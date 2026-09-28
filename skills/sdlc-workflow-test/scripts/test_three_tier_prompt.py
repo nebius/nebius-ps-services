@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import owned_git_origin  # noqa: E402
+
 
 SKILLS_ROOT = Path(__file__).resolve().parents[2]
 PROMPT_WORKSPACE = SKILLS_ROOT / "sdlc-start" / "scripts" / "prompt_workspace.py"
 RENDERER = Path(__file__).with_name("render_three_tier_prompt.py")
-COMPUTER_USE_CONTRACT_FILES = (
+HEADLESS_CONTRACT_FILES = (
     SKILLS_ROOT / "sdlc-workflow-test" / "references" / "three-tier-process.md",
     SKILLS_ROOT / "sdlc-workflow-test" / "references" / "three-tier-live.md",
     SKILLS_ROOT
@@ -29,7 +33,7 @@ COMPUTER_USE_CONTRACT_FILES = (
 
 
 class ThreeTierPromptTests(unittest.TestCase):
-    def run_json(self, *arguments: str) -> dict[str, object]:
+    def run_json(self, *arguments: str, cwd=None, env=None) -> dict[str, object]:
         result = subprocess.run(
             [sys.executable, *arguments],
             check=False,
@@ -37,8 +41,10 @@ class ThreeTierPromptTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=20,
+            cwd=cwd,
+            env=env,
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         return json.loads(result.stdout)
 
     def test_rendered_starter_is_accepted_as_a_new_managed_run(self) -> None:
@@ -46,6 +52,9 @@ class ThreeTierPromptTests(unittest.TestCase):
             root = Path(temporary)
             project = root / "project"
             project.mkdir()
+            (project / "README.md").write_text("# Disposable admission test\n")
+            baseline = owned_git_origin.create_baseline(project)
+            owned_git_origin.initialize(project, root, "a" * 32)
             codex_home = root / "codex-home"
             initialized = self.run_json(
                 str(PROMPT_WORKSPACE),
@@ -93,6 +102,22 @@ class ThreeTierPromptTests(unittest.TestCase):
             )
             self.assertEqual(intake["action"], "new")
             self.assertEqual(intake["revision"], "r0001")
+            promotions = list(codex_home.rglob("git-promotion.json"))
+            self.assertEqual(len(promotions), 1)
+            promotion = json.loads(promotions[0].read_text())
+            self.assertEqual(promotion["default_branch"], "main")
+            self.assertEqual(
+                promotion["promotion_branch"], owned_git_origin._git(project, "branch", "--show-current")
+            )
+            manager = SKILLS_ROOT / "worktree/scripts/worktree_manager.py"
+            environment = {**os.environ, "SKILLS_AGENT": "codex", "CODEX_HOME": str(codex_home)}
+            worktree = self.run_json(
+                str(manager), "add", "--project", ".", "--task-slug", "admission",
+                cwd=project, env=environment,
+            )
+            self.assertTrue(Path(str(worktree["worktree"])).is_dir())
+            self.run_json(str(manager), "remove", "--name", str(worktree["name"]), cwd=project, env=environment)
+            owned_git_origin.validate(project, root, "a" * 32, baseline=baseline)
 
     def test_renderer_rejects_compose_identity_drift(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
@@ -135,24 +160,22 @@ class ThreeTierPromptTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("does not match", result.stderr)
 
-    def test_computer_use_jit_readiness_contract_is_mirrored(self) -> None:
+    def test_headless_browser_contract_is_mirrored(self) -> None:
         skill = (SKILLS_ROOT / "sdlc-workflow-test" / "SKILL.md").read_text()
         self.assertIn("read and follow\n`references/three-tier-process.md` before any live operation", skill)
-        for path in COMPUTER_USE_CONTRACT_FILES:
+        for path in HEADLESS_CONTRACT_FILES:
             with self.subTest(path=path):
                 text = " ".join(
                     path.read_text(encoding="utf-8").lower().split()
                 )
-                self.assertIn("immediately before", text)
-                self.assertIn("unlocked", text)
-                self.assertIn("visible", text)
-                self.assertIn("foreground", text)
-                self.assertIn("current macos space", text)
-                self.assertIn("environment_defect", text)
-                self.assertIn("pre-navigation-window-capture", text)
-                self.assertIn("no gui navigation or action was attempted", text)
-                self.assertIn("stop all further computer use calls", text)
-                self.assertIn("separate explicitly authorized action", text)
+                self.assertIn("headless playwright test", text)
+                self.assertIn("uat-before-restart", text)
+                self.assertIn("uat-after-restart", text)
+                self.assertIn("fresh", text)
+                self.assertIn("independent", text)
+                self.assertNotIn("pre-navigation-window-capture", text)
+                self.assertNotIn("harness: computer-use", text)
+
 
 
 if __name__ == "__main__":

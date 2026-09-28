@@ -9,10 +9,12 @@
 
 set -euo pipefail
 umask 077
+export COURSE_CAPTURE=1
+export COURSE_PROFILE_TOOL=ncu
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  sbatch [site options] %s LAB.py [lab options]\n' "$0"
+  printf 'Usage:\n  python3 tools/submit_lab.py --lab 14_profiler_bottlenecks [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
   printf '\nCaptures one NVTX-selected kernel with an Nsight Compute section set.\n'
   printf 'Set NCU_SET to override the default roofline set after checking ncu --list-sets.\n'
   printf 'Set comma-separated NCU_SECTIONS after checking ncu --list-sections.\n'

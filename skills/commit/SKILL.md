@@ -1,7 +1,6 @@
 ---
 name: commit
-description: "Use only when explicitly asked for one local Git commit without push: inspect the full diff, stage repo-wide, validate, commit, and report. Also handles exact worktree-integration commits; not for PRs."
-disable-model-invocation: true
+description: "Use when the user asks for one local Git commit without push: inspect the full diff, stage repo-wide, validate, commit, and report. Also handles exact worktree-integration commits; not for PRs."
 ---
 
 # Commit
@@ -68,10 +67,10 @@ Agentic SDLC checkpoints.
 ## Inputs
 
 - The exact Git worktree and current branch selected by the user's session.
-- A fresh root-user authorization from the prompt hook, or exact delegated
-  owner evidence from Task Implementer or Worktree. The shared hook also mints
-  this authorization for a fresh explicit `$commit-push` so that workflow can
-  reuse the same local transaction before its separately bounded push.
+- A current nonauthorizing root-turn receipt from the prompt hook, or exact delegated
+  owner evidence from Task Implementer or Worktree. The root agent binds the receipt to an authorized
+  commit or commit-push action during preparation; delegated owners retain
+  their existing evidence path.
 - An optional user-provided commit message; otherwise the reviewed candidate
   must be coherent enough to summarize truthfully.
 
@@ -79,7 +78,8 @@ Agentic SDLC checkpoints.
 
 - Repository-root branch, operation, conflict, status, staged, unstaged, and
   untracked state before preparation.
-- The hook- or coordinator-provided canonical authorization and claim paths;
+- The hook-provided receipt digest and canonical authorization and claim paths,
+  or coordinator-provided delegated paths;
   never discover or substitute an alternate helper or private-state path.
 - The complete temporary-index candidate summary and enough focused diff to
   review every changed project, root file, risky path, and generated artifact.
@@ -112,9 +112,9 @@ Agentic SDLC checkpoints.
    - Stop if unresolved conflicts exist.
    - If the repository default branch is known locally and the current branch
      matches it, stop unless the user explicitly asked to commit on the default
-     branch by starting the invocation body with `on <current-branch>` or
-     `on the default branch`. Do not perform network fetches only to discover
-     the default branch.
+     branch with clear, separate consent for that branch. Only then pass the
+     private `--allow-default-branch` assertion; commit-push never permits it.
+     Do not perform network fetches only to discover the default branch.
 3. Inspect current status.
    - Run `git status --short --branch`.
    - If the worktree is clean, report that there is nothing to commit.
@@ -124,18 +124,23 @@ Agentic SDLC checkpoints.
      unclear generated artifacts, or a diff too broad or incoherent to
      summarize truthfully.
 4. Prepare one reviewed repository transaction.
-   - Direct mode is authorized only by this turn's explicit root-user
-     invocation. Accept optional `please`, then either `$commit` directly or
-     one bounded leading directive from `run`, `apply`, `execute`, `invoke`, or
-     `use` immediately before `$commit`. Casual mentions,
-     questions, quotations, later prose references, implicit selection,
-     subagent turns, Stop continuations, contradictory explicit origin
-     markers, and help do not authorize mutation. An absent `agent_type` is
-     compatible with primary UserPromptSubmit events; an explicit non-root
-     value is denied.
-     The same bounded grammar with `$commit-push` authorizes this transaction
-     only as that workflow's local commit phase; it never authorizes a push
-     from the `commit` skill or a default-branch commit.
+   - Classify the actual root-user request semantically. Accept natural-language
+     commit requests, polite action questions, and native skill mentions at any
+     position. For example, "please commit all changes", "can you commit this?",
+     and "commit and push using $commit-push" are action requests. The latter
+     belongs to commit-push, which owns the separate publication phase.
+     Discussion, help, quoted examples, negation, and requests to edit or repair
+     this skill do not authorize Git effects. Skill selection alone never
+     grants permission. Never demand that the user repeat an already clear
+     request or move a skill token to the beginning.
+   - The prompt hook records a nonauthorizing current root-turn receipt. Only
+     after classifying an authorized action, pass its exact hook-provided
+     digest as `--intent-sha256` and the typed `--requested-action commit` (or
+     `commit-push` inside that workflow) to canonical preparation. These are
+     private helper arguments, not public skill flags. The helper binds one
+     authorization under its existing lock; never hand-write or reset it.
+     Subagent and generated turns do not supply root receipts. An absent
+     `agent_type` remains compatible with primary UserPromptSubmit events.
    - Project lifecycle state is advisory and is never a commit prerequisite.
      Direct preparation relies on the explicit current-turn authorization,
      already-effective repository instructions, and the transaction's own Git,
@@ -215,10 +220,10 @@ Agentic SDLC checkpoints.
      child, stop with `REVIEW_REQUIRED` intact.
    - A failed hook that did not create a commit and any pre-commit drift make
      the claim `STALE`; preserve the real index and worktree and require a fresh
-     explicit `$commit` after the blocker is resolved.
+     user commit request after the blocker is resolved.
    - Exact crash recovery accepts only the same branch and either the unchanged
-     base or one direct-child commit with the reviewed tree. A fresh explicit
-     `$commit` may rebind an otherwise unchanged prepared claim; it never uses
+     base or one direct-child commit with the reviewed tree. A fresh authorized
+     user request may rebind an otherwise unchanged prepared claim; it never uses
      a TTL, process identity, or guessed ownership.
    - Report the branch name, commit hash and message when a commit was created,
      the validation performed, and whether the worktree is clean.
@@ -235,7 +240,7 @@ Agentic SDLC checkpoints.
 - Default branch, local only:
   `git symbolic-ref -q --short refs/remotes/origin/HEAD | sed 's#^origin/##'`
 - Candidate preparation: canonical installed commit transaction helper with
-  the hook-provided explicit-turn authorization and private claim paths
+  the hook-provided root-turn receipt digest, authorization and private claim paths
 - Staging inside the helper: `git add -A` from the repository root, with no
   pathspec
 - Staged validation inside the helper: `git diff --cached --check`
@@ -261,7 +266,7 @@ Agentic SDLC checkpoints.
 ## Failure Handling
 
 - Before real staging, repository, candidate, authorization, owner, or claim
-  drift becomes `STALE` and requires a fresh explicit invocation.
+  drift becomes `STALE` and requires a fresh authorized user action.
 - A normal hook failure with no commit becomes `STALE`; preserve the real
   index and worktree for diagnosis rather than resetting or unstaging them.
 - A created direct child whose tree or checkout is not the exact reviewed
@@ -273,11 +278,11 @@ Agentic SDLC checkpoints.
 
 ## Must Not
 
-- Do not treat anything except a fresh explicit root-user `$commit`
-  invocation, including the bounded leading directive forms above, as
-  permission to prepare and execute the one canonical local transaction for
-  the current branch. The hook authorization is single-use and contains no
-  prompt or commit-message text.
+- Require an authorized root-user action and its exact current receipt for
+  direct preparation. Interpret intent semantically; neither a receipt nor a
+  skill mention alone grants permission. Authorization stays single-use and
+  contains no prompt or commit-message text. A consumed receipt cannot mint a
+  second authorization; a fresh user action has a new receipt.
 - Do not use the helper to bypass already-effective repository instructions,
   unresolved Git state, active Worktree ownership, or workflow-owned commit
   policy. Project lifecycle status remains advisory in every case.

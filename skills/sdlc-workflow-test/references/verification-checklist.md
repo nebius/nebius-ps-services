@@ -68,8 +68,11 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `agentic-sdlc/prompt-v3`, Ask-only required input, immutable raw and intent
   revisions, requirements refinement, same-prompt steering, durable FIFO
   queueing, linked completed follow-ups, `ALREADY_COMPLETE`, and fail-closed
-  `WORKFLOW_UPGRADE_REQUIRED`; the private refinement verifier must bind the
-  latest accepted intent to the exact compiled requirements file before design
+  `WORKFLOW_UPGRADE_REQUIRED`; private read-only `refinement-ready` must bind
+  the latest accepted intent to the exact compiled requirements before design.
+  Missing canonical documents receive an owner-managed draft-pair bootstrap
+  preserving existing counterparts. Full `refinement-verify` still requires
+  ready design and complete statement impact before planning or execution.
 - schema-v7 execution, exact initialized-folder scope, `task-arm`, direct
   `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
   `task-recover`, task-finish crash adoption, `replan-future`, process-group
@@ -264,7 +267,9 @@ Use a disposable Python project that validates a Nebius-style resource name:
 - structured validation errors
 - tests and evaluation evidence
 
-Run the SDLC skills in order through local disposable state. Passing evidence
+Initialize the workspace and accept the managed prompt through `sdlc-start`
+before invoking coordinator-only requirements authoring. Run the remaining
+SDLC skills in order through local disposable state. Passing evidence
 requires committed requirements/design, a locked local `TASK-*` graph,
 execution preparation, tests before dependency-wave implementation,
 one agent/branch/worktree per safe task, ordered merge commits, auto-steering
@@ -295,17 +300,16 @@ unavailable rather than treating deterministic fake-process proof as live proof.
 
 ## Opt-In Three-Tier Live Profile
 
-Use only for explicit `--create`, `--create --keep`, `--resume`, or
+Use only for explicit `--create-live-test`, `--create-live-test --keep`, `--resume`, or
 `--destroy`; read
 `references/three-tier-live.md` for the authoritative workflow.
 
 Verify before mutation:
 
 - the no-flag deterministic verifier has no FAIL
-- Docker Engine, Docker Compose, Git, source-installed parity, and canonical
-  Google Chrome are available; the helper launches a fresh process group with
-  a new verifier-owned user-data directory and marker, and a real Computer Use
-  `get_app_state` must expose the exact marker before every action
+- Docker, Compose, Git, Node.js 20+, npm, installed Chrome and source-installed
+  parity are available; the owned headless capability stage really interacts
+  and captures a screenshot
 - one valid owned verification root exists; if it has an active lifecycle,
   preflight succeeds before its exact ownership-checked cleanup, and cleanup
   completes before a fresh lifecycle is created
@@ -328,34 +332,41 @@ Verify the recorded web and database IDs have canonical Compose service labels
 Require semantic evidence for requirements, context, design, steering, plan,
 execution preparation, test-first development, implementation, validation,
 unit/API/database/vertical tests, evaluation, documents, alignment, commit,
-local ship, computer-use UAT, and the final document pass. Bind all evidence to
+local ship, headless Playwright Test UAT, and the final document pass. Bind all evidence to
 the clean promoted SHA. Reject placeholder `{"result":"pass"}` artifacts,
 generic evidence reused across test classes, missing phases, screenshots as the
 only GUI oracle, and stale worker/integration SHAs.
 
-GUI evaluation and UAT must use `harness: computer-use` against only the fresh
-verifier-owned Chrome instance. Immediately before the first navigation in
-evaluation and again before UAT, require a fresh browser `get_app_state` whose
-accessibility state contains the exact verification marker while
-the console is unlocked unless the current agent surface explicitly confirms
-locked Computer Use is enabled for this session. A normal target window must
-be visible, unminimized, foreground, and on the current macOS Space. Refresh
-accessibility state after every successful action. Test blank input, create,
-refresh persistence, complete, active/completed filters, and service restart
-without volume deletion. Correlate the same record ID, title, and completion
-state through GUI, API, and database. Require five distinct sanitized
-screenshots.
+Use headless Playwright Test with Chrome for required web acceptance. Run
+four fresh owned stages in order: `capability-discovery`, `evaluate`,
+`uat-before-restart`, and `uat-after-restart`. Each stage starts a new process
+and isolated context, records assertions, screenshots, a trace, actual browser
+version and timestamps, and closes its processes even with `--keep`. Native
+desktop capture, an unlocked screen, display selection, and foreground windows
+are not prerequisites. Optional headless isolated Playwright MCP exploration
+is separate from the acceptance oracle and cannot satisfy a required stage.
 
-Classify `cgWindowNotFound` or another just-in-time visibility failure as
-`ENVIRONMENT_DEFECT` at `pre-navigation-window-capture`, explicitly recording
-that no GUI navigation or action was attempted. If any Computer Use call hangs,
-times out, or stops responding across browsers, stop all further Computer Use
-calls for that attempt. Do not attempt `list_apps`, new-window recovery,
-repeated browser retries, or browser/service restart through the same unhealthy
-path. Exact PID/process-group cleanup remains allowed without Computer Use and
-must fail closed when its executable/profile identity cannot be revalidated.
-Fresh-session or service recovery remains a separate explicitly authorized
-action.
+The verifier freezes its independent test bundle before product implementation;
+never copy it into product TDD tests or alter it to fit an implementation.
+Run evaluation against the clean registered integration revision and UAT against
+the clean promoted revision. The outer lifecycle owner alone restarts Compose
+between the two UAT stages, retaining the original database volume. Rediscover
+the dynamic loopback port, refresh recorded endpoints, then launch a fresh
+post-restart browser against the same task ID/title/completion state.
+Independent API and PostgreSQL checks accompany blank rejection, creation,
+completion, and post-restart persistence. Use the frozen task-board DOM/API/table
+contract in the generated prompt. Before evaluation and separately before UAT,
+use the declared disposable reset to establish an empty database; resets are
+fixture setup, never part of the product acceptance journey. Never reset between
+UAT stages.
+
+A failed stage remains failed and its artifacts are preserved. Correct the
+proven owner and start a new trial; no later success erases the earlier result.
+Resume retained application work with a fresh browser, never a retained tab.
+Laptops must remain awake with Docker and the agent running. A locked-screen
+certification additionally needs independently observed lock intervals and an
+actual agent launching a new stage and collecting evidence before unlock;
+a standalone browser smoke test does not certify agent continuity.
 
 The report must include logical/container layer inventory, Docker and browser
 versions, project/report paths, baseline/promoted SHAs, resolved web/API/health
@@ -365,7 +376,7 @@ container/network/volume/image IDs, UAT result, and cleanup/retention state.
 Default create closes the exact verifier-owned Chrome process group and destroys the exact owned
 project, raw evidence/private state, two containers, network, database volume,
 and built web image even after failure. Any cleanup failure is FAIL. Create plus
-keep preserves those resources and reports `KEPT`. Standalone destroy validates
+keep preserves the application and evidence but closes browser processes and reports `KEPT`. Standalone destroy validates
 the exact Chrome process identity, then both Docker ownership labels for every
 alias, canonicalizes and deduplicates Docker identities, preserves a cumulative
 retry ledger, retains sanitized reports/lifecycle history, and returns
@@ -503,7 +514,7 @@ runaway execution.
 GUI and TUI checks are safe local tests, but both are required for an exact
 20-skill PASS:
 
-- GUI: use the three-tier Computer Use profile and require semantic GUI
+- GUI: use the three-tier headless Playwright Test profile and require semantic GUI
   assertions, API/database correlation, and restart persistence. Missing GUI
   capacity before an attempt is PARTIAL.
 - TUI: use the lightweight fixture's documented terminal flow and require a
@@ -528,3 +539,38 @@ terminal and prompt-bound claims require `lightweight` provenance.
 `sdlc-merge-pr` uses the deterministic explicit-authorization hook result plus
 safety evidence and never performs a real merge. `sdlc-tui-test` requires its
 own disposable terminal evidence and is not inferred from continuation state.
+
+### Owned local Git admission
+
+- Both lightweight and three-tier fixtures use one verifier-created bare origin
+  outside their checkout and inside their private scope. Its receipt binds
+  owner, project, baseline and default branch; no other remote or push URL is
+  accepted. The origin stays frozen as local implementation advances.
+- Real prompt intake and managed worktree admission must pass without mocking
+  Git promotion. Check inherited command configuration before staging or
+  transport; reject redirects, borrowed objects, unsafe paths and changed guards.
+- Creation, evidence recording, resume and cleanup share the same validator.
+  Interrupted unreceipted origins remain preserved and rejected.
+- `--create-live-test` is the sole public creation action; `--live-evidence PATH`
+  is the sole evidence input. The aggregate profile source identity resolves
+  the owned canonical three-tier evidence automatically. Distinct aggregate
+  and lifecycle identities remain independently bound; unsafe, stale, missing
+  or nonmatching canonical evidence cannot pass. Validate before cleanup.
+- Hosted Git authentication, network failures, pushing, PRs and merging remain
+  explicitly unverified by this local live trial.
+
+The live harness resolves the active feature through the isolated host's validated
+prompt workspace and canonical execution status. Before promotion, Compose and
+execution-phase Git evidence use the exact registered integration worktree, with
+matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
+active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
+run validation on uncommitted integration work before coordinator sealing.
+Shipping and UAT always require a clean promoted checkout. After completed promotion,
+Compose uses the exact promoted primary checkout and requires integration
+resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Five screenshots mean five independently captured artifacts: four different
+pre-restart UI states and one capture from the fresh post-restart stage. The
+post-restart pixels may match the completed state when persistence works.
+Require separate owned stage receipts and capture observations; never fabricate
+visual changes, copy an earlier screenshot, or weaken the four-state check.

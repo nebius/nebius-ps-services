@@ -14,10 +14,17 @@ from nebius_cxcli.soperator_checks_policy import (
     paused_partition_configuration,
     propose_checks_target,
 )
+from passive_scheduler_fakes import DESIRED_SCHEDULER
+from soperator_fixtures import sample_snapshot
 
 
 @pytest.fixture
 def source(tmp_path, monkeypatch):
+    # Synthetic policy fixture has no chart hook templates; hook projections
+    # have separate tests against their exact source-bound adapter.
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_acceptance_hooks.verify_policy_hooks", lambda *_: None
+    )
     chart = tmp_path / "helm/soperator-activechecks"
     (chart / "scripts").mkdir(parents=True)
     (chart / "scripts/user.sh").write_text("useradd soperatorchecks\n")
@@ -70,6 +77,10 @@ def source(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr("nebius_cxcli.soperator_checks_policy._render_execution_specs", render)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_passive_policy._rendered_scheduler",
+        lambda *_args: copy.deepcopy(DESIRED_SCHEDULER),
+    )
     return tmp_path
 
 
@@ -89,6 +100,114 @@ def values():
             }
         },
     }
+
+
+@pytest.mark.parametrize(
+    "disabled,gpu",
+    [
+        ("cuda-samples", True),
+        ("ensure-healthy-nodes", False),
+        (None, True),
+        ("cuda-samples", False),
+    ],
+)
+def test_creation_flags_cannot_remove_mandatory_worker_smoke(
+    source, values, monkeypatch, disabled, gpu
+):
+    chart_values = source / "helm/soperator-activechecks/values.yaml"
+    upstream = yaml.safe_load(chart_values.read_text())
+    health = copy.deepcopy(upstream["checks"]["gpu-fryer"])
+    upstream["checks"]["ensure-healthy-nodes"] = health
+    cuda = copy.deepcopy(health)
+    cuda["slurmJobSpec"]["jobContainer"] = {
+        "extraEnv": [{"name": "SBATCH_GPUS_PER_NODE", "value": "8"}]
+    }
+    upstream["checks"]["cuda-samples"] = cuda
+    chart_values.write_text(yaml.safe_dump(upstream))
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_checks_policy._render_execution_specs",
+        lambda *_: {name: {"schedule": "0 */6 * * *"} for name in upstream["checks"]},
+    )
+    values["nodesets"] = {
+        "overrideValues": {"nodesets": [{"name": "worker", "replicas": 2, "gpu": {"enabled": gpu}}]}
+    }
+    values["soperatorActiveChecks"]["overrideValues"]["checks"] = {
+        "gpu-fryer": {"runAfterCreation": False},
+    }
+    if disabled:
+        values["soperatorActiveChecks"]["overrideValues"]["checks"][disabled] = {
+            "runAfterCreation": False
+        }
+    if disabled is None or (disabled == "cuda-samples" and not gpu):
+        policy = compile_checks_policy(source, values)
+        assert "ensure-healthy-nodes" in {rule.name for rule in policy.readiness}
+        return
+    with pytest.raises(ValueError, match="readiness requires"):
+        compile_checks_policy(source, values)
+
+
+@pytest.mark.parametrize("profile", ["cpu", "gpu", "mixed"])
+def test_new_profile_defaults_compile_mandatory_worker_readiness(source, monkeypatch, profile):
+    from nebius_cxcli import cli
+    from nebius_cxcli.components import component_entries, soperator_install_entry
+    from nebius_cxcli.soperator_adapter import compile_upstream_soperator_values
+
+    chart_values = source / "helm/soperator-activechecks/values.yaml"
+    upstream = yaml.safe_load(chart_values.read_text())
+    health = {
+        "enabled": True,
+        "checkType": "slurmJob",
+        "runAfterCreation": True,
+        "suspend": True,
+        "slurmJobSpec": {"sbatchScriptFile": "scripts/ready.sh"},
+    }
+    upstream["checks"]["ensure-healthy-nodes"] = health
+    cuda = copy.deepcopy(health)
+    cuda["slurmJobSpec"].update(
+        eachWorkerJobs=True,
+        jobContainer={"extraEnv": [{"name": "SBATCH_GPUS_PER_NODE", "value": "8"}]},
+    )
+    upstream["checks"]["cuda-samples"] = cuda
+    chart_values.write_text(yaml.safe_dump(upstream))
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_checks_policy._render_execution_specs",
+        lambda _chart, overrides: {
+            name: {"schedule": "0 */6 * * *"}
+            for name, row in upstream["checks"].items()
+            if overrides.get("checks", {}).get(name, {}).get("enabled", row["enabled"])
+        },
+    )
+
+    release = sample_snapshot(release="4.1.8")
+    payload = cli._starter_component_payload(
+        client_name="example",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps={"soperator"},
+        infra_entries=component_entries("infra"),
+        app_entries=(
+            soperator_install_entry(
+                release.release,
+                chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd",
+            ),
+        ),
+        soperator_profile=f"nebius-{profile}-v1",
+    )
+    cli._materialize_soperator_component_defaults(payload)
+    values = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")["values"]
+    compiled, _ = compile_upstream_soperator_values(values, release=release)
+    assert compiled["nodesets"]["overrideValues"]["nodesets"]
+    desired = copy.deepcopy(compiled)
+    policy = compile_checks_policy(source, compiled)
+    smoke = next(rule for rule in policy.readiness if rule.name == "ensure-healthy-nodes")
+    assert smoke.each_worker and not smoke.requires_gpu
+    assert ("cuda-samples" in {rule.name for rule in policy.readiness}) is (profile != "cpu")
+    checks = compiled["soperatorActiveChecks"]["overrideValues"]["checks"]
+    assert checks["wait-for-topology"]["runAfterCreation"] is False
+    assert compiled == desired
 
 
 def test_temporary_policy_preserves_desired_values_and_bootstrap(source, values):

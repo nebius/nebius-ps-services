@@ -188,7 +188,7 @@ def test_native_retry_orchestrator_verifies_source_before_mutation(
     monkeypatch.setattr(flux_ops, "_run_kubectl_json_process", lambda *a, **kw: next(values))
     writes = []
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda args, **kw: writes.append(args) or SimpleNamespace(returncode=0),
     )

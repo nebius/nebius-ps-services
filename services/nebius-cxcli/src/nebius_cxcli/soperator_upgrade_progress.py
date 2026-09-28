@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -348,9 +349,10 @@ class SoperatorProgressSequence:
                             completed=task.total,
                             state=state,
                         )
-                    self._progress.refresh()
                     # Commit the finished row to terminal scrollback, then keep
                     # only the next active task inside Rich's live surface.
+                    # stop() performs the final refresh; an explicit refresh here
+                    # duplicates the completed row in captured terminal output.
                     self._progress.stop()
                     self._progress.remove_task(self._task_id)
                     self._progress.start()
@@ -596,7 +598,9 @@ class SoperatorUpgradeProgress:
         *,
         success: str | None = None,
     ) -> Iterator[SoperatorProgressSequence]:
-        with self.sequence() as sequence:
+        from .deployment_timing import timed_phase
+
+        with timed_phase(phase), self.sequence() as sequence:
             sequence.start(phase, description)
             try:
                 yield sequence
@@ -605,6 +609,18 @@ class SoperatorUpgradeProgress:
                 raise
             else:
                 sequence.success(success)
+
+
+_PROGRESS_PAUSE: ContextVar[Callable[[], AbstractContextManager[None]]] = ContextVar(
+    "soperator_progress_pause", default=nullcontext
+)
+
+
+@contextmanager
+def pause_rendered_flux_progress() -> Iterator[None]:
+    """Give interactive input exclusive use of the active deployment terminal."""
+    with _PROGRESS_PAUSE.get()():
+        yield
 
 
 @contextmanager
@@ -630,7 +646,11 @@ def rendered_flux_progress_surface(
                 if description:
                     sequence.update(description)
 
-            yield _set_phase, _update_detail, sequence.handle
+            token = _PROGRESS_PAUSE.set(sequence.paused)
+            try:
+                yield _set_phase, _update_detail, sequence.handle
+            finally:
+                _PROGRESS_PAUSE.reset(token)
         return
     with console.status(
         "[cyan]Preparing Flux deployment...[/cyan]",
@@ -645,7 +665,19 @@ def rendered_flux_progress_surface(
                 console.print(message)
             last_phase = message
 
-        yield _set_phase, console.print, None
+        @contextmanager
+        def _paused() -> Iterator[None]:
+            status.stop()
+            try:
+                yield
+            finally:
+                status.start()
+
+        token = _PROGRESS_PAUSE.set(_paused)
+        try:
+            yield _set_phase, console.print, None
+        finally:
+            _PROGRESS_PAUSE.reset(token)
 
 
 __all__ = [
@@ -655,6 +687,7 @@ __all__ = [
     "SoperatorProgressState",
     "SoperatorUpgradeProgress",
     "bounded_identifier_summary",
+    "pause_rendered_flux_progress",
     "rendered_flux_progress_surface",
     "sanitized_bounded_command_output",
 ]

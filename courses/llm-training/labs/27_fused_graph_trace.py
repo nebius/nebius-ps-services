@@ -4,30 +4,33 @@ from __future__ import annotations
 
 import argparse
 import time
+from contextlib import nullcontext
 
 from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     sgd_updates_match,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    parser.add_argument("--external-only", action="store_true", help="Skip the internal CUDA profiler during a separate Nsight capture.")
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     seed_everything(torch, args.seed)
-    environment = require_h100(torch)
-    width = 256 if args.profile == "smoke" else 1_024
-    batch = 64 if args.profile == "smoke" else 256
+    environment = require_course_gpu(torch)
+    width = 256 if args.profile == "small" else 1_024
+    batch = 64 if args.profile == "small" else 256
     x = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     target = torch.randn_like(x)
     base_weight = (
@@ -120,17 +123,17 @@ def main() -> None:
             iterations=args.iterations,
         )
     )
-    with torch.profiler.profile(
+    with (nullcontext() if args.external_only else torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
             torch.profiler.ProfilerActivity.CUDA,
         ]
-    ) as profile:
+    )) as profile:
         graph.replay()
         torch.cuda.synchronize()
     dispatch = sorted(
         event.key
-        for event in profile.key_averages()
+        for event in (profile.key_averages() if profile is not None else [])
         if "cuda" in event.key.lower() or "gemm" in event.key.lower()
     )[:20]
 
@@ -156,4 +159,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

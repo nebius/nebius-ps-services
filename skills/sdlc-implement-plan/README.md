@@ -38,7 +38,9 @@ that never starts is requeued only after confirmed termination and an exact
 dispatch-timestamp compare-and-swap proves the assignment is untouched.
 
 For diagnosis-bound correction, immutable plan vN+1 preserves every prior task
-definition and digest, then appends corrective tasks and waves. Each corrective
+definition and digest, then appends corrective tasks and waves. It retains the
+existing TDD base and integration tip; prepare the appended wave directly after
+`replan-future`, without resealing TDD. Each corrective
 assignment carries the exact diagnosis and original regression oracle. The
 worker runs that oracle first after the bounded repair, followed by the
 affected-boundary check and normal validation. `task-finish` stores a passed,
@@ -46,6 +48,12 @@ digest-protected oracle proof bound to the diagnosis and the
 coordinator-created task commit; missing
 or mismatched proof cannot enter integration. Completed, sealed, promoted, or
 completed-run execution is never reopened.
+When combined validation fails after integration, classifier lifecycle
+`integrated_wave` and a counted repair dispatch authorize `wave-fail`. The wave
+remains failed while clean worker resources are retired. Only matching
+diagnosis/oracle-bound tasks may cross that failure. Successful corrective
+combined validation creates a separate resolution receipt before the dispatch
+is completed and downstream gates are rerun.
 Before creating that commit, the coordinator journals the exact staged tree,
 message, assignment, and evidence intent. Retry accepts only the corresponding
 clean direct-child commit and exact persisted result.

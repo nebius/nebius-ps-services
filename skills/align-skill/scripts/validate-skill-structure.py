@@ -101,8 +101,6 @@ EXPLICIT_ONLY_SKILL_NAMES = {
     "sdlc-workflow-test",
     "attach-ubuntu",
     "code-info",
-    "commit",
-    "commit-push",
     "config-codex",
     "create-pr",
     "install-grafana-mcp-for-nebius",

@@ -1,0 +1,22 @@
+{
+  "correctness": {
+    "both_endpoints_validated_bytes": true,
+    "infiniBand_rc_confirmed": true
+  },
+  "lab": "07_rdma_bandwidth",
+  "measurements": {
+    "bidirectional_Gbps": 247.72,
+    "iterations": 1000,
+    "payload_bytes": 4194304,
+    "validated_bytes_min": 4194304000
+  },
+  "parameters": {
+    "iterations": 1000,
+    "seed": 17,
+    "tx_depth": 64,
+    "warmup": 0,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

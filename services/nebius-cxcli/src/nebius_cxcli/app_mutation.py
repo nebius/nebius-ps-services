@@ -21,6 +21,11 @@ def assert_app_mutation_authority() -> None:
         authority()
 
 
+def current_app_mutation_authority() -> Callable[[], object] | None:
+    """Capture the outer fence before entering a nested runtime scope."""
+    return _AUTHORITY.get()
+
+
 def guarded_app_manifest(manifest: Mapping[str, Any]) -> dict[str, Any] | None:
     assert_app_mutation_authority()
     guard = _MANIFEST_GUARD.get()

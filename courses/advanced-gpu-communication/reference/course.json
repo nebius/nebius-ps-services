@@ -1,0 +1,215 @@
+{
+  "slug": "advanced-gpu-communication",
+  "title": "Advanced Labs: Multi-GPUs Multi-Nodes communication optimization",
+  "profile": "labs-only",
+  "estimated_guided_hours": 64,
+  "lessons": [],
+  "labs": [
+    {
+      "path": "labs/01_fabric_topology.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/01_fabric_topology.json"
+    },
+    {
+      "path": "labs/02_collective_readiness.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/02_collective_readiness.json"
+    },
+    {
+      "path": "labs/03_training_readiness.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/03_training_readiness.json"
+    },
+    {
+      "path": "labs/04_inference_readiness.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/04_inference_readiness.json"
+    },
+    {
+      "path": "labs/05_transport_readiness.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/05_transport_readiness.json"
+    },
+    {
+      "path": "labs/06_nvlink_bandwidth.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/06_nvlink_bandwidth.json"
+    },
+    {
+      "path": "labs/07_rdma_bandwidth.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/07_rdma_bandwidth.json"
+    },
+    {
+      "path": "labs/08_distributed_collectives.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/08_distributed_collectives.json"
+    },
+    {
+      "path": "labs/09_nccl_transport_sweep.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/09_nccl_transport_sweep.json"
+    },
+    {
+      "path": "labs/10_nccl_tests_report.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/10_nccl_tests_report.json"
+    },
+    {
+      "path": "labs/11_collective_layout.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/11_collective_layout.json"
+    },
+    {
+      "path": "labs/12_distributed_scaling.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/12_distributed_scaling.json"
+    },
+    {
+      "path": "labs/13_collective_overlap.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/13_collective_overlap.json"
+    },
+    {
+      "path": "labs/14_distributed_profiling.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/14_distributed_profiling.json"
+    },
+    {
+      "path": "labs/15_ddp_train.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/15_ddp_train.json"
+    },
+    {
+      "path": "labs/16_fsdp2_train.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/16_fsdp2_train.json"
+    },
+    {
+      "path": "labs/17_training_expert_parallel.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/17_training_expert_parallel.json"
+    },
+    {
+      "path": "labs/18_training_tensor_parallel.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/18_training_tensor_parallel.json"
+    },
+    {
+      "path": "labs/19_gradient_overlap.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/19_gradient_overlap.json"
+    },
+    {
+      "path": "labs/20_parallelism_mechanics.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/20_parallelism_mechanics.json"
+    },
+    {
+      "path": "labs/21_ddp_buckets.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/21_ddp_buckets.json"
+    },
+    {
+      "path": "labs/22_fabric_training.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/22_fabric_training.json"
+    },
+    {
+      "path": "labs/23_inference_expert_parallel.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/23_inference_expert_parallel.json"
+    },
+    {
+      "path": "labs/24_inference_tensor_parallel.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/24_inference_tensor_parallel.json"
+    },
+    {
+      "path": "labs/25_fabric_inference.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/25_fabric_inference.json"
+    },
+    {
+      "path": "labs/26_collective_latency.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/26_collective_latency.json"
+    },
+    {
+      "path": "labs/27_rdma_latency.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/27_rdma_latency.json"
+    },
+    {
+      "path": "labs/28_nic_selection.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/28_nic_selection.json"
+    },
+    {
+      "path": "labs/29_nixl_transfer.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/29_nixl_transfer.json"
+    },
+    {
+      "path": "labs/30_megatron_overlap.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/30_megatron_overlap.json"
+    },
+    {
+      "path": "labs/31_context_parallel.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/31_context_parallel.json"
+    },
+    {
+      "path": "labs/32_dynamo_disaggregation.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/32_dynamo_disaggregation.json"
+    },
+    {
+      "path": "labs/33_dynamo_routing.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/33_dynamo_routing.json"
+    },
+    {
+      "path": "labs/34_serving_goodput.py",
+      "optional": false,
+      "lessons": [],
+      "dashboard": "reference/grafana/34_serving_goodput.json"
+    }
+  ],
+  "extensions": [],
+  "observability": "reference/observability.json"
+}

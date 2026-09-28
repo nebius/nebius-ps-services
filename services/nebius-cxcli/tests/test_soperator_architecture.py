@@ -141,7 +141,7 @@ def test_protected_rootfs_admission_has_no_reference_scratch_contract() -> None:
     assert "RootfsScratchIdentity" not in protected_text
     assert "rootfs_scratch_pvc_manifest" not in protected_text
     assert "compute-csi-default-sc" not in protected_text
-    assert "nebius-cxcli.soperator-rootfs-admission.v1" in cli_text
+    assert "nebius-cxcli.soperator-rootfs-admission.v2" in cli_text
     assert '"mode": "target-wins"' in cli_text
     assert '"targetProvisioner"' in cli_text
 
@@ -151,9 +151,9 @@ def test_upgrade_campaign_and_node_group_migration_keep_separate_lifecycles() ->
     migration = cli_text.split("def migrate_node_group_command(", maxsplit=1)[1].split(
         "def upgrade_helm_chart_command(", maxsplit=1
     )[0]
-    upgrade = cli_text.split("def soperator_upgrade_command(", maxsplit=1)[1].split(
-        "def _soperator_upgrade_flux_bundle_sha256(", maxsplit=1
-    )[0]
+    upgrade = (PROJECT_ROOT / "src" / "nebius_cxcli" / "soperator_campaign_cli.py").read_text(
+        encoding="utf-8"
+    )
     status_text = (PROJECT_ROOT / "src" / "nebius_cxcli" / "soperator_status.py").read_text(
         encoding="utf-8"
     )
@@ -161,6 +161,7 @@ def test_upgrade_campaign_and_node_group_migration_keep_separate_lifecycles() ->
     assert "_run_common_soperator_release_upgrade(" not in migration
     assert "apply_staged_soperator_release(" in migration
     assert "_SOPERATOR_PARENT_OPERATION_LEASE" not in migration
-    assert "supervise_committed_soperator_upgrade(" in upgrade
+    assert "execute_committed_soperator_upgrade(" in upgrade
+    assert "supervise_committed_soperator_upgrade(" not in upgrade
     assert "supervise=False" in upgrade
     assert "mk8s_node_group_migration" not in status_text

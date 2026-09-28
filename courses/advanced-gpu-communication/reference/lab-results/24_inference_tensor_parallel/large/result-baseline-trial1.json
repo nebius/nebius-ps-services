@@ -1,0 +1,57 @@
+{
+  "correctness": {
+    "column_parallel_matches_reference": true,
+    "row_parallel_matches_reference": true
+  },
+  "lab": "24_inference_tensor_parallel",
+  "measurements": {
+    "batch": 8,
+    "column_parallel_all_gather_median_ms": 0.1885,
+    "column_parallel_all_gather_samples_ms": [
+      0.4321759915910661,
+      0.3487579997454304,
+      0.2319220220670104,
+      0.19140099902870134,
+      0.1943620154634118,
+      0.1735410187393427,
+      0.16676700033713132,
+      0.1454050070606172,
+      0.18565100617706776,
+      0.1616440131329
+    ],
+    "inference_contract": [
+      null,
+      null,
+      null
+    ],
+    "logical_collective_tensor_bytes": 131072,
+    "maximum_absolute_error": 2.0,
+    "maximum_relative_l2": 0.002852349542081356,
+    "model_fit_fraction_per_rank": 0.5,
+    "parameter_shard_bytes_per_rank": 67108864,
+    "replicated_reference_weight_bytes": 134217728,
+    "row_parallel_all_reduce_median_ms": 0.1125,
+    "row_parallel_all_reduce_samples_ms": [
+      0.11726299999281764,
+      0.1119570224545896,
+      0.138178002089262,
+      0.10600301902741194,
+      0.11691497638821602,
+      0.11623196769505739,
+      0.1113229664042592,
+      0.10537402704358101,
+      0.11310004629194736,
+      0.1078540226444602
+    ],
+    "width": 8192
+  },
+  "parameters": {
+    "batch_size": 8,
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

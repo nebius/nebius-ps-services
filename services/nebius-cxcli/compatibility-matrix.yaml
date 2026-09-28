@@ -1,0 +1,309 @@
+# Canonical compatibility registry. Recommendations are not support claims.
+# Semantics, implementation plan, and current test assessment:
+# docs/compatibility-matrix.md
+schema_version: 1
+status: active
+reviewed_on: "2026-09-15"
+
+coverage:
+  inventory: resolved_selected_components
+  initial_profiles: [mk8s, soperator]
+  unassessed_components: report_unknown
+  disabled_components: not_applicable
+  upstream_children: expand_from_frozen_release
+
+selection:
+  config_reference: compatibility.targets.<target_id>.version_set
+  profile_defaults:
+    mk8s: nebius-mk8s-gpu-recommendation-2026-09-15
+    soperator: nebius-mk8s-gpu-recommendation-2026-09-15
+  default_applies_when: gpu_enabled
+  version_sets_enable_components: false
+  persist_resolved_reference_in_config: true
+  ambiguous_or_missing_required_selection: reject
+  explicit_version_conflicts_with_set: reject
+  custom_selection: explicit_versions_without_version_set
+  custom_selection_must_pass_all_applicable_rules: true
+
+# Named exact selections are reusable candidates, not automatic support claims.
+# Once integrated, these pins are the sole version defaults for covered
+# profiles; component_sources.yaml continues to own their source locations.
+version_sets:
+  nebius-mk8s-gpu-recommendation-2026-09-15:
+    profiles: [mk8s, soperator]
+    qualification: vendor_recommended_pending_joint_validation
+    pins:
+      nvidia-gpu-operator:
+        distribution: nebius-marketplace-gpu
+        chart_version: "v25.10.0"
+        observed_artifact:
+          checked_on: "2026-09-15"
+          chart_app_version: "v25.10.0"
+          kube_version_constraint: ">= 1.16.0-0"
+          package_sha256: sha256:9d1d41ff88760599ee229bf37094b23d26ac4621f9335a58cee141a60318c76d
+          oci_manifest_digest: sha256:d8a3b61df353562fd4be656b6a8739ec3639c1b4c6b973a191aa073827fcea41
+      nvidia-network-operator:
+        distribution: nebius-marketplace-network
+        chart_version: "25.7.0"
+        observed_artifact:
+          checked_on: "2026-09-15"
+          chart_app_version: "v25.7.0"
+          kube_version_constraint: ">= 1.21.0"
+          package_sha256: sha256:2cfc9d535127506408c64c4aac4a268ef1385d05edd0b8c76c38734be6181cbc
+          oci_manifest_digest: sha256:48f89b4f64ed065aab0826d48a261aa3ddbdcf223bcc191ea1fb0723aa6a29e1
+          controller_image:
+            declared_reference: cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/image/network-operator:v25.1.0
+            observed_runtime_digest: sha256:12f0576f372f5adc17b60795952ae47388e50d8fad563b9595f3091eadd8eb29
+            verified_binary_version: null
+            nvidia_upstream_equivalence: unverified
+    evidence: [nebius-gpu-setup]
+    requires: [all_applicable_constraints, per_target_support_assessment]
+    supported_kubernetes_minors: null
+    # null means unknown; it never means all versions.
+
+# Identity dimensions are distinct. In particular, a Terraform module version
+# is not a Kubernetes version, and a chart version is not an operand version.
+identity:
+  required: [instance_id, component_id, kind, owner, distribution]
+  artifact_fields:
+    - source
+    - chart_version
+    - chart_app_version
+    - application_version
+    - image_reference
+    - image_digest
+    - package_sha256
+    - oci_manifest_digest
+    - source_commit
+  context_fields:
+    - kubernetes_control_plane_version
+    - kubernetes_node_versions
+    - os
+    - architecture
+    - platform
+    - gpu_model
+    - nic_model
+    - host_driver_version
+    - host_driver_preset
+    - jail_cuda_version
+    - driver_owner
+    - rdma_mode
+    - enabled_subcomponents
+
+distributions:
+  nebius-marketplace-gpu:
+    component_id: nvidia-gpu-operator
+    source: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/chart/gpu-operator
+  nebius-marketplace-network:
+    component_id: nvidia-network-operator
+    source: oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator
+  nvidia-upstream-gpu:
+    component_id: nvidia-gpu-operator
+    source: https://helm.ngc.nvidia.com/nvidia
+  nvidia-upstream-network:
+    component_id: nvidia-network-operator
+    source: https://helm.ngc.nvidia.com/nvidia
+  nebius-soperator:
+    component_id: soperator
+    source: https://github.com/nebius/soperator
+
+sources:
+  nebius-gpu-setup:
+    authority: nebius
+    kind: distribution_recommendation
+    url: https://docs.nebius.com/kubernetes/gpu/set-up
+    checked_on: "2026-09-15"
+  nebius-kubernetes-versions:
+    authority: nebius
+    kind: service_documentation
+    url: https://docs.nebius.com/kubernetes/versions
+    checked_on: "2026-09-15"
+  nebius-kubernetes-upgrades:
+    authority: nebius
+    kind: transition_documentation
+    url: https://docs.nebius.com/kubernetes/manage-versions
+    checked_on: "2026-09-15"
+  kubernetes-version-skew:
+    authority: kubernetes
+    kind: transition_documentation
+    url: https://kubernetes.io/releases/version-skew-policy/
+    checked_on: "2026-09-15"
+  nvidia-gpu-25-10:
+    authority: nvidia
+    kind: vendor_support
+    url: https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/25.10/platform-support.html
+    checked_on: "2026-09-15"
+  nvidia-network-25-7:
+    authority: nvidia
+    kind: vendor_support
+    url: https://docs.nvidia.com/networking/display/kubernetes2570/platform-support.html
+    checked_on: "2026-09-15"
+  nvidia-network-25-10:
+    authority: nvidia
+    kind: vendor_support
+    url: https://docs.nvidia.com/networking/display/kubernetes25100/platform-support.html
+    checked_on: "2026-09-15"
+  nvidia-network-upgrades:
+    authority: nvidia
+    kind: transition_documentation
+    url: https://docs.nvidia.com/networking/display/kubernetes2640/life-cycle-management.html
+    checked_on: "2026-09-15"
+  soperator-4-1-5:
+    authority: nebius-soperator
+    kind: release_documentation
+    release: "4.1.5"
+    url: https://github.com/nebius/soperator/blob/4.1.5/README.md
+    checked_on: "2026-09-15"
+  soperator-4-1-8:
+    authority: nebius-soperator
+    kind: release_documentation
+    release: "4.1.8"
+    url: https://github.com/nebius/soperator/blob/4.1.8/README.md
+    checked_on: "2026-09-15"
+
+# Multiple matching assertions accumulate; no first-match or last-match wins.
+# A recommendation does not assert a Kubernetes support range.
+assertions:
+  - id: nebius-gpu-recommended-package
+    subject: {distribution: nebius-marketplace-gpu}
+    claim:
+      kind: recommended_version_set
+      version_set: nebius-mk8s-gpu-recommendation-2026-09-15
+    evidence: [nebius-gpu-setup]
+  - id: nebius-network-recommended-package
+    subject: {distribution: nebius-marketplace-network}
+    claim:
+      kind: recommended_version_set
+      version_set: nebius-mk8s-gpu-recommendation-2026-09-15
+    evidence: [nebius-gpu-setup]
+  - id: nvidia-network-25-7-kubernetes
+    subject:
+      distribution: nvidia-upstream-network
+      application_version: {scheme: nvidia_calendar, family: "25.7"}
+    claim:
+      kind: supported_kubernetes_minors
+      versions: ["1.29", "1.30", "1.31", "1.32", "1.33"]
+    evidence: [nvidia-network-25-7]
+  - id: nvidia-network-25-10-kubernetes
+    subject:
+      distribution: nvidia-upstream-network
+      application_version: {scheme: nvidia_calendar, family: "25.10"}
+    claim:
+      kind: supported_kubernetes_minors
+      versions: ["1.30", "1.31", "1.32", "1.33", "1.34"]
+    evidence: [nvidia-network-25-10]
+  - id: nvidia-gpu-25-10-kubernetes-1-35
+    subject:
+      distribution: nvidia-upstream-gpu
+      application_version: {scheme: nvidia_calendar, family: "25.10"}
+    when: {kubernetes_minor: "1.35"}
+    claim:
+      kind: minimum_supported_application_version
+      version: "25.10.1"
+    evidence: [nvidia-gpu-25-10]
+  - id: soperator-4-1-5-kubernetes-minimum
+    subject: {distribution: nebius-soperator, release: "4.1.5"}
+    claim: {kind: minimum_kubernetes_minor, version: "1.31"}
+    evidence: [soperator-4-1-5]
+  - id: soperator-4-1-8-kubernetes-minimum
+    subject: {distribution: nebius-soperator, release: "4.1.8"}
+    claim: {kind: minimum_kubernetes_minor, version: "1.31"}
+    evidence: [soperator-4-1-8]
+
+# These are closed evaluator identifiers, never executable commands or code.
+# The actual data is acquired from authoritative adapters, then frozen.
+required_checks:
+  - id: selected-component-coverage
+    select: all_selected_components
+    evaluator: coverage
+  - id: helm-kubernetes-constraint
+    select: all_selected_helm_artifacts
+    evaluator: exact_artifact_kube_version
+    absent_optional_constraint: not_declared
+    unreadable_or_malformed_metadata: block
+    constraint_not_satisfied: block
+    not_declared_implies_support: false
+  - id: terraform-provider-and-module-constraints
+    select: all_selected_terraform_modules
+    evaluator: resolved_terraform_constraints
+  - id: mk8s-host-compatibility
+    select: all_selected_mk8s_node_groups
+    evaluator: nebius_node_group_compatibility_api
+  - id: mk8s-service-version-admission
+    select: all_selected_mk8s_targets
+    evaluator: nebius_cluster_version_api
+  - id: soperator-release-contract
+    select: all_selected_soperator_targets
+    evaluator: frozen_soperator_release_contract
+  - id: gpu-rdma-ownership
+    select: gpu_enabled_targets
+    evaluator: gpu_network_driver_and_nfd_ownership
+  - id: enabled-operand-compatibility
+    select: enabled_operator_operands
+    evaluator: artifact_bound_operand_constraints
+
+transitions:
+  - id: kubernetes-control-plane-first
+    component: mk8s
+    operations: [upgrade]
+    evaluator: kubernetes_minor_step_and_version_skew
+    before: control_plane
+    after: node_groups
+    evidence: [kubernetes-version-skew, nebius-kubernetes-upgrades]
+  - id: network-before-gpu-install
+    operations: [install]
+    when: {rdma: true}
+    before: nvidia-network-operator
+    after: nvidia-gpu-operator
+    evidence: [nebius-gpu-setup]
+  - id: nvidia-network-release-family-step
+    distribution: nvidia-upstream-network
+    operations: [upgrade]
+    evaluator: same_or_next_published_release_family
+    version_scheme: nvidia_calendar
+    allow_within_family: true
+    reviewed_family_edges:
+      - {from: "25.7", to: "25.10"}
+    unlisted_family_edge: unknown
+    evidence: [nvidia-network-upgrades]
+  - id: every-intermediate-state
+    operations: [upgrade]
+    evaluator: all_required_checks_per_stage
+    includes: [source, target, mixed_node_versions, operand_rollout, crd_transition]
+
+# No source violation is currently approved for remediation. A reviewed entry
+# must name exact source/target versions, affected assertions and source evidence.
+reviewed_remediations: []
+
+policy:
+  constraint_failure: block
+  required_evidence_missing: block
+  conflicting_evidence: block
+  outside_documented_support: block
+  unknown_support: warn
+  expired_positive_evidence: warn
+  recommendation_implies_support: false
+  runtime_success_implies_vendor_support: false
+  cross_distribution_inheritance: require_explicit_verified_mapping
+
+freeze:
+  bind:
+    - matrix_schema_version
+    - matrix_sha256
+    - evaluator_version
+    - selected_assertions_and_evidence
+    - resolved_version_set_identity_and_pins
+    - resolved_component_inventory
+    - exact_artifact_digests
+    - effective_values_and_enabled_features
+    - planned_intermediate_states
+  recovery: reuse_admitted_snapshot
+  live_rechecks: [identity, artifact_integrity, provider_admission, available_capacity]
+  live_recheck_may_change_selected_versions: false
+  current_matrix_may_replace_admitted_matrix: false
+
+report:
+  separate_axes: [constraints, documented_support, runtime_validation]
+  row_fields: [check_id, subject, dependency, applicability, outcome, evidence, reason]
+  runtime_receipts: operation_owned
+  public_catalog_contains_live_environment_data: false

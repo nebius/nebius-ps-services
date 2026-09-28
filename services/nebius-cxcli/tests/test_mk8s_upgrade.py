@@ -1093,11 +1093,9 @@ def test_plan_node_template_upgrade_validates_combined_matrix_tuple() -> None:
     assert "system: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04" in rendered
     assert "gpu: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04" in rendered
     assert "GPU stack cuda12.8 -> cuda13.0" in rendered
-    assert "- compatibility matrix:" in rendered
-    assert "  - cpu-platform:" in rendered
-    assert "    - ubuntu24.04: driverless/operator-managed" in rendered
-    assert "  - gpu-platform:" in rendered
-    assert "    - ubuntu24.04: cuda13.0" in rendered
+    assert "- compatibility matrix:" not in rendered
+    assert {row.platform for row in plan.compatibility_matrix} == {"cpu-platform", "gpu-platform"}
+    assert plan.compatibility_matrix[0].choices
 
 
 def test_plan_node_template_upgrade_requires_gpu_stack_for_nebius_image_gpu() -> None:
@@ -1290,8 +1288,12 @@ def test_plan_node_template_upgrade_reports_invalid_matrix_tuple() -> None:
     assert "cannot use Kubernetes 1.33, OS 'ubuntu24.04'" in plan.compatibility_failures[0].reason
     assert "Compatible GPU stack values" in plan.compatibility_failures[0].follow_up
     rendered = "\n".join(upgrade.format_node_template_upgrade_plan(plan, dry_run=True))
-    assert "- compatibility matrix:" in rendered
-    assert "    - ubuntu24.04: cuda12.8" in rendered
+    assert "- compatibility matrix:" not in rendered
+    assert "- compatibility blockers:" in rendered
+    assert all(
+        line.strip() in rendered for line in plan.compatibility_failures[0].follow_up.splitlines()
+    )
+    assert plan.compatibility_matrix[0].choices[0].drivers_presets == ("cuda12.8",)
 
 
 def test_plan_rejects_node_groups_above_target_control_plane_version() -> None:

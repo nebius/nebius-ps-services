@@ -152,9 +152,10 @@ segment unless the complete workflow is rerun.
 Separately make bad product code leave the target unresponsive. Expect
 authorized stabilization to take priority after evidence preservation when
 safe, while immediately marking the affected lineage intervened. Recovery
-authority must not become product proof, and destructive, IAM, credential,
-data, public-exposure, deletion, material-cost, or material-availability
-changes must still require action-specific approval in every environment.
+authority must not become product proof. Necessary new credentials and secrets
+for an authorized task proceed without a redundant confirmation. Uncovered
+credential replacement, IAM access expansion, destructive changes, public
+exposure, or material impact still require action-specific approval.
 
 Provide a harness-owned connectivity defect outside the accepted product
 contract. Expect the harness owner to be repaired and product behavior rerun

@@ -191,6 +191,24 @@ def test_noop_node_drain_closes_the_write_ahead_action() -> None:
     assert completion["disposition"] == "applied"
 
 
+@pytest.mark.parametrize("field", ["node_names", "job_ids", "partitions"])
+def test_action_identity_survives_sequence_json_roundtrip(field: str) -> None:
+    import json
+
+    subject = {"partition": "gpu"} if field == "partitions" else "worker-0"
+    event = {
+        "namespace": "soperator",
+        "checkpoint_id": "checkpoint",
+        "action": "scheduling-pause-recorded",
+        field: (subject,),
+    }
+    action = normalize_slurm_recovery_event(event, fencing_epoch=7)
+    restored = json.loads(json.dumps(action))
+    validate_slurm_recovery_actions([restored])
+    listed = normalize_slurm_recovery_event({**event, field: [subject]}, fencing_epoch=7)
+    assert action["actionId"] == listed["actionId"]
+
+
 def test_untyped_or_unfenced_action_is_rejected() -> None:
     with pytest.raises(RuntimeError, match="incomplete"):
         validate_slurm_recovery_actions(

@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,serialized_median_seconds,value,0.011947800000000001,s
+baseline-trial1,overlapped_median_seconds,value,0.0118657,s
+baseline-trial1,serialized_to_overlap_ratio,value,1.0069,none
+repeat-trial1,serialized_median_seconds,value,0.0119482,s
+repeat-trial1,overlapped_median_seconds,value,0.011838900000000001,s
+repeat-trial1,serialized_to_overlap_ratio,value,1.0092,none

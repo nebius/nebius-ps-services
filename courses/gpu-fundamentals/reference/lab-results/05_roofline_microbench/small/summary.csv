@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,bandwidth_kernel_timing_median_seconds,value,5.33e-05,s
+baseline-trial1,bandwidth_kernel_estimated_gib_per_s,value,3602253495664.64,Bps
+baseline-trial1,gemm_achieved_tflops,value,475900000000000.0,FLOPS
+repeat-trial1,bandwidth_kernel_timing_median_seconds,value,5.31e-05,s
+repeat-trial1,bandwidth_kernel_estimated_gib_per_s,value,3615814854901.76,Bps
+repeat-trial1,gemm_achieved_tflops,value,490850000000000.0,FLOPS

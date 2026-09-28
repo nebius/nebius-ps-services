@@ -382,7 +382,7 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
         "  Overall: PASS (1/1 completed, 0 not run)",
-        "  PASS GPU visibility probe: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
+        "  SKIPPED GPU visibility probe: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'deploy-gpu-visibility-report.json'}",
     ]
@@ -443,7 +443,7 @@ def test_build_deploy_validation_report_keeps_soperator_gpu_visibility_skip(
 
     summary_lines = format_deploy_validation_summary_lines(report)
     assert (
-        "  PASS GPU visibility probe (mk8s): Skipped: all Ready GPU nodes already have "
+        "  SKIPPED GPU visibility probe (mk8s): Skipped: all Ready GPU nodes already have "
         "their GPUs allocated to existing workloads; total Ready GPU nodes 2."
     ) in summary_lines
     markdown = "\n".join(validation_section_lines(report))
@@ -508,3 +508,12 @@ def test_build_deploy_validation_report_summarizes_error_report(tmp_path: Path) 
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'deploy-gpu-visibility-report.json'}",
     ]
+
+
+def test_failed_payload_cannot_be_hidden_by_skipped_marker(tmp_path):
+    (tmp_path / "result.json").write_text(json.dumps({"passed": False, "skipped": True}))
+    report = build_deploy_validation_report(
+        [{"kind": "mk8s_gpu_visibility", "report_file": "result.json"}], reports_dir=tmp_path
+    )
+    assert report.overall_status == "failed"
+    assert report.failed_count == 1

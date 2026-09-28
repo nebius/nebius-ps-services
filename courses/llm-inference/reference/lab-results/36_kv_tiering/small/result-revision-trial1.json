@@ -1,0 +1,334 @@
+{
+  "correctness": {
+    "exclusive_ownership_and_capacity": true
+  },
+  "lab": "36_kv_tiering",
+  "measurements": {
+    "modeled_foreground_total_ms": 109.782912,
+    "modeled_write_service_total_ms": 36.75443200000001,
+    "no_cache_prefill_total_ms": 144,
+    "policy": {
+      "capacities": [
+        2,
+        0,
+        8
+      ],
+      "latency_ms": 0.2,
+      "prefill_ms": 8,
+      "prefix_bytes": 4194304,
+      "storage_gbps": 2,
+      "ttl_ms": 500
+    },
+    "read_bytes": 25165824,
+    "requests": [
+      {
+        "arrival_ms": 0,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 0.0,
+        "prefix": 0,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          1,
+          0,
+          0
+        ],
+        "worker_restart": false,
+        "write_bytes": 0
+      },
+      {
+        "arrival_ms": 50,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 0.0,
+        "prefix": 1,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          0
+        ],
+        "worker_restart": false,
+        "write_bytes": 0
+      },
+      {
+        "arrival_ms": 100,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 2,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          1
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 150,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 3,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          2
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 200,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 4,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          3
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 250,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 5,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          4
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 300,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 0,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          5
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 350,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 1,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          6
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 400,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 2,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          7
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 450,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 3,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          8
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 500,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 4,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          8
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 550,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 8,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 5,
+        "read_bytes": 0,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          8
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 600,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 0,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          7
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 650,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 1,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          6
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 700,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 2,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          5
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 750,
+        "capacity_evictions": 0,
+        "expired_prefixes": 1,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 3,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          4
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 800,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 4,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          4
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      },
+      {
+        "arrival_ms": 850,
+        "capacity_evictions": 0,
+        "expired_prefixes": 0,
+        "modeled_foreground_ms": 2.2971520000000005,
+        "modeled_write_service_ms": 2.2971520000000005,
+        "prefix": 5,
+        "read_bytes": 4194304,
+        "tier_occupancy_prefixes": [
+          2,
+          0,
+          4
+        ],
+        "worker_restart": false,
+        "write_bytes": 4194304
+      }
+    ],
+    "reuse_fraction": 0.3333333333333333,
+    "write_bytes": 67108864
+  },
+  "parameters": {
+    "device_prefixes": 2,
+    "gap_ms": 50,
+    "latency_ms": 0.2,
+    "prefill_ms": 8,
+    "prefix_mib": 4,
+    "prefixes": 6,
+    "restart_at": -1,
+    "revision_change_at": 6,
+    "rounds": 3,
+    "seed": 17,
+    "storage_gbps": 2,
+    "storage_prefixes": 8,
+    "ttl_ms": 500,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

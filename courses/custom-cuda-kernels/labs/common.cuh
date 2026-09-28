@@ -3,11 +3,13 @@
 #include "arguments.hpp"
 
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -21,16 +23,17 @@
     }                                                                                     \
   } while (false)
 
-inline cudaDeviceProp require_h100() {
+inline cudaDeviceProp require_course_gpu() {
   int count = 0;
   CUDA_CHECK(cudaGetDeviceCount(&count));
   if (count != 1) throw std::runtime_error("expected exactly one allocated GPU");
   cudaDeviceProp properties{};
   CUDA_CHECK(cudaGetDeviceProperties(&properties, 0));
   const std::string name(properties.name);
-  if (properties.major != 9 || properties.minor != 0 || name.find("H100") == std::string::npos || name.find("MIG") != std::string::npos) {
-    throw std::runtime_error("expected one full NVIDIA H100 with compute capability 9.0");
+  if (properties.major != 9 || properties.minor != 0 || !std::regex_search(name, std::regex("\\b(H100|H200)\\b")) || name.find("MIG") != std::string::npos) {
+    throw std::runtime_error("expected one full H100 or H200 with compute capability 9.0");
   }
+  std::cout << "gpu_name=" << name << "\ngpu_compute_capability=" << properties.major << '.' << properties.minor << '\n';
   return properties;
 }
 
@@ -69,6 +72,19 @@ inline TimingSummary summarize_samples(std::vector<float> samples) {
   return {samples.size(), samples.front(), median, samples[p90_index]};
 }
 
+inline bool capture_enabled() {
+  const char* value = std::getenv("COURSE_CAPTURE");
+  return value && std::string(value) == "1";
+}
+
+class CaptureRange {
+ public:
+  explicit CaptureRange(const char* name) : enabled_(capture_enabled()) { if (enabled_) nvtxRangePushA(name); }
+  ~CaptureRange() { if (enabled_) nvtxRangePop(); }
+ private:
+  bool enabled_;
+};
+
 template <typename Launch>
 TimingSummary benchmark_cuda(Launch&& launch, int warmups = 5, int iterations = 20) {
   for (int index = 0; index < warmups; ++index) {
@@ -80,6 +96,7 @@ TimingSummary benchmark_cuda(Launch&& launch, int warmups = 5, int iterations = 
   std::vector<float> samples;
   samples.reserve(iterations);
   for (int index = 0; index < iterations; ++index) {
+    CaptureRange region("course_measure");
     timer.start();
     launch();
     CUDA_CHECK(cudaGetLastError());
@@ -101,6 +118,7 @@ TimingSummary benchmark_cuda_with_setup(Prepare&& prepare, Launch&& launch, int 
   samples.reserve(iterations);
   for (int index = 0; index < iterations; ++index) {
     prepare();
+    CaptureRange region("course_measure");
     timer.start();
     launch();
     CUDA_CHECK(cudaGetLastError());

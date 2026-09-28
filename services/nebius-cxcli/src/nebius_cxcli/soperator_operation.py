@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .paths import ProjectPaths
 from .soperator_cache import locked_cache_entry
 from .soperator_failures import SoperatorMainWorkloadIdentity, SoperatorSafetyPauseError
@@ -169,11 +170,13 @@ def soperator_stage_plan_sha256(paths: ProjectPaths) -> str:
 def _operation_stage_plan_sha256(paths: ProjectPaths, *, strategy: str) -> str:
     # Local import avoids a module cycle: the reconciler consumes the operation
     # spec, while this builder also binds the reconciler's exact phase plan.
+    from .soperator_deployment_profile import rendered_deployment_profile
     from .soperator_release_reconciler import soperator_reconcile_stage_plan_sha256
 
     return soperator_reconcile_stage_plan_sha256(
         strategy=strategy,
         rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+        deployment_profile=rendered_deployment_profile(paths),
     )
 
 
@@ -391,6 +394,19 @@ def _load_release_intent(path: Path) -> SoperatorReleaseIntent:
     return intent
 
 
+def load_completed_soperator_release_intent(
+    *,
+    paths: ProjectPaths,
+    target_ref: str,
+) -> SoperatorReleaseIntent | None:
+    """Read completed child authority without treating it as an active operation."""
+    path = _release_intent_path(paths, target_ref)
+    if not path.is_file():
+        return None
+    intent = _load_release_intent(path)
+    return intent if intent.status == "complete" else None
+
+
 def load_local_active_soperator_release_intent(
     *,
     paths: ProjectPaths,
@@ -526,7 +542,7 @@ def supersede_soperator_operation_anchor(
     name = f"nebius-cxcli-soperator-op-{cluster_digest}-{operation_digest}"
     env = os.environ.copy()
     env.update(extra_env or {})
-    get_result = subprocess.run(
+    get_result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -603,7 +619,7 @@ def supersede_soperator_operation_anchor(
             "value": replacement_operation_spec_sha256,
         },
     ]
-    patched = subprocess.run(
+    patched = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -652,7 +668,7 @@ def soperator_operation_anchor_status(
     name = f"nebius-cxcli-soperator-op-{cluster_digest}-{operation_digest}"
     env = os.environ.copy()
     env.update(extra_env or {})
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -741,7 +757,7 @@ class SoperatorOperationAnchor:
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(self._extra_env)
-        return subprocess.run(
+        return kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -857,6 +873,10 @@ class SoperatorOperationAnchor:
                 )
             resource_version = self._resource_version(payload)
             status = str(data.get("status") or "")
+            if status == "reconciled":
+                raise RuntimeError(
+                    "This historical operation was reconciled and cannot be reopened"
+                )
             if status not in {"active", "complete"}:
                 raise RuntimeError("Soperator operation anchor has an invalid status")
             current_epoch = self._fencing_epoch(data)

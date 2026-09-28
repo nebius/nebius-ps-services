@@ -6,13 +6,13 @@ import copy
 import json
 import os
 import re
-import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from . import kubernetes_process
 from .component_instances import component_instance_id, component_type_id
 from .config_loader import dump_yaml
 from .duration_utils import parse_go_duration_seconds
@@ -1073,7 +1073,7 @@ def _kubectl_json(
     kube_env: Mapping[str, str],
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    cp = subprocess.run(
+    cp = kubernetes_process.run(
         ["kubectl", *args, "-o", "json"],
         check=True,
         capture_output=True,
@@ -1313,22 +1313,6 @@ def _append_compatibility_failure_lines(
             lines.append(f"      {line}")
 
 
-def _append_compatibility_matrix_lines(
-    lines: list[str],
-    summaries: Sequence[CompatibilityMatrixSummary],
-) -> None:
-    if not summaries:
-        return
-    lines.append("- compatibility matrix:")
-    for summary in summaries:
-        lines.append(f"  - {summary.platform}:")
-        if not summary.choices:
-            lines.append("    - no compatible OS/GPU stack values returned")
-            continue
-        for choice in summary.choices:
-            lines.append(f"    - {choice.os}: " + ", ".join(choice.drivers_presets))
-
-
 def format_node_template_upgrade_plan(
     plan: Mk8sNodeTemplateUpgradePlan,
     *,
@@ -1371,7 +1355,6 @@ def format_node_template_upgrade_plan(
                 f"GPU stack {current_stack} -> {gpu_stack} "
                 f"({'gpu' if group.gpu else 'cpu/system'})"
             )
-    _append_compatibility_matrix_lines(lines, plan.compatibility_matrix)
     if plan.preflight_findings:
         lines.append("- preflight findings:")
         lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))

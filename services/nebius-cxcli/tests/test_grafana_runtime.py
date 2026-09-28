@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -52,7 +53,7 @@ def test_run_kubectl_uses_explicit_target_context(monkeypatch: pytest.MonkeyPatc
             {"returncode": 0, "stdout": "{}", "stderr": ""},
         )()
 
-    monkeypatch.setattr(grafana_runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(grafana_runtime.kubernetes_process, "run", fake_run)
 
     grafana_runtime._run_kubectl(
         ["-n", "observability", "get", "service", "grafana", "-o", "json"],
@@ -94,7 +95,7 @@ def test_grafana_delivery_probe_treats_missing_secret_as_ambiguous(
         credentials=(("static-key", "static-key-id"),),
     )
     monkeypatch.setattr(
-        grafana_runtime.subprocess,
+        grafana_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: type(
             "Completed",
@@ -143,19 +144,20 @@ def test_grafana_prometheus_parity_uses_configured_proxy_and_fresh_sample(
     )
     monkeypatch.setattr(
         grafana_runtime,
-        "_grafana_base_url",
-        lambda *_args, **_kwargs: "https://grafana.example/",
+        "grafana_api_endpoint",
+        lambda *_args, **_kwargs: nullcontext("https://grafana.example/"),
     )
     monkeypatch.setattr(
         grafana_runtime,
         "_grafana_admin_credentials",
         lambda *_args, **_kwargs: ("admin", "password"),
     )
+    monkeypatch.setattr(grafana_runtime, "grafana_api_environment", lambda env: env)
     captured: dict[str, object] = {}
 
     def _get(base_url: str, path: str, **kwargs: object):
         captured.update({"base_url": base_url, "path": path, **kwargs})
-        return {"data": {"result": [{"value": [1001.0, "1"]}]}}
+        return {"status": "success", "data": {"result": [{"value": [1001.0, "1001"]}]}}
 
     monkeypatch.setattr(grafana_runtime, "_get_grafana_json", _get)
 
@@ -164,12 +166,16 @@ def test_grafana_prometheus_parity_uses_configured_proxy_and_fresh_sample(
         target_ref="cluster2",
         query='slurm_node_info{mk8s_cluster_id="mk8scluster-123"}',
         not_before=1000.0,
+        datasource_uid="nebius-user-metrics",
         extra_env={},
     )
     assert captured["path"] == ("api/datasources/proxy/uid/nebius-user-metrics/api/v1/query")
     params = captured["params"]
     assert isinstance(params, dict)
-    assert params["query"] == 'slurm_node_info{mk8s_cluster_id="mk8scluster-123"}'
+    assert (
+        params["query"]
+        == '(slurm_node_info{mk8s_cluster_id="mk8scluster-123"}) and (timestamp(slurm_node_info{mk8s_cluster_id="mk8scluster-123"}) >= 1000.000000)'
+    )
     assert str(params["time"]).isdigit()
 
 
@@ -279,8 +285,8 @@ def test_grafana_release_specs_uses_catalog_component_id(
     assert specs[0].namespace == "dashboards-ns"
     assert specs[0].release_name == "dashboards-release"
     assert specs[0].admin_secret_name == "runtime-admin"
-    assert specs[0].token_secret_name == "runtime-read"
-    assert specs[0].token_key == "runtime-token"
+    assert specs[0].token_secret_name == ""
+    assert specs[0].token_key == ""
 
 
 def test_explore_url_uses_grafana_panes_schema() -> None:
@@ -396,6 +402,15 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = GrafanaCliSettings(
+        datasources=(
+            GrafanaDatasourceSpec(
+                key="cloud",
+                name="Cloud",
+                uid="cloud",
+                datasource_type="prometheus",
+                read_endpoint="cloud",
+            ),
+        ),
         admin_secret=GrafanaAdminSecretSpec(
             secret_name="nebius-cxcli-grafana-admin",
             user="admin",
@@ -407,6 +422,11 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
             secret_name="nebius-cxcli-grafana-observability-read",
             key="token",
         ),
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "observability_endpoint_summary",
+        lambda _: {"read": {"cloud": "https://read.monitoring.api.nebius.cloud"}},
     )
     applied: list[dict[str, Any]] = []
     emitted: list[str] = []
@@ -489,7 +509,7 @@ def test_cleanup_observability_read_token_deletes_provider_key_before_secret(
         "data": {"token": "c2VjcmV0"},
     }
     monkeypatch.setattr(
-        grafana_runtime.subprocess,
+        grafana_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: type(
             "Completed",
@@ -534,7 +554,7 @@ def test_cleanup_observability_read_token_fails_closed_without_key_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        grafana_runtime.subprocess,
+        grafana_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: type(
             "Completed",
@@ -565,7 +585,7 @@ def test_cleanup_observability_read_token_is_noop_when_secret_is_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        grafana_runtime.subprocess,
+        grafana_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: type(
             "Completed",
@@ -938,6 +958,7 @@ def test_collect_grafana_runtime_status_records_kube_context(
         _grafana_payload(),
         extra_env={
             "KUBECONFIG": str(kubeconfig),
+            grafana_runtime.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "nebius-cluster2-mk8scluster-123-external",
             grafana_runtime.GRAFANA_TARGET_CLUSTER_ID_ENV: "mk8scluster-123",
         },
         target_ref="cluster2",

@@ -1,6 +1,23 @@
-# LLM Training and GPU Optimization on NVIDIA H100
+# LLM Training
 
 This course teaches how an LLM training step works, how its state consumes memory and communication, and how to optimize it without changing the learning objective or hiding correctness regressions.
+
+Hardware routes:
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Learn to preserve the learning objective while improving training
+correctness, recoverability, memory, precision, data flow, communication, and
+throughput through single-GPU experiments and distributed-training concepts.
+
+Local practice uses one H100. Distributed practical work belongs to the
+advanced communication course on two eight-H100 workers. Its bounded
+mechanics and synthetic workloads do not establish production convergence
+or large-model scaling.
 
 ## 1. Model learning and training objectives
 
@@ -52,7 +69,9 @@ To know which procedure a result describes, identify the trainable parameters, t
 
 Before a transformer, use the scalar model prediction = weight × input. For inputs 1 and 2 with targets 2 and 4, weight 0 predicts zero. The mean squared error is (4 + 16)/2 = 10 and its gradient is -10. A learning rate of 0.1 makes the next weight 0 - 0.1 × (-10) = 1. The new loss is 2.5. Repetition approaches weight 2; input 3, never used for updates, should then produce approximately 6. This demonstrates the update mechanism, not language understanding.
 
-**Practice labs**
+**Practice**
+
+Begin with Lab 32 to observe a weight changing during learning. Read Labs 01 and 05–07 only as previews of later training objectives; their full execution follows the corresponding lessons.
 
 - [Lab 32: Learn a weight and separate training from inference](reference/labs/32_learning_basics.md)
 - [Lab 01: Trace a complete tiny-transformer training step](reference/labs/01_tiny_transformer_train.md)
@@ -92,10 +111,12 @@ Padding, prompt masking, truncation, chat templates, and packing change the loss
 
 For tokens [A, B, C], a causal next-token objective pairs the representation after A with label B and the representation after B with label C. It must not train the position after C to predict the first token of an unrelated packed document. An attention boundary prevents reading the other document, while a loss mask excludes invalid prediction targets; those two controls solve different problems.
 
-**Practice labs**
+**Practice**
 
-- [Lab 13: Decide which tokens contribute to the training loss](reference/labs/13_loss_masking.md)
+Use Lab 25 for packing plans and mask checks, and inspect the masked positions in Lab 13. Defer the full loss and gradient comparison until Lesson 4.
+
 - [Lab 25: Pack variable-length examples without crossing boundaries](reference/labs/25_sequence_packing.md)
+- [Lab 13: Decide which tokens contribute to the training loss](reference/labs/13_loss_masking.md)
 
 **Mental model**
 
@@ -137,7 +158,9 @@ Backward traces how that loss depends on each trainable parameter and computes i
 
 Shape reasoning reveals compute, activation memory, communication, and kernel efficiency. It also separates parameters that persist across steps from activations whose size grows with microbatch and sequence length.
 
-**Practice labs**
+**Practice**
+
+Inspect the forward shapes in Lab 01 and trace tokens to logits. Run the complete training update after Lesson 4.
 
 - [Lab 01: Trace a complete tiny-transformer training step](reference/labs/01_tiny_transformer_train.md)
 
@@ -181,12 +204,14 @@ DDP's `no_sync` can suppress intermediate communication while microbatches accum
 
 A loop can run quickly while applying the wrong gradient scale, clipping at the wrong time, accumulating stale gradients, or stepping its scheduler on the wrong cadence. Performance evidence is invalid until update semantics are tested.
 
-**Practice labs**
+**Practice**
+
+Run Labs 01 and 13, then revisit Lab 25 to connect mask structure to valid-token loss. Preview Lab 02; its matched-work accumulation experiment belongs to Lesson 8.
 
 - [Lab 01: Trace a complete tiny-transformer training step](reference/labs/01_tiny_transformer_train.md)
-- [Lab 02: Trade microbatch size for peak memory](reference/labs/02_gradient_accumulation.md)
 - [Lab 13: Decide which tokens contribute to the training loss](reference/labs/13_loss_masking.md)
 - [Lab 25: Pack variable-length examples without crossing boundaries](reference/labs/25_sequence_packing.md)
+- [Lab 02: Trade microbatch size for peak memory](reference/labs/02_gradient_accumulation.md)
 
 **Mental model**
 
@@ -214,9 +239,13 @@ Saving should expose only a complete snapshot. Data is written to a temporary pr
 
 Restoration is tested by continuing both an uninterrupted run and a restored run from the same boundary with the same next data. A deterministic supported recipe may require bitwise equality; a nondeterministic kernel path needs an explicit tolerance-based continuation claim. Merely loading the file proves neither. Evaluation separately uses held-out data and weights loss by valid tokens so unequal batch lengths do not distort the reported mean.
 
+For example, save immediately after update 40 with no partial gradients. The checkpoint records the model and optimizer after that update, the scheduler position, the RNG states and the cursor for the next batch, B41. Both an uninterrupted run and a restored run must now consume B41 and use the same update-41 learning rate and random choices. Restoring only the weights can instead restart optimizer moments, replay an earlier batch or draw different dropout masks. Compare the next update under the declared deterministic or tolerance-based contract; these update numbers illustrate the boundary, not a measured run.
+
 Missing optimizer, scheduler, scaler, RNG, sampler, or partial-accumulation state can silently fork the run. A checkpoint that loads successfully may still fail continuation equivalence.
 
-**Practice labs**
+**Practice**
+
+Use Lab 24 to compare uninterrupted and restored continuation at the same saved boundary, including the next parameter update.
 
 - [Lab 24: Reproduce the next update after checkpoint restoration](reference/labs/24_checkpoint_resume.md)
 
@@ -254,7 +283,9 @@ As a deliberately simplified ledger, one million parameters stored in 32-bit flo
 
 High-bandwidth memory (HBM) is the GPU’s device memory. This ledger concerns live storage there; moving or sharding state changes ownership and communication costs rather than making the state disappear.
 
-**Practice labs**
+**Practice**
+
+Inspect the memory accounting in Lab 21 and identify persistent versus transient state. Run its precision comparisons after Lesson 7.
 
 - [Lab 21: Validate precision changes across a full training update](reference/labs/21_mixed_precision_training.md)
 
@@ -298,7 +329,9 @@ Matching initial parameters and inputs allow loss, gradients and parameter chang
 
 FP8 weight caching retains a quantized copy of unchanged weights across microbatches in an accumulation window, avoiding repeated conversions. Fused weight-gradient accumulation writes matrix-product gradients directly into an accumulation buffer, combining gradient production and addition instead of requiring a separate temporary gradient and addition step. These techniques can remove conversions or launches only for supported recipes, modules and shapes. Weight caching still needs numerical checks because changing scale history can make cached and freshly converted values differ.
 
-**Practice labs**
+**Practice**
+
+Run Lab 21 with full-update correctness checks. Attempt Lab 22 only in its separately qualified Transformer Engine environment.
 
 - [Lab 21: Validate precision changes across a full training update](reference/labs/21_mixed_precision_training.md)
 - [Lab 22: Qualify a warmed Transformer Engine FP8 recipe](reference/labs/22_transformer_engine_fp8.md)
@@ -329,9 +362,13 @@ Here reentrant refers to invoking a nested differentiation execution during back
 
 Re-execution must preserve semantics. Random operations, stateful modules, autocast/8-bit floating point (FP8) state and side effects can behave differently when run again unless the chosen implementation handles them correctly. The resulting trade includes bytes no longer retained, added floating-point operations (FLOPs) or kernels, peak memory, step-time distribution and valid tokens/s. Numerical update equivalence establishes whether the smaller-memory execution still performs the same learning task.
 
+For a matched-work example, suppose one update uses 64 examples with equal valid-token counts. A microbatch of 16 needs four forward/backward passes; a microbatch of 8 needs eight. Weight each mean loss by one quarter or one eighth respectively, then apply the optimizer once. With unequal valid-token counts, use each microbatch’s share of the total valid tokens instead. Hold that microbatch plan fixed when studying recomputation: checkpointing a block keeps its chosen inputs but recreates omitted intermediates during backward. It does not add new training examples or authorize an extra optimizer update. The memory saved and computation added must be measured.
+
 Accumulation reduces per-microbatch activations but does not remove parameter/optimizer state. Checkpointing removes selected saved activations but executes forward work again during backward. Comparing different effective batches hides the real exchange.
 
-**Practice labs**
+**Practice**
+
+Run Labs 02 and 14 as separate matched-work comparisons: vary microbatching first, then recomputation, preserving effective tokens and each lab’s stated correctness scope.
 
 - [Lab 02: Trade microbatch size for peak memory](reference/labs/02_gradient_accumulation.md)
 - [Lab 14: Compare checkpointing on alternate blocks and all blocks](reference/labs/14_activation_checkpointing.md)
@@ -364,7 +401,9 @@ Ready-time distributions and queue depth beside GPU steps reveal where waiting o
 
 Loader starvation creates idle gaps; careless tuning can duplicate, omit, reorder, or retokenize data differently. Throughput gained by changing examples is not an optimization.
 
-**Practice labs**
+**Practice**
+
+Use Lab 26 to locate producer waiting and change input preparation while preserving sample order and ownership.
 
 - [Lab 26: Diagnose a slow training-data producer](reference/labs/26_input_pipeline.md)
 
@@ -396,10 +435,12 @@ These transformations must preserve random number generator (RNG) advancement, g
 
 Training graphs include autograd, mutation, RNG, optimizer state, dynamic shapes, and collective boundaries. A transformation that works for an inference fragment can produce graph breaks or incorrect gradients in training.
 
-**Practice labs**
+**Practice**
 
-- [Lab 27: Separate compiled expressions from captured training steps](reference/labs/27_fused_graph_trace.md)
+Use Lab 30 to identify the local update operators, then Lab 27 to separate compiler transformations from graph capture and replay.
+
 - [Lab 30: Inspect the operators in a tiny training step](reference/labs/30_training_profiler.md)
+- [Lab 27: Separate compiled expressions from captured training steps](reference/labs/27_fused_graph_trace.md)
 
 **Mental model**
 
@@ -409,7 +450,7 @@ Compilation can fuse forward/backward operators; CUDA Graphs can replay stable s
 
 **Objective**
 
-Compare replicated and sharded training state on two one-GPU nodes.
+Compare replicated and sharded training state with one rank on each advanced worker.
 
 **How it works**
 
@@ -431,11 +472,13 @@ DDP and FSDP2 solve different constraints. A small two-rank job may run faster w
 
 Megatron Core's distributed optimizer separately shards optimizer state and coordinates reduce-scatter/update/all-gather, but this two-rank PyTorch course does not qualify its production implementation.
 
-**Practice labs**
+**Practice**
 
-- [Lab 00: Verify the distributed training allocation](reference/labs/00_cluster_preflight.md)
-- [Lab 03: Train replicated models with DDP](reference/labs/03_ddp_train.md)
-- [Lab 04: Observe FSDP2 sharded training state](reference/labs/04_fsdp2_train.md)
+On the fabric cluster, complete Advanced Lab 03 before Labs 15 and 16; compare replicated and sharded state with the same gradient objective.
+
+- [Lab 03: Verify the distributed training allocation](../advanced-gpu-communication/reference/labs/03_training_readiness.md)
+- [Lab 15: Train replicated models with DDP](../advanced-gpu-communication/reference/labs/15_ddp_train.md)
+- [Lab 16: Observe FSDP2 sharded training state](../advanced-gpu-communication/reference/labs/16_fsdp2_train.md)
 
 **Mental model**
 
@@ -473,11 +516,11 @@ Point-to-point communication sends a tensor from one rank to another instead of 
 
 Expert parallelism places MoE experts on ranks. Grouped GEMM can batch several local expert operations. Router balance, capacity factors, dropped or padded tokens and slow experts affect how much useful work each rank completes.
 
-Expert routing groups tokens by owner, exchanges those groups with all-to-all, applies each owner's expert, then reverses the routing to restore input order. The training path must also return token gradients and update expert weights. Lab 12 explicitly carries these values across communication boundaries rather than assuming communication builds an autograd connection. Batched matrix multiplication (`bmm`) computes corresponding matrix products in a batch; padding unequal expert groups to a common size permits that comparison but performs extra work. Keep padding costs and the actual grouped implementation visible.
+Expert routing groups tokens by owner, exchanges those groups with all-to-all, applies each owner's expert, then reverses the routing to restore input order. The training path must also return token gradients and update expert weights. Advanced Lab 17 explicitly carries these values across communication boundaries rather than assuming communication builds an autograd connection. Batched matrix multiplication (`bmm`) computes corresponding matrix products in a batch; padding unequal expert groups to a common size permits that comparison but performs extra work. Keep padding costs and the actual grouped implementation visible.
 
 ### Make completion and correctness a group decision
 
-A distributed acceptance decision must reach the same verdict on every rank. Lab 19 converts any non-finite tensor, norm or relative error into a failing infinite error, then reduces the integer pass flags with MIN across all ranks. One failed rank therefore prevents publication everywhere. This infinite error is a rejection marker, not a valid measurement. Keep ranks participating through the verdict collective rather than raising on just one rank before its peers reach that operation.
+A distributed acceptance decision must reach the same verdict on every rank. Advanced Lab 18 converts any non-finite tensor, norm or relative error into a failing infinite error, then reduces the integer pass flags with MIN across all ranks. One failed rank therefore prevents publication everywhere. This infinite error is a rejection marker, not a valid measurement. Keep ranks participating through the verdict collective rather than raising on just one rank before its peers reach that operation.
 
 The same parallel degree can produce very different communication, bubbles, memory, and load balance. A topology choice must begin from what is sharded and when consumers need it.
 
@@ -485,11 +528,13 @@ A virtual pipeline stage is a logical chunk of layers; one physical rank can own
 
 For a context-parallel attention example, split a four-token sequence so one rank owns positions 1–2 and another owns 3–4. The query at position 4 still needs allowed keys and values from all four positions; the query at position 2 must not see later positions. Exchanging key/value blocks lets each owner accumulate its local queries' attention contributions while maintaining the causal mask. The normalization must include all allowed keys, not a separate softmax average per rank. Backward must also return gradient contributions to the owners of those keys and values. This explains the communication dependency; the scalar context-partition lab only checks ownership, reconstruction and global normalization, not a distributed attention implementation.
 
-**Practice labs**
+**Practice**
 
-- [Lab 12: Trace expert routing, gradients, and grouped work](reference/labs/12_moe_expert_parallel.md)
-- [Lab 19: Partition a linear layer and verify its backward pass](reference/labs/19_tensor_parallel_linear.md)
-- [Lab 29: Follow pipeline and context partitions through backward](reference/labs/29_parallelism_mechanics.md)
+Use Advanced Labs 17, 18 and 20 to trace expert, tensor, pipeline and context ownership through backward; preserve each lab’s reference checks.
+
+- [Lab 17: Trace expert routing, gradients, and grouped work](../advanced-gpu-communication/reference/labs/17_training_expert_parallel.md)
+- [Lab 18: Partition a linear layer and verify its backward pass](../advanced-gpu-communication/reference/labs/18_training_tensor_parallel.md)
+- [Lab 20: Follow pipeline and context partitions through backward](../advanced-gpu-communication/reference/labs/20_parallelism_mechanics.md)
 
 **Mental model**
 
@@ -529,10 +574,12 @@ A gradient hook is a callback triggered at a defined point in differentiation. A
 
 Total collective duration can remain unchanged while step time improves, or an “asynchronous” collective can remain fully exposed. The optimization target is critical-path wait, not merely a shorter communication bar.
 
-**Practice labs**
+**Practice**
 
-- [Lab 28: Reduce gradients when they become ready](reference/labs/28_communication_overlap.md)
-- [Lab 33: Tune real DDP buckets and communication hooks](reference/labs/33_ddp_buckets.md)
+Use Advanced Lab 19 to establish gradient readiness, then Lab 21 to test real DDP bucket behavior against the complete step time.
+
+- [Lab 19: Reduce gradients when they become ready](../advanced-gpu-communication/reference/labs/19_gradient_overlap.md)
+- [Lab 21: Tune real DDP buckets and communication hooks](../advanced-gpu-communication/reference/labs/21_ddp_buckets.md)
 
 **Mental model**
 
@@ -564,7 +611,9 @@ Reconstructing the effective model requires the adapter values and configuration
 
 Small trainable state is often confused with proportionally smaller total memory or faster steps. The frozen base still occupies memory and participates in forward/backward activation computation.
 
-**Practice labs**
+**Practice**
+
+Run Lab 05 for adapter training and revisit Lab 13 to verify which tokens supply supervision; account separately for frozen and trainable parameters.
 
 - [Lab 05: Fine-tune a small model with LoRA adapters](reference/labs/05_lora_sft.md)
 - [Lab 13: Decide which tokens contribute to the training loss](reference/labs/13_loss_masking.md)
@@ -607,7 +656,9 @@ The objective is only one part of the system. Rollout generation, verifier/rewar
 
 Consider three completions with rewards 1, 2 and 3. Their group mean is 2. If this illustration uses a population standard deviation, it is sqrt(2/3), about 0.816, so the normalized advantages are approximately −1.225, 0 and +1.225 before any stabilizing epsilon. The chosen estimator and reward grouping are part of the objective. With clipping width 0.2, probability ratio 1.4 and advantage +1, the smaller of 1.4 and clipped 1.2 contributes 1.2. With advantage −1 and ratio 0.6, the smaller of −0.6 and clipped −0.8 is −0.8. The sign matters: clipping limits the incentive to move too far in the favorable direction.
 
-**Practice labs**
+**Practice**
+
+Work through Lab 06’s arithmetic objective before running Lab 07’s generation-to-update loop. Check rewards, policy ratios and updated parameters before performance.
 
 - [Lab 06: Work through a group-relative policy objective](reference/labs/06_grpo_objective.md)
 - [Lab 07: Verify the GRPO generation-to-update loop](reference/labs/07_grpo_trainer.md)
@@ -640,7 +691,9 @@ For a purely illustrative calculation, suppose a step performs 100 trillion usef
 
 Tokens per second and MFU summarize outcomes but do not diagnose causes. A credible report preserves failed hypotheses, numerical gates, workload identity, and limitations alongside a successful or rejected change.
 
-**Practice labs**
+**Practice**
+
+Reuse Lab 30’s attribution method on Lab 31’s matched workload in a separate diagnostic run, then complete the unprofiled Lab 31 campaign. Keep optional matmul utilization distinct from full-model utilization.
 
 - [Lab 30: Inspect the operators in a tiny training step](reference/labs/30_training_profiler.md)
 - [Lab 31: Validate an optimization across complete training updates](reference/labs/31_training_capstone.md)
@@ -648,3 +701,27 @@ Tokens per second and MFU summarize outcomes but do not diagnose causes. A credi
 **Mental model**
 
 A report connects equivalent-work correctness to step time, tokens/s, memory, communication, and an explicitly bounded MFU estimate.
+
+## 17. Scaling a fixed training workload
+
+**Objective**
+
+Preserve the global training objective while comparing microbatching and rank counts, and validate parameter updates before interpreting scaling.
+
+**How it works**
+
+Strong scaling holds useful global work fixed while changing available resources. A rank is one training process; an accumulation window is the set of microbatches whose gradients contribute to one optimizer update. DistributedDataParallel (DDP) keeps a model replica on each rank and synchronizes gradients across the group. For data parallel training, global batch equals rank count times microbatch size times accumulation count. A 128-example batch on 16 ranks with microbatch 4 needs two accumulation steps; on eight ranks it needs four. Divide each microbatch loss consistently and reduce accumulated gradients before the optimizer step. DDP’s `no_sync` context suppresses intermediate gradient synchronization, but must wrap both forward and backward; leave the context for the final microbatch that synchronizes the accumulated gradients. Check the parameter update against a full-batch reference. Step time uses the slowest rank, throughput counts global examples once, and memory uses the maximum rank. The controlled multilayer perceptron (MLP), a sequence of learned linear layers and activations, is a mechanism experiment; production large language model (LLM) efficiency additionally depends on attention, optimizer state, checkpointing and the input pipeline.
+
+The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
+
+For the small workload, 128 global examples on eight ranks means 16 examples per rank. At microbatch 4, each rank accumulates four gradients; on sixteen ranks it accumulates two. This changes the communication-to-compute balance while preserving the global objective. A valid strong-scaling report states speedup as the eight-rank step duration divided by the sixteen-rank duration, and efficiency as that speedup divided by two. For example, 20 ms becoming 12 ms yields about 1.67 times speedup and 83 percent efficiency. A faster run with half the global examples is not that experiment. Recheck update equivalence and loss before interpreting the ratio.
+
+**Practice**
+
+Use Advanced Lab 22 on the fabric cluster to compare eight and sixteen ranks at fixed global batch; check update equivalence before calculating speedup and efficiency.
+
+- [Lab 22: Tune microbatching at fixed global batch](../advanced-gpu-communication/reference/labs/22_fabric_training.md)
+
+**Mental model**
+
+Strong scaling keeps global work fixed. Microbatching, accumulation and gradient reduction must preserve the same update before step time or efficiency becomes meaningful.

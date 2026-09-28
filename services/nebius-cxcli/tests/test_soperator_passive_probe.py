@@ -46,6 +46,7 @@ def test_remote_probe_embeds_shared_validator_without_installed_package():
 @pytest.fixture
 def native(monkeypatch):
     expected = {
+        "worker": "worker-0",
         "hashes": {"check_runner.py": "sha"},
         "config": [],
         "resources": {"gpus": 8},
@@ -134,6 +135,55 @@ def test_complete_native_execution_is_observed_without_launching_checks(native):
         "requiredMeasurements": ["gpu_health_check.py"],
         "supportingOnly": [],
     }
+
+
+def test_embedded_probe_uses_bound_worker_without_slurm_hook_environment(monkeypatch):
+    monkeypatch.delenv("SLURMD_NODENAME", raising=False)
+    namespace = {"__name__": "observer_test"}
+    exec(_PROBE, namespace)
+    remote = namespace["native_probe"]
+    remote["mounted"] = lambda *args: ({}, [])
+    remote["running"] = lambda: []
+    remote["Path"] = lambda path: SimpleNamespace(read_text=lambda: "boot")
+    expected = {"worker": "worker-0", "hashes": {}, "config": []}
+    assert remote["probe"](expected, "observe")["worker"] == "worker-0"
+
+
+def test_native_reader_receives_bound_worker_identity(native, monkeypatch):
+    expected, _, _, runner = native
+    monkeypatch.delenv("SLURMD_NODENAME", raising=False)
+    original = runner["get_node_info"]
+
+    def get_node_info():
+        assert module.os.environ["SLURMD_NODENAME"] == "worker-0"
+        return original()
+
+    runner["get_node_info"] = get_node_info
+    assert module.probe(expected, "accept")["worker"] == "worker-0"
+
+
+def test_probe_rejects_conflicting_worker_environment(native, monkeypatch):
+    expected, _, _, _ = native
+    monkeypatch.setenv("SLURMD_NODENAME", "worker-1")
+    with pytest.raises(RuntimeError, match="worker identity"):
+        module.probe(expected, "observe")
+
+
+def test_node_facts_uses_bound_worker_without_hook_environment(monkeypatch):
+    monkeypatch.delenv("SLURMD_NODENAME", raising=False)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {"nodes": [{"name": "worker-0", "state": ["IDLE"], "real_memory": 10}]}
+            )
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert module.node_facts({"worker": "worker-0", "resources": {"gpus": 0}})["realMemory"] == 10
+    assert calls == [["scontrol", "show", "node", "worker-0", "--json"]]
 
 
 def test_run_started_before_restoration_cannot_supply_fresh_evidence(native):

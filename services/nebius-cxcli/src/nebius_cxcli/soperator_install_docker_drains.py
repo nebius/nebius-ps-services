@@ -22,7 +22,12 @@ from .soperator_install_runtime_recovery import (
     slurm_jobs,
     slurm_nodes,
 )
-from .soperator_install_storage_recovery import _accounted, _complete, _time
+from .soperator_install_storage_recovery import (
+    _accounted,
+    _complete,
+    _time,
+    same_terminal_accounting,
+)
 from .soperator_worker_docker import DOCKER_STORAGE_MOUNT, DOCKER_SUPERVISOR_CONFIG
 
 _KEY = "dockerDrainRecovery"
@@ -43,7 +48,7 @@ def _handled_failure(
         or meta.get("deletionTimestamp")
         or not _complete(live)
         or job_execution_digest(live) != failure["job"]["entry"]["execution"]
-        or row != failure["slurm"]
+        or not same_terminal_accounting(failure["slurm"], row)
         or not re.fullmatch(r"[1-9][0-9]*", handled)
         or int(handled) != ended
     ):

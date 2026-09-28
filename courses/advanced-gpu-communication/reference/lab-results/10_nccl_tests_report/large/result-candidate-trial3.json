@@ -1,0 +1,395 @@
+{
+  "correctness": {
+    "checked_elements_match": true
+  },
+  "lab": "10_nccl_tests_report",
+  "measurements": {
+    "acceptance_timing": true,
+    "iterations": 20,
+    "job_local_overrides": {},
+    "launcher_exit_code": 0,
+    "nccl_headers": 23003,
+    "nccl_library": 23003,
+    "ranks": 16,
+    "rows": [
+      {
+        "bytes": 8,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 108.81,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 188.21,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 16,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 108.62,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 109.24,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 32,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 110.38,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 109.13,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 64,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 110.77,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 111.23,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 128,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 184.59,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 178.16,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 256,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 183.26,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 209.96,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 512,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 195.49,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.0,
+          "time_us": 192.39,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 1024,
+        "in_place": {
+          "algbw_GBps": 0.0,
+          "normalized_busbw_GBps": 0.01,
+          "time_us": 208.03,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.01,
+          "normalized_busbw_GBps": 0.01,
+          "time_us": 204.43,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 2048,
+        "in_place": {
+          "algbw_GBps": 0.01,
+          "normalized_busbw_GBps": 0.02,
+          "time_us": 206.27,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.01,
+          "normalized_busbw_GBps": 0.02,
+          "time_us": 214.9,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 4096,
+        "in_place": {
+          "algbw_GBps": 0.02,
+          "normalized_busbw_GBps": 0.04,
+          "time_us": 209.87,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.02,
+          "normalized_busbw_GBps": 0.04,
+          "time_us": 216.65,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 8192,
+        "in_place": {
+          "algbw_GBps": 0.04,
+          "normalized_busbw_GBps": 0.07,
+          "time_us": 230.37,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.04,
+          "normalized_busbw_GBps": 0.07,
+          "time_us": 212.89,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 16384,
+        "in_place": {
+          "algbw_GBps": 0.03,
+          "normalized_busbw_GBps": 0.05,
+          "time_us": 561.23,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.02,
+          "normalized_busbw_GBps": 0.04,
+          "time_us": 778.08,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 32768,
+        "in_place": {
+          "algbw_GBps": 0.1,
+          "normalized_busbw_GBps": 0.18,
+          "time_us": 343.52,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.1,
+          "normalized_busbw_GBps": 0.18,
+          "time_us": 337.17,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 65536,
+        "in_place": {
+          "algbw_GBps": 0.14,
+          "normalized_busbw_GBps": 0.26,
+          "time_us": 468.98,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.14,
+          "normalized_busbw_GBps": 0.26,
+          "time_us": 464.4,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 131072,
+        "in_place": {
+          "algbw_GBps": 0.22,
+          "normalized_busbw_GBps": 0.42,
+          "time_us": 586.86,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.2,
+          "normalized_busbw_GBps": 0.38,
+          "time_us": 646.16,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 262144,
+        "in_place": {
+          "algbw_GBps": 0.31,
+          "normalized_busbw_GBps": 0.58,
+          "time_us": 854.28,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.27,
+          "normalized_busbw_GBps": 0.52,
+          "time_us": 953.7,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 524288,
+        "in_place": {
+          "algbw_GBps": 0.32,
+          "normalized_busbw_GBps": 0.59,
+          "time_us": 1662.97,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.33,
+          "normalized_busbw_GBps": 0.62,
+          "time_us": 1584.25,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 1048576,
+        "in_place": {
+          "algbw_GBps": 0.54,
+          "normalized_busbw_GBps": 1.02,
+          "time_us": 1931.67,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.54,
+          "normalized_busbw_GBps": 1.02,
+          "time_us": 1924.74,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 2097152,
+        "in_place": {
+          "algbw_GBps": 0.79,
+          "normalized_busbw_GBps": 1.48,
+          "time_us": 2656.41,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.74,
+          "normalized_busbw_GBps": 1.39,
+          "time_us": 2819.48,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 4194304,
+        "in_place": {
+          "algbw_GBps": 1.0,
+          "normalized_busbw_GBps": 1.87,
+          "time_us": 4200.5,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 0.99,
+          "normalized_busbw_GBps": 1.86,
+          "time_us": 4232.72,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 8388608,
+        "in_place": {
+          "algbw_GBps": 1.11,
+          "normalized_busbw_GBps": 2.08,
+          "time_us": 7550.17,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 1.08,
+          "normalized_busbw_GBps": 2.03,
+          "time_us": 7731.45,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 16777216,
+        "in_place": {
+          "algbw_GBps": 1.11,
+          "normalized_busbw_GBps": 2.09,
+          "time_us": 15083.2,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 1.13,
+          "normalized_busbw_GBps": 2.12,
+          "time_us": 14835.7,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 33554432,
+        "in_place": {
+          "algbw_GBps": 1.17,
+          "normalized_busbw_GBps": 2.2,
+          "time_us": 28636.3,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 1.13,
+          "normalized_busbw_GBps": 2.12,
+          "time_us": 29637.3,
+          "wrong": 0
+        }
+      },
+      {
+        "bytes": 67108864,
+        "in_place": {
+          "algbw_GBps": 1.18,
+          "normalized_busbw_GBps": 2.22,
+          "time_us": 56662.7,
+          "wrong": 0
+        },
+        "out_of_place": {
+          "algbw_GBps": 1.2,
+          "normalized_busbw_GBps": 2.25,
+          "time_us": 55866.8,
+          "wrong": 0
+        }
+      }
+    ],
+    "validation_iterations": 1,
+    "variant": "socket",
+    "warmup": 5
+  },
+  "parameters": {
+    "diagnostic": false,
+    "exit_code": null,
+    "input": null,
+    "iterations": 20,
+    "max_bytes": 67108864,
+    "min_bytes": 8,
+    "nodes": 2,
+    "seed": 17,
+    "variant": "socket",
+    "warmup": 5,
+    "world_size": 16
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

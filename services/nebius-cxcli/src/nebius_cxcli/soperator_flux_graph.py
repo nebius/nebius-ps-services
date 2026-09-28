@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from .soperator_acceptance_hooks import ACTIVE_CHECKS_RELEASE, HOOK_CONTROL
 from .soperator_adapter import (
     SOPERATOR_LIFECYCLE_LABEL,
     SOPERATOR_LIFECYCLE_RECREATABLE,
@@ -73,86 +74,6 @@ def _nested(values: Mapping[str, Any], *path: str) -> Mapping[str, Any]:
     return current if isinstance(current, Mapping) else {}
 
 
-def expected_soperator_release_names(values: Mapping[str, Any]) -> frozenset[str]:
-    names = {
-        "soperator-fluxcd-ns",
-        "soperator-fluxcd-kruise",
-        "soperator-fluxcd-security-profiles-operator",
-        "soperator-fluxcd-custom-configmaps",
-        "soperator-fluxcd-soperator",
-        "soperator-fluxcd-nodeconfigurator",
-        "soperator-fluxcd-slurm-cluster",
-    }
-    if _enabled(_nested(values, "certManager").get("enabled"), default=True):
-        names.add("soperator-fluxcd-cert-manager")
-    if _enabled(_nested(values, "mariadbOperator").get("enabled"), default=True):
-        names.update(
-            {
-                "soperator-fluxcd-mariadb-operator-crds",
-                "soperator-fluxcd-mariadb-operator",
-            }
-        )
-    if _enabled(_nested(values, "soperator", "soperatorChecks").get("enabled"), default=True):
-        names.add("soperator-fluxcd-soperatorchecks")
-    if _enabled(_nested(values, "nodesets").get("enabled")):
-        names.add("soperator-fluxcd-nodesets")
-    if _enabled(_nested(values, "soperatorActiveChecks").get("enabled"), default=True):
-        names.add("soperator-fluxcd-soperator-activechecks")
-    if _enabled(_nested(values, "storageClasses").get("enabled")):
-        names.add("soperator-fluxcd-storageclasses")
-    backup = _nested(values, "backup")
-    if _enabled(backup.get("enabled")):
-        names.add("soperator-fluxcd-k8up")
-        if _enabled(_nested(backup, "config").get("enabled")):
-            names.add("soperator-fluxcd-backup-config")
-    observability = _nested(values, "observability")
-    if _enabled(observability.get("enabled")):
-        vm_stack = _nested(observability, "vmStack")
-        vm_logs_enabled = _enabled(_nested(observability, "vmLogs").get("enabled"), default=True)
-        vm_stack_enabled = _enabled(vm_stack.get("enabled"), default=True)
-        if _enabled(_nested(observability, "prometheusOperator").get("enabled"), default=True):
-            names.add("soperator-fluxcd-prometheus-operator-crds")
-        if vm_logs_enabled:
-            names.add("soperator-fluxcd-vm-logs")
-        if vm_stack_enabled:
-            names.update(
-                {
-                    "soperator-fluxcd-victoria-metrics-operator-crds",
-                    "soperator-fluxcd-vm-stack",
-                }
-            )
-            token_kind = str(observability.get("publicEndpointTokenKind") or "secret")
-            writer = _nested(vm_stack, "tsaToken", "writer")
-            if (
-                _enabled(observability.get("publicEndpointEnabled"), default=True)
-                and token_kind == "secret"
-                and _enabled(writer.get("enabled"), default=True)
-            ):
-                names.add("soperator-fluxcd-tsa-token-writer")
-        opentelemetry = _nested(observability, "opentelemetry")
-        if _enabled(opentelemetry.get("enabled"), default=True):
-            names.update(
-                {
-                    "soperator-fluxcd-opentelemetry-collector-events",
-                    "soperator-fluxcd-opentelemetry-collector-logs",
-                }
-            )
-            if _enabled(
-                _nested(opentelemetry, "logs", "values", "jailLogs").get("enabled"),
-                default=True,
-            ):
-                names.add("soperator-fluxcd-opentelemetry-collector-jail-logs")
-        if _enabled(_nested(observability, "dcgmExporter").get("enabled"), default=True):
-            names.add("soperator-fluxcd-dcgm-exporter")
-        if _enabled(_nested(values, "notifier").get("enabled")) and _enabled(
-            _nested(observability, "vmStack").get("enabled"), default=True
-        ):
-            names.add("soperator-fluxcd-soperator-notifier")
-    if _enabled(_nested(values, "soperator", "monitoringDashboards").get("enabled")):
-        names.add("soperator-fluxcd-monitoring-dashboards")
-    return frozenset(names)
-
-
 def _source_name(node: SoperatorReleaseGraphNode) -> str:
     prefix = "soperator-upstream" if node.owner == "upstream" else "soperator-third-party"
     return f"{prefix}-{_slug(node.chart_key)}"
@@ -186,7 +107,7 @@ def _oci_repository(
         },
         "spec": {
             "interval": "30m",
-            "url": chart.oci_url,
+            "url": lock.chart_oci_url(node.chart_key),
             "layerSelector": {
                 "mediaType": "application/vnd.cncf.helm.chart.content.v1.tar+gzip",
                 "operation": "copy",
@@ -321,6 +242,11 @@ def _readiness_contract(
         )
     )
     return {
+        **(
+            {"deploymentProfile": "fast-dev-test"}
+            if values.get("cxcliDiagnostics", {}).get("profile") == "fast-dev-test"
+            else {}
+        ),
         "roles": ["accounting", "controller", "login"],
         "nodeSets": nodesets,
         "activeChecksRequired": target_soperator_release_name(
@@ -336,15 +262,11 @@ def soperator_graph_post_render_patches(
     lock: SoperatorReleaseSnapshot,
     values: Mapping[str, Any],
     *,
+    release_graph: tuple[SoperatorReleaseGraphNode, ...],
     adapter_documents: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    expected = expected_soperator_release_names(values)
-    nodes = {node.release_name: node for node in lock.release_graph}
-    unknown = expected - nodes.keys()
-    if unknown:
-        raise ValueError(
-            "Soperator values enable an unverified release: " + ", ".join(sorted(unknown))
-        )
+    expected = frozenset(node.release_name for node in release_graph)
+    nodes = {node.release_name: node for node in release_graph}
     vm_stack_exception = soperator_vm_stack_cleanup_exception(lock)
     patches: list[dict[str, Any]] = []
     for release_name in sorted(expected):
@@ -365,21 +287,6 @@ def soperator_graph_post_render_patches(
                 "op": "replace",
                 "path": "/metadata/name",
                 "value": target_soperator_release_name(release_name),
-            },
-            {
-                "op": "add",
-                "path": "/metadata/labels/soperator.nebius.ai~1release-graph",
-                "value": SOPERATOR_GRAPH_LABEL_VALUE,
-            },
-            {
-                "op": "add",
-                "path": "/metadata/labels/soperator.nebius.ai~1release-stage",
-                "value": str(node.stage),
-            },
-            {
-                "op": "add",
-                "path": "/metadata/labels/app.kubernetes.io~1version",
-                "value": lock.release,
             },
         ]
         if node.dependencies:
@@ -442,6 +349,13 @@ def soperator_graph_post_render_patches(
                     "value": auxiliary_post_renderers(values),
                 }
             )
+        if release_name == ACTIVE_CHECKS_RELEASE:
+            patch.extend(
+                [
+                    {"op": "add", "path": "/spec/install/disableHooks", "value": True},
+                    {"op": "add", "path": "/spec/upgrade/disableHooks", "value": True},
+                ]
+            )
         if release_name == JAIL_LOGS_RELEASE:
             patch.extend(jail_logs_binding_operations(values, adapter_documents or []))
         if release_name == _SLURM_CLUSTER_RELEASE_NAME:
@@ -497,6 +411,32 @@ def soperator_graph_post_render_patches(
                 "patch": yaml.safe_dump(patch, sort_keys=False),
             }
         )
+        # Strategic merge creates a missing labels map and preserves upstream labels.
+        patches.append(
+            {
+                "target": {
+                    "group": "helm.toolkit.fluxcd.io",
+                    "version": "v2",
+                    "kind": "HelmRelease",
+                    "name": target_soperator_release_name(release_name),
+                },
+                "patch": yaml.safe_dump(
+                    {
+                        "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                        "kind": "HelmRelease",
+                        "metadata": {
+                            "name": target_soperator_release_name(release_name),
+                            "labels": {
+                                SOPERATOR_GRAPH_LABEL: SOPERATOR_GRAPH_LABEL_VALUE,
+                                "soperator.nebius.ai/release-stage": str(node.stage),
+                                "app.kubernetes.io/version": lock.release,
+                            },
+                        },
+                    },
+                    sort_keys=False,
+                ),
+            }
+        )
     return patches
 
 
@@ -504,15 +444,11 @@ def render_soperator_flux_graph_documents(
     lock: SoperatorReleaseSnapshot,
     values: Mapping[str, Any],
     *,
+    release_graph: tuple[SoperatorReleaseGraphNode, ...],
     adapter_documents: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    expected = expected_soperator_release_names(values)
-    nodes = {node.release_name: node for node in lock.release_graph}
-    unknown = expected - nodes.keys()
-    if unknown:
-        raise ValueError(
-            "Soperator values enable an unverified release: " + ", ".join(sorted(unknown))
-        )
+    expected = frozenset(node.release_name for node in release_graph)
+    nodes = {node.release_name: node for node in release_graph}
     selected = [nodes[name] for name in sorted(expected)]
     repositories: dict[str, dict[str, Any]] = {}
     sources: dict[tuple[str, str], dict[str, Any]] = {}
@@ -547,6 +483,11 @@ def render_soperator_flux_graph_documents(
                     if item in expected
                 ],
                 "isMain": node.is_main,
+                **(
+                    {"acceptanceHooks": HOOK_CONTROL}
+                    if node.release_name == ACTIVE_CHECKS_RELEASE
+                    else {}
+                ),
             }
         )
     main_rows = [row for row in graph_payload if row["isMain"]]
@@ -590,7 +531,6 @@ __all__ = [
     "SOPERATOR_GRAPH_LABEL",
     "SOPERATOR_GRAPH_LABEL_VALUE",
     "SOPERATOR_GRAPH_SCHEMA",
-    "expected_soperator_release_names",
     "render_soperator_flux_graph_documents",
     "soperator_graph_post_render_patches",
     "target_soperator_release_name",

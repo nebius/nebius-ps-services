@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,median_e2e_seconds,value,0.064845,s
+baseline-trial1,p90_e2e_seconds,value,0.629009,s
+baseline-trial1,request_throughput_per_second,value,19.425,reqps
+baseline-trial1,output_tokens_per_second,value,621.585,count:tokens/s
+repeat-trial1,median_e2e_seconds,value,0.06266100000000001,s
+repeat-trial1,p90_e2e_seconds,value,0.534079,s
+repeat-trial1,request_throughput_per_second,value,22.187,reqps
+repeat-trial1,output_tokens_per_second,value,709.972,count:tokens/s

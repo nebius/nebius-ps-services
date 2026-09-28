@@ -52,6 +52,14 @@ def _shorten(text: str, *, limit: int = 72) -> str:
     return value[: limit - 3] + "..."
 
 
+def _resource_address(text: str, *, limit: int = 72) -> str:
+    """Keep the instance key visible when long Terraform addresses share a prefix."""
+    if len(text) <= limit:
+        return text
+    suffix = min(32, (limit - 3) // 2)
+    return text[: limit - suffix - 3] + "..." + text[-suffix:]
+
+
 def _event_level_rank(level: str) -> int:
     normalized = _as_text(level).upper()
     if normalized == "ERROR":
@@ -118,6 +126,36 @@ def _event_error_text(error: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _node_group_retry_note(last_occurrence: Any, *, state_name: str) -> str | None:
+    if _as_text(state_name).upper() not in {"PROVISIONING", "CREATING", "UPDATING"}:
+        return None
+    if _enum_value_name(getattr(last_occurrence, "level", None)) != "ERROR":
+        return None
+    if _as_text(getattr(last_occurrence, "code", None)) != "ComputeInstanceCreationFailed":
+        return None
+    error = getattr(last_occurrence, "error", None)
+    if isinstance(error, str):
+        code, separator, detail = error.partition(":")
+        if not separator:
+            return None
+    else:
+        code = _enum_value_name(getattr(error, "code", None))
+        detail = _event_error_text(error)
+    # A recurrent instance-creation event is not a failed node-group operation.
+    # Let the cloud reconciler retry transient service unavailability while the
+    # existing Terraform operation and its bounded timeout remain authoritative.
+    if code.strip().upper() == "UNAVAILABLE":
+        return "waiting for cloud provisioning retry"
+    # RESOURCE_EXHAUSTED alone also covers quota failures. Only the known
+    # scheduler-capacity wait is advisory while the group is still reconciling.
+    if code.strip().upper() == "RESOURCE_EXHAUSTED" and detail.strip().lower() in {
+        "vm schedule timeout",
+        "vm schedule timeout.",
+    }:
+        return "waiting for cloud capacity"
+    return None
 
 
 def _coerce_utc_datetime(value: Any) -> datetime | None:
@@ -427,7 +465,7 @@ def _latest_operation_summary(
         if operation_id:
             parts.append(operation_id)
         parts.append(done_summary)
-        if age_summary:
+        if age_summary and not done:
             parts.append(age_summary)
         return "op " + " ".join(parts)
     return None
@@ -530,6 +568,11 @@ class _Mk8sStatusPoller:
             message = _resource_event_message(last_occurrence)
             if not message:
                 continue
+            retry_note = _node_group_retry_note(last_occurrence, state_name=state_name)
+            if retry_note:
+                if retry_note not in transient_notes:
+                    transient_notes.append(retry_note)
+                continue
             if _is_transient_node_group_warning(
                 level=level, message=message, state_name=state_name
             ):
@@ -577,6 +620,8 @@ class _Mk8sStatusPoller:
             last_occurrence = getattr(event, "last_occurrence", None)
             level = _enum_value_name(getattr(last_occurrence, "level", None))
             if level != "ERROR":
+                continue
+            if _node_group_retry_note(last_occurrence, state_name=state_name):
                 continue
             message = _resource_event_message(last_occurrence)
             if not message:
@@ -1325,7 +1370,7 @@ class TerraformApplyProgress:
             if not addr:
                 return False
             self.active[addr] = action
-            self.last_transition = f"started {_shorten(addr)} ({action})"
+            self.last_transition = f"started {_resource_address(addr)} ({action})"
             return True
 
         if event_type == "apply_complete":
@@ -1340,13 +1385,16 @@ class TerraformApplyProgress:
             elapsed_seconds = hook.get("elapsed_seconds")
             if addr:
                 self.active.pop(addr, None)
-            self.completed += 1
+            if action in {"create", "update", "delete", "destroy"}:
+                self.completed += 1
+            elif action == "replace":
+                self.completed += 2
             elapsed_label = (
                 f" after {_format_elapsed(float(elapsed_seconds))}"
                 if isinstance(elapsed_seconds, (int, float))
                 else ""
             )
-            self.last_transition = f"completed {_shorten(addr)} ({action}){elapsed_label}"
+            self.last_transition = f"completed {_resource_address(addr)} ({action}){elapsed_label}"
             return True
 
         if event_type == "diagnostic":
@@ -1377,7 +1425,7 @@ class TerraformApplyProgress:
         if self.active:
             active_items = list(self.active.items())[:2]
             active_summary = ", ".join(
-                f"{_shorten(addr)} ({action})" for addr, action in active_items
+                f"{_resource_address(addr)} ({action})" for addr, action in active_items
             )
             if len(self.active) > 2:
                 active_summary += f", +{len(self.active) - 2} more"
@@ -1510,22 +1558,20 @@ class DeploymentStatusReporter:
 
     def _build_status_message(self, *, force: bool = False) -> str | None:
         with self._lock:
-            elapsed = _format_elapsed(time.monotonic() - self._started_at)
-            plain_message = (
-                f"Status [{elapsed}] TF: {self._terraform.summary()} | API: {self._api_summary}"
-            )
+            now = time.monotonic()
+            elapsed = _format_elapsed(now - self._started_at)
+            plain_message = f"TF: {self._terraform.summary()} | API: {self._api_summary}"
             message = (
                 f"[bold white]Status[/bold white] [dim][{escape(elapsed)}][/dim]\n"
                 f"[bold yellow]TF [/bold yellow] {escape(self._terraform.summary())}\n"
                 f"[bold cyan]API[/bold cyan] {escape(self._api_summary)}"
             )
-            now = time.monotonic()
-            if (
-                not force
-                and plain_message == self._last_message
-                and (now - self._last_emit_at) < self._repeat_interval_seconds
-            ):
-                return None
+            if not force and self._last_message:
+                interval = (
+                    self._repeat_interval_seconds if plain_message == self._last_message else 1.0
+                )
+                if now - self._last_emit_at < interval:
+                    return None
             self._last_message = plain_message
             self._last_emit_at = now
             return message
@@ -1597,13 +1643,22 @@ class DeploymentStatusReporter:
         return self
 
     def handle_terraform_event(self, event: Mapping[str, Any]) -> None:
-        if self._terraform.update_from_event(event):
-            self._emit_status(force=True)
+        with self._lock:
+            changed = self._terraform.update_from_event(event)
+        if changed:
+            self._emit_status(force=event.get("type") in {"diagnostic", "change_summary"})
 
     def close(self) -> None:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=max(1.0, self._poll_interval_seconds + 1.0))
+        # Flush a coalesced final transition without duplicating an unchanged snapshot.
+        with self._lock:
+            changed = (
+                f"TF: {self._terraform.summary()} | API: {self._api_summary}" != self._last_message
+            )
+        if changed:
+            self._emit_status(force=True)
         self._poller.close()
 
 

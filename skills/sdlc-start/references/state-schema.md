@@ -45,7 +45,7 @@ All run artifacts are private local state under
         FEAT-001.context.md
       plans/
         FEAT-001.plan.v1.md
-        FEAT-001.plan.v1.lock
+        FEAT-001.plan.v1.md.lock
       execution/
         FEAT-001/
           coordinator.json
@@ -64,6 +64,7 @@ All run artifacts are private local state under
           diagnoses/<diagnosis-id>.json
           approvals/<approval-id>.json
           classifications/<classification-id>.json
+          dispatches/<dispatch-id>.json
           revalidations/<revalidation-id>.json
       worktrees/
         FEAT-001/integration/
@@ -107,7 +108,12 @@ bodies.
 `agentic-sdlc/requirements-refinement-v1`. It binds the latest accepted intent
 to categorized extraction, stable `Q-*` clarification state and provenance,
 the compiled requirements digest, and `extracting`, `needs_clarification`, or
-`ready` status. Material open or reopened questions prevent `ready`.
+`ready` status. Material open or reopened questions prevent `ready`. Private
+`refinement-ready` checks this ledger and the exact compiled requirements
+read-only before context/design. It does not create impact state or unlock
+planning, steering resolution, execution, integration or promotion.
+`refinement-verify` rechecks readiness and settles impact only after ready design
+and before planning; the two checks do not share an authority claim.
 
 `prompt-impact-claim.json` uses the workflow's prompt-impact contract. The SDLC
 adapter converts complete statement-occurrence dispositions into immutable
@@ -127,6 +133,36 @@ cannot yet become active. Its immutable accepted snapshots live under
 prompt changes its entry only after another explicit run. Queue-head drift
 blocks activation, and the coordinator activates the head only after the
 active run and execution resources are terminal and released.
+
+## Active Workflow Ownership
+
+`active.lock` is a private JSON ownership record. Creating an empty file or
+holding an advisory OS lock does not register a workflow: hook discovery reads
+its JSON identity. The coordinator creates or updates it before the first
+phase, after accepting the managed prompt and confirming no conflicting writer.
+Use the exact validated workspace values; never infer the selected project root
+from the Git root in a nested project.
+
+```json
+{
+  "project_id": "example-project",
+  "project_root": "/absolute/selected/project",
+  "run_id": "run-example",
+  "status": "running",
+  "owner_session_hash": "sha256-of-native-session-identity",
+  "created_at": "2026-01-01T00:00:00Z"
+}
+```
+
+The first three fields must agree with `workspace.json`, `active-run.json` and
+the selected run. Derive the owner hash from the genuine native session, never
+a caller-invented identity. Publish the record privately and durably, then use
+read-only hook state discovery to require this exact project and run before
+phase dispatch. A missing, empty or mismatched record blocks initialization;
+never count a hook's no-active-run result as a passing continuation check.
+Checkpoint updates preserve the ownership record. Recovery requires proof that
+prior writers are quiescent; record the repair and replay affected checks from
+the last valid checkpoint without rewriting earlier evidence.
 
 ## Minimum current-state.json
 
@@ -229,6 +265,15 @@ phase-owned `passed` result; the cursor is content-identified and bound to the
 immutable classification plus a completed successful dispatch. `resolved` is
 valid only when the cursor is complete; the Stop hook rejects UAT, PR, or
 publication routing while any invalidated gate remains.
+
+An environment-only block after completed waves uses the failure owner's
+`record-environment-recovery` transition instead of a code-remediation cursor.
+Its `environment_recovery_id` binds the immutable original event, classification,
+unchanged clean integrated commit and fingerprints, and passing original gate
+evidence. The sole resolved invalidation remains in that immutable receipt,
+while the pending projection becomes empty. Other pending invalidations reject
+recovery. It preserves budgets. This exception cannot
+clear a code-repair cursor, a policy/human block, or a failed verifier trial.
 
 Coordinator v7 binds the exact initialized folder through `git_root`,
 `selected_project_root`, `project_scope`, and per-assignment `scope_cwd`.

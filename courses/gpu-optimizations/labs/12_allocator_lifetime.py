@@ -9,11 +9,12 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -22,7 +23,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
     def snapshot() -> dict[str, Any]:
@@ -37,7 +38,7 @@ def main() -> None:
 
     torch.cuda.empty_cache()
     baseline = snapshot()
-    scale = 1 if args.profile == "smoke" else 4
+    scale = 1 if args.profile == "small" else 4
 
     def allocate(mebibytes: int) -> Any:
         tensor = torch.empty(
@@ -137,4 +138,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

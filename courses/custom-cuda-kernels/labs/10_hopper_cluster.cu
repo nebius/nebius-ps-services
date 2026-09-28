@@ -7,10 +7,10 @@ __global__ void cluster_probe(unsigned int* observed) {
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 10_hopper_cluster [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 10_hopper_cluster [--profile small|large]\n"; return 0; }
   try {
     validate_simple_arguments(argc, argv);
-    require_h100();
+    require_course_gpu();
     constexpr int blocks = 4;
     DeviceBuffer<unsigned int> output(blocks);
     cudaLaunchConfig_t config{};
@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
     for (int index = 0; index < blocks; ++index) if (observed[index] != static_cast<unsigned int>(index)) throw std::runtime_error("cluster launch output mismatch");
     print_result("10_hopper_cluster", timing, blocks);
     std::cout << "architecture=sm_90a\ncluster_blocks=2\nportable_default=false\n";
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

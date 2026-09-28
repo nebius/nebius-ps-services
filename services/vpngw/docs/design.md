@@ -1,6 +1,6 @@
 <!-- markdownlint-disable MD001 MD013 MD024 MD041 -->
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-001: Conservative brownfield Python-project hardening
 
 #### Requirements Covered
@@ -19,10 +19,20 @@ Retain the existing PEP 621/setuptools-scm `src`-layout project and its current 
 
 Retain the existing PEP 621/setuptools-scm `src`-layout project and its current runtime dependencies, entrypoints, test lanes, Makefile, and CI workflows. Harden only proven gaps: bind direct Git fallback time, load runtime SCM state through one environment-backed configuration built from `pyproject.toml`, use nested tag configuration instead of deprecated `tag_regex` inputs, codify existing public packaging and developer-workflow invariants in focused tests, and ignore standard local-only tool output.
 
+For CVE-2026-69247, require `cryptography>=50.0.0,<51.0.0` in the package
+metadata and refresh only that dependency in `uv.lock`. The prior `<50.0.0`
+bound excludes the upstream security fix. Version 50 retains the project's
+Python support range and X.509, EC, and RSA APIs. Validate the locked dependency,
+managed identities, mutual TLS, credentials, and package boundaries locally;
+installed gateways require a separately authorized upgrade.
+
 #### Alternatives Considered
 
 - Replacing the established project with the generic scaffold was rejected because the current project already implements the required structure and a rewrite would risk user-facing regressions.
-- Raising Python versions, changing dependency constraints, adding repository-local pre-commit ownership, or broadly hardening systemd/runtime subprocesses was deferred because those changes require separate compatibility and operational evidence.
+- Raising Python versions, broader dependency changes beyond the scoped
+  CVE-2026-69247 fix, adding repository-local pre-commit ownership, or broadly
+  hardening systemd/runtime subprocesses was deferred because those changes
+  require separate compatibility and operational evidence.
 
 #### Implementation Boundaries
 
@@ -58,10 +68,20 @@ The mapped requirements, validation, and evaluation all pass.
 - Runtime SCM lookup uses the environment-backed current configuration model, reads nested tag matching from `pyproject.toml`, and explicitly suppresses version-file writes instead of passing deprecated programmatic fields. Build configuration explicitly retains the established source `_version.py` generation behavior.
 - `test_python_project_contract.py` binds the supported Python range, public console scripts, `src` package discovery, systemd package data, SCM dependency/configuration/version-file/tag contract, and canonical Makefile targets. Runtime-version coverage proves the timeout path and rejects dependency deprecations.
 - `.gitignore` excludes standard local coverage, tox, and nox output while preserving tracked source and public examples.
+- `pyproject.toml` requires `cryptography>=50.0.0,<51.0.0`; `uv.lock` selects
+  50.0.1. The release-wheel metadata regression enforces the same bounds.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before migration.
+- CVE-2026-69247 source verification on 2026-09-16: 136 focused TLS,
+  managed-credential, package, SSH deployment, project-contract, and wheel
+  metadata checks passed in an isolated locked Python 3.12 environment with
+  cryptography 50.0.1. The prior manifest admits vulnerable 49.0.0 and excludes
+  the fix; the repaired manifest rejects affected releases and admits 50.0.x.
+  Only cryptography and the project's matching requirement metadata changed in
+  the lock. Lock freshness, Ruff, Markdown lint, and canonical spec validation
+  passed. Gateway upgrades, other Python runtime lanes, and GitHub alert closure
+  were not exercised. Earlier hardening retains its prior delivery status.
 
 <!-- /FEATURE: FEAT-001 -->
 

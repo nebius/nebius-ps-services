@@ -1,0 +1,23 @@
+{
+  "correctness": {
+    "all_reduce_exact": true,
+    "compute_is_finite": true,
+    "ratio_is_finite": true
+  },
+  "lab": "13_collective_overlap",
+  "measurements": {
+    "collective_mib": 512,
+    "matrix_size": 4096,
+    "overlapped_median_ms": 11.8657,
+    "serialized_median_ms": 11.9478,
+    "serialized_to_overlap_ratio": 1.0069
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 2
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

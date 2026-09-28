@@ -1,0 +1,23 @@
+# Glossary
+
+- **Account** — Slurm association used for charging usage and applying scheduling policy; separate from a Linux group.
+- **Allocation** — Resources granted to a job for a limited time.
+- **Controller** — Slurm scheduling service, `slurmctld`.
+- **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
+- **Jail** — Soperator's shared Linux user filesystem, with some special/node-local paths excluded.
+- **Job** — A scheduled request for work and its resource allocation.
+- **Job step** — An execution within an allocation, commonly launched by `srun`.
+- **Login node** — User entry point for preparing and submitting work and reading results.
+- **MUNGE** — Credential service used to authenticate messages between trusted Slurm components.
+- **NodeSet** — Soperator custom resource describing a group of worker Pods.
+- **Operator** — Kubernetes controller that reconciles declared and observed application resources.
+- **Partition** — Named collection of Slurm workers and scheduling rules; not a private allocation.
+- **Pod** — Kubernetes unit grouping containers placed together on a host.
+- **Rank / world size** — A distributed application's process index / total process count.
+- **REST API** — HTTP interface for programmatic Slurm access through optional `slurmrestd`.
+- **RSS** — Resident set size; process memory resident in host RAM, not GPU memory.
+- **Slurm CPU** — A schedulable CPU resource whose core/thread interpretation depends on the site.
+- **SlurmCluster / SlurmNodes** — Cluster custom resource / its service-role configuration type.
+- **StatefulSet** — Kubernetes workload resource maintaining Pods with stable identities.
+- **Task** — A process launched by Slurm; it may itself launch child processes.
+- **Worker** — Slurm compute environment running `slurmd` and assigned application work.

@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .component_defaults import resolve_component_defaults
 from .component_instances import INSTANCE_ID_FIELD, component_instance_id, component_type_id
 from .component_sources import (
@@ -1359,6 +1360,11 @@ def resolve_mk8s_gpu_app_selection(
             gpu_operator_row = _app_chart_row(payload, gpu_operator_id)
             gpu_operator_rows = [gpu_operator_row] if gpu_operator_row else []
         for gpu_operator_row in gpu_operator_rows:
+            scoped = _contexts_for_app_chart(gpu_operator_row, contexts=contexts)
+            if scoped and all(
+                context.instance_id in _soperator_app_target_refs(payload) for context in scoped
+            ):
+                continue
             if (
                 _nested_path_value(_mapping(gpu_operator_row), "values.dcgmExporter.enabled")
                 is not False
@@ -2367,6 +2373,17 @@ def materialize_mk8s_gpu_app_values(payload_or_config: Any) -> bool:
                     f"MK8s GPU app rules resolve conflicting defaults for '{chart_id}' at '{default.target_path}'"
                 )
             values_by_path[default.target_path] = default.value
+        if chart_id == _mk8s_gpu_app_id_by_role().get("gpu_operator"):
+            soperator_contexts = [
+                context.instance_id in _soperator_app_target_refs(payload)
+                for context in scoped_contexts
+            ]
+            if any(soperator_contexts):
+                if not all(soperator_contexts):
+                    raise RuntimeError(
+                        "GPU Operator must use separate releases for Soperator and ordinary MK8s targets"
+                    )
+                values_by_path["values.dcgmExporter.enabled"] = False
         for stale_path in sorted(
             set(_managed_app_value_paths(app_id=chart_id)) - set(values_by_path),
             key=lambda item: item.count("."),
@@ -2391,11 +2408,11 @@ def _run_kubectl(
     if extra_env:
         env.update(extra_env)
     command = ["kubectl", *args]
-    context = str(env.get("KUBECTL_CONTEXT", "") or "").strip()
-    if context and "--context" not in args:
-        command = ["kubectl", "--context", context, *args]
     try:
-        completed = subprocess.run(
+        from .app_mutation import assert_app_mutation_authority
+
+        assert_app_mutation_authority()
+        completed = kubernetes_process.run(
             command,
             env=env,
             capture_output=True,

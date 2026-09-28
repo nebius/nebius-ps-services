@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .component_defaults import (
     resolve_component_defaults,
     set_component_path,
@@ -38,6 +39,8 @@ from .deploy_targets import (
     enabled_cluster_target_refs,
     flux_target_dir,
 )
+from .grafana_database import database_component_id, database_readiness_patch
+from .helm_chart_versions import exact_helm_chart_version
 from .mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_flux_release_post_render_patches,
@@ -48,7 +51,11 @@ from .mysterybox_eso import (
     mysterybox_eso_extra_objects_for_target,
 )
 from .nfs_csi import NFS_CSI_APP_ID, nfs_instance_id_for_target
-from .observability import soperator_target_refs
+from .observability import (
+    _grafana_app_id,
+    materialize_observability_app_values,
+    soperator_target_refs,
+)
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 from .soperator_adapter import (
@@ -74,8 +81,8 @@ from .soperator_registration import (
     soperator_registration_target,
 )
 from .soperator_release import (
-    SOPERATOR_UPSTREAM_REGISTRY,
     SOPERATOR_UPSTREAM_UMBRELLA_CHART,
+    SoperatorArtifactRequest,
     SoperatorReleaseSnapshot,
     soperator_release_snapshot_path,
     write_soperator_release_snapshot,
@@ -347,6 +354,10 @@ def _local_chart_path_from_entry(entry: Any | None) -> str:
     source = str(getattr(entry, "source", "") or "").strip()
     if not source or source.startswith(("git::", "http://", "https://", "oci://")):
         return ""
+    from .compatibility_artifacts import frozen_local_chart
+
+    if frozen_local_chart(source) is not None:
+        return source
     chart_path = Path(source).expanduser()
     if chart_path.is_dir() and (chart_path / "Chart.yaml").exists():
         return str(chart_path)
@@ -674,6 +685,11 @@ def _materialize_soperator_observability_values(
     release: str,
     resolved_component_outputs: Mapping[str, Any],
 ) -> None:
+    observability = values.get("observability")
+    if not isinstance(observability, dict):
+        raise ValueError("Soperator values.observability must be a mapping")
+    if observability.get("enabled") is False:
+        return
     client_info = payload.get("client_info")
     nebius = client_info.get("nebius") if isinstance(client_info, Mapping) else None
     project_id = str(nebius.get("project_id") if isinstance(nebius, Mapping) else "").strip()
@@ -696,19 +712,11 @@ def _materialize_soperator_observability_values(
     normalized_release = str(release or "").strip()
     if not normalized_release:
         raise ValueError("Soperator direct-upstream observability requires an exact release")
-    configured = values.get("observability")
-    if configured is not None and not isinstance(configured, dict):
-        raise ValueError("Soperator values.observability must be a mapping")
-    observability = configured if isinstance(configured, dict) else {}
-    if observability.get("enabled") is False:
-        raise ValueError("Soperator authoritative observability cannot be disabled")
     cluster_name = str(values.get("clusterName") or "soperator").strip() or "soperator"
     observability.update(
         {
-            "enabled": True,
             "clusterName": cluster_name,
             "clusterId": cluster_id,
-            "publicEndpointEnabled": True,
             "publicEndpointTokenKind": "secret",
             "logsProjectId": project_id,
             "metricsProjectId": project_id,
@@ -719,12 +727,10 @@ def _materialize_soperator_observability_values(
     opentelemetry = observability.setdefault("opentelemetry", {})
     if not isinstance(opentelemetry, dict):
         raise ValueError("Soperator values.observability.opentelemetry must be a mapping")
-    opentelemetry["enabled"] = True
     opentelemetry["publicEndpoint"] = f"dns:///write.logging.{region}.nebius.cloud.:443"
     vm_stack = observability.setdefault("vmStack", {})
     if not isinstance(vm_stack, dict):
         raise ValueError("Soperator values.observability.vmStack must be a mapping")
-    vm_stack["enabled"] = True
     tsa_token = vm_stack.setdefault("tsaToken", {})
     if not isinstance(tsa_token, dict):
         raise ValueError("Soperator values.observability.vmStack.tsaToken must be a mapping")
@@ -733,18 +739,20 @@ def _materialize_soperator_observability_values(
         raise ValueError("Soperator values.observability.vmStack.tsaToken.writer must be a mapping")
     writer.update(
         {
-            "enabled": True,
             "source": "imds",
-            "namespaces": ["monitoring-system", "logs-system"],
+            "namespaces": list(
+                dict.fromkeys(
+                    [
+                        str(vm_stack.get("namespace") or "monitoring-system"),
+                        str(opentelemetry.get("namespace") or "logs-system"),
+                    ]
+                )
+            ),
         }
     )
     vm_values = vm_stack.setdefault("values", {})
     if not isinstance(vm_values, dict):
         raise ValueError("Soperator values.observability.vmStack.values must be a mapping")
-    bundled_grafana = vm_values.setdefault("grafana", {})
-    if not isinstance(bundled_grafana, dict):
-        raise ValueError("Soperator values.observability.vmStack.values.grafana must be a mapping")
-    bundled_grafana["enabled"] = False
     vmagent = vm_values.setdefault("vmagent", {})
     if not isinstance(vmagent, dict):
         raise ValueError("Soperator values.observability.vmStack.values.vmagent must be a mapping")
@@ -753,12 +761,20 @@ def _materialize_soperator_observability_values(
         raise ValueError(
             "Soperator values.observability.vmStack.values.vmagent.spec must be a mapping"
         )
-    vmagent_spec["externalLabels"] = {
-        "iam_tenant_id": tenant_id,
-        "iam_project_id": project_id,
-        "mk8s_cluster_id": cluster_id,
-        "soperator_release": normalized_release,
-    }
+    from .soperator_vmagent import materialize_vmagent_queues
+
+    materialize_vmagent_queues(values)
+    external_labels = vmagent_spec.setdefault("externalLabels", {})
+    if not isinstance(external_labels, dict):
+        raise ValueError("Soperator vmagent externalLabels must be a mapping")
+    external_labels.update(
+        {
+            "iam_tenant_id": tenant_id,
+            "iam_project_id": project_id,
+            "mk8s_cluster_id": cluster_id,
+            "soperator_release": normalized_release,
+        }
+    )
     values["observability"] = observability
 
 
@@ -787,6 +803,10 @@ def _configured_app_release_specs(
     if not isinstance(payload, dict):
         return []
 
+    # All renderer callers (including frozen-bundle refreshes) must receive the
+    # same generated DB/Secret binding. Materialize a private copy, never source.
+    materialize_observability_app_values(payload)
+
     specs: list[dict[str, Any]] = []
     resolved_component_outputs = component_output_values or {}
     entry_by_id = {entry.id: entry for entry in component_entries("apps")}
@@ -806,7 +826,10 @@ def _configured_app_release_specs(
                     continue
                 entry = entry_by_id.get(entry_id)
                 if entry_id == SOPERATOR_APP_ID:
-                    entry = soperator_install_entry(str(raw_chart.get("version", "") or "").strip())
+                    entry = soperator_install_entry(
+                        str(raw_chart.get("version", "") or "").strip(),
+                        chart_repo=str(raw_chart.get("repo") or ""),
+                    )
                 chart_node = dict(raw_chart)
                 instance_id = str(chart_node.get("instance_id", entry_id)).strip() or entry_id
                 target_ref = app_chart_target_ref(chart_node)
@@ -843,6 +866,11 @@ def _configured_app_release_specs(
                     # changes the chart version to the separately frozen target.
                     continue
 
+                soperator_requested_values = (
+                    copy.deepcopy(chart_node.get("values") or {})
+                    if entry_id == SOPERATOR_APP_ID
+                    else None
+                )
                 if entry is not None and entry.input_bindings:
                     conflicts = input_binding_conflicts(chart_node, entry)
                     if conflicts:
@@ -930,15 +958,6 @@ def _configured_app_release_specs(
                         f"apps.charts[{entry_id}].values must be a mapping for enabled chart '{entry_id}'"
                     )
 
-                if entry_id == SOPERATOR_APP_ID:
-                    _materialize_soperator_observability_values(
-                        payload=payload,
-                        values=values_node,
-                        target_ref=target_ref,
-                        release=str(chart_node.get("version") or ""),
-                        resolved_component_outputs=resolved_component_outputs,
-                    )
-
                 chart_repo = str(chart_node.get("repo", "")).strip()
                 local_chart_path = _local_chart_path_from_entry(entry)
                 chart_name = _runtime_app_chart_name(
@@ -972,6 +991,11 @@ def _configured_app_release_specs(
                     raise ValueError(
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
                     )
+                if source_kind == "helm_repository":
+                    try:
+                        chart_version = exact_helm_chart_version(chart_version)
+                    except ValueError as exc:
+                        raise ValueError(f"apps.charts[{entry_id}].version: {exc}") from None
 
                 soperator_upstream_values: dict[str, Any] | None = None
                 soperator_adapter_docs: list[dict[str, Any]] | None = None
@@ -981,30 +1005,58 @@ def _configured_app_release_specs(
                 soperator_graph_docs: list[dict[str, Any]] | None = None
                 soperator_release_snapshot: SoperatorReleaseSnapshot | None = None
                 if entry_id == SOPERATOR_APP_ID:
-                    expected_repo = (
-                        f"{SOPERATOR_UPSTREAM_REGISTRY}/{SOPERATOR_UPSTREAM_UMBRELLA_CHART}"
-                    )
-                    if (
-                        chart_repo.rstrip("/") != expected_repo
-                        or chart_name != SOPERATOR_UPSTREAM_UMBRELLA_CHART
-                    ):
-                        raise ValueError(
-                            "Soperator must use the official upstream umbrella OCI repository"
-                        )
-                    frozen = current_frozen_soperator_release(chart_version)
+                    frozen = current_frozen_soperator_release(chart_version, target_ref=target_ref)
                     if frozen is None:
-                        frozen = freeze_soperator_release(chart_version)
+                        frozen = freeze_soperator_release(
+                            chart_version,
+                            request=SoperatorArtifactRequest.deployment(
+                                target_ref,
+                                soperator_requested_values or {},
+                                payload=payload,
+                                post_render_patches=tuple(
+                                    chart_node.get("post_render_patches") or ()
+                                ),
+                            ),
+                        )
                     release_snapshot = frozen.snapshot
                     if release_snapshot.release != chart_version:
                         raise ValueError("resolved Soperator release differs from config.yaml")
+                    if (
+                        chart_repo.rstrip("/") != release_snapshot.chart_oci_url("umbrella")
+                        or chart_name != SOPERATOR_UPSTREAM_UMBRELLA_CHART
+                    ):
+                        raise ValueError(
+                            "Soperator must use the frozen official upstream umbrella OCI repository"
+                        )
                     soperator_release_snapshot = release_snapshot
+                    from .soperator_values import with_frozen_observability
+
+                    values_node = with_frozen_observability(values_node, frozen)
+                    _materialize_soperator_observability_values(
+                        payload=payload,
+                        values=values_node,
+                        target_ref=target_ref,
+                        release=chart_version,
+                        resolved_component_outputs=resolved_component_outputs,
+                    )
                     soperator_upstream_values, _ = compile_upstream_soperator_values(
                         values_node,
                         release=release_snapshot,
                     )
+                    from .soperator_observability_routing import bind_routing
+
+                    bind_routing(payload, target_ref, soperator_upstream_values)
                     soperator_upstream_values = bind_checks_login(
                         soperator_upstream_values, Path(frozen.source.source_dir)
                     )
+                    if soperator_upstream_values.get("cxcliDiagnostics"):
+                        from .soperator_checks_preflight import _preflight_soperator_checks
+
+                        _preflight_soperator_checks(
+                            soperator_upstream_values,
+                            source_dir=Path(frozen.source.source_dir),
+                            installing=True,
+                        )
                     soperator_adapter_docs, _ = render_soperator_adapter_documents(
                         values_node,
                         release=release_snapshot,
@@ -1013,8 +1065,8 @@ def _configured_app_release_specs(
                         values_node,
                         release=release_snapshot,
                     ):
-                        source = getattr(frozen, "source", None)
-                        source_dir = str(getattr(source, "source_dir", "") or "").strip()
+                        frozen_source = frozen.source
+                        source_dir = str(frozen_source.source_dir or "").strip()
                         if not source_dir:
                             raise ValueError(
                                 "the frozen Soperator source is required for dashboard delivery"
@@ -1026,23 +1078,61 @@ def _configured_app_release_specs(
                         )
                     else:
                         soperator_post_flux_docs = []
+                    from .soperator_release_graph import render_soperator_release_graph
+
+                    telemetry_patches: list[dict[str, Any]] = []
+                    selected_graph = render_soperator_release_graph(
+                        release_snapshot,
+                        Path(frozen.source.source_dir),
+                        soperator_upstream_values,
+                        telemetry_patches=telemetry_patches,
+                        post_render_patches=tuple(chart_node.get("post_render_patches") or ()),
+                    )
+                    from .soperator_release_artifacts import verify_soperator_release_artifacts
+
+                    verify_soperator_release_artifacts(
+                        release_snapshot,
+                        frozen.source,
+                        values=soperator_upstream_values,
+                        adapter_documents=soperator_adapter_docs,
+                        post_render_patches=tuple(chart_node.get("post_render_patches") or ()),
+                    )
                     soperator_graph_docs = render_soperator_flux_graph_documents(
                         release_snapshot,
                         soperator_upstream_values,
+                        release_graph=selected_graph,
                         adapter_documents=soperator_adapter_docs,
                     )
                     graph_patches = soperator_graph_post_render_patches(
                         release_snapshot,
                         soperator_upstream_values,
+                        release_graph=selected_graph,
                         adapter_documents=soperator_adapter_docs,
                     )
                     existing_patches = list(chart_node.get("post_render_patches") or [])
-                    chart_node["post_render_patches"] = [*existing_patches, *graph_patches]
+                    chart_node["post_render_patches"] = [
+                        *existing_patches,
+                        *telemetry_patches,
+                        *graph_patches,
+                    ]
                     soperator_umbrella_digest = release_snapshot.umbrella.digest
                     soperator_umbrella_oci_url = chart_repo
                     chart_values = soperator_upstream_values
                 else:
                     chart_values = values_node
+
+                if entry_id == "grafana":
+                    from .observability_routing import target_settings
+
+                    if target_settings(payload, target_ref):
+                        # Remote catalog dashboards assume Nebius-specific labels and
+                        # query languages. Explicit imports keep their typed mappings.
+                        chart_values.pop("dashboards", None)
+
+                if chart_node.get("dashboard_imports"):
+                    from .grafana_project import exclude_linked_catalog_dashboards
+
+                    exclude_linked_catalog_dashboards(chart_values, chart_node)
 
                 namespace = str(chart_node.get("namespace", "")).strip()
                 if not namespace:
@@ -1076,6 +1166,23 @@ def _configured_app_release_specs(
                         "interval": interval,
                         "timeout": release_timeout,
                         "values": chart_values,
+                        **(
+                            {
+                                "grafana_owner": hashlib.sha256(
+                                    json.dumps(
+                                        [to_plain_data(config).get("client_info", {}), target_ref],
+                                        sort_keys=True,
+                                    ).encode()
+                                ).hexdigest()
+                            }
+                            if entry_id in {_grafana_app_id(), database_component_id()}
+                            else {}
+                        ),
+                        **(
+                            {"dashboard_imports": chart_node["dashboard_imports"]}
+                            if chart_node.get("dashboard_imports")
+                            else {}
+                        ),
                         "soperator_upstream_values": soperator_upstream_values,
                         "soperator_adapter_docs": soperator_adapter_docs,
                         "soperator_post_flux_docs": soperator_post_flux_docs,
@@ -1136,6 +1243,28 @@ def _configured_app_release_specs(
             release["depends_on"] = depends_on
         patches = list(release.get("post_render_patches") or [])
         patches.extend(post_render_patch_map.get((target_ref, entry_id)) or ())
+        if entry_id == database_component_id():
+            patches.append(database_readiness_patch(str(release["release_name"])))
+        from .nsight import APP_TOOLS, validate_viewer_values, viewer_patches
+
+        if entry_id in APP_TOOLS:
+            from .nsight import CHART_NAME, CHART_REPOSITORY, CHART_VERSION, namespace_name
+            from .nsight import release_name as validate_nsight_release_name
+
+            if (
+                release["chart_version"] != CHART_VERSION
+                or release["source_url"] != CHART_REPOSITORY
+                or release["chart_ref"] != CHART_NAME
+            ):
+                raise ValueError("Nsight viewers require the reviewed official chart 2026.4.1")
+            namespace_name(release["namespace"])
+            validate_nsight_release_name(release["release_name"])
+            validate_viewer_values(entry_id, release["values"])
+            patches.extend(viewer_patches(str(release["release_name"]), tool=APP_TOOLS[entry_id]))
+            from .nsight_profiling import soperator_viewer_gate
+
+            patches.extend(soperator_viewer_gate(payload, target_ref=target_ref, release=release))
+            release["disable_hooks"] = True
         if patches:
             release["post_render_patches"] = [dict(item) for item in patches]
     return specs
@@ -1155,7 +1284,9 @@ def _helm_release_doc(
     depends_on: list[dict[str, str]] | None = None,
     post_render_patches: list[dict[str, Any]] | None = None,
     disable_wait: bool = False,
+    disable_hooks: bool = False,
     labels: Mapping[str, str] | None = None,
+    annotations: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     if source_kind == "OCIRepository":
         source: dict[str, Any] = {
@@ -1186,6 +1317,9 @@ def _helm_release_doc(
     if disable_wait:
         spec["install"]["disableWait"] = True
         spec["upgrade"] = {"disableWait": True}
+    if disable_hooks:
+        for action in ("install", "upgrade", "uninstall"):
+            spec.setdefault(action, {})["disableHooks"] = True
     if timeout:
         spec["timeout"] = timeout
     if depends_on:
@@ -1214,6 +1348,7 @@ def _helm_release_doc(
             "name": release_name,
             "namespace": namespace,
             **({"labels": dict(labels)} if labels else {}),
+            **({"annotations": dict(annotations)} if annotations else {}),
         },
         "spec": spec,
     }
@@ -1525,6 +1660,35 @@ def _render_flux_app_helm_releases(
                 Path("post-flux-soperator-monitoring-dashboards.yaml"),
                 post_flux_docs,
             )
+        if release.get("dashboard_imports"):
+            from .grafana_dashboards import content_digest, json_bytes, read_dashboard
+            from .project_bundle_transaction import normalize_project_bundle_target
+
+            for declaration in release["dashboard_imports"]:
+                if not declaration.get("replay", True):
+                    continue
+                source = normalize_project_bundle_target(
+                    state.paths.project_dir,
+                    state.paths.project_dir / declaration["json_file"],
+                )
+                dashboard = read_dashboard(source)
+                if (
+                    dashboard["uid"] != declaration["uid"]
+                    or content_digest(dashboard, declaration.get("folder_uid", ""))
+                    != declaration["sha256"]
+                ):
+                    raise ValueError(
+                        "Declared Grafana dashboard changed; run grafana import --overwrite"
+                    )
+                asset = (
+                    state.paths.generated_dir
+                    / "grafana_dashboards"
+                    / str(release["target_ref"])
+                    / "cxcli-api-imports"
+                    / f"{declaration['uid']}.json"
+                )
+                _write_text(asset, json_bytes(dashboard).decode())
+                state.files.append(asset)
         _externalize_dashboard_json_values(state, release=release)
         release_file_name = f"helmrelease-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
         state.write_doc(
@@ -1541,11 +1705,17 @@ def _render_flux_app_helm_releases(
                 values=release["values"],
                 depends_on=release.get("depends_on") or None,
                 post_render_patches=release.get("post_render_patches") or None,
+                disable_hooks=bool(release.get("disable_hooks")),
                 disable_wait=is_soperator
                 or _release_has_managed_mysterybox_external_secret(release["values"]),
                 labels=(
                     {SOPERATOR_LIFECYCLE_LABEL: SOPERATOR_LIFECYCLE_RECREATABLE}
                     if is_soperator
+                    else None
+                ),
+                annotations=(
+                    {"cxcli.nebius.com/app-owner": release["grafana_owner"]}
+                    if release.get("grafana_owner")
                     else None
                 ),
             ),
@@ -1558,6 +1728,25 @@ def _render_local_helm_chart(
     namespace: str,
     chart_path: str,
     values: dict[str, Any],
+) -> str:
+    from .compatibility_artifacts import frozen_local_chart, materialize_frozen_chart
+
+    frozen = frozen_local_chart(chart_path)
+    if frozen is not None:
+        with materialize_frozen_chart(frozen) as directory:
+            return _render_materialized_local_helm_chart(
+                release_name=release_name,
+                namespace=namespace,
+                chart_path=str(directory),
+                values=values,
+            )
+    return _render_materialized_local_helm_chart(
+        release_name=release_name, namespace=namespace, chart_path=chart_path, values=values
+    )
+
+
+def _render_materialized_local_helm_chart(
+    *, release_name: str, namespace: str, chart_path: str, values: dict[str, Any]
 ) -> str:
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-helm-chart-") as chart_staging_dir:
         render_chart_path = _stage_local_helm_chart(chart_path, Path(chart_staging_dir))
@@ -1576,7 +1765,7 @@ def _render_local_helm_chart(
                 "--values",
                 values_file.name,
             ]
-            result = subprocess.run(
+            result = kubernetes_process.run(
                 command,
                 check=False,
                 capture_output=True,
@@ -1737,7 +1926,7 @@ def _helm_repository_config_source() -> Path | None:
     if configured:
         return Path(configured).expanduser()
 
-    result = subprocess.run(
+    result = kubernetes_process.run(
         ["helm", "env", "HELM_REPOSITORY_CONFIG"],
         check=False,
         capture_output=True,
@@ -1863,7 +2052,7 @@ def _prepare_local_chart_helm_repositories(
                 "--repository-cache",
                 str(repository_cache),
             ]
-        result = subprocess.run(
+        result = kubernetes_process.run(
             command,
             check=False,
             capture_output=True,
@@ -1891,7 +2080,7 @@ def _run_local_helm_dependency_build(
         *(repository_flags or ()),
         str(chart_dir),
     ]
-    result = subprocess.run(
+    result = kubernetes_process.run(
         command,
         check=False,
         capture_output=True,
@@ -2031,7 +2220,11 @@ def render_flux(
                     ).encode()
                 ).hexdigest()
                 for ordinary_file in ordinary_state.files:
-                    if ordinary_file.name == "kustomization.yaml":
+                    # Dashboard exports are JSON data, not Kubernetes resources.
+                    if (
+                        not ordinary_file.is_relative_to(ordinary_paths.flux_dir)
+                        or ordinary_file.name == "kustomization.yaml"
+                    ):
                         continue
                     docs = list(yaml.safe_load_all(ordinary_file.read_text()))
                     for doc in docs:

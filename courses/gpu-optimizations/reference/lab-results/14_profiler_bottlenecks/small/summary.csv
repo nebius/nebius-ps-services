@@ -1,0 +1,17 @@
+variant,metric,case,value,unit
+compute-baseline-trial1,timing_median_seconds,value,6.93e-05,s
+compute-baseline-trial1,checksum,value,-1.946e-05,none
+compute-optimized-trial1,timing_median_seconds,value,1.72e-05,s
+compute-optimized-trial1,checksum,value,-1.946e-05,none
+launch-baseline-trial1,timing_median_seconds,value,0.0002095,s
+launch-baseline-trial1,checksum,value,0.0664623,none
+launch-optimized-trial1,timing_median_seconds,value,4.53e-05,s
+launch-optimized-trial1,checksum,value,0.06646233,none
+memory-baseline-trial1,timing_median_seconds,value,0.0001238,s
+memory-baseline-trial1,checksum,value,0.4890694,none
+memory-optimized-trial1,timing_median_seconds,value,6.0400000000000004e-05,s
+memory-optimized-trial1,checksum,value,0.4890694,none
+sync-baseline-trial1,timing_median_seconds,value,0.0002662,s
+sync-baseline-trial1,checksum,value,7.99361658,none
+sync-optimized-trial1,timing_median_seconds,value,0.00015110000000000001,s
+sync-optimized-trial1,checksum,value,7.99361658,none

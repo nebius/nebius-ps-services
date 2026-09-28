@@ -26,7 +26,13 @@ def _starter_payload(
     requested_apps = selected_apps or set()
     app_entries = component_entries("apps")
     if "soperator" in requested_apps:
-        app_entries = (*app_entries, soperator_install_entry("4.1.7"))
+        app_entries = (
+            *app_entries,
+            soperator_install_entry(
+                "4.1.7",
+                chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd",
+            ),
+        )
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -228,12 +234,12 @@ def test_native_mysterybox_eso_uses_declared_kubernetes_secret_name() -> None:
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
-    external_secret = next(item for item in _extra_objects(config) if item["kind"] == "ExternalSecret")
+    external_secret = next(
+        item for item in _extra_objects(config) if item["kind"] == "ExternalSecret"
+    )
     assert external_secret["metadata"]["name"] == "app-db-creds"
     assert external_secret["spec"]["target"]["name"] == "app-db-creds"
     assert external_secret["spec"]["data"] == [
@@ -497,12 +503,12 @@ def test_native_mysterybox_eso_auto_primary_omits_declared_version() -> None:
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
-    external_secret = next(item for item in _extra_objects(config) if item["kind"] == "ExternalSecret")
+    external_secret = next(
+        item for item in _extra_objects(config) if item["kind"] == "ExternalSecret"
+    )
     assert external_secret["spec"]["data"] == [
         {
             "secretKey": "USERNAME",
@@ -529,12 +535,12 @@ def test_native_mysterybox_eso_manual_version_pinning_renders_version() -> None:
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
-    external_secret = next(item for item in _extra_objects(config) if item["kind"] == "ExternalSecret")
+    external_secret = next(
+        item for item in _extra_objects(config) if item["kind"] == "ExternalSecret"
+    )
     assert external_secret["spec"]["data"] == [
         {
             "secretKey": "USERNAME",
@@ -564,16 +570,16 @@ def test_native_mysterybox_eso_does_not_manage_builtin_default_namespace() -> No
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
     assert not any(
         item["kind"] == "Namespace" and item["metadata"]["name"] == "default"
         for item in _extra_objects(config)
     )
-    external_secret = next(item for item in _extra_objects(config) if item["kind"] == "ExternalSecret")
+    external_secret = next(
+        item for item in _extra_objects(config) if item["kind"] == "ExternalSecret"
+    )
     assert external_secret["metadata"]["namespace"] == "default"
 
 
@@ -594,9 +600,7 @@ def test_native_mysterybox_eso_cluster_wide_store_syncs_each_namespace() -> None
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
     extra_objects = _extra_objects(config)
@@ -627,19 +631,17 @@ def test_native_mysterybox_eso_accepts_refresh_interval_units(
         ],
     )
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
-        "refresh_interval"
-    ] = refresh_interval
+    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
 
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
-    external_secret = next(item for item in _extra_objects(config) if item["kind"] == "ExternalSecret")
+    external_secret = next(
+        item for item in _extra_objects(config) if item["kind"] == "ExternalSecret"
+    )
     assert external_secret["spec"]["refreshInterval"] == refresh_interval
 
 
@@ -660,9 +662,7 @@ def test_native_mysterybox_eso_restricted_store_uses_sync_namespaces() -> None:
     config = validate_config(payload)
     materialize_mysterybox_eso_app_values(
         config,
-        component_output_values={
-            "mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}
-        },
+        component_output_values={"mysterybox.secret_ids": {"db-uname-pass": "mbsec-e00db"}},
     )
 
     extra_objects = _extra_objects(config)
@@ -730,7 +730,9 @@ def test_native_mysterybox_eso_rejects_invalid_sync_namespace() -> None:
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload, sync_namespaces=["Bad_Namespace"])
 
-    with pytest.raises(ValueError, match="sync_namespaces\\[0\\] must be a Kubernetes namespace name"):
+    with pytest.raises(
+        ValueError, match="sync_namespaces\\[0\\] must be a Kubernetes namespace name"
+    ):
         validate_config(payload)
 
 
@@ -741,9 +743,7 @@ def test_native_mysterybox_eso_rejects_invalid_refresh_interval(
     payload = _starter_payload()
     _set_mysterybox_inputs(payload)
     _enable_mysterybox_eso(payload)
-    payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
-        "refresh_interval"
-    ] = refresh_interval
+    payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["refresh_interval"] = refresh_interval
 
     with pytest.raises(ValueError, match="refresh_interval must use s, m, or h units"):
         validate_config(payload)

@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: VLLM_IMAGE_DIGEST=... COURSE_CONTAINER_RUNNER=... sbatch %s [lab options]\n' "$0"
+  printf 'Usage: VLLM_IMAGE_DIGEST=... COURSE_CONTAINER_RUNNER=... python3 tools/submit_lab.py --lab 10_vllm_offline %s [lab options]\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi
@@ -19,11 +19,11 @@ if [[ ${VLLM_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; 
   printf 'ERROR: immutable image and executable runner required.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit from the llm-inference course root.}
+course_dir=$PWD
 if [[ ! -f ${course_dir}/labs/10_vllm_offline.py ]]; then
   printf 'ERROR: submit from the course root containing labs/10_vllm_offline.py.\n' >&2
   exit 2
 fi
 cd "${course_dir}"
 srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" \
-  python3 labs/10_vllm_offline.py "$@"
+  python3 tools/profile_lab.py --lab 10_vllm_offline -- python3 labs/10_vllm_offline.py "$@"

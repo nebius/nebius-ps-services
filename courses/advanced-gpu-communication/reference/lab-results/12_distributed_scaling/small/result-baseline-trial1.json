@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "all_ranks_finite_loss": true
+  },
+  "lab": "12_distributed_scaling",
+  "measurements": {
+    "global_batch": 64,
+    "median_step_ms": 0.8599,
+    "samples_per_second": 74423.23
+  },
+  "parameters": {
+    "global_batch": 64,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

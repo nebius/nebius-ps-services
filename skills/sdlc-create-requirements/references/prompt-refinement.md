@@ -36,8 +36,15 @@ compiled requirements digest, and status (`extracting`,
 requirements digest and no material open or reopened question. Never place
 prompt/run IDs, private paths, raw chat, or internal digests in committed specs.
 
+Before the first adapter publication, a missing canonical document returns to
+the coordinator for `maintain-project-specs` draft-pair bootstrap. This adapter
+never authors the missing design counterpart.
+
 After writing the file and saving `ready`, invoke the private
-`refinement-verify` action owned by `sdlc-start` with the exact workspace and
-run. Do not route to design until it proves that the latest accepted prompt
-identity and intent digest match the exact current `docs/requirements.md`
-bytes.
+`refinement-ready` action owned by `sdlc-start` with the exact workspace and
+run. Do not route to context/design until it proves that the latest accepted
+prompt identity and intent digest match the exact current
+`docs/requirements.md` bytes. This read-only check publishes no impact receipt.
+The coordinator invokes `refinement-verify` only after ready design and before
+planning, with a complete statement-impact claim. Execution and steering
+resolution continue to require that full settlement.

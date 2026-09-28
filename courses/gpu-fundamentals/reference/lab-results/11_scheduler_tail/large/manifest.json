@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "d4399ef0e8f823cd06abf8b1643307088de951e99301d0fad4e514a932e79e61",
+      "sha256": "281aa63fc367f3a2685730ec3fa5d357346cfb62a15563f2fb1c6a64aba4eb38",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "be7c8963220bc3d7d126fa1897127596c089ef6dfb06fdf8a4374098ebc86b6f",
+      "sha256": "28552b897fe9f496145339d6f6f14d63de7b5fcff92de4d02af273f0d735c65a",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "c57f8b6a2cfd316f6a57bd990da56e0aa4d84fcd1e41d3c83905cbeab86d5e22",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "3858fb616c1cb2f5cc9438b68e5be545f0ff400f918baa809ed438e7e8278ef6",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "4f898ef302fe265e23b3287b7d6ec0c72947ee71077cd2f0d3c240a941b410c8",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "9e2f171a646c4f76888e7da846238d9c144960acf8585be59b041cc4c4725b97",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "b40839ed82f59a7b003a72694cb2ceee495d86940f1134114bc6d9520e405c01",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "11_scheduler_tail",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "b80d456a33a979dabd938fa51eebd5b4d2bcde59ddb73b8e279df5968209d400"
+}

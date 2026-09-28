@@ -358,8 +358,8 @@ def test_mk8s_status_poller_summary_reads_enum_event_levels_and_error_details() 
 
     summary = poller.summary()
 
-    assert "alerts ERROR workers:" in summary
-    assert "RESOURCE_EXHAUSTED" in summary
+    assert "waiting for cloud capacity" in summary
+    assert "0/2 ready" in summary
 
 
 def test_mk8s_status_poller_ignores_terminal_error_while_node_group_is_deleting() -> None:
@@ -578,7 +578,7 @@ def test_latest_operation_summary_keeps_completed_operation_from_current_monitor
     )
 
     assert summary is not None
-    assert "op Update cluster opmk8scluster-current done" in summary
+    assert summary == "op Update cluster opmk8scluster-current done"
 
 
 def test_latest_operation_summary_keeps_observed_running_operation_after_completion() -> None:
@@ -1610,3 +1610,58 @@ def test_enum_field_name_supports_python_enum_values() -> None:
     message = SimpleNamespace(phase=_Phase.PHASE_PROVISIONING)
 
     assert _enum_field_name(message, "phase", prefixes=("PHASE_",)) == "PROVISIONING"
+
+
+def test_reporter_coalesces_bursts_and_elapsed_only_heartbeats(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(deployment_status_module.time, "monotonic", lambda: now[0])
+    messages = []
+    reporter = DeploymentStatusReporter({}, emit=messages.append)
+    reporter._emit_status(force=True)
+    for index in range(100):
+        reporter.handle_terraform_event(
+            {
+                "type": "apply_start",
+                "hook": {"resource": {"addr": f"terraform_data.item[{index}]"}, "action": "create"},
+            }
+        )
+    assert len(messages) == 1
+    now[0] += 1
+    reporter._emit_status()
+    assert len(messages) == 2 and "+98 more" in messages[-1]
+    now[0] += 15
+    reporter._emit_status()
+    assert len(messages) == 2
+    now[0] += 45
+    reporter._emit_status()
+    assert len(messages) == 3
+    reporter.handle_terraform_event(
+        {
+            "type": "change_summary",
+            "changes": {"operation": "apply", "add": 100, "change": 0, "remove": 0},
+        }
+    )
+    assert "apply complete 100 add" in messages[-1]
+    count = len(messages)
+    reporter.close()
+    assert len(messages) == count
+
+
+def test_truncated_terraform_addresses_preserve_distinct_instance_keys():
+    progress = deployment_status_module.TerraformApplyProgress()
+    for key in ("accounting", "controller"):
+        progress.update_from_event(
+            {
+                "type": "apply_start",
+                "hook": {
+                    "resource": {
+                        "addr": 'module.long_cluster_name.nebius_iam_v1_service_account.node_group["'
+                        + key
+                        + '"]'
+                    },
+                    "action": "create",
+                },
+            }
+        )
+    summary = progress.summary()
+    assert '["accounting"]' in summary and '["controller"]' in summary

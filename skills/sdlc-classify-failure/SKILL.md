@@ -111,6 +111,12 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   existing attempt contract. After completed waves, require immutable
   corrective plan vN+1. After promotion, require a new corrective run from the
   promoted commit; never reopen sealed execution.
+- Use lifecycle `integrated_wave` when task integration succeeded but combined
+  checks failed before wave completion. Record its exact failed commit and a
+  complete localized diagnosis. A counted localized dispatch authorizes the
+  execution owner's `wave-fail` retirement and adjacent corrective plan.
+  Immutable dispatch receipts preserve historical authority after repair
+  control advances. Do not call the failed wave completed or reopen its tasks.
 - Increment remediation counts only through a helper-authorized dispatch.
   Enforce two localized repairs, one design repair, three total blocker
   attempts, 60 active minutes, and four repair dispatches per feature.
@@ -128,6 +134,17 @@ Classify failures and select the correct retry or stop route before any SDLC loo
   base branch, and verified integration cleanup; mark the repair resolved only
   after that final gate.
 - Stop when human input, policy block, environment block, or retry budget requires it.
+- After a pre-promotion environment block is externally recovered, rerun its
+  exact gate on the unchanged clean integrated commit. Use private
+  `record-environment-recovery --run-dir <run> --input <receipt>` only with
+  schema `agentic-sdlc/environment-recovery-v1`, the active feature/event/
+  classification IDs, original surface/commit/fingerprints, and a digest-bound
+  passing `gate-evidence-v1` source. The helper verifies current Git and
+  fingerprints, then resolves only that environment block. It preserves the
+  original failure, history and budgets. It archives the sole resolved gate's
+  invalidation in immutable recovery evidence and clears that pending
+  projection; other pending invalidations reject recovery. It does not certify an
+  earlier failed trial or accept implementation, policy or human blockers.
 - Preserve every dirty, divergent, unreachable, malformed, or foreign Git
   resource. Classification never authorizes reset, history rewrite, or force
   cleanup.
@@ -205,3 +222,7 @@ Return a concise result with:
 - Use `scripts/repair_control.py` for every failure, diagnosis, broader-design
   approval, classification, diagnostic-experiment, remediation-dispatch, and
   completion and invalidated-gate revalidation transition.
+- After a proven gate-owner route repair, use the private
+  `refresh-revalidation-routes` action with the exact pending cursor and evidence
+  reference. Archive old progress and rerun all gates; never edit the cursor,
+  transfer old passes, or reset repair budgets. Alignment is owned by `align`.

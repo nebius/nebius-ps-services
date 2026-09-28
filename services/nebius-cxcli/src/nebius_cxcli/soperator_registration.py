@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .component_instances import normalize_component_token
 from .deploy_targets import deploy_target_is_external_mk8s
 from .runtime_config import to_plain_data
@@ -474,7 +475,7 @@ def verify_live_soperator_release_provenance(
     environment = None if extra_env is None else {**os.environ, **dict(extra_env)}
 
     def _run(args: list[str], *, input_text: str | None = None) -> str:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             args,
             input=input_text,
             capture_output=True,
@@ -1604,7 +1605,7 @@ def collect_kubectl_soperator_snapshot(
                     "json",
                 ],
                 timeout,
-                errors=None,
+                errors=collection_errors,
                 extra_env=extra_env,
             )
         cluster_workloads = _merge_kubectl_list_payloads(
@@ -2162,7 +2163,7 @@ def _collect_slurm_health_from_login(
     ]
     run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             command,
             check=False,
             capture_output=True,
@@ -2223,6 +2224,22 @@ def _pvc_claim_names_from_pod_spec(pod_spec: Mapping[str, Any]) -> list[str]:
     )
 
 
+def _sanitize_owner_references(references: Any) -> Any:
+    # Preserve invalid shape as invalid evidence without copying arbitrary payloads.
+    if not isinstance(references, list):
+        return None
+    return [
+        {
+            key: value if isinstance(value, (str, bool)) else None
+            for key, value in reference.items()
+            if key in {"apiVersion", "kind", "name", "uid", "controller", "namespace"}
+        }
+        if isinstance(reference, Mapping)
+        else None
+        for reference in references
+    ]
+
+
 def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
     sanitized: list[dict[str, Any]] = []
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
@@ -2237,6 +2254,9 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             "metadata": {
                 "name": metadata.get("name"),
                 "namespace": metadata.get("namespace"),
+                "uid": metadata.get("uid"),
+                "generation": metadata.get("generation"),
+                "ownerReferences": _sanitize_owner_references(metadata.get("ownerReferences", [])),
                 "labels": _mapping_value(metadata.get("labels")),
             },
         }
@@ -2258,7 +2278,6 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             if claim_names := _pvc_claim_names_from_pod_spec(pod_spec):
                 row["pvc_claim_names"] = claim_names
         elif kind == "Job":
-            row["metadata"]["uid"] = metadata.get("uid")
             row["metadata"]["creationTimestamp"] = metadata.get("creationTimestamp")
             row["status"] = _mapping_value(item.get("status"))
             spec = _mapping_value(item.get("spec"))
@@ -2320,7 +2339,7 @@ def _kubectl_json(
 ) -> Mapping[str, Any]:
     run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             list(command),
             check=True,
             capture_output=True,
@@ -2387,7 +2406,7 @@ def _helm_json(
 ) -> Any:
     run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             list(command),
             check=True,
             capture_output=True,
@@ -2416,7 +2435,7 @@ def _kubectl_text(
 ) -> str:
     run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             list(command),
             check=True,
             capture_output=True,

@@ -1,0 +1,15 @@
+# Official references
+
+1. [NCCL environment and transport controls](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html)
+2. [NCCL Tests performance interpretation](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md)
+3. [NVIDIA NVBandwidth](https://github.com/NVIDIA/nvbandwidth)
+4. [RDMA perftest source](https://github.com/linux-rdma/perftest)
+5. [NIXL benchmark v1.4.1](https://github.com/ai-dynamo/nixl/blob/v1.4.1/benchmark/nixlbench/README.md)
+6. [Megatron Bridge v0.6.0](https://github.com/NVIDIA-NeMo/Megatron-Bridge/tree/v0.6.0)
+7. [Dynamo release artifacts v1.4.2](https://docs.nvidia.com/dynamo/v1.4.2/reference/release-artifacts)
+8. [Dynamo disaggregated launch source](https://github.com/ai-dynamo/dynamo/blob/v1.4.2/examples/backends/vllm/launch/disagg.sh)
+9. [AIPerf v0.12.0 metrics](https://github.com/ai-dynamo/aiperf/blob/v0.12.0/docs/metrics-reference.md)
+10. [PyTorch profiler](https://docs.pytorch.org/docs/stable/profiler.html)
+11. [Nsight Systems documentation](https://docs.nvidia.com/nsight-systems/)
+12. [Nsight Compute profiling guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html)
+13. [Soperator source](https://github.com/nebius/soperator)

@@ -10,6 +10,13 @@ or `/skills:config-claude` from the repository's Claude plugin. Describe whether
 you want inspection, setup, reconciliation or missing-settings recovery. Help
 performs no inspection. Installing the skill does not configure the machine.
 
+The global instruction template reuses task authorization for necessary new
+credentials and secrets, permits only secure operational storage of values,
+and avoids repeated confirmation for the same action. Explicit requests may
+repair restrictive human-owned project rules; generated regions retain their
+owning workflow. Uncovered access expansion, destructive credential replacement
+and secret disclosure remain outside ordinary task authority.
+
 ## Behavior
 
 - Existing `CLAUDE.md` and `settings.json` receive narrow patches. Personal
@@ -67,3 +74,12 @@ skill is hidden from automatic selection. The shared print-mode runner's
 dollar-form probe does not establish native slash-command dispatch; record
 that loading evidence separately before claiming a Claude runtime pass.
 See [native invocation control](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill).
+
+## Headless browser default
+
+The Playwright MCP template uses `@playwright/mcp@0.0.81 --headless --browser
+chrome --isolated`. Install Chrome locally. Isolated session storage is discarded
+on close; this does not connect to a personal Chrome profile. Existing config
+is patch-only and requires an explicit request to change its values. Restart
+the client/MCP session after applying a config change. Agent exploration through
+MCP is separate from required Playwright Test acceptance and its evidence.

@@ -1,0 +1,170 @@
+{
+  "correctness": {
+    "all_outputs_finite": true,
+    "all_partial_wave_programs_completed_and_match_reference": true,
+    "matched_work_within_two_percent": true
+  },
+  "lab": "15_tail_load_balance",
+  "measurements": {
+    "balanced": {
+      "makespan": {
+        "median_ms": 0.1987,
+        "min_ms": 0.1869,
+        "p90_ms": 0.2148
+      },
+      "makespan_distribution": {
+        "max_ms": 0.2235,
+        "min_ms": 0.1869,
+        "p50_ms": 0.1987,
+        "p90_ms": 0.2148,
+        "p99_ms": 0.2235
+      },
+      "median_task_to_max_task_ratio": 0.6069,
+      "modeled_gemm_flops": 17179869184,
+      "task_duration": {
+        "median_ms": 0.0174,
+        "min_ms": 0.0155,
+        "p90_ms": 0.0191
+      },
+      "task_duration_distribution": {
+        "max_ms": 0.0287,
+        "min_ms": 0.0155,
+        "p50_ms": 0.0174,
+        "p90_ms": 0.0191,
+        "p99_ms": 0.0273
+      },
+      "widths": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ]
+    },
+    "partial_wave_probe": {
+      "cases": [
+        {
+          "completion_distribution": {
+            "max_ms": 0.045,
+            "min_ms": 0.028,
+            "p50_ms": 0.0294,
+            "p90_ms": 0.0343,
+            "p99_ms": 0.045
+          },
+          "max_absolute_error": 5.364418029785156e-07,
+          "model": {
+            "blocks": 528,
+            "tail_blocks": 528,
+            "tail_utilization": 1.0,
+            "waves": 1
+          }
+        },
+        {
+          "completion_distribution": {
+            "max_ms": 0.0383,
+            "min_ms": 0.0316,
+            "p50_ms": 0.033,
+            "p90_ms": 0.0369,
+            "p99_ms": 0.0383
+          },
+          "max_absolute_error": 5.364418029785156e-07,
+          "model": {
+            "blocks": 529,
+            "tail_blocks": 1,
+            "tail_utilization": 0.0019,
+            "waves": 2
+          }
+        },
+        {
+          "completion_distribution": {
+            "max_ms": 0.0498,
+            "min_ms": 0.0448,
+            "p50_ms": 0.0455,
+            "p90_ms": 0.0466,
+            "p99_ms": 0.0498
+          },
+          "max_absolute_error": 9.5367431640625e-07,
+          "model": {
+            "blocks": 1056,
+            "tail_blocks": 528,
+            "tail_utilization": 1.0,
+            "waves": 2
+          }
+        },
+        {
+          "completion_distribution": {
+            "max_ms": 0.0524,
+            "min_ms": 0.0483,
+            "p50_ms": 0.049,
+            "p90_ms": 0.051,
+            "p99_ms": 0.0524
+          },
+          "max_absolute_error": 9.5367431640625e-07,
+          "model": {
+            "blocks": 1057,
+            "tail_blocks": 1,
+            "tail_utilization": 0.0019,
+            "waves": 3
+          }
+        }
+      ],
+      "derived_blocks_per_sm": 4,
+      "registers_per_thread": 8,
+      "resident_block_slots": 528,
+      "shared_bytes_per_block": 0,
+      "sm_count": 132,
+      "warps_per_block": 16
+    },
+    "profiler_confirmation_required": true,
+    "skewed": {
+      "makespan": {
+        "median_ms": 0.2131,
+        "min_ms": 0.1953,
+        "p90_ms": 0.2272
+      },
+      "makespan_distribution": {
+        "max_ms": 0.2548,
+        "min_ms": 0.1953,
+        "p50_ms": 0.2131,
+        "p90_ms": 0.2272,
+        "p99_ms": 0.2548
+      },
+      "median_task_to_max_task_ratio": 0.495,
+      "modeled_gemm_flops": 17318281216,
+      "task_duration": {
+        "median_ms": 0.0176,
+        "min_ms": 0.0138,
+        "p90_ms": 0.0252
+      },
+      "task_duration_distribution": {
+        "max_ms": 0.0355,
+        "min_ms": 0.0138,
+        "p50_ms": 0.0176,
+        "p90_ms": 0.0252,
+        "p99_ms": 0.0314
+      },
+      "widths": [
+        1536,
+        896,
+        896,
+        896,
+        896,
+        896,
+        896,
+        896
+      ]
+    },
+    "skewed_to_balanced_modeled_work_ratio": 1.0081
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

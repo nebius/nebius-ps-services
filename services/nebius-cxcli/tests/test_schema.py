@@ -42,6 +42,29 @@ def test_schema_valid_dynamic_file(tmp_path: Path) -> None:
     assert isinstance(loaded.apps.charts, list)
 
 
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize(
+    "tag",
+    ["x" * 36, "x" * 37, " " + "x" * 36, "x" * 36 + " ", "é" * 18, "é" * 19],
+)
+def test_schema_enforces_filesystem_mount_tag_limit(tmp_path: Path, mapped, tag) -> None:
+    payload = _dynamic_payload()
+    spec = {"mount_tag": tag}
+    inputs = {"filesystems": {"jail": spec}} if mapped else spec
+    payload["infra"]["components"] = [
+        {"id": "sfs", "instance_id": "sfs", "enabled": True, "inputs": inputs}
+    ]
+    payload["apps"]["charts"] = []
+    payload.pop("deploy", None)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    if len(tag.encode("utf-8")) > 36:
+        with pytest.raises(ValueError, match=r"mount_tag.*at most 36 UTF-8 bytes"):
+            load_config(config_path)
+    else:
+        load_config(config_path)
+
+
 def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
     key_path = tmp_path / "id_ed25519.pub"
     key_path.write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")

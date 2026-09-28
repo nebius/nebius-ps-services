@@ -10,17 +10,18 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .app_mutation import app_mutation_scope
 from .component_instances import component_type_id
 from .deploy_targets import enabled_cluster_target_refs, flux_target_dir
@@ -39,7 +40,7 @@ from .grafana_runtime import (
 from .observability import materialize_observability_app_values, observability_validation_specs
 from .observability_validation import run_observability_validations
 from .paths import ProjectPaths
-from .project_bundle_transaction import ProjectBundleTransaction
+from .project_bundle_transaction import ProjectBundlePreimageConflict, ProjectBundleTransaction
 from .render import reset_generated_bundle, staged_generated_paths
 from .runtime_config import to_plain_data
 from .soperator_operation_lock import SoperatorOperationLease, SoperatorOperationLocalLock
@@ -68,10 +69,19 @@ def protected_config_digest(config: Any) -> str:
             if isinstance(row, Mapping)
             and (component_type_id(row) == "soperator" or "soperator_registration" in row)
         ]
+    native_targets = {
+        row.get("target_ref") or row.get("instance_id")
+        for row in apps.get("charts", [])
+        if row.get("id") == "soperator"
+    }
     for target in payload.get("deploy", {}).get("targets", []):
-        # This field controls extra app telemetry, not Soperator's exporters.
         if isinstance(target, dict):
+            # Native routing changes its protected child HelmReleases. Additional
+            # app telemetry remains ordinary-owned.
+            routing = target.get("observability", {}).get("routing")
             target.pop("observability", None)
+            if routing and target.get("instance_id") in native_targets:
+                target["observability"] = {"routing": routing}
     return _digest(_json_bytes(payload))
 
 
@@ -86,11 +96,14 @@ def ordinary_config(config: Any) -> dict[str, Any]:
 
 
 def publish_ordinary_app_config(
-    paths: ProjectPaths, candidate: Mapping[str, Any], *, expected_bytes: bytes | None = None
+    paths: ProjectPaths,
+    candidate: Mapping[str, Any],
+    *,
+    expected_bytes: bytes | None = None,
+    observability_target_refs: frozenset[str] = frozenset(),
 ) -> bool:
     """Publish only app configuration, preserving authored protected subtrees."""
     with SoperatorOperationLocalLock(paths.project_dir / ".nebius-cxcli" / "config.lock"):
-        validate_ordinary_app_scope(paths)
         current_bytes = paths.config_path.read_bytes()
         if expected_bytes is not None and expected_bytes != current_bytes:
             raise RuntimeError("Config changed during ordinary app selection")
@@ -120,7 +133,24 @@ def publish_ordinary_app_config(
         for row in updated.get("deploy", {}).get("targets", []):
             if settings.get(row.get("instance_id")) is not None:
                 row["observability"] = copy.deepcopy(settings[row["instance_id"]])
-        if protected_config_digest(updated) != protected_config_digest(source):
+        from .observability_routing import app_row, resolve_settings
+
+        for target in observability_target_refs:
+            if app_row(updated, target, "grafana") is None:
+                raise ValueError("Observability config publication requires selected Grafana")
+            resolve_settings(updated, target)
+
+        def publication_digest(payload: Mapping[str, Any]) -> str:
+            comparable = copy.deepcopy(dict(payload))
+            for row in comparable.get("deploy", {}).get("targets", []):
+                if row.get("instance_id") in observability_target_refs:
+                    row.get("observability", {}).pop("routing", None)
+            return protected_config_digest(comparable)
+
+        # Only the explicitly selected routing intent is editable here. Native
+        # charts/infra come from source, and the saved protected digest remains
+        # changed so ordinary rendering/application cannot bypass native admission.
+        if publication_digest(updated) != publication_digest(source):
             raise RuntimeError("Ordinary app selection changed protected configuration")
         if updated == source:
             return False
@@ -177,7 +207,10 @@ def accept_ordinary_app_baseline(
     paths: ProjectPaths,
     *,
     identities: Mapping[str, Mapping[str, str]] | None = None,
-) -> None:
+    selected_target_refs: Sequence[str] | None = None,
+    deployment_generation: str = "",
+    expected_generation: Any = None,
+) -> bool:
     """Record successful lifecycle postconditions, never an ordinary candidate."""
     manifest = load_generated_manifest(paths.generated_dir)
     baseline_path = paths.reports_dir / BASELINE_FILENAME
@@ -188,10 +221,43 @@ def accept_ordinary_app_baseline(
     bindings = {key: value for key, value in bindings.items() if key in target_refs}
     transaction = ProjectBundleTransaction(paths.project_dir)
     manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
-    targets = (paths.config_path, manifest_path, baseline_path, *_protected_files(paths))
+    protected_paths = tuple(_protected_files(paths))
+    generation_paths = (
+        tuple(paths.generated_dir / name for name in expected_generation.files)
+        if expected_generation
+        else ()
+    )
+    targets = tuple(
+        dict.fromkeys(
+            (paths.config_path, manifest_path, baseline_path, *protected_paths, *generation_paths)
+        )
+    )
     preimages = transaction.snapshot_preimages(targets)
     manifest_bytes = preimages[manifest_path].content
     source_bytes = preimages[paths.config_path].content
+    if expected_generation is not None:
+        from base64 import b64decode
+
+        from .compatibility_matrix import digest as source_digest
+        from .deployment_state import DeploymentGeneration
+
+        if deployment_generation != expected_generation.identity:
+            raise RuntimeError("App baseline was given a different accepted generation")
+        expected_source = expected_generation.manifest.get("render", {}).get("source_config_sha256")
+        if (
+            not expected_source
+            or source_bytes is None
+            or source_digest(yaml.safe_load(source_bytes)) != expected_source
+        ):
+            return False
+        if manifest_bytes is None:
+            return False
+        current = DeploymentGeneration.capture(paths, json.loads(manifest_bytes))
+        if current.identity != expected_generation.identity:
+            return False
+        for name, encoded in expected_generation.files.items():
+            if preimages[paths.generated_dir / name].content != b64decode(encoded, validate=True):
+                return False
     if manifest_bytes is None or source_bytes is None:
         raise RuntimeError("Lifecycle acceptance lost its generated manifest or source")
     accepted_manifest = json.loads(manifest_bytes)
@@ -199,22 +265,61 @@ def accept_ordinary_app_baseline(
         raise RuntimeError("Generated manifest changed during lifecycle acceptance")
     baseline = {
         "schema": "nebius-cxcli-ordinary-apps/v1",
+        "deployment_generation": deployment_generation,
         "source_sha256": protected_config_digest(yaml.safe_load(source_bytes)),
         "runtime_sha256": protected_config_digest(accepted_manifest["runtime_config"]),
         "protected_files": {
             path.relative_to(paths.generated_dir).as_posix(): item.sha256
             for path, item in preimages.items()
-            if path not in {paths.config_path, manifest_path, baseline_path}
+            if path in protected_paths
         },
         "identities": bindings,
-        "ordinary_files": {
-            path.relative_to(paths.generated_dir).as_posix(): _digest(path.read_bytes())
-            for path in _ordinary_files(paths, manifest["runtime_config"])
-        },
+        "ordinary_files": _accepted_ordinary_files(
+            paths,
+            manifest["runtime_config"],
+            prior.get("ordinary_files", {}),
+            selected_target_refs,
+        ),
     }
     writes = {path: item.content for path, item in preimages.items() if item.content is not None}
     writes[baseline_path] = _json_bytes(baseline)
-    transaction.commit(writes, expected_preimages={p: item.sha256 for p, item in preimages.items()})
+    try:
+        transaction.commit(
+            writes, expected_preimages={p: item.sha256 for p, item in preimages.items()}
+        )
+    except ProjectBundlePreimageConflict:
+        # The deployment already succeeded. Preserve the user's newer source and
+        # leave app-only admission closed until a baseline can be accepted again.
+        return False
+    return True
+
+
+def _accepted_ordinary_files(
+    paths: ProjectPaths,
+    config: Any,
+    prior: Mapping[str, str],
+    selected: Sequence[str] | None,
+) -> dict[str, str]:
+    files = _ordinary_files(paths, config)
+    if selected is None:
+        return {
+            path.relative_to(paths.generated_dir).as_posix(): _digest(path.read_bytes())
+            for path in files
+        }
+    roots = tuple(flux_target_dir(paths, ref) / "ordinary" for ref in selected)
+
+    def owned(path: Path) -> bool:
+        return any(path.is_relative_to(root) for root in roots)
+
+    result = {name: value for name, value in prior.items() if not owned(paths.generated_dir / name)}
+    result.update(
+        {
+            path.relative_to(paths.generated_dir).as_posix(): _digest(path.read_bytes())
+            for path in files
+            if owned(path)
+        }
+    )
+    return result
 
 
 def preserve_ordinary_app_generation(paths: ProjectPaths, staged: ProjectPaths) -> None:
@@ -263,6 +368,15 @@ def preserve_ordinary_app_generation(paths: ProjectPaths, staged: ProjectPaths) 
     for key in ("app_scope", "ordinary_validations", "ordinary_files"):
         if key in current.get("render", {}):
             candidate["render"][key] = copy.deepcopy(current["render"][key])
+    from .application_compatibility import refresh_application_manifest
+    from .compatibility_artifacts import frozen_chart_inputs
+    from .frozen_catalog import use_frozen_catalog
+
+    with (
+        use_frozen_catalog(candidate["render"]["inputs"]),
+        frozen_chart_inputs(current["render"]["compatibility"].get("chart_inputs", {})),
+    ):
+        candidate = refresh_application_manifest(candidate["runtime_config"], staged, candidate)
     candidate_path.write_bytes(_json_bytes(candidate))
 
 
@@ -348,6 +462,24 @@ def _external_secret_target(doc: Mapping[str, Any]) -> tuple[str, str] | None:
     )
 
 
+def is_shared_protected_resource(doc: Mapping[str, Any], protected: Mapping[str, Any]) -> bool:
+    """Identify an ordinary prerequisite that its protected owner supplies."""
+    if resource_identity(doc) != resource_identity(protected):
+        return False
+    if doc.get("kind") == "Namespace":
+        metadata = doc.get("metadata", {})
+        return (
+            doc.get("apiVersion") == protected.get("apiVersion")
+            and set(doc) <= {"apiVersion", "kind", "metadata"}
+            and set(metadata) <= {"name", "labels", "annotations"}
+            and not metadata.get("labels")
+            and set(metadata.get("annotations", {})) <= {"cxcli.nebius.com/app-owner"}
+        )
+    return doc.get("kind") in {"HelmRepository", "GitRepository", "OCIRepository"} and doc.get(
+        "spec"
+    ) == protected.get("spec")
+
+
 def omit_shared_protected_resources(ordinary_dir: Path, protected_dir: Path) -> None:
     """Reference shared namespaces and identical sources without reapplying them."""
     protected = {resource_identity(doc): doc for doc in resource_documents(protected_dir)}
@@ -362,15 +494,8 @@ def omit_shared_protected_resources(ordinary_dir: Path, protected_dir: Path) -> 
             if not isinstance(doc, dict):
                 continue
             existing = protected.get(resource_identity(doc))
-            if existing is not None:
-                if doc.get("kind") == "Namespace" and not doc.get("metadata", {}).get("labels"):
-                    continue
-                if doc.get("kind") in {
-                    "HelmRepository",
-                    "GitRepository",
-                    "OCIRepository",
-                } and doc.get("spec") == existing.get("spec"):
-                    continue
+            if existing is not None and is_shared_protected_resource(doc, existing):
+                continue
             docs.append(doc)
         if docs:
             path.write_text(yaml.safe_dump_all(docs, sort_keys=False))
@@ -429,8 +554,27 @@ def validate_resource_ownership(ordinary_dir: Path, protected_dir: Path) -> None
 def render_ordinary_apps(
     config: Any, paths: ProjectPaths, *, source_preimage: bytes | None = None
 ) -> list[Path]:
-    """Publish apps only, retaining exact protected resources and accepted hashes."""
+    """Prepare and atomically publish ordinary apps with fresh compatibility evidence."""
     with SoperatorOperationLocalLock(paths.project_dir / ".nebius-cxcli" / "config.lock"):
+        writes, removals, expected, manifest = prepare_ordinary_apps(
+            config, paths, source_preimage=source_preimage
+        )
+        ProjectBundleTransaction(paths.project_dir).commit(
+            writes, removals=removals, expected_preimages=expected
+        )
+        return [paths.generated_dir / name for name in manifest["render"]["ordinary_files"]]
+
+
+def prepare_ordinary_apps(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    source_preimage: bytes | None = None,
+    source_content: bytes | None = None,
+    component_output_values=None,
+):
+    """Prepare an app-only transaction without publishing project files."""
+    with ExitStack():
         manifest = load_generated_manifest(paths.generated_dir)
         validate_ordinary_app_scope(paths, manifest=manifest)
         # Keep the lifecycle's normalized protected runtime exactly as accepted;
@@ -463,14 +607,27 @@ def render_ordinary_apps(
             paths.reports_dir / BASELINE_FILENAME,
             *_protected_files(paths),
         )
-        preimages = transaction.snapshot_preimages(original_targets)
+        preimages = transaction.snapshot_preimages(original_targets, read_only=True)
         if source_preimage is not None and preimages[paths.config_path].content != source_preimage:
             raise RuntimeError("Authored config changed during ordinary app validation")
         current_files = set(_ordinary_files(paths, config))
-        app_preimages = transaction.snapshot_preimages(current_files) if current_files else {}
+        app_preimages = (
+            transaction.snapshot_preimages(current_files, read_only=True) if current_files else {}
+        )
         stage = staged_generated_paths(paths)
         try:
-            written = render_flux(candidate, stage, ordinary_only=True)
+            from .deployment_state import DeploymentGeneration
+
+            stage.generated_dir.rmdir()
+            DeploymentGeneration.capture(paths, manifest).materialize(stage)
+            for path in _ordinary_files(stage, candidate):
+                path.unlink()
+            written = render_flux(
+                candidate,
+                stage,
+                ordinary_only=True,
+                component_output_values=component_output_values,
+            )
             for target_ref in enabled_cluster_target_refs(config):
                 omit_shared_protected_resources(
                     flux_target_dir(stage, target_ref) / "ordinary",
@@ -480,6 +637,9 @@ def render_ordinary_apps(
                     flux_target_dir(stage, target_ref) / "ordinary",
                     flux_target_dir(paths, target_ref),
                 )
+            from .application_compatibility import refresh_application_manifest
+
+            manifest = refresh_application_manifest(candidate, stage, manifest)
             new_files = {
                 paths.generated_dir / p.relative_to(stage.generated_dir): p.read_bytes()
                 for p in written
@@ -491,6 +651,8 @@ def render_ordinary_apps(
                 path: item.content for path, item in preimages.items() if item.content is not None
             }
             writes.update(new_files)
+            if source_content is not None:
+                writes[paths.config_path] = source_content
             manifest = copy.deepcopy(manifest)
             manifest["runtime_config"] = candidate
             manifest["render"]["app_scope"] = "ordinary"
@@ -499,17 +661,18 @@ def render_ordinary_apps(
                 p.relative_to(paths.generated_dir).as_posix(): _digest(content)
                 for p, content in new_files.items()
             }
+            from .compatibility_matrix import digest
+
+            manifest["render"]["source_config_sha256"] = digest(
+                yaml.safe_load(writes[paths.config_path])
+            )
             writes[manifest_path_for_generated_dir(paths.generated_dir)] = _json_bytes(manifest)
             removals = current_files - set(new_files)
-            transaction.commit(
-                writes,
-                removals=removals,
-                expected_preimages={
-                    **{path: "absent" for path in new_files if path not in app_preimages},
-                    **{path: item.sha256 for path, item in {**preimages, **app_preimages}.items()},
-                },
-            )
-            return sorted(new_files)
+            expected = {
+                **{path: "absent" for path in new_files if path not in app_preimages},
+                **{path: item.sha256 for path, item in {**preimages, **app_preimages}.items()},
+            }
+            return writes, removals, expected, manifest
         finally:
             reset_generated_bundle(stage)
 
@@ -532,7 +695,7 @@ def validate_ordinary_bundle(paths: ProjectPaths, manifest: Mapping[str, Any]) -
 
 
 def _live_json(argv: list[str], env: Mapping[str, str]) -> Any:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         argv, env={**os.environ, **env}, capture_output=True, text=True, timeout=90
     )
     if result.returncode:
@@ -540,13 +703,107 @@ def _live_json(argv: list[str], env: Mapping[str, str]) -> Any:
     return json.loads(result.stdout or "{}")
 
 
-def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str]) -> None:
+def _accepted_read_only_oci_source(desired, live, accepted, desired_releases, live_releases):
+    """Reuse an unchanged accepted source without claiming or mutating its ownership."""
+    identity = resource_identity(desired)
+    prior = accepted.get(identity)
+    owner = desired.get("metadata", {}).get("annotations", {}).get("cxcli.nebius.com/app-owner")
+    meta, status = live.get("metadata", {}), live.get("status", {})
+    ready = next((c for c in status.get("conditions", []) if c.get("type") == "Ready"), {})
+    if (
+        desired.get("kind") != "OCIRepository"
+        or not prior
+        or not owner
+        or resource_identity(live) != identity
+        or meta.get("annotations", {}).get("cxcli.nebius.com/app-owner")
+        or prior.get("metadata", {}).get("annotations", {}).get("cxcli.nebius.com/app-owner")
+        not in {None, owner}
+        or meta.get("ownerReferences", []) != prior.get("metadata", {}).get("ownerReferences", [])
+        or not meta.get("uid")
+        or meta.get("deletionTimestamp")
+        or not meta.get("generation")
+        or ready.get("status") != "True"
+        or ready.get("observedGeneration", status.get("observedGeneration")) != meta["generation"]
+    ):
+        return False
+
+    def canonical_spec(document):
+        spec = copy.deepcopy(document.get("spec", {}))
+        # Flux source API defaults; all other fields remain exact.
+        for key, value in (
+            ("provider", "generic"),
+            ("timeout", "60s"),
+            ("insecure", False),
+            ("suspend", False),
+        ):
+            spec.setdefault(key, value)
+        return spec
+
+    expected = canonical_spec(desired)
+    if (
+        expected != canonical_spec(prior)
+        or expected != canonical_spec(live)
+        or expected.get("suspend")
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", str(expected.get("ref", {}).get("digest", "")))
+        or set(expected.get("ref", {})) != {"digest"}
+    ):
+        return False
+
+    def uses_source(release):
+        ref = release.get("spec", {}).get("chartRef", {})
+        return (
+            ref.get("kind") == "OCIRepository"
+            and ref.get("name") == identity[3]
+            and ref.get("namespace", release.get("metadata", {}).get("namespace")) == identity[2]
+        )
+
+    consumers = {resource_identity(r): r for r in desired_releases if uses_source(r)}
+    live_consumers = {resource_identity(r): r for r in live_releases if uses_source(r)}
+    accepted_consumers = {
+        key
+        for key, item in accepted.items()
+        if item.get("kind") == "HelmRelease" and uses_source(item)
+    }
+    if (
+        not consumers
+        or consumers.keys() != live_consumers.keys()
+        or consumers.keys() != accepted_consumers
+    ):
+        return False
+    for key, consumer in consumers.items():
+        for item in (consumer, live_consumers[key], accepted.get(key, {})):
+            metadata = item.get("metadata", {})
+            if (
+                not uses_source(item)
+                or metadata.get("annotations", {}).get("cxcli.nebius.com/app-owner") != owner
+                or metadata.get("deletionTimestamp")
+                or item.get("spec", {}).get("suspend")
+            ):
+                return False
+        if not live_consumers[key].get("metadata", {}).get("uid"):
+            return False
+    return True
+
+
+def validate_live_app_ownership(
+    flux_dir: Path,
+    *,
+    extra_env: Mapping[str, str],
+    accepted_documents: Mapping | None = None,
+) -> None:
     docs = resource_documents(flux_dir)
     desired_releases = [doc for doc in docs if doc.get("kind") == "HelmRelease"]
+    version = _live_json(["helm", "version", "--template", '{"version":"{{.Version}}"}'], extra_env)
+    if not isinstance(version, Mapping) or not re.fullmatch(
+        r"v4\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?", str(version.get("version", ""))
+    ):
+        raise RuntimeError("Ordinary app ownership checks require Helm 4")
     live_releases = _live_json(
         ["kubectl", "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json"], extra_env
     ).get("items", [])
-    helm_releases = _live_json(["helm", "list", "-A", "--all", "-o", "json"], extra_env)
+    # Helm 4 lists every release status by default; its removed --all flag fails
+    # before this ownership boundary can inspect even an empty installation.
+    helm_releases = _live_json(["helm", "list", "-A", "-o", "json"], extra_env)
     for desired in desired_releases:
         identity = resource_identity(desired)
         meta, spec = desired["metadata"], desired["spec"]
@@ -587,7 +844,7 @@ def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str])
         if external_secrets
         else []
     )
-    shared_namespaces = set()
+    shared_resources = set()
     for doc in docs:
         group, kind, namespace, name = resource_identity(doc)
         if kind == "HelmRelease":
@@ -640,7 +897,12 @@ def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str])
             live.get("metadata", {}).get("labels", {}).get(key) == value
             for key, value in doc.get("metadata", {}).get("labels", {}).items()
         ):
-            shared_namespaces.add(resource_identity(doc))
+            shared_resources.add(resource_identity(doc))
+            continue
+        if _accepted_read_only_oci_source(
+            doc, live, accepted_documents or {}, desired_releases, live_releases
+        ):
+            shared_resources.add(resource_identity(doc))
             continue
         if (
             live.get("metadata", {}).get("annotations", {}).get("cxcli.nebius.com/app-owner")
@@ -649,8 +911,9 @@ def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str])
             raise RuntimeError(f"Ordinary app resource already has another owner: {kind}/{name}")
 
     # The caller supplied a private apply snapshot. Existing namespaces are
-    # shared read-only prerequisites; omit them from this snapshot only.
-    if shared_namespaces:
+    # shared read-only prerequisites, as are proven unchanged accepted OCI inputs.
+    # Omit them from this snapshot only; never adopt or relabel a shared resource.
+    if shared_resources:
         kustomization_path = flux_dir / "kustomization.yaml"
         kustomization = yaml.safe_load(kustomization_path.read_text())
         removed = set()
@@ -660,7 +923,7 @@ def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str])
             remaining = [
                 doc
                 for doc in yaml.safe_load_all(path.read_text())
-                if isinstance(doc, dict) and resource_identity(doc) not in shared_namespaces
+                if isinstance(doc, dict) and resource_identity(doc) not in shared_resources
             ]
             if remaining:
                 path.write_text(yaml.safe_dump_all(remaining, sort_keys=False))
@@ -673,13 +936,17 @@ def validate_live_app_ownership(flux_dir: Path, *, extra_env: Mapping[str, str])
         kustomization_path.write_text(yaml.safe_dump(kustomization, sort_keys=False))
 
 
-def _validate_live_lifecycle_complete(identity: Mapping[str, str], env: Mapping[str, str]) -> None:
+def _validate_live_lifecycle_complete(
+    identity: Mapping[str, str], env: Mapping[str, str], *, state=None
+) -> None:
     digest = hashlib.sha256(identity["cluster_id"].encode()).hexdigest()
     prefixes = (
         f"nebius-cxcli-soperator-install-{digest[:20]}",
         f"nebius-cxcli-soperator-op-{digest[:10]}-",
     )
-    anchors = _live_json(["kubectl", "get", "configmaps", "-n", "kube-system", "-o", "json"], env)
+    from .installation_reconciliation import _read
+
+    anchors = _read(["get", "configmaps", "-n", "kube-system", "-o", "json"], env)
     owned = {
         str(item.get("data", {}).get("operationId", "")): item.get("data", {})
         for item in anchors.get("items", [])
@@ -697,6 +964,14 @@ def _validate_live_lifecycle_complete(identity: Mapping[str, str], env: Mapping[
                 raise RuntimeError("Live Soperator operation identity or supersession is invalid")
             seen.add(operation_id)
             if data.get("status") == "complete":
+                break
+            if data.get("status") == "reconciled" and state is not None:
+                from .installation_reconciliation import validate_reconciled
+
+                matches = [item for item in anchors.get("items", []) if item.get("data") == data]
+                if len(matches) != 1:
+                    raise RuntimeError("Reconciled operation identity is ambiguous")
+                validate_reconciled(matches[0], state, state.read())
                 break
             successor = data.get("supersededBy")
             if data.get("status") != "superseded" or successor not in owned:
@@ -733,16 +1008,27 @@ def runtime_manifest_guard(
 
 
 def runtime_app_documents(config: Any, target_ref: str) -> list[dict[str, Any]]:
+    from .grafana_database_runtime import runtime_secret_documents
+    from .observability_runtime import runtime_secret_documents as telemetry_secret_documents
+
     identities = {
         (spec.namespace, name)
         for spec in grafana_release_specs(config, target_ref=target_ref)
         for name in (spec.admin_secret_name, spec.token_secret_name)
         if name
     }
-    return [
-        {"apiVersion": "v1", "kind": "Secret", "metadata": {"namespace": namespace, "name": name}}
-        for namespace, name in sorted(identities)
-    ]
+    return (
+        runtime_secret_documents(config, target_ref)
+        + telemetry_secret_documents(config, target_ref)
+        + [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"namespace": namespace, "name": name},
+            }
+            for namespace, name in sorted(identities)
+        ]
+    )
 
 
 @contextmanager
@@ -771,6 +1057,63 @@ class OrdinaryAppServices:
     emit: Callable[[str], Any]
 
 
+def assert_accepted_deployment(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    target_refs: Sequence[str],
+    *,
+    assert_held: Callable[[], None],
+):
+    """Bind app effects to the current backend and accepted identity."""
+    from .deployment_local import LocalObjectStore
+    from .deployment_state import DeploymentState
+    from .terraform_backend import backend_settings_from_config
+
+    assert_held()
+    settings = backend_settings_from_config(config)
+    if manifest.get("execution", {}).get("backend") != asdict(settings):
+        raise RuntimeError("Ordinary app bundle does not match the deployment backend")
+    state = DeploymentState(
+        LocalObjectStore.for_project(paths),
+        settings,
+        command="ordinary-apps",
+        baseline_generation=str(baseline.get("deployment_generation") or ""),
+        baseline_targets=target_refs,
+        assert_held=assert_held,
+    )
+    record = state.read()
+    validate_accepted_deployment_record(record.value if record else None, baseline, target_refs)
+    assert_held()
+    return state
+
+
+def validate_accepted_deployment_record(record, baseline, target_refs) -> None:
+    from .installation_reconciliation import pending_reconciliation
+
+    if not isinstance(record, Mapping) or (
+        record.get("active") is not None
+        and not (len(target_refs) == 1 and pending_reconciliation(record, target_refs[0]))
+    ):
+        raise RuntimeError("Ordinary apps require a quiescent accepted deployment")
+    accepted = record.get("accepted") or {}
+    generation = baseline.get("deployment_generation")
+    if not generation or accepted.get("generation") != generation:
+        raise RuntimeError(
+            "Ordinary app baseline does not match the accepted deployment generation"
+        )
+    evidence = accepted.get("evidence") or {}
+    for ref in target_refs:
+        identity = baseline.get("identities", {}).get(ref)
+        if (
+            not identity
+            or identity != evidence.get("identities", {}).get(ref)
+            or identity != evidence.get("targets", {}).get(ref, {}).get("identity")
+        ):
+            raise RuntimeError("Ordinary app target differs from the accepted deployment identity")
+
+
 def apply_ordinary_apps(
     config: Any,
     paths: ProjectPaths,
@@ -779,11 +1122,16 @@ def apply_ordinary_apps(
     targets: Sequence[Mapping[str, str]],
     services: OrdinaryAppServices,
     validations: Sequence[Mapping[str, Any]] = (),
+    assert_project_authority: Callable[[], None],
 ) -> list[dict[str, Any]]:
     with SoperatorOperationLocalLock(paths.project_dir / ".nebius-cxcli" / "config.lock"):
         baseline = validate_ordinary_bundle(paths, manifest)
         if not targets:
             raise RuntimeError("Ordinary app apply requires an explicit cluster target")
+        refs = [str(target["target_ref"]) for target in targets]
+        state = assert_accepted_deployment(
+            config, paths, manifest, baseline, refs, assert_held=assert_project_authority
+        )
         statuses: list[dict[str, Any]] = []
         for target in targets:
             target_ref = str(target["target_ref"])
@@ -829,8 +1177,20 @@ def apply_ordinary_apps(
                         extra_env=env,
                     )
                 )
-                lease.assert_held()
-                _validate_live_lifecycle_complete(identity, env)
+
+                def assert_authority(lease=lease) -> None:
+                    assert_project_authority()
+                    lease.assert_held()
+
+                assert_authority()
+                from . import cli
+                from .installation_reconciliation import reconcile_accepted_installation
+
+                state.assert_held = assert_authority
+                reconcile_accepted_installation(
+                    cli, state, target_ref=target_ref, env=env, fence=assert_authority
+                )
+                _validate_live_lifecycle_complete(identity, env, state=state)
                 validate_ordinary_bundle(paths, manifest)
                 source_dir = flux_target_dir(paths, target_ref) / "ordinary"
                 temp_dir = Path(
@@ -845,7 +1205,24 @@ def apply_ordinary_apps(
                         raise RuntimeError("Ordinary app bundle changed during target handoff")
                     (temp_dir / source.name).write_bytes(content)
                 validate_resource_ownership(temp_dir, flux_target_dir(paths, target_ref))
-                validate_live_app_ownership(temp_dir, extra_env=env)
+                from .deployment_jail_state import accepted_effective_generation
+                from .deployment_observation import target_documents
+
+                accepted_target = state.read().value["accepted"]["evidence"]["targets"][target_ref]
+                accepted_generation = accepted_effective_generation(
+                    state, target_ref, accepted_target
+                )
+                accepted_documents = (
+                    {
+                        resource_identity(doc): doc
+                        for doc in target_documents(accepted_generation, target_ref).values()
+                    }
+                    if accepted_generation is not None
+                    else {}
+                )
+                validate_live_app_ownership(
+                    temp_dir, extra_env=env, accepted_documents=accepted_documents
+                )
                 target_config = ordinary_config(config)
                 owner = hashlib.sha256(
                     json.dumps(
@@ -855,20 +1232,30 @@ def apply_ordinary_apps(
                 guard = runtime_manifest_guard(owner, env)
                 for doc in runtime_app_documents(config, target_ref):
                     guard(doc)
-                stack.enter_context(app_mutation_scope(lease.assert_held, guard))
-                lease.assert_held()
+                stack.enter_context(app_mutation_scope(assert_authority, guard))
+                assert_authority()
                 # Keep Soperator signal context for Grafana datasource generation.
+                from .grafana_cluster import preflight_dashboard_ownership
+                from .grafana_database_runtime import preflight_grafana_database
+                from .nsight_runtime import prepare_nsight_viewers
+
+                preflight_grafana_database(config, target_ref=target_ref, extra_env=env)
+                preflight_dashboard_ownership(config, target=target_ref, env=env)
+                prepare_nsight_viewers(config, extra_env=env, target_ref=target_ref)
                 services.ensure_grafana(config, extra_env=env, target_ref=target_ref)
-                lease.assert_held()
+                assert_authority()
                 services.apply_flux(
                     replace(paths, flux_dir=temp_dir),
                     config=target_config,
                     require_existing_flux=True,
                     extra_env=env,
                     target_ref=target_ref,
-                    assert_authority=lease.assert_held,
+                    assert_authority=assert_authority,
                 )
-                lease.assert_held()
+                assert_authority()
+                from .grafana_cluster import replay_dashboards
+
+                replay_dashboards(config, paths, target=target_ref, env=env)
                 target_validations = [
                     dict(item) for item in validations if item.get("target_ref") == target_ref
                 ]
@@ -881,6 +1268,11 @@ def apply_ordinary_apps(
                     )
                 statuses.extend(
                     services.collect_grafana(config, extra_env=env, target_ref=target_ref)
+                )
+                from .nsight_runtime import collect_nsight_status
+
+                collect_nsight_status(
+                    config, extra_env=env, target_ref=target_ref, emit=services.emit
                 )
                 services.emit(
                     f"Ordinary apps applied for target {target_ref}; infrastructure unchanged."
@@ -896,8 +1288,14 @@ class OrdinaryAppWorkflow:
     resolve_targets: Callable[..., list[dict[str, str]]]
 
     def accept_baseline(
-        self, paths: ProjectPaths, *, identities: Mapping[str, Mapping[str, str]] | None = None
-    ) -> None:
+        self,
+        paths: ProjectPaths,
+        *,
+        identities: Mapping[str, Mapping[str, str]] | None = None,
+        selected_target_refs: Sequence[str] | None = None,
+        deployment_generation: str = "",
+        expected_generation: Any = None,
+    ) -> bool:
         """Capture all accepted target bindings at successful lifecycle completion."""
         services = self.services()
         manifest = load_generated_manifest(paths.generated_dir)
@@ -905,7 +1303,9 @@ class OrdinaryAppWorkflow:
         bindings = {key: dict(value) for key, value in (identities or {}).items()}
         for target in self.resolve_targets(manifest, requested_target_ref=None, all_targets=True):
             target_ref = str(target["target_ref"])
-            if target_ref in bindings:
+            if target_ref in bindings or (
+                selected_target_refs is not None and target_ref not in selected_target_refs
+            ):
                 continue
             with ExitStack() as stack:
                 bound_target = dict(target)
@@ -926,7 +1326,13 @@ class OrdinaryAppWorkflow:
                 if not uid:
                     raise RuntimeError("Lifecycle completion could not verify an app target UID")
                 bindings[target_ref] = {"cluster_id": cluster_id, "kubernetes_uid": uid}
-        accept_ordinary_app_baseline(paths, identities=bindings)
+        return accept_ordinary_app_baseline(
+            paths,
+            identities=bindings,
+            selected_target_refs=selected_target_refs,
+            deployment_generation=deployment_generation,
+            expected_generation=expected_generation,
+        )
 
     def apply(
         self,
@@ -937,6 +1343,7 @@ class OrdinaryAppWorkflow:
         target_ref: str | None,
         all_targets: bool,
         validations: Sequence[Mapping[str, Any]] = (),
+        assert_project_authority: Callable[[], None],
     ) -> None:
         statuses = apply_ordinary_apps(
             config,
@@ -947,6 +1354,7 @@ class OrdinaryAppWorkflow:
             ),
             validations=validations,
             services=self.services(),
+            assert_project_authority=assert_project_authority,
         )
 
         if statuses:

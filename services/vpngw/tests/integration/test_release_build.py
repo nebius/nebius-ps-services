@@ -182,8 +182,8 @@ def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
     )
     assert any(
         requirement.startswith("cryptography")
-        and ">=42.0.0" in requirement
-        and "<50.0.0" in requirement
+        and ">=50.0.0" in requirement
+        and "<51.0.0" in requirement
         for requirement in requires_dist
     )
 

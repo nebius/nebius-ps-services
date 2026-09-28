@@ -4,7 +4,7 @@ This capstone deliberately reuses Lab 24's explicit-attention versus SDPA compar
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11’s attention-backend comparison and Lesson 16’s independent, counterbalanced causal trial procedure. Reuse Lessons 2 and 4 for masks/shapes and Optimizations for event timing, memory and focused profiling. Complete Lab 24 before the attention-only capstone.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/32_inference_capstone.json).
 
 Use one H100 and complete Lab 24. Each invocation is one fresh-process trial; the campaign launcher runs three with alternating variant order. Keep raw results and any profiler artifacts private.
 
@@ -14,21 +14,39 @@ No latency, throughput, engine-activation, or scaling claim is complete until me
 
 The lab builds corresponding baseline and SDPA callables, compares outputs, warms each path, and records CUDA-event distributions and incremental peak allocation. It emits a provisional observation with the variant order. The source's workload labels describe the bounded attention shape; no HTTP server, queue, tokenizer, or autoregressive model loop is launched.
 
-## Practice
-
 Given a mixed workload whose baseline reaches 12,000 tokens/s but violates p95 ITL during long prefills, enable chunking and observe 11,500 tokens/s with ITL inside the SLO and unchanged quality. Change to a short-prompt-only workload where chunking adds overhead. Expected observation: keep a workload-specific profile rather than a universal setting; pending live campaigns remain explicitly pending.
 
-Required mechanics deliverable: submit slurm/capstone_three_trials.sbatch for three fresh-process Lab 32 attention comparisons with alternating variant order, correctness, memory, repeated CUDA-event timing, and a profiler-backed explanation. Lab 32 does not launch a service or measure TTFT/ITL. Conditional serving deliverable: after engine/environment qualification, use slurm/vllm_chunked_prefill_ab.sbatch for the supported chunking A/B campaign, following its profile and benchmark-client instructions. Run baseline/candidate campaigns at declared loads and keep at least three independent trials per comparison. Only the live campaign can support service-latency, throughput, failure, or quality conclusions.
+Required mechanics deliverable: submit `python3 tools/submit_lab.py --lab 32_inference_capstone slurm/capstone_three_trials.sbatch --profile small` for three fresh-process Lab 32 attention comparisons with alternating variant order, correctness, memory, repeated CUDA-event timing, and a profiler-backed explanation. Lab 32 does not launch a service or measure TTFT/ITL. Conditional serving deliverable: after engine/environment qualification, use slurm/vllm_chunked_prefill_ab.sbatch for the supported chunking A/B campaign, following its profile and benchmark-client instructions. Run baseline/candidate campaigns at declared loads and keep at least three independent trials per comparison. Only the live campaign can support service-latency, throughput, failure, or quality conclusions.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Use the campaign launcher for the three-process comparison. Profile the same attention workload separately if needed to explain dispatch or memory behavior; instrumented duration is not acceptance timing.
 
 ```bash
 umask 077
-python labs/32_inference_capstone.py --help
-sbatch slurm/capstone_three_trials.sbatch --profile smoke
+"$COURSE_PYTHON" labs/32_inference_capstone.py --help
+python3 tools/submit_lab.py --lab 32_inference_capstone slurm/capstone_three_trials.sbatch --profile small
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+Every input to the capstone aggregator must contain explicit
+`experiment.instrumented: false` provenance. Profiled inputs, missing or
+malformed provenance, and records declaring
+`measurements.acceptance_timing: false` are rejected before an aggregate is
+written. Rerun affected trials without profiling; do not edit diagnostic
+records to make them appear clean.
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 32_inference_capstone --job "$LAB_JOB_ID"
+```
 
 Require output allclose at BF16 `rtol=1e-2, atol=1e-2` in every trial. Inspect maximum error, variant order, distributions, incremental peaks, and provisional/publication status. No single trial can establish a repeatable campaign result.
 
@@ -41,17 +59,69 @@ Keep separate records. Mechanics: input shape/dtype/mask, reference error, varia
 
 Publish only claims demonstrated by the declared model, engine, H100 nodes, and workload.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Timing / materialized / median (seconds) | `timing.materialized.median_ms` | `s` |
+| Timing / sdpa / median (seconds) | `timing.sdpa.median_ms` | `s` |
+| Incremental peak bytes / materialized | `incremental_peak_bytes.materialized` | `bytes` |
+| Incremental peak bytes / sdpa | `incremental_peak_bytes.sdpa` | `bytes` |
+| Max abs error | `max_abs_error` | `none` |
+
+Complete each three-trial group for acceptance. For repeated publication, run
+the complete launcher twice in the same profile, retaining all six clean child
+records and both validated aggregates. Pair corresponding children with the
+same seed and variant order: 17 with 17, 18 with 18, and 19 with 19. Publish each
+pair separately and review its generation before selecting the next pair.
+Each child already contains the internal baseline/candidate comparison; the
+dashboard pair does not replace either three-trial aggregate, and the two
+groups must not be combined into one aggregate. Select only successful,
+equivalent, unprofiled originals. On the login node, set the paths to the printed
+result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_inference_capstone \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Does the measured memory difference match the materialized score-matrix explanation? Does the timing conclusion survive order reversal? Explain how a large attention-kernel improvement could have a smaller end-to-end service impact.
 
 The best aggregate-throughput setting may not maximize SLO goodput. More KV reservation can reduce workspaces; chunking can trade prompt throughput for decode latency; quantization can trade quality or kernel support for fit.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare materialized attention with SDPA across all three trials. Independently reconcile memory and timing evidence and estimate the service-level gain from its hotspot fraction.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Mask or numerical disagreement rejects the candidate. Missing trials, changed shapes, or unsupported backends prevent a comparable aggregate. Preserve unfavorable observations instead of selecting only the fastest candidate sample.
 
 Avoid tuning to one benchmark point while ignoring overload, failure rate, or quality.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

@@ -15,7 +15,6 @@ from nebius_cxcli.soperator_adapter import (
     SOPERATOR_ADAPTER_LABEL_VALUE,
     SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS,
     SOPERATOR_VM_STACK_CLEANUP_HOOK_DISABLED_PACKAGES,
-    prepare_soperator_upgrade_adapter_handoff,
     render_soperator_monitoring_dashboard_documents,
     soperator_adapter_state_from_documents,
     soperator_monitoring_dashboards_require_post_flux,
@@ -30,6 +29,10 @@ from nebius_cxcli.soperator_adapter import (
 )
 from nebius_cxcli.soperator_populate_jail import switch_active_passive_jail_rootfs_values
 from nebius_cxcli.soperator_release import SoperatorReleaseGraphNode
+from nebius_cxcli.soperator_worker_docker import (
+    DOCKER_STORAGE_MOUNT,
+    materialize_worker_docker,
+)
 from soperator_fixtures import sample_snapshot
 
 _RELEASE = sample_snapshot()
@@ -153,6 +156,7 @@ def _values() -> dict[str, Any]:
                 "gpu": {"enabled": True},
                 "slurmd": {
                     "resources": {
+                        "gpu": 8,
                         "cpu": "1",
                         "memory": "1Gi",
                         "ephemeralStorage": "1Gi",
@@ -224,6 +228,45 @@ def _values() -> dict[str, Any]:
             }
         },
     }
+
+
+def test_rotated_retained_generation_keeps_storage_without_an_upstream_root_source() -> None:
+    from nebius_cxcli.soperator_jail_protection import protect_jail_directories, slot_generation
+    from nebius_cxcli.soperator_rootfs_transition import plan_soperator_rootfs_transition
+
+    values = protect_jail_directories(
+        _values(), paths=["/workspace"], layout="managed", target_ref="cluster"
+    )
+    retained = slot_generation(values, "slot-a")
+    for _ in range(2):
+        values, _ = plan_soperator_rootfs_transition(
+            values, target_ref="cluster", layout="managed", legacy_pvc_resolver=lambda: "unused"
+        )
+    documents, state = render_soperator_adapter_documents(values)
+    objects = {(row["kind"], row["metadata"]["name"]): row for row in documents}
+    pv = objects["PersistentVolume", retained["pvName"]]
+    pvc = objects["PersistentVolumeClaim", retained["pvcName"]]
+    assert pv["spec"]["local"]["path"] == retained["localPath"]
+    assert pv["spec"]["persistentVolumeReclaimPolicy"] == "Retain"
+    assert pvc["spec"]["volumeName"] == retained["pvName"]
+    assert pv["metadata"]["labels"]["soperator.nebius.ai/lifecycle"] == "protected"
+    assert state["retainedGenerations"][0]["local_path"] == retained["localPath"]
+    umbrella, _ = compile_upstream_soperator_values(values)
+    sources = umbrella["slurmCluster"]["overrideValues"]["volumeSources"]
+    assert retained["volumeSourceName"] not in {row["name"] for row in sources}
+    assert "jail-persistent-workspace" in {row["name"] for row in sources}
+    daemon = next(
+        row
+        for row in documents
+        if row["kind"] == "DaemonSet"
+        and row["metadata"]["name"] == "nebius-cxcli-soperator-jail-mount"
+    )
+    env = {
+        row["name"]: row.get("value")
+        for row in daemon["spec"]["template"]["spec"]["containers"][0]["env"]
+    }
+    assert "rootfs/slot-a" not in env["CREATE_DIRS"].split(";")
+    assert "rootfs/slot-a" in env["VERIFY_DIRS"].split(";")
 
 
 def test_adapter_compiles_upstream_values_without_owning_product_resources() -> None:
@@ -445,6 +488,52 @@ def test_rest_enabled_controller_waits_for_jwt_config_before_start() -> None:
     assert "AuthAltParameters=.*jwt_key=" in command
 
 
+def test_adapter_preserves_private_docker_storage_with_persistent_jail_mounts() -> None:
+    values = _values()
+    materialize_worker_docker(values)
+    before = copy.deepcopy(values)
+
+    umbrella, _ = compile_upstream_soperator_values(values)
+
+    worker = umbrella["nodesets"]["overrideValues"]["nodesets"][0]
+    mounts = worker["slurmd"]["volumes"]["jailSubMounts"]
+    assert next(m for m in mounts if m["mountPath"] == "/mnt/image-storage") == (
+        DOCKER_STORAGE_MOUNT
+    )
+    assert {m["mountPath"] for m in mounts} == {
+        "/mnt/image-storage",
+        "/home",
+        "/data",
+        "/scripts",
+        "/models",
+        "/opt/soperator-home",
+    }
+    assert all(
+        "persistentVolumeClaim" in m["volumeSource"]
+        for m in mounts
+        if m["mountPath"] != "/mnt/image-storage"
+    )
+    assert values == before
+    assert compile_upstream_soperator_values(values)[0] == umbrella
+
+
+@pytest.mark.parametrize("collision", ["name", "path", "malformed"])
+def test_adapter_rejects_conflicting_worker_jail_submounts(collision: str) -> None:
+    values = _values()
+    mount: Any = {"name": "scratch", "mountPath": "/scratch", "volumeSource": {"emptyDir": {}}}
+    if collision == "name":
+        mount["name"] = "jail-home"
+    elif collision == "path":
+        mount["mountPath"] = "/home/"
+    else:
+        mount = None
+    values["nodesets"][0]["slurmd"]["volumes"]["jailSubMounts"] = [mount]
+    before = copy.deepcopy(values)
+    with pytest.raises(ValueError, match="jail submount"):
+        compile_upstream_soperator_values(values)
+    assert values == before
+
+
 def test_rest_dependency_is_enabled_with_jwt_gate_by_default() -> None:
     values = _values()
 
@@ -653,14 +742,29 @@ def test_adapter_rejects_partial_existing_storage_identity() -> None:
         compile_upstream_soperator_values(values)
 
 
-def test_adapter_does_not_enable_observability_from_disabled_dcgm_defaults() -> None:
+def test_adapter_rejects_obsolete_dcgm_subtree() -> None:
     values = _values()
     values["soperator-dcgm-exporter"] = {"enabled": False}
+    with pytest.raises(ValueError, match="reauthor using values.observability.dcgmExporter"):
+        compile_upstream_soperator_values(values)
 
-    umbrella, _contract = compile_upstream_soperator_values(values)
 
-    assert umbrella["observability"] == {"enabled": False}
-    assert umbrella["soperator"]["monitoringDashboards"] == {"enabled": False}
+@pytest.mark.parametrize("enabled", [False, True])
+def test_adapter_preserves_native_observability(enabled) -> None:
+    values = _values()
+    native = {
+        "enabled": enabled,
+        "dcgmExporter": {
+            "enabled": True,
+            "values": {"validateToolkit": False, "hpcJobMapDir": "/jobs"},
+        },
+        "vmStack": {"enabled": False},
+        "vmLogs": {"enabled": True},
+    }
+    values["observability"] = copy.deepcopy(native)
+    umbrella, _ = compile_upstream_soperator_values(values)
+    assert umbrella["observability"] == native
+    assert values["observability"] == native
 
 
 @pytest.mark.parametrize("broken_digest", sorted(SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS))
@@ -680,6 +784,41 @@ def test_adapter_uses_post_flux_dashboards_only_for_the_known_broken_digest(brok
         "enabled": True,
         "version": "4.1.7",
     }
+
+
+@pytest.mark.parametrize(
+    ("version", "digest"),
+    [
+        ("4.1.8", "sha256:b2cea9e81578e50e779a86b6426129175fafc1d3e8d96259b6fb9ffbd6612100"),
+        ("4.1.9", "sha256:3bd979e84f4c7e5356cc6b6546f51e0719f0b531c9f1eb1376851a8d1c34b93f"),
+        ("4.1.11", "sha256:71a2c115845e403e8c6a24ade3a4d29c5aa2cbfc5a1cdd1728af91b1ca1dc1cd"),
+    ],
+)
+def test_reviewed_dashboards_use_verified_json_adapter(tmp_path: Path, version, digest) -> None:
+    release = _release_with_monitoring_chart(digest)
+    release = replace(
+        release,
+        release=version,
+        charts={key: replace(chart, version=version) for key, chart in release.charts.items()},
+    )
+    values = _values()
+    values["observability"] = {"enabled": True}
+    source = _write_dashboard_source(tmp_path)
+
+    umbrella, _ = _compile_upstream_soperator_values(values, release=release)
+    assert umbrella["soperator"]["monitoringDashboards"] == {"enabled": False}
+    documents = render_soperator_monitoring_dashboard_documents(
+        values, release=release, source_root=tmp_path
+    )
+    assert len(documents) == 7
+    for document, name in zip(documents, _DASHBOARD_FILES, strict=True):
+        assert document["data"] == {
+            f"{Path(name).stem.replace('_', '-')}.json": (source / name).read_text()
+        }
+        assert (
+            document["metadata"]["annotations"]["soperator.nebius.ai/upstream-chart-digest"]
+            == digest
+        )
 
 
 def test_adapter_records_raw_child_cleanup_exception_without_mutating_outer_values() -> None:
@@ -857,7 +996,6 @@ def test_adapter_routes_cert_manager_customization_to_upstream_owner() -> None:
 
     assert umbrella["certManager"] == {
         "enabled": True,
-        "version": "v1.19.6",
         "overrideValues": {"privateKey": {"rotationPolicy": "Always"}},
     }
 
@@ -879,15 +1017,27 @@ def test_adapter_rejects_unsafe_partition_tokens() -> None:
         compile_upstream_soperator_values(values)
 
 
-def test_adapter_rejects_owned_volume_source_name_collisions() -> None:
-    values = _values()
-    values["volumeSources"] = [{"name": "jail", "emptyDir": {}}]
+@pytest.mark.parametrize(
+    "name",
+    [
+        "jail",
+        "controller-spool",
+        "jail-rootfs-slot-a",
+        "jail-rootfs-slot-b",
+        "jail-home",
+    ],
+)
+def test_adapter_rejects_owned_volume_source_name_collisions(name) -> None:
+    from nebius_cxcli.soperator_jail_mounts import apply_jail_persistent_mount_values
 
+    values = _values()
+    values["volumeSources"] = [{"name": name, "emptyDir": {}}]
+    values = apply_jail_persistent_mount_values(values, target_ref="cluster", layout="managed")
     with pytest.raises(ValueError, match="volumeSources collide"):
         compile_upstream_soperator_values(values)
 
 
-def test_protected_upgrade_handoff_replaces_generated_storage_aliases() -> None:
+def test_protected_upgrade_compiles_canonical_storage_intent() -> None:
     values = switch_active_passive_jail_rootfs_values(_values())
     values["volume"]["controllerSpool"].update(
         {
@@ -899,10 +1049,9 @@ def test_protected_upgrade_handoff_replaces_generated_storage_aliases() -> None:
         }
     )
 
-    prepared = prepare_soperator_upgrade_adapter_handoff(values)
-    umbrella, _contract = compile_upstream_soperator_values(prepared)
+    umbrella, _contract = compile_upstream_soperator_values(values)
 
-    assert prepared["volumeSources"] == []
+    assert "volumeSources" not in values
     sources = {
         item["name"]: item for item in umbrella["slurmCluster"]["overrideValues"]["volumeSources"]
     }
@@ -924,6 +1073,7 @@ def test_adapter_rejects_non_integer_gpu_resource_counts() -> None:
     values = _values()
     nodeset = values["nodesets"][0]
     nodeset["gpu"]["enabled"] = False
+    nodeset["slurmd"]["resources"].pop("gpu")
     nodeset["slurmd"]["resources"]["nvidia.com/gpu"] = "1Gi"
 
     with pytest.raises(ValueError, match="non-negative integer"):
@@ -1062,3 +1212,48 @@ def test_required_rest_cannot_be_explicitly_disabled() -> None:
     values["slurmNodes"]["rest"] = {"enabled": False}
     with pytest.raises(ValueError, match="REST is required"):
         compile_upstream_soperator_values(values)
+
+
+@pytest.mark.parametrize("layout", ["managed", "external"])
+def test_storage_intent_compiles_across_adoption_and_consecutive_switches(layout):
+    from nebius_cxcli.soperator_jail_mounts import apply_jail_persistent_mount_values
+
+    values = _values()
+    custom = {"name": "custom-scratch", "emptyDir": {}}
+    values["volumeSources"] = [custom]
+    if layout == "external":
+        values["jailPersistentMounts"] = []
+    values = apply_jail_persistent_mount_values(values, target_ref="cluster", layout=layout)
+    values["volume"]["controllerSpool"].update(
+        existingPvcName="protected-spool", existingPvName="protected-spool-pv"
+    )
+    retained = copy.deepcopy(values["jailPersistentMounts"])
+    if layout == "external":
+        values["jailRootfs"]["adoption"]["legacyPvcName"] = "observed-jail"
+    for index in range(3):
+        if index:
+            values = switch_active_passive_jail_rootfs_values(values)
+        before = copy.deepcopy(values)
+        compiled, contract = compile_upstream_soperator_values(values)
+        assert values == before
+        assert values["volumeSources"] == [custom]
+        assert values["jailPersistentMounts"] == retained
+        slurm = compiled["slurmCluster"]["overrideValues"]
+        sources = slurm["volumeSources"]
+        by_name = {source["name"]: source for source in sources}
+        assert len(sources) == len(by_name)
+        assert by_name["custom-scratch"] == custom
+        assert (
+            by_name["controller-spool"]["persistentVolumeClaim"]["claimName"] == "protected-spool"
+        )
+        expected_jail = (
+            "observed-jail"
+            if layout == "external" and not index
+            else f"jail-rootfs-slot-{'b' if index == 1 else 'a'}-pvc"
+        )
+        assert by_name["jail"]["persistentVolumeClaim"]["claimName"] == expected_jail
+        assert contract["active_pvc"] == expected_jail
+        for role in ("controller", "login"):
+            assert slurm["slurmNodes"][role]["volumes"]["jail"] == {"volumeSourceName": "jail"}
+        if layout == "external" and index:
+            assert values["jailRootfs"]["adoption"]["rollbackSource"] == "legacy-rootfs"

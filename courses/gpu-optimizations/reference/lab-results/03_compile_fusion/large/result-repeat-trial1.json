@@ -1,0 +1,28 @@
+{
+  "correctness": {
+    "allclose": true
+  },
+  "lab": "03_compile_fusion",
+  "measurements": {
+    "compiled": {
+      "median_ms": 0.3884,
+      "min_ms": 0.3833,
+      "p90_ms": 0.3919
+    },
+    "compiled_first_call_ms": 8723.297,
+    "eager": {
+      "median_ms": 1.6863,
+      "min_ms": 1.6818,
+      "p90_ms": 1.7031
+    },
+    "elements": 128000000
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

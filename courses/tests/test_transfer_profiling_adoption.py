@@ -1,88 +1,104 @@
 """CPU controls for transfer ownership, DDP checks and modeled KV retention."""
 
-from concurrent.futures import Future
-from contextlib import nullcontext
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from concurrent.futures import Future
+from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("exit_code", [0, 9])
 def test_ddp_profiler_launch_preserves_rank_arguments_and_failure(tmp_path, exit_code):
     bash = next(
-        (
-            path
-            for path in ("/opt/homebrew/bin/bash", "/usr/bin/bash")
-            if Path(path).exists()
-        ),
+        (p for p in ("/opt/homebrew/bin/bash", "/usr/bin/bash") if Path(p).exists()),
         shutil.which("bash"),
     )
-    version = subprocess.run(
-        [bash, "-c", "printf '%s' ${BASH_VERSINFO[0]}"], capture_output=True, text=True
-    )
-    if int(version.stdout) < 4:
-        pytest.skip("The cluster launcher requires Bash 4+ mapfile")
     root = Path(__file__).resolve().parents[1]
-    (tmp_path / "labs").mkdir()
-    (tmp_path / "labs/33_ddp_buckets.py").write_text("# Non-executed lab fixture\n")
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
+    for folder in ("labs", "tools", "reference", "bin"):
+        (tmp_path / folder).mkdir()
+    (tmp_path / "labs/21_ddp_buckets.py").write_text(
+        "raise SystemExit('fixture must not train')\n"
+    )
+    shutil.copyfile(root / "tools/profile_lab.py", tmp_path / "tools/profile_lab.py")
+    (tmp_path / "tools/fabric_guard.py").write_text(
+        "# Hardware guard replaced by fixture only\n"
+    )
+    (tmp_path / "reference/observability.json").write_text(
+        json.dumps(
+            {
+                "labs": {
+                    "21_ddp_buckets": {
+                        "kind": "distributed",
+                        "nvtx_range": "course_measure",
+                        "systems": {"applicable": True, "target": "rank"},
+                    }
+                }
+            }
+        )
+    )
 
     def executable(name, body):
-        path = binary_dir / name
+        path = tmp_path / "bin" / name
         path.write_text(f"#!{sys.executable}\n" + body)
         path.chmod(0o700)
-        return path
 
     executable("scontrol", "print('node-a\\nnode-b')\n")
-    executable(
-        "torchrun", "raise SystemExit('profiler fixture must not run training')\n"
-    )
     executable(
         "srun",
         """import os, subprocess, sys
 args = sys.argv[1:]
 assert '--kill-on-bad-exit=1' in args
-assert '--ntasks=2' in args and '--ntasks-per-node=1' in args
-while args[0].startswith('--'):
-    args.pop(0)
-env = dict(os.environ, SLURM_NODEID='1')
-raise SystemExit(subprocess.run(args, env=env).returncode)
+while args[0].startswith('--'): args.pop(0)
+raise SystemExit(subprocess.run(args, env=dict(os.environ,SLURM_NODEID='1')).returncode)
+""",
+    )
+    executable(
+        "torchrun",
+        """import json, os, pathlib, subprocess, sys
+args=sys.argv[1:]
+pathlib.Path(os.environ['RANK_ARGS']).write_text(json.dumps(args))
+command=args[args.index('--no-python')+1:]
+raise SystemExit(subprocess.run(command,env=dict(os.environ,RANK='1')).returncode)
 """,
     )
     executable(
         "nsys",
         """import json, os, pathlib, sys
 pathlib.Path(os.environ['CAPTURE_PATH']).write_text(json.dumps(sys.argv[1:]))
+if os.environ['FAKE_NSYS_EXIT'] == '0':
+    pathlib.Path(sys.argv[sys.argv.index('--output')+1]).with_suffix('.nsys-rep').write_bytes(b'fixture report')
 raise SystemExit(int(os.environ['FAKE_NSYS_EXIT']))
 """,
     )
     capture = tmp_path / "capture.json"
     env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("SLURM_", "MASTER_", "COURSE_"))
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("SLURM_", "MASTER_", "COURSE_"))
     }
     env.update(
-        PATH=str(binary_dir) + os.pathsep + env["PATH"],
+        PATH=str(tmp_path / "bin") + os.pathsep + env["PATH"],
         SLURM_JOB_ID="123",
         SLURM_JOB_NODELIST="node-[a-b]",
+        COURSE_PYTHON=sys.executable,
+        COURSE_PROFILE_TOOL="nsys",
         CAPTURE_PATH=str(capture),
+        RANK_ARGS=str(tmp_path / "rank.json"),
         FAKE_NSYS_EXIT=str(exit_code),
     )
     literal = "results/literal spaces;$(no-execution)"
     run = subprocess.run(
         [
             bash,
-            str(root / "llm-training/slurm/nsys_ddp.sbatch"),
+            str(root / "advanced-gpu-communication/slurm/training_two_rank.sbatch"),
+            "labs/21_ddp_buckets.py",
             "--hook",
             "allreduce",
             "--output-dir",
@@ -92,29 +108,25 @@ raise SystemExit(int(os.environ['FAKE_NSYS_EXIT']))
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert run.returncode == exit_code, run.stderr
+    rank_args = json.loads((tmp_path / "rank.json").read_text())
+    assert "--node-rank=1" in rank_args and "--master-addr=node-a" in rank_args
     captured = json.loads(capture.read_text())
-    assert "--node-rank=1" in captured
-    assert "--master-addr=node-a" in captured
     assert captured[-5:] == [
-        "labs/33_ddp_buckets.py",
+        "labs/21_ddp_buckets.py",
         "--hook",
         "allreduce",
         "--output-dir",
         literal,
     ]
-    report = Path(
-        next(
-            arg.removeprefix("--output=")
-            for arg in captured
-            if arg.startswith("--output=")
-        )
-    )
-    assert report.name == "node-1"
-    assert report.parent.parent == tmp_path / "results"
+    report = Path(captured[captured.index("--output") + 1])
+    assert report.name.endswith("-rank-1")
+    assert report.parent == tmp_path / "results/21_ddp_buckets/profiles"
     assert report.parent.stat().st_mode & 0o777 == 0o700
-    assert ("Completed diagnostic capture" in run.stdout) == (exit_code == 0)
+    receipt = json.loads(report.with_suffix(".json").read_text())
+    assert receipt["exit_code"] == exit_code and receipt["acceptance_timing"] is False
 
 
 class ImmediateCPU:
@@ -184,7 +196,7 @@ def test_output_modes_complete_cpu_control_and_propagate_corruption(mode, monkey
     torch.set_num_threads(1)
     with load_lab("gpu-optimizations/labs/20_d2h_pipeline.py") as lab:
         args = SimpleNamespace(
-            profile="smoke", mode=mode, slots=2, workers=2, batches=3, sink_ms=0
+            profile="small", mode=mode, slots=2, workers=2, batches=3, sink_ms=0
         )
         elapsed, capacity = lab.run_pipeline(ImmediateCPU(torch), args)
         assert elapsed > 0 and capacity == 2 * 512 * 512 * 4
@@ -206,7 +218,7 @@ def test_input_modes_verify_every_batch_on_cpu_control(mode, slots, monkeypatch)
     proxy = ImmediateCPU(torch)
     with load_lab("gpu-optimizations/labs/19_h2d_pipeline.py") as lab:
         args = SimpleNamespace(
-            profile="smoke", mode=mode, slots=slots, batches=3, work=1
+            profile="small", mode=mode, slots=slots, batches=3, work=1
         )
         assert lab.run_pipeline(proxy, args)[0] > 0
         monkeypatch.setattr(proxy, "mm", lambda a, b, out: out.zero_(), raising=False)
@@ -216,7 +228,7 @@ def test_input_modes_verify_every_batch_on_cpu_control(mode, slots, monkeypatch)
 
 def test_ddp_error_and_update_checks_reject_omitted_or_corrupted_work():
     torch = pytest.importorskip("torch")
-    with load_lab("llm-training/labs/33_ddp_buckets.py") as lab:
+    with load_lab("advanced-gpu-communication/labs/21_ddp_buckets.py") as lab:
         x = torch.tensor([1.0, 2.0])
         assert lab.relative_l2(torch, [x], [x]) == 0
         assert lab.relative_l2(torch, [x * 2], [x]) == 1
@@ -254,7 +266,7 @@ def test_ddp_hook_records_actual_bucket_and_preserves_future(
     monkeypatch.setattr(
         default_hooks, attribute, lambda state, bucket: calls.append(bucket) or future
     )
-    with load_lab("llm-training/labs/33_ddp_buckets.py") as lab:
+    with load_lab("advanced-gpu-communication/labs/21_ddp_buckets.py") as lab:
         log = []
         state, selected = lab.make_hook(
             ImmediateCPU(torch), SimpleNamespace(hook=hook), log
@@ -323,7 +335,7 @@ def test_invalid_policy_rejected(field, value):
         ("gpu-optimizations/labs/19_h2d_pipeline.py", ["--slots", "0"]),
         ("gpu-optimizations/labs/20_d2h_pipeline.py", ["--sink-ms", "nan"]),
         (
-            "llm-training/labs/33_ddp_buckets.py",
+            "advanced-gpu-communication/labs/21_ddp_buckets.py",
             ["--hook", "powersgd", "--warmup", "2"],
         ),
         ("llm-inference/labs/36_kv_tiering.py", ["--storage-gbps", "0"]),

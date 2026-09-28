@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,full_batch_median_elapsed_seconds,value,0.0031592,s
+baseline-trial1,accumulated_median_elapsed_seconds,value,0.034469299999999994,s
+baseline-trial1,full_batch_median_peak_allocated_bytes,value,4909432832.0,bytes
+baseline-trial1,accumulated_median_peak_allocated_bytes,value,5983698944.0,bytes
+repeat-trial1,full_batch_median_elapsed_seconds,value,0.0031785999999999997,s
+repeat-trial1,accumulated_median_elapsed_seconds,value,0.034444800000000005,s
+repeat-trial1,full_batch_median_peak_allocated_bytes,value,4909432832.0,bytes
+repeat-trial1,accumulated_median_peak_allocated_bytes,value,5983698944.0,bytes

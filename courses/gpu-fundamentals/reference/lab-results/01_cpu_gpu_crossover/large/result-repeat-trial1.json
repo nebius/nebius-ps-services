@@ -1,0 +1,48 @@
+{
+  "correctness": {
+    "allclose": true
+  },
+  "lab": "01_cpu_gpu_crossover",
+  "measurements": {
+    "sizes": [
+      {
+        "cpu_median_ms": 0.002,
+        "elements": 1024,
+        "gpu_resident": {
+          "median_ms": 0.0176,
+          "min_ms": 0.0157,
+          "p90_ms": 0.0219
+        },
+        "gpu_with_transfers_median_ms": 0.0442
+      },
+      {
+        "cpu_median_ms": 0.7566,
+        "elements": 1000000,
+        "gpu_resident": {
+          "median_ms": 0.0171,
+          "min_ms": 0.0159,
+          "p90_ms": 0.0179
+        },
+        "gpu_with_transfers_median_ms": 2.7822
+      },
+      {
+        "cpu_median_ms": 115.5487,
+        "elements": 32000000,
+        "gpu_resident": {
+          "median_ms": 0.1876,
+          "min_ms": 0.185,
+          "p90_ms": 0.1901
+        },
+        "gpu_with_transfers_median_ms": 97.6848
+      }
+    ]
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

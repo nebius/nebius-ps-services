@@ -1,0 +1,19 @@
+{
+  "correctness": {
+    "finite_gradients": true,
+    "ignore_index_applied": true
+  },
+  "lab": "13_loss_masking",
+  "measurements": {
+    "ignored_tokens": 7,
+    "masked_loss": 5.125,
+    "trained_tokens": 7,
+    "unmasked_loss": 5.0
+  },
+  "parameters": {
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

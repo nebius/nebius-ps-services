@@ -67,7 +67,15 @@ def test_cpu_mask_successor_routes_after_topology_and_resumes_directly(
 
     monkeypatch.setattr(predecessor, "prepare_install_topology_repair", old)
     monkeypatch.setattr(successor, "prepare_install_cpu_mask_repair", new)
-    assert prepare_install_input_repair(paths=paths, target_ref="gpu") == {"repair": "selected"}
+    assert prepare_install_input_repair(
+        paths=paths,
+        target_ref="gpu",
+        scheduling_journal={},
+        local_scheduling_journal=None,
+        env={},
+        kube_context="cluster",
+        assert_authority=lambda: None,
+    ) == {"repair": "selected"}
     assert len(calls) == 1
     assert calls[0].get("ancestor") == (None if saved_successor else ancestor)
 

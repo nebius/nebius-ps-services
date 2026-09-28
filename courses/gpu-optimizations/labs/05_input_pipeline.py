@@ -9,13 +9,14 @@ import time
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     resolve_int_override,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -26,11 +27,11 @@ def main() -> None:
     validate_common_args(args)
     batches = resolve_int_override(
         args.batches,
-        20 if args.profile == "smoke" else 100,
+        20 if args.profile == "small" else 100,
         option="--batches",
     )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     feature_width = 4_096
 
@@ -144,4 +145,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

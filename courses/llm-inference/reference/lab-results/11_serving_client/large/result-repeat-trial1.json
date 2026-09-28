@@ -1,0 +1,21 @@
+{
+  "correctness": {
+    "all_requests_completed": true
+  },
+  "lab": "11_serving_client",
+  "measurements": {
+    "concurrency": 4,
+    "median_e2e_ms": 65.656,
+    "output_tokens_per_second": 642.075,
+    "p90_e2e_ms": 599.482,
+    "request_throughput_per_second": 20.065,
+    "requests": 16
+  },
+  "parameters": {
+    "concurrency": 4,
+    "requests": 16,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

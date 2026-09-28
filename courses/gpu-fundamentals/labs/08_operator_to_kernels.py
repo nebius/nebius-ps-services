@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    parser.add_argument("--external-only", action="store_true", help="Skip the internal CUDA profiler during a separate Nsight capture.")
     return parser.parse_args()
 
 
@@ -24,10 +27,10 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 1_024 if args.profile == "smoke" else 4_096
-    batch = 64 if args.profile == "smoke" else 256
+    width = 1_024 if args.profile == "small" else 4_096
+    batch = 64 if args.profile == "small" else 256
     values = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
     bias = torch.randn((width,), device="cuda", dtype=torch.bfloat16)
@@ -40,19 +43,20 @@ def main() -> None:
     for _ in range(args.warmup):
         workload()
     torch.cuda.synchronize()
-    with torch.profiler.profile(
+    with (nullcontext() if args.external_only else torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
             torch.profiler.ProfilerActivity.CUDA,
         ],
         record_shapes=True,
-    ) as profiler:
+    )) as profiler:
         loss = None
         for _ in range(args.iterations):
             loss = workload()
-            profiler.step()
+            if profiler is not None:
+                profiler.step()
     assert loss is not None
-    events = profiler.key_averages()
+    events = (profiler.key_averages() if profiler is not None else [])
     cuda_events = [event for event in events if event.self_device_time_total > 0]
     top_cuda = sorted(
         cuda_events, key=lambda event: event.self_device_time_total, reverse=True
@@ -66,7 +70,7 @@ def main() -> None:
         for event in top_cuda
     ]
     finite = bool(torch.isfinite(loss).item())
-    if not finite or not rows:
+    if not finite or (not args.external_only and not rows):
         raise SystemExit("Profiler did not capture finite CUDA work.")
     target = write_result(
         args,
@@ -78,11 +82,12 @@ def main() -> None:
             "cuda_events_with_device_time": len(cuda_events),
             "top_cuda_events": rows,
         },
-        correctness={"finite_loss": True, "captured_cuda_events": True},
+        correctness={"finite_loss": True, "captured_cuda_events_or_external_capture": bool(rows) or args.external_only},
     )
-    print(events.table(sort_by="self_cuda_time_total", row_limit=10))
+    if profiler is not None:
+        print(events.table(sort_by="self_cuda_time_total", row_limit=10))
     print(f"Completed operator-to-kernel map: {target}")
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

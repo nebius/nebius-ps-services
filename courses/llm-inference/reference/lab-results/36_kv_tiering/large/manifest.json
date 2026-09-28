@@ -1,0 +1,206 @@
+{
+  "artifacts": [
+    {
+      "file": "result-bandwidth-trial1.json",
+      "original_sha256": "5065eada9d2c6ed147ddad6e3eb5190dd4d55988e2c3b927899782f35974c821",
+      "sha256": "1c99d3e9f23d2c93e3b377f84387818eee2c3172748318db9c9b922cd2bb4c63",
+      "variant": "bandwidth-trial1"
+    },
+    {
+      "file": "result-no-tier-trial1.json",
+      "original_sha256": "141a494459cc2722c7ab256dd3cf98ec2dd9a971ac6850dd8d9497a8a440f26d",
+      "sha256": "7869ad0e9cd2c542ef7aed3094711f415bdf2872fc73ccd1ebbc8c75494ba11f",
+      "variant": "no-tier-trial1"
+    },
+    {
+      "file": "result-restart-trial1.json",
+      "original_sha256": "b96cfd09e23864fceaf04f2ae42e19b28533c747af043145bd22a43db21c6186",
+      "sha256": "2e21a1ab7924b7d2325a1c369ca9446b5432a006d5a131d7a25e1dca3e6b2cc0",
+      "variant": "restart-trial1"
+    },
+    {
+      "file": "result-revision-trial1.json",
+      "original_sha256": "a8c66c0d21fd851be668d8a5ef659967aaf473099aa23d13ad16ff4d8f9d82c8",
+      "sha256": "3b017efb71e78dea173921375a845e4a6f853d0c1219c831884b2b99417899e2",
+      "variant": "revision-trial1"
+    },
+    {
+      "file": "result-storage-trial1.json",
+      "original_sha256": "b55712d005abbaf9bf1a99c4f09f2577bb5195ac8f651ccd9ba397f408acd21b",
+      "sha256": "c189482c93aae01426787d8366456e9f242613480b480d07767c6599439d103c",
+      "variant": "storage-trial1"
+    },
+    {
+      "file": "result-ttl-trial1.json",
+      "original_sha256": "fca8635293a810469b25ee1a8ac78b7fedd94d7e9d95fe98b67566911a4e44b6",
+      "sha256": "8231fe8963f3aacc1c72eb96561fdf174eb211380e3f624d92ab3e53224fdabc",
+      "variant": "ttl-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "cf967e17e718850adc213f1210baee4447bcf13727b34a03e58f62f6105fc420",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "7ca56271c53dd6a423afb880dc2d74cb27db46a6472c599c455a5bb01d475e38",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "282e9b008e74d9afb1399728c403625a0d7ace0aeebb27d9c4d88383dcf4d584",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "98cde03301eff79d5076b9c5ebe7286f0af00f65c66905e33968dbb275dec17d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view5.png",
+      "sha256": "3bb266f26847144505368cc0776d9ecc54a6fe6a744fd820418a5266929a4c6a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view6.png",
+      "sha256": "d3673fc730ef88d0578924298a8937b0e9acadfa17ce849efbed6a7dabf9f06d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "49df0e277e090810c8a9937101ad13a2d2c5a1fc7ec9f75c505160b90f971da2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view2.png",
+      "sha256": "b0033fd986a3986c0feb2bf1d1f75f6d2e769f8fb83eb372d4e8e94942ffe850",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view3.png",
+      "sha256": "1399f19219da71c3d2cfaab1132bb639cafa4c1ede516db2464e2518781d5541",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view4.png",
+      "sha256": "98cde03301eff79d5076b9c5ebe7286f0af00f65c66905e33968dbb275dec17d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view5.png",
+      "sha256": "9b0a88d833d74a9d0ab652e76fe08c581c1c994f7c3c5bbd70de56177c022df9",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view6.png",
+      "sha256": "9b1d8de972d0d33801b3656853daec7ae8a5bb72118c6c87e56da04af2ad4156",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view1.png",
+      "sha256": "49df0e277e090810c8a9937101ad13a2d2c5a1fc7ec9f75c505160b90f971da2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view2.png",
+      "sha256": "b0033fd986a3986c0feb2bf1d1f75f6d2e769f8fb83eb372d4e8e94942ffe850",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view3.png",
+      "sha256": "7ce487046a5fd73ddd8e062c7b0b3c0c6a41d49b3dd5abecb315c55bbacf8e1c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view4.png",
+      "sha256": "98cde03301eff79d5076b9c5ebe7286f0af00f65c66905e33968dbb275dec17d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view5.png",
+      "sha256": "9b0a88d833d74a9d0ab652e76fe08c581c1c994f7c3c5bbd70de56177c022df9",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view6.png",
+      "sha256": "5d95749ffa778b7427ac6315b8a206371688636179f04796564638a29a7a916c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view1.png",
+      "sha256": "641144904000613aba6948f9db606d6becb45459406cf3d58e8258040d80a9c5",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view2.png",
+      "sha256": "3da569fe5e10479a14aab25bffc69269f052c5ad4413e521a7906f27f3f5cc8a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view3.png",
+      "sha256": "98bff4ec34e2b75aadb9fb289f7e4df767b8f4f10ca763f869d3a7013ae05c1a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view4.png",
+      "sha256": "98cde03301eff79d5076b9c5ebe7286f0af00f65c66905e33968dbb275dec17d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view5.png",
+      "sha256": "5a2bd5614e56800c1c1b87e675ee12e65d6f22d9eef87cc01c6ad16f5f41cf4d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view6.png",
+      "sha256": "e0088ce368e4d831de99fda514921711babd344af1aec264b1db091c392764c2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view1.png",
+      "sha256": "f2b546dc000abe157f419bb5c173ac52002ae8d04e9e15cb167103b00e8f91f2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view2.png",
+      "sha256": "fe3d25d11b3f42670a4968ff4bd2e77a3925231ee61be738c065124f13640a75",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view3.png",
+      "sha256": "21477189725a7ccfee81030ba8101132aac623373ecd656cf15b46474ea81f61",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view4.png",
+      "sha256": "98cde03301eff79d5076b9c5ebe7286f0af00f65c66905e33968dbb275dec17d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view5.png",
+      "sha256": "8f75a59ced56fb367e8a5c215b77456c32c7de41d1139f2e2d3617bb5c99e686",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair5-view6.png",
+      "sha256": "5d95749ffa778b7427ac6315b8a206371688636179f04796564638a29a7a916c",
+      "tool": "grafana"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "36_kv_tiering",
+  "limitations": [],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "239b7c229a6f21677bb5e65031a1ddbe8f280f4a1b08ae398fc679d5239b6109",
+  "summary_sha256": "b2a2677cff8f920ddf7e0419e7df283f73baa519c52e70805e1fb2c97b9ba8ad"
+}

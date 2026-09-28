@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 import yaml
 
+from . import kubernetes_process
 from .soperator_values import validate_object_name
 
 
@@ -30,7 +31,7 @@ class RuntimeObjects:
             rendered = yaml.safe_dump(dict(manifest), sort_keys=False) if manifest else None
             if manifest is not None:
                 self.assert_authority()
-            result = subprocess.run(
+            result = kubernetes_process.run(
                 command, env=self.env, input=rendered, capture_output=True, text=True, timeout=120
             )
         except (OSError, subprocess.SubprocessError):

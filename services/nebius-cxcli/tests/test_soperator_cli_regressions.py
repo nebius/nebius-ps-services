@@ -25,109 +25,31 @@ runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
-@pytest.fixture
-def install_scope_config(monkeypatch):
-    monkeypatch.setattr(
-        cli,
-        "rendered_module_sources",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(module_name="cluster", instance_id="gpu1", component_id="mk8s"),
-            SimpleNamespace(module_name="storage", instance_id="sfs", component_id="sfs"),
-        ),
-    )
-    return {
-        "apps": {"charts": [{"id": "soperator", "instance_id": "gpu1", "enabled": True}]},
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "gpu1",
-                    "enabled": True,
-                    "inputs": {
-                        "node_groups": {
-                            "worker": {"service_account": {"name": "worker-account"}},
-                            "existing": {"service_account": {"id": "serviceaccount-existing"}},
-                            "disabled": {"enabled": False, "service_account": {"name": "disabled"}},
-                            "unconfigured": {},
-                        }
-                    },
-                }
-            ]
+@pytest.mark.parametrize(
+    "resource_type",
+    ["nebius_iam_v1_group", "nebius_iam_v1_group_membership", "nebius_iam_v1_access_permit"],
+)
+def test_shared_deploy_recovery_cannot_expand_admitted_observability_iam(resource_type):
+    from nebius_cxcli.deployment_plan import assert_stage_plan, terraform_admission
+
+    row = {
+        "address": f'{resource_type}.cluster_soperator_observability["worker"]',
+        "type": resource_type,
+        "change": {
+            "actions": ["create"],
+            "after": {"role": "monitoring.viewer"},
+            "after_unknown": {},
         },
     }
-
-
-@pytest.mark.parametrize(
-    "resource",
-    [
-        "nebius_iam_v1_group.cluster_soperator_observability",
-        "nebius_iam_v1_group_membership.cluster_soperator_observability",
-        "nebius_iam_v1_access_permit.cluster_soperator_observability",
-    ],
-)
-@pytest.mark.parametrize("key", ["worker", "existing"])
-def test_install_scope_accepts_exact_generated_observability_iam(
-    install_scope_config, resource, key
-):
-    cli._validate_soperator_install_terraform_plan_scope(
-        install_scope_config,
-        {
-            "resource_changes": [
-                {
-                    "address": "module.cluster.nebius_mk8s_v1_cluster.this",
-                    "change": {"actions": ["create"]},
-                },
-                {"address": f'{resource}["{key}"]', "change": {"actions": ["create"]}},
-            ],
-        },
-    )
-
-
-@pytest.mark.parametrize(
-    "address",
-    [
-        'nebius_iam_v1_group.other_soperator_observability["worker"]',
-        'nebius_iam_v1_group.cluster_soperator_observability_extra["worker"]',
-        'nebius_iam_v1_group.cluster_soperator_observability["foreign"]',
-        'nebius_iam_v1_group.cluster_soperator_observability["disabled"]',
-        'nebius_iam_v1_group.cluster_soperator_observability["unconfigured"]',
-        "nebius_iam_v1_group.cluster_soperator_observability",
-        'nebius_iam_v1_group.cluster_soperator_observability["worker"].extra',
-        'nebius_iam_v1_access_permit.cluster_soperator_observability_admin["worker"]',
-    ],
-)
-def test_install_scope_rejects_unowned_root_iam(install_scope_config, address):
-    with pytest.raises(RuntimeError, match="outside its"):
-        cli._validate_soperator_install_terraform_plan_scope(
-            install_scope_config,
-            {
-                "resource_changes": [{"address": address, "change": {"actions": ["create"]}}],
-            },
-        )
-
-
-@pytest.mark.parametrize(
-    "actions,message",
-    [
-        (["delete", "create"], "delete or replacement"),
-        (["create"], "no MK8s or SFS changes"),
-    ],
-)
-def test_install_scope_root_iam_cannot_replace_or_fake_fresh_infra(
-    install_scope_config, actions, message
-):
-    with pytest.raises(RuntimeError, match=message):
-        cli._validate_soperator_install_terraform_plan_scope(
-            install_scope_config,
-            {
-                "resource_changes": [
-                    {
-                        "address": 'nebius_iam_v1_group.cluster_soperator_observability["worker"]',
-                        "change": {"actions": actions},
-                    }
-                ],
-            },
-        )
+    admitted = terraform_admission({"resource_changes": [row]})
+    assert_stage_plan(admitted, terraform_admission({"resource_changes": [row]}))
+    for candidate in (
+        {**row, "address": f'{resource_type}.foreign["worker"]'},
+        {**row, "change": {**row["change"], "after": {"role": "admin"}}},
+        {**row, "change": {**row["change"], "actions": ["delete", "create"]}},
+    ):
+        with pytest.raises(ValueError, match="admitted"):
+            assert_stage_plan(admitted, terraform_admission({"resource_changes": [candidate]}))
 
 
 def _plain_cli_output(value: str) -> str:
@@ -1073,7 +995,7 @@ def test_upgrade_admission_validates_the_target_scoped_flux_directory(
     calls: list[list[str]] = []
     monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda args, **_kwargs: calls.append(list(args)) or SimpleNamespace(returncode=0),
     )
@@ -1106,7 +1028,7 @@ def test_upgrade_live_release_probe_preserves_the_process_environment(
             stderr="",
         )
 
-    monkeypatch.setattr(cli.subprocess, "run", _run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _run)
 
     assert cli._live_soperator_release_for_reconcile(env={"KUBECONFIG": "/tmp/config"}) == (
         "1.22.3"
@@ -1196,6 +1118,22 @@ def _prepare_onboarding(
     monkeypatch.setattr(cli, "load_config", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(cli, "_load_config_payload", lambda _path: copy.deepcopy(payload))
 
+    from nebius_cxcli import deployment_state
+
+    @contextmanager
+    def backend_lease(**_kwargs):
+        yield SimpleNamespace(assert_held=lambda: None)
+
+    monkeypatch.setattr(cli, "_deployment_execution", backend_lease)
+    monkeypatch.setattr(deployment_state.DeploymentState, "read", lambda _self: None)
+    monkeypatch.setattr(deployment_state.DeploymentState, "register", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        deployment_state.DeploymentGeneration,
+        "capture",
+        lambda *a, **kw: SimpleNamespace(identity="sha256:" + "a" * 64),
+    )
+    monkeypatch.setattr(cli, "load_generated_manifest", lambda *_: {})
+
     @contextmanager
     def _status(*_args: Any, **_kwargs: Any):
         yield
@@ -1221,6 +1159,18 @@ def _prepare_onboarding(
         tag="4.1.7",
         commit="a" * 40,
         tree="b" * 40,
+    )
+    source_values = tmp_path / "helm/soperator-fluxcd/values.yaml"
+    source_values.parent.mkdir(parents=True)
+    source_values.write_text(
+        json.dumps(
+            {
+                "helmRepository": {
+                    "soperator": {"type": "oci", "url": "oci://registry.example.invalid/soperator"}
+                }
+            }
+        ),
+        encoding="utf-8",
     )
     source = SimpleNamespace(
         source_dir=tmp_path,
@@ -1630,7 +1580,7 @@ def test_deployments_root_onboard_retry_replaces_scaffold_region_from_live_clust
 
     _onboard(config_path)
 
-    assert region_updates == [("client_info.nebius.region_id", "eu-west1")]
+    assert region_updates == [("client_info.nebius.region_id", "eu-west1")] * 2
     assert effects == ["write-config", "render", "write-discovery"]
 
 
@@ -2121,10 +2071,9 @@ def test_removed_discovery_redaction_fails_at_parser_before_cluster_access(
 @pytest.mark.parametrize(
     ("command", "foreign_option", "foreign_value"),
     (
-        pytest.param("install", "--target", "cluster-a", id="install-target"),
+        pytest.param("create", "--target", "cluster-a", id="create-target"),
         pytest.param("onboard", "--release", "4.1.7", id="onboard-release"),
         pytest.param("upgrade", "--release", "4.1.7", id="upgrade-release"),
-        pytest.param("destroy", "--approve", None, id="destroy-approve"),
         pytest.param("discover", "--to-release", "4.1.7", id="discover-to-release"),
         pytest.param("status", "--redaction", "support", id="status-redaction"),
     ),
@@ -2136,8 +2085,6 @@ def test_soperator_commands_reject_misrouted_options_at_the_parser(
     foreign_value: str | None,
 ) -> None:
     argv = ["soperator", command, str(tmp_path / "config.yaml")]
-    if command == "destroy":
-        argv.extend(["--target", "cluster-a"])
     argv.append(foreign_option)
     if foreign_value is not None:
         argv.append(foreign_value)
@@ -2167,6 +2114,7 @@ def test_flux_resume_preserves_explicit_absent_install_source(
         flux_dir=tmp_path, reports_dir=tmp_path, path_project_folder="cluster-a"
     )
     (tmp_path / "configmap-terraform-fluxcd-values.yaml").write_text("{}")
+    (tmp_path / "soperator-nebius-adapter.yaml").write_text("")
     snapshot = SimpleNamespace(release="4.1.5", capability_contract="upstream-flux-v1")
     monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda *_: True)
     monkeypatch.setattr(cli, "load_soperator_release_snapshot", lambda *_: snapshot)
@@ -2184,7 +2132,9 @@ def test_flux_resume_preserves_explicit_absent_install_source(
     monkeypatch.setattr(cli, "verify_soperator_release_artifacts", lambda *a, **kw: None)
     monkeypatch.setattr(cli.shutil, "which", lambda *_: "kubectl")
     monkeypatch.setattr(
-        cli.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+        cli.kubernetes_process,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
     monkeypatch.setattr(cli, "flux_controllers_installed", lambda **kw: True)
     monkeypatch.setattr(cli, "flux_crds_installed", lambda **kw: True)
@@ -2209,3 +2159,116 @@ def test_flux_resume_preserves_explicit_absent_install_source(
     else:
         with pytest.raises(StopBeforeMutation):
             cli._apply_rendered_flux(paths, config={}, operation_source_release=source_release)
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "registration-failed", "source-changed"])
+def test_onboard_publishes_only_the_accepted_generation(monkeypatch, tmp_path, outcome):
+    from nebius_cxcli import deployment_state, ordinary_apps
+    from nebius_cxcli.generated_manifest import (
+        build_generated_manifest,
+        load_generated_manifest,
+        manifest_path_for_generated_dir,
+    )
+    from test_deployment_state import Store
+
+    real_read = deployment_state.DeploymentState.read
+    real_register = deployment_state.DeploymentState.register
+    real_capture = deployment_state.DeploymentGeneration.capture
+    payload = _onboard_source_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "cluster-a",
+            "target_ref": "cluster-a",
+            "enabled": True,
+            "values": {},
+        }
+    ]
+    config_path, _, _ = _prepare_onboarding(
+        monkeypatch, tmp_path, snapshot=_valid_onboard_snapshot(), source_payload=payload
+    )
+    store = Store()
+    monkeypatch.setattr(
+        "nebius_cxcli.deployment_local.LocalObjectStore.for_project", lambda _settings: store
+    )
+    monkeypatch.setattr(deployment_state.DeploymentState, "read", real_read)
+    monkeypatch.setattr(deployment_state.DeploymentGeneration, "capture", real_capture)
+    monkeypatch.setattr(cli, "load_generated_manifest", load_generated_manifest)
+    paths = cli.resolve_project_paths(config_path)
+    baseline_path = paths.reports_dir / ordinary_apps.BASELINE_FILENAME
+    states = []
+
+    def register(state, generation, *, evidence):
+        states.append(state)
+        if outcome == "registration-failed":
+            raise RuntimeError("registration rejected")
+        record = real_register(state, generation, evidence=evidence)
+        if outcome == "source-changed":
+            changed = json.loads(config_path.read_text())
+            changed["apps"]["charts"][0]["values"]["concurrent_edit"] = True
+            config_path.write_text(json.dumps(changed))
+        return record
+
+    monkeypatch.setattr(deployment_state.DeploymentState, "register", register)
+    monkeypatch.setattr(cli, "_ensure_soperator_registration_app_row", lambda *a, **kw: False)
+    for name in (
+        "_materialize_single_target_app_bindings",
+        "_materialize_soperator_component_defaults",
+        "ensure_mk8s_gpu_app_rows",
+        "materialize_mk8s_gpu_app_values",
+        "_refresh_soperator_registration_fingerprints",
+    ):
+        monkeypatch.setattr(cli, name, lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "_selection_change_issues", lambda _: [])
+
+    def write_config(path, document, **_kwargs):
+        path.write_text(json.dumps(document))
+        return True
+
+    def render(*_args, **_kwargs):
+        paths.infra_dir.mkdir(parents=True)
+        (paths.infra_dir / "main.tf").write_text("terraform {}\n")
+        document = json.loads(config_path.read_text())
+        manifest = build_generated_manifest(
+            config=document,
+            paths=paths,
+            targets=[
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "cluster-a",
+                    "target_ref": "cluster-a",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "cluster_id": "mk8scluster-a",
+                    "access": "external",
+                    "flux_dir": str(cli.flux_target_dir(paths, "cluster-a")),
+                }
+            ],
+            required_component_outputs=[],
+        )
+        manifest_path_for_generated_dir(paths.generated_dir).write_text(json.dumps(manifest))
+
+    monkeypatch.setattr(cli, "_write_runtime_payload_config", write_config)
+    monkeypatch.setattr(cli, "_run_internal_render_command", render)
+    monkeypatch.setattr(
+        cli,
+        "write_source_soperator_discovery_report",
+        lambda *a, **kw: tmp_path / "discovery" / "report.json",
+    )
+    if outcome == "registration-failed":
+        with pytest.raises(RuntimeError, match="registration rejected"):
+            _onboard(config_path)
+        assert not baseline_path.exists()
+    elif outcome == "source-changed":
+        _onboard(config_path)
+        assert states[0].read().value["accepted"] is not None
+        assert not baseline_path.exists()
+        assert json.loads(config_path.read_text())["apps"]["charts"][0]["values"]["concurrent_edit"]
+    else:
+        _onboard(config_path)
+        baseline = json.loads(baseline_path.read_text())
+        ordinary_apps.validate_accepted_deployment_record(
+            states[0].read().value, baseline, ["cluster-a"]
+        )
+        generation = real_capture(paths, load_generated_manifest(paths.generated_dir))
+        assert baseline["deployment_generation"] == generation.identity

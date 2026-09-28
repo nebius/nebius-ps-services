@@ -12,6 +12,7 @@ class SoperatorFailureDisposition(StrEnum):
     RETRY = "retrying"
     SAFETY_PAUSE = "safety-paused"
     TERMINAL = "terminal-failed"
+    STOP = "recovery-required"
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,7 @@ def soperator_invocation_environment_invalidated(exc: BaseException) -> bool:
 
 
 def soperator_failure_disposition(exc: BaseException) -> SoperatorFailureDisposition:
-    """Classify only typed failures; ordinary exceptions remain retryable."""
+    """Classify lifecycle outcomes without guessing that unknown failures are transient."""
 
     current: BaseException | None = exc
     seen: set[int] = set()
@@ -106,7 +107,7 @@ def soperator_failure_disposition(exc: BaseException) -> SoperatorFailureDisposi
         if isinstance(current, SoperatorSafetyPauseError):
             return SoperatorFailureDisposition.SAFETY_PAUSE
         current = current.__cause__ or current.__context__
-    return SoperatorFailureDisposition.RETRY
+    return SoperatorFailureDisposition.STOP
 
 
 __all__ = [

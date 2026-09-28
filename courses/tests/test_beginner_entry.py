@@ -1,23 +1,24 @@
 """Beginner definitions precede advanced contracts without replacing depth."""
 
+from course_builder import content as cb_content, markdown as cb_markdown, metadata as cb_metadata
 import json
+import re
 
 import pytest
 
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_first_lesson_has_substantive_beginner_entry(course):
-    builder = load_builder()
-    _, _, lessons = builder.parse_course(ROOT / course / "COURSE.md")
+    _, _, lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")
     entry = lessons[0]["How it works"]
     assert len(entry.split()) >= 350
     assert all(term in entry for term in ("### What", "### Why", "### How", "### Try"))
-    rendered = builder.lesson_markup(lessons[0], 1)
+    rendered = cb_content.lesson_markup(lessons[0], 1, {destination: "#practice" for value in lessons[0].values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)})
     assert rendered.index("Objective") < rendered.index("How it works")
-    assert builder.block(entry) in rendered
+    assert cb_markdown.block(entry, heading_offset=1) in rendered
     manifest = json.loads(
         (ROOT / course / "reference/visual-manifest.json").read_text()
     )
@@ -43,7 +44,7 @@ def test_validator_tracks_explanation_diagram_inside_its_section():
     with load_lab("tools/validate_course_template.py") as module:
         parser = module.Parser()
         parser.feed(
-            '<section class="lesson" id="entry">'
+            '<section class="lesson" id="entry" data-lesson-number="1">'
             '<div class="how-it-works">Beginner explanation'
             '<figure id="detail-entry"></figure></div></section>'
         )

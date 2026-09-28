@@ -6,8 +6,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import subprocess
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -169,61 +167,30 @@ def terraform_state_lock_object_key(settings: TerraformBackendSettings) -> str:
     return f"{settings.key}.tflock"
 
 
-def _require_aws_cli() -> None:
-    if shutil.which("aws"):
-        return
-    raise RuntimeError(
-        "aws CLI is required to inspect the remote Terraform state lock object, but it was not found in PATH"
-    )
-
-
 def read_state_lock_info(
     settings: TerraformBackendSettings,
     *,
     extra_env: dict[str, str] | None = None,
 ) -> TerraformStateLockInfo | None:
-    _require_aws_cli()
-    env = os.environ.copy()
-    if extra_env:
-        env.update(extra_env)
+    from .object_storage_errors import ObjectStorageError
+    from .object_storage_transport import object_storage_transport
 
     object_key = terraform_state_lock_object_key(settings)
-    command = [
-        "aws",
-        "--cli-connect-timeout",
-        "5",
-        "--cli-read-timeout",
-        "5",
-        "--endpoint-url",
-        settings.endpoint,
-        "s3",
-        "cp",
-        f"s3://{settings.bucket}/{object_key}",
-        "-",
-    ]
-    completed = subprocess.run(
-        command,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
-    )
-    if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout or "").strip()
-        if _is_not_found_error(RuntimeError(message)):
+    try:
+        with object_storage_transport(settings, extra_env=extra_env) as transport:
+            response = transport.request("get_object", object_key, deadline=time.monotonic() + 30)
+    except ObjectStorageError as exc:
+        if exc.absent:
             return None
         raise RuntimeError(
-            "Failed to inspect remote Terraform state lock object "
-            f"`s3://{settings.bucket}/{object_key}` via aws CLI: {message or 'unknown error'}"
-        )
-
+            "Failed to inspect remote Terraform state lock object: " + exc.code
+        ) from None
     try:
-        payload = json.loads(completed.stdout or "{}")
-    except json.JSONDecodeError as exc:
+        payload = json.loads(response.body or b"{}")
+    except (ValueError, UnicodeError):
         raise RuntimeError(
-            f"Remote Terraform state lock object did not contain valid JSON: {exc}"
-        ) from exc
+            "Remote Terraform state lock object did not contain valid JSON"
+        ) from None
     if not isinstance(payload, dict):
         raise RuntimeError("Remote Terraform state lock object did not contain a JSON mapping")
 
@@ -279,7 +246,7 @@ def _wait_for_bucket_ready(
     buckets,
     lookup,
     bucket_name: str,
-) -> None:
+) -> Any:
     timeout_seconds = float(
         _as_text(os.environ.get("NEBIUS_CXCLI_TFSTATE_READY_TIMEOUT_SECONDS"))
         or DEFAULT_BUCKET_READY_TIMEOUT_SECONDS
@@ -299,7 +266,7 @@ def _wait_for_bucket_ready(
         state = getattr(status, "state", None)
         last_state = str(getattr(state, "name", state) or "unknown")
         if _bucket_is_active(bucket):
-            return
+            return bucket
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"Terraform state bucket '{bucket_name}' is not ready yet "
@@ -316,8 +283,10 @@ def _sdk_for_backend_api(project_id: str):
     )
 
 
-def ensure_state_bucket(settings: TerraformBackendSettings) -> bool:
+def ensure_state_bucket(settings: TerraformBackendSettings, *, create: bool = True) -> bool:
     """Ensure remote Terraform state bucket exists. Returns True when created."""
+    from .object_storage_admission import validate_backend_bucket
+
     sdk = _sdk_for_backend_api(settings.project_id)
     try:
         from nebius.api.nebius.common.v1 import ResourceMetadata
@@ -334,11 +303,12 @@ def ensure_state_bucket(settings: TerraformBackendSettings) -> bool:
         with suppress_expected_refresh_logs():
             try:
                 buckets.get_by_name(lookup).wait()
-                _wait_for_bucket_ready(
+                bucket = _wait_for_bucket_ready(
                     buckets=buckets,
                     lookup=lookup,
                     bucket_name=settings.bucket,
                 )
+                validate_backend_bucket(settings, bucket)
                 return False
             except Exception as exc:
                 if not _is_not_found_error(exc):
@@ -346,6 +316,8 @@ def ensure_state_bucket(settings: TerraformBackendSettings) -> bool:
                         f"Failed to verify Terraform state bucket '{settings.bucket}': {exc}"
                     ) from exc
 
+            if not create:
+                raise RuntimeError("Terraform state bucket is absent; preview cannot create it")
             try:
                 buckets.create(
                     CreateBucketRequest(
@@ -356,21 +328,23 @@ def ensure_state_bucket(settings: TerraformBackendSettings) -> bool:
                         spec=BucketSpec(versioning_policy=VersioningPolicy.ENABLED),
                     )
                 ).wait()
-                _wait_for_bucket_ready(
+                bucket = _wait_for_bucket_ready(
                     buckets=buckets,
                     lookup=lookup,
                     bucket_name=settings.bucket,
                 )
+                validate_backend_bucket(settings, bucket)
                 return True
             except Exception as exc:
                 if _is_already_exists_error(exc):
                     try:
                         buckets.get_by_name(lookup).wait()
-                        _wait_for_bucket_ready(
+                        bucket = _wait_for_bucket_ready(
                             buckets=buckets,
                             lookup=lookup,
                             bucket_name=settings.bucket,
                         )
+                        validate_backend_bucket(settings, bucket)
                         return False
                     except Exception as verify_exc:
                         raise RuntimeError(

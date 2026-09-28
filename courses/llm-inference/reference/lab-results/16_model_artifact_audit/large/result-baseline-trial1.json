@@ -1,0 +1,40 @@
+{
+  "correctness": {
+    "expected_artifacts_present": true,
+    "license_metadata_was_inspected": true,
+    "model_uses_standard_transformers_code": true,
+    "pinned_revision_matches": true,
+    "remote_code_was_not_enabled": true,
+    "safetensors_weights_present": true
+  },
+  "lab": "16_model_artifact_audit",
+  "measurements": {
+    "attention_heads": 14,
+    "config_vocab_size": 151936,
+    "generation_eos_token_id": [
+      151645,
+      151643
+    ],
+    "generation_max_length": null,
+    "has_chat_template": true,
+    "hidden_size": 896,
+    "key_value_heads": 2,
+    "layers": 24,
+    "maximum_positions": 32768,
+    "remote_model_code_declared": false,
+    "rope_scaling": {
+      "rope_theta": 1000000.0
+    },
+    "rope_theta": null,
+    "weight_files": [
+      null
+    ],
+    "weight_index_files": []
+  },
+  "parameters": {
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

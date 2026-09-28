@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,host_enqueue_median_seconds,value,2.0700000000000002e-05,s
+baseline-trial1,sequential_device_median_seconds,value,2.77e-05,s
+baseline-trial1,independent_streams_device_median_seconds,value,6.18e-05,s
+repeat-trial1,host_enqueue_median_seconds,value,2.0700000000000002e-05,s
+repeat-trial1,sequential_device_median_seconds,value,2.79e-05,s
+repeat-trial1,independent_streams_device_median_seconds,value,6.14e-05,s

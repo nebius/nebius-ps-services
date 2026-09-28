@@ -1,0 +1,33 @@
+{
+  "files": [
+    "compute-sync-baseline-rank-0.png",
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "grafana-pair3-view1.png",
+    "grafana-pair3-view2.png",
+    "grafana-pair4-view1.png",
+    "grafana-pair4-view2.png",
+    "manifest.json",
+    "result-compute-baseline-trial1.json",
+    "result-compute-optimized-trial1.json",
+    "result-launch-baseline-trial1.json",
+    "result-launch-optimized-trial1.json",
+    "result-memory-baseline-trial1.json",
+    "result-memory-optimized-trial1.json",
+    "result-sync-baseline-trial1.json",
+    "result-sync-optimized-trial1.json",
+    "summary.csv",
+    "systems-compute-baseline-rank-0.png",
+    "systems-compute-optimized-rank-0.png",
+    "systems-launch-baseline-rank-0.png",
+    "systems-launch-optimized-rank-0.png",
+    "systems-memory-baseline-rank-0.png",
+    "systems-memory-optimized-rank-0.png",
+    "systems-sync-baseline-rank-0.png",
+    "systems-sync-optimized-rank-0.png"
+  ],
+  "identity": "fd3bd568689240d4",
+  "schema": "run-labs-owned/v1"
+}

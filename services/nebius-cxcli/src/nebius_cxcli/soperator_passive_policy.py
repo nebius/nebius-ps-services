@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import subprocess
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -13,11 +12,16 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
+from .soperator_passive_scheduler import scheduler_from_cluster_spec
+
 # Reviewed upstream chart bundles, including scripts, configuration, rendering
 # and image defaults. A newly changed upstream implementation is not implicitly
 # safe to suppress just because it retains a familiar filename.
 REVIEWED_BUNDLES = frozenset(
     {
+        # Soperator 4.1.9: unchanged native runners; builtIn gates script and JSON entries.
+        "eb812e7ff5ed51cd094d13f627642e0554f053f64a0c3c36d390533efd1b6c17",
         "c1f4ea57913aa3359f887bdae15b4b2def80886539f4028ca57c53b0441c723f",
         "d0312c256ef9fde31b0c17df63b8c555029be90e9fb64c075491211ad1b792c0",
     }
@@ -61,7 +65,7 @@ def passive_bundle_digest(chart: Path) -> str:
 def _opaque_data(chart: str, bundle: str, overrides: str) -> dict[str, str] | None:
     if not (Path(chart) / "templates/slurm-scripts-cm.yaml").is_file():
         return None
-    rendered = subprocess.run(
+    rendered = kubernetes_process.run(
         [
             "helm",
             "template",
@@ -92,54 +96,78 @@ def _opaque_data(chart: str, bundle: str, overrides: str) -> dict[str, str] | No
     return documents[0]["data"]
 
 
+def _rendered_scheduler(chart: str, overrides: str) -> dict[str, Any]:
+    rendered = kubernetes_process.run(
+        [
+            "helm",
+            "template",
+            "slurm-cluster",
+            chart,
+            "--namespace",
+            "soperator",
+            "--show-only",
+            "templates/slurm-cluster-cr.yaml",
+            "-f",
+            "-",
+        ],
+        input=overrides,
+        text=True,
+        capture_output=True,
+        timeout=120,
+        check=True,
+    )
+    clusters = [
+        row
+        for row in yaml.safe_load_all(rendered.stdout)
+        if isinstance(row, dict) and row.get("kind") == "SlurmCluster"
+    ]
+    if len(clusters) != 1 or not isinstance(clusters[0].get("spec"), dict):
+        raise ValueError("desired passive scheduler cannot be frozen unambiguously")
+    return scheduler_from_cluster_spec(clusters[0]["spec"])
+
+
 def compile_passive_policy(source: Path, values: Mapping[str, Any]) -> dict[str, Any]:
+    from .soperator_deployment_profile import auxiliary_checks_suspended
+
+    fast = auxiliary_checks_suspended(values)
     chart = source / "helm/slurm-cluster"
     bundle = passive_bundle_digest(chart)
     fallback: dict[str, Any] = {
         "supported": False,
         "bundle": bundle,
         "reason": "unreviewed upstream passive execution contract; keeping diagnostics enabled",
+        "scheduler": _rendered_scheduler(
+            str(chart),
+            json.dumps(values.get("slurmCluster", {}).get("overrideValues", {}), sort_keys=True),
+        ),
         "opaque": _opaque_data(
             str(chart),
             bundle,
             json.dumps(values.get("slurmCluster", {}).get("overrideValues", {}), sort_keys=True),
         ),
     }
-    if bundle not in REVIEWED_BUNDLES:
+    # Fast Dev/Test disables diagnostics permanently through native controls.
+    # Standard maintenance suppression still requires reviewed executable semantics.
+    if not fast and bundle not in REVIEWED_BUNDLES:
         return fallback
     defaults = yaml.safe_load((chart / "values.yaml").read_text())["slurmScripts"]
     cluster = values.get("slurmCluster", {}).get("overrideValues", {})
-    if cluster.get("customSlurmConfig"):
+    if not fast and cluster.get("customSlurmConfig"):
         return {
             **fallback,
             "reason": "custom Slurm execution configuration; leaving passive policy unchanged",
         }
-    health = cluster.get("healthCheckConfig")
-    if health is None:
-        scheduler = {"HealthCheckInterval": "0", "HealthCheckProgram": "(null)"}
-    elif (
-        isinstance(health, Mapping)
-        and health.get("healthCheckProgram") == "/opt/slurm_scripts/hc_program.sh"
-    ):
-        scheduler = {
-            "HealthCheckInterval": str(health["healthCheckInterval"]),
-            "HealthCheckProgram": health["healthCheckProgram"],
-            "HealthCheckNodeState": ",".join(
-                row["state"] for row in health["healthCheckNodeState"]
-            ),
-        }
-    else:
+    scheduler = fallback["scheduler"]
+    if scheduler["HealthCheckProgram"] != "/opt/slurm_scripts/hc_program.sh":
         return {**fallback, "reason": "custom passive scheduler; keeping diagnostics enabled"}
-    config = cluster.get("slurmConfig") or {}
     if any(
-        config.get(key, default) != default
+        scheduler[key] != [default]
         for key, default in {
-            "prolog": "/opt/slurm_scripts/prolog.sh",
-            "epilog": "/opt/slurm_scripts/epilog.sh",
+            "Prolog": "/opt/slurm_scripts/prolog.sh",
+            "Epilog": "/opt/slurm_scripts/epilog.sh",
         }.items()
     ):
         return {**fallback, "reason": "custom job lifecycle hook; keeping diagnostics enabled"}
-    scheduler.update(Prolog="/opt/slurm_scripts/prolog.sh", Epilog="/opt/slurm_scripts/epilog.sh")
     overrides = cluster.get("slurmScripts") or {}
     if not isinstance(overrides, Mapping):
         raise ValueError("Slurm scripts overrides must be a mapping")
@@ -176,6 +204,24 @@ def compile_passive_policy(source: Path, values: Mapping[str, Any]) -> dict[str,
             continue
         entries[name] = json.loads((chart / "slurm_scripts" / (name + ".json")).read_text())
         scripts[name] = (chart / "slurm_scripts" / name).read_text()
+    if fast:
+        opaque = fallback["opaque"]
+        if not isinstance(opaque, Mapping) or set(opaque) != {"checks.json", *scripts}:
+            raise ValueError(
+                "Fast deployment passive render does not preserve native script controls"
+            )
+        if any(opaque[name] != script.rstrip("\n") for name, script in scripts.items()):
+            raise ValueError("Fast deployment passive render changes native operational scripts")
+        try:
+            rendered_entries = json.loads(opaque["checks.json"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Fast deployment passive render has invalid check configuration"
+            ) from exc
+        if rendered_entries != [entries[name] for name in sorted(entries)]:
+            raise ValueError(
+                "Fast deployment passive render does not preserve native check controls"
+            )
     return {
         "supported": True,
         "bundle": bundle,

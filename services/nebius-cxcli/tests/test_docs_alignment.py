@@ -5,12 +5,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_SOPERATOR_COMMANDS = (
-    "install",
+    "create",
     "discover",
     "onboard",
     "upgrade",
     "status",
-    "destroy",
 )
 NON_CANONICAL_UPGRADE_OPTIONS = (
     "--to-chart-version",
@@ -34,15 +33,15 @@ def test_specs_expose_only_the_current_canonical_contracts() -> None:
     design = _read("docs/design.md")
 
     assert re.findall(r"^### (REQ-\d+):", requirements, re.MULTILINE) == [
-        f"REQ-{number:03d}" for number in range(13, 31)
+        f"REQ-{number:03d}" for number in range(13, 41)
     ]
     assert re.findall(r"^### (FEAT-\d+):", design, re.MULTILINE) == [
-        f"FEAT-{number:03d}" for number in range(13, 34)
+        f"FEAT-{number:03d}" for number in range(13, 49)
     ]
-    assert requirements.count("<!-- REQUIREMENT:") == 18
-    assert requirements.count("<!-- /REQUIREMENT:") == 18
-    assert design.count("<!-- FEATURE:") == 21
-    assert design.count("<!-- /FEATURE:") == 21
+    assert requirements.count("<!-- REQUIREMENT:") == 28
+    assert requirements.count("<!-- /REQUIREMENT:") == 28
+    assert design.count("<!-- FEATURE:") == 36
+    assert design.count("<!-- /FEATURE:") == 36
 
 
 def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
@@ -112,7 +111,7 @@ def test_docs_define_one_upstream_soperator_surface() -> None:
         "backup receipt",
     ):
         assert stale_phrase not in active_docs
-    assert "The only Soperator-related root command is `soperator`" in requirements
+    assert "Deploy Soperator through the standard configuration pipeline" in requirements
     assert "one command family, operation model, and official-upstream delivery path" in _squash(
         design
     )
@@ -137,17 +136,16 @@ def test_docs_name_the_exact_public_commands_without_an_upgrade_resume_surface()
     assert "--resume" not in upgrade_blocks
 
 
-def test_docs_define_guarded_pre_execution_install_replan() -> None:
-    readme = _squash(_read("README.md"))
+def test_docs_define_current_inputs_and_local_deployment_recovery() -> None:
     requirements = _squash(_read("docs/requirements.md"))
     design = _squash(_read("docs/design.md"))
-    changelog = _squash(_read("CHANGELOG.md"))
-
-    assert "`install`, `discover`, `onboard`, `upgrade`, `status`, and `destroy`" in requirements
-    for surface in (readme, requirements, design, changelog):
-        assert "never-executed" in surface
-    assert "prior fingerprint cannot authorize the replacement" in readme
-    assert "partial-apply plan" not in " ".join((readme, requirements, design, changelog))
+    readme = _squash(_read("README.md"))
+    assert "Terraform" in requirements and "native" in requirements
+    assert "FEAT-048" in design
+    assert "local" in readme and "semantic" in readme
+    assert "no saved binary approval" in design
+    assert "--lease-wait" not in readme
+    assert "nebius-cxcli operation status" not in readme
 
 
 def test_docs_keep_terraform_out_of_in_cluster_installation() -> None:
@@ -157,7 +155,11 @@ def test_docs_keep_terraform_out_of_in_cluster_installation() -> None:
 
     assert "Do not use Terraform as an in-cluster package manager" in readme
     assert "Do not add Terraform resources for in-cluster Soperator installation" in requirements
-    assert "Terraform owns Nebius resources outside the cluster" in design
+    assert (
+        "Terraform owns creation and reconciliation of managed Nebius resources outside the cluster"
+        in design
+    )
+    assert "Whole-cluster destruction uses the Nebius SDK for both ownership modes" in design
 
 
 def test_docs_record_dynamic_release_and_delivery_contract() -> None:
@@ -175,7 +177,7 @@ def test_docs_record_dynamic_release_and_delivery_contract() -> None:
     for phrase in (
         "exact infrastructure",
         "official-upstream release plan",
-        "one root group with exactly six public commands",
+        "one root group with exactly five public commands",
     ):
         assert phrase in changelog
     assert "one product delivery path" in design
@@ -198,7 +200,7 @@ def test_unreleased_changelog_names_the_current_soperator_contract() -> None:
     changelog = _read("CHANGELOG.md")
     unreleased = changelog.split("## [Unreleased]", maxsplit=1)[1].split("\n## [", maxsplit=1)[0]
 
-    assert "`soperator install --release latest|X.Y.Z`" in unreleased
+    assert "`soperator create --release latest|X.Y.Z`" in unreleased
     assert "`soperator onboard`" in unreleased
     assert "`soperator upgrade --to-release latest|X.Y.Z`" in unreleased
     assert "`migrate node-group`" in unreleased

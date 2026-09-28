@@ -1,0 +1,71 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "ec6fc77702fca60fdd07ca786fcc56c44b67e1ce51f79a9554e5517686033f3a",
+      "sha256": "3bc02e098da9a5a70ac4bb6c57db9538bb5f398405241fe2f8f71e51f0020af4",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "cb10256d9224b4289d950fda954a6d87bbc1f96c5da42e701349b8baabceaa16",
+      "sha256": "9d1c7f9256cfd2576ce0607e6e672b78a13ef8ac64c1bbd1b400e5de6aad5692",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "536d877cc90bc904d6539d061d2ed5ffa6dbe93c84aadf7652cd392fb72ce360",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "6d258db528237c8beb160c717c7d813f2d4fd032e11d61fe83a3e0e26ec3bf2b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "99a582a394ed0b0a4afb86ca37c60478c25f87eda4e3bfbf593c2fee453fb09a",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "5289d99170d9b52bd2f90e596f38ae0a530a5e99ffd07f4a7d9b3278c62ec351",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "91e9ce34a3a7ab536b3c8ad6f45c473bd8a6af12b5556ab9c9039385ceee6793",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "08c235b128e3a818894581db1c65eea0bdc474205ae7226c0f7eac9713e0c520",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "02_tensor_core_precision",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "67f21db7447bec19fd3bd8675e0eb29d1c54f4cab6e1d9e30febd42bcf75cdea"
+}

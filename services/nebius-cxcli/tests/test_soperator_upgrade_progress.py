@@ -340,3 +340,19 @@ def test_rendered_flux_progress_keeps_live_updates_off_result_stdout() -> None:
     assert stdout.getvalue() == "Soperator release reconcile receipt: receipt.json\n"
     assert "Waiting for Soperator readiness" in stderr.getvalue()
     assert "worker-0 pending worker-1 ready" in stderr.getvalue()
+
+
+def test_terminal_phase_commits_one_completed_row(monkeypatch):
+    from nebius_cxcli import soperator_upgrade_progress as module
+
+    original = module.Progress
+    monkeypatch.setattr(
+        module, "Progress", lambda *args, **kwargs: original(*args, auto_refresh=False, **kwargs)
+    )
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, color_system=None, width=120)
+    with SoperatorUpgradeProgress(console, terminal=True).phase(
+        "resolve", "Resolve application inputs"
+    ):
+        pass
+    assert output.getvalue().count("✓ Resolve application inputs") == 1

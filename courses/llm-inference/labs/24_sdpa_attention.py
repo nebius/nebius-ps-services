@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import argparse
 import math
+from contextlib import nullcontext
 
 from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def peak_bytes(torch: object, operation: object) -> int:
@@ -29,12 +31,13 @@ def peak_bytes(torch: object, operation: object) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    parser.add_argument("--external-only", action="store_true", help="Skip the internal CUDA profiler during a separate Nsight capture.")
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    sequence = 512 if args.profile == "smoke" else 2_048
+    sequence = 512 if args.profile == "small" else 2_048
     batch, heads, head_dim = 2, 8, 64
     rows = []
     for label, query_length, causal in (
@@ -77,17 +80,17 @@ def main() -> None:
             raise SystemExit(
                 f"Materialized and SDPA {label} paths diverged: {max_error=}"
             )
-        with torch.profiler.profile(
+        with (nullcontext() if args.external_only else torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,
             ]
-        ) as profile:
+        )) as profile:
             sdpa()
             torch.cuda.synchronize()
         dispatch = sorted(
             event.key
-            for event in profile.key_averages()
+            for event in (profile.key_averages() if profile is not None else [])
             if "scaled_dot_product" in event.key.lower()
             or "flash" in event.key.lower()
             or "attention" in event.key.lower()
@@ -127,4 +130,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

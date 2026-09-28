@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .soperator_failures import SoperatorSafetyPauseError
 from .soperator_jail_mounts import (
     apply_jail_persistent_mount_values,
     jail_rootfs_active_source,
 )
+from .soperator_jail_protection import prepare_disposable_passive_generation
 from .soperator_populate_jail import (
     active_passive_jail_rootfs_slots,
     switch_active_passive_jail_rootfs_values,
@@ -26,6 +29,7 @@ def plan_soperator_rootfs_transition(
 
     current_active_source = jail_rootfs_active_source(current_values)
     if current_active_source == "slot":
+        current_values, allocated = prepare_disposable_passive_generation(current_values)
         current_slots = active_passive_jail_rootfs_slots(current_values)
         live_jail_pvc = current_slots.active_pvc
         switched_values = switch_active_passive_jail_rootfs_values(current_values)
@@ -45,7 +49,7 @@ def plan_soperator_rootfs_transition(
             "desiredActiveSlot": switched_slots.active_slot,
             "livePvcName": live_jail_pvc,
             "targetPvcName": switched_slots.active_pvc,
-            "recycleInactiveSlot": True,
+            "recycleInactiveSlot": not allocated,
         }
 
     live_jail_pvc = str(legacy_pvc_resolver() or "").strip()
@@ -76,3 +80,37 @@ def plan_soperator_rootfs_transition(
         "targetPvcName": switched_slots.active_pvc,
         "recycleInactiveSlot": False,
     }
+
+
+def recover_soperator_rootfs_transition(
+    current_values: Mapping[str, Any],
+    transition: Mapping[str, object],
+    *,
+    target_ref: str,
+    layout: str,
+) -> dict[str, Any]:
+    """Reconstruct the admitted allocation, or accept its already activated target."""
+    live_pvc = str(transition.get("livePvcName") or "").strip()
+    desired_slot = str(transition.get("desiredActiveSlot") or "").strip()
+    target_pvc = str(transition.get("targetPvcName") or "").strip()
+    if not live_pvc or not desired_slot or not target_pvc:
+        raise SoperatorSafetyPauseError("The active Soperator rootfs slot transition is incomplete")
+    source = jail_rootfs_active_source(current_values)
+    slots = active_passive_jail_rootfs_slots(current_values)
+    if source == "slot" and slots.active_slot == desired_slot:
+        switched = copy.deepcopy(dict(current_values))
+    else:
+        # Reuse admission's planner: a retained passive slot may need a new
+        # physical generation before it can become the active logical slot.
+        switched, reconstructed = plan_soperator_rootfs_transition(
+            current_values,
+            target_ref=target_ref,
+            layout=layout,
+            legacy_pvc_resolver=lambda: live_pvc,
+        )
+        if reconstructed != dict(transition):
+            raise SoperatorSafetyPauseError("The active Soperator rootfs slot transition changed")
+    switched_slots = active_passive_jail_rootfs_slots(switched)
+    if switched_slots.active_slot != desired_slot or switched_slots.active_pvc != target_pvc:
+        raise SoperatorSafetyPauseError("The active Soperator desired rootfs slot identity changed")
+    return switched

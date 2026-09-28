@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,median_seconds,value,0.0001679,s
+baseline-trial1,effective_payload_gib_per_s,value,24985972244.48,Bps
+candidate-trial1,median_seconds,value,0.0008622,s
+candidate-trial1,effective_payload_gib_per_s,value,38912403701.76,Bps

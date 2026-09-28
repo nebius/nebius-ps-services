@@ -333,11 +333,17 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
 - Passive production telemetry remains read-only evidence. It does not
   authorize remediation, workload execution, or broader scope than the user
   explicitly provided.
-- Require action-specific approval everywhere before destructive or irreversible
-  actions, credential or IAM changes, data mutation, public exposure, resource
-  deletion, or changes with material availability or cost impact.
-- Use existing authorized credentials without printing, copying, or persisting
-  them. Redact secrets and private endpoints from evidence and reports.
+- An authorized task includes creating new credentials and secrets necessary
+  for its identified target and intended access scope; do not request separate
+  approval solely for that creation. Store values only in the intended secret
+  store or protected runtime file, never in chat, logs, Git, documentation, task
+  state, or other artifacts. Reuse authorization already given. Destructive or
+  irreversible actions, replacement or revocation of existing credentials, IAM
+  access expansion, unrelated data changes, public exposure, deletion, or material
+  availability or cost impact require action-specific approval only when not
+  already covered by the user's authorization.
+- Use existing authorized credentials securely. Redact secrets and private
+  endpoints from evidence and reports.
 - Treat restarts, retries, rollbacks, failovers, cache clearing, timeouts, sleeps,
   concurrency reduction, and downgrades as mitigations or experimental evidence,
   not proof of root cause.

@@ -51,7 +51,7 @@ def test_filtered_kubectl_apply_returns_summary_without_terminal_chatter(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
@@ -82,7 +82,7 @@ def test_captured_flux_failure_is_bounded_and_redacts_urls(
         f"detail {index}" for index in range(20)
     ]
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
@@ -105,7 +105,7 @@ def test_captured_flux_failure_redacts_credential_shaped_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
@@ -153,7 +153,7 @@ def test_filtered_kubectl_failure_surfaces_bounded_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
@@ -184,7 +184,7 @@ def test_captured_flux_timeout_keeps_bounded_redacted_detail(
             stderr=b"Authorization: Bearer timeout-sensitive-value",
         )
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _timeout)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _timeout)
 
     with pytest.raises(RuntimeError, match="flux timed out after 600 seconds") as excinfo:
         flux_ops._run_captured(["flux", "migrate"], timeout=600)
@@ -296,7 +296,7 @@ def test_delete_rendered_flux_uses_explicit_manifest_inventory(
             return SimpleNamespace(returncode=0, stdout="deleted\n", stderr="")
         raise AssertionError(f"Unexpected kubectl invocation: {cmd}")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops.delete_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
@@ -321,7 +321,7 @@ def test_delete_rendered_flux_fails_fast_when_cluster_is_unreachable(
         flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
     )
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda cmd, **kwargs: SimpleNamespace(
             returncode=1, stdout="", stderr="connection refused\n"
@@ -383,7 +383,7 @@ metadata:
         deleted.append(str(kwargs.get("input") or ""))
         return SimpleNamespace(returncode=0, stdout="deleted\n", stderr="")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops.delete_rendered_flux(fake_paths, emit=messages.append)
 
@@ -417,7 +417,7 @@ metadata:
     monkeypatch.setattr(flux_ops.shutil, "which", lambda _name: "/usr/bin/kubectl")
     monkeypatch.setattr(flux_ops, "flux_crds_installed", lambda *, extra_env=None: True)
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda cmd, **kwargs: SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
     )
@@ -445,7 +445,7 @@ def test_delete_rendered_flux_skips_when_flux_crds_are_absent(
             return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
         raise AssertionError(f"Unexpected kubectl invocation: {cmd}")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops.delete_rendered_flux(
         fake_paths,
@@ -470,7 +470,7 @@ def test_delete_rendered_flux_private_handoff_reports_network_guidance(
         flux_ops.shutil, "which", lambda name: "/usr/bin/kubectl" if name == "kubectl" else None
     )
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda cmd, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="i/o timeout\n"),
     )
@@ -487,7 +487,7 @@ def test_delete_rendered_flux_private_handoff_reports_network_guidance(
 
 def test_get_crd_payload_returns_none_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             subprocess.TimeoutExpired(cmd=["kubectl", "get", "crd"], timeout=20)
@@ -519,7 +519,7 @@ def test_wait_for_flux_resource_apis_retries_transient_kubectl_timeouts(
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=20)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
 
     flux_ops.wait_for_flux_resource_apis(
@@ -548,7 +548,7 @@ def test_wait_for_flux_resource_apis_checks_resource_types_without_target_namesp
         {("helmreleases.helm.toolkit.fluxcd.io", flux_ops.FLUX_NAMESPACE)},
     )
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda cmd, **kwargs: (
             calls.append(cmd) or SimpleNamespace(returncode=0, stdout="", stderr="")

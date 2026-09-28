@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,trainable_parameters,value,540672,none
+baseline-trial1,trainable_percent,value,0.1093,percent
+baseline-trial1,elapsed_seconds,value,0.6444932,s
+baseline-trial1,peak_allocated_bytes,value,1425895587.84,bytes
+baseline-trial1,adapter_max_parameter_delta,value,0.002665979787707329,none
+candidate-trial1,trainable_parameters,value,540672,none
+candidate-trial1,trainable_percent,value,0.1093,percent
+candidate-trial1,elapsed_seconds,value,0.6377331,s
+candidate-trial1,peak_allocated_bytes,value,1428066140.16,bytes
+candidate-trial1,adapter_max_parameter_delta,value,0.002665979787707329,none

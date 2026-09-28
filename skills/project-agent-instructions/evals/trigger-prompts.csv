@@ -3,11 +3,14 @@ project-instructions-positive-01,true,Maintain-project-specs routed the current 
 project-instructions-positive-02,true,"With the current spec receipt, explicitly render and apply the needed project rules."
 project-instructions-positive-03,true,Verify the terminal not-needed project-instructions decision for the selected project.
 project-instructions-positive-04,true,Explicitly update this project's AGENTS.md using the current canonical spec receipt.
+project-instructions-positive-05,true,Repair the existing human-written AGENTS.md rule that asks again before creating secrets required by my authorized task.
+project-instructions-positive-06,true,Fix the restrictive rule in the existing active AGENTS.override.md without creating another instruction file.
+project-instructions-positive-07,true,Repair the outdated rule in this project's existing human-written CLAUDE.md without adding an AGENTS.md import.
 project-instructions-negative-01,false,Create a generic AGENTS.md for this repository without a canonical spec receipt.
-project-instructions-negative-02,false,Edit AGENTS.override.md with my personal preferences.
+project-instructions-negative-02,false,Create a new AGENTS.override.md with my personal preferences.
 project-instructions-negative-03,false,Add task-specific implementation steps to the project instructions.
 project-instructions-negative-04,false,Create a README for this project.
-project-instructions-negative-05,false,Invoke project-agent-instructions directly without maintain-project-specs.
+project-instructions-negative-05,false,Generate managed project rules without a canonical spec receipt.
 project-instructions-negative-06,false,Add a temporary rule for only this task.
 project-instructions-negative-07,false,Update my global Codex AGENTS.md.
 project-instructions-negative-08,false,Create an AGENTS.override.md in every subdirectory.

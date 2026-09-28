@@ -82,6 +82,21 @@ def _accounted(runner: SoperatorChecksExecution, job_id: str) -> dict[str, str]:
     )
 
 
+def same_terminal_accounting(expected: Mapping[str, str], observed: Mapping[str, str]) -> bool:
+    """Retain exact job identity while a timeout's termination signal settles.
+
+    Slurm reports exit status and signal separately. A TIMEOUT may be recorded
+    before SIGTERM/SIGKILL reaches accounting; neither observation is a PASS.
+    Only that one-way signal finalization may differ from the sealed record.
+    """
+    return observed == expected or (
+        expected.get("JobState") == "TIMEOUT"
+        and expected.get("ExitCode") == "0:0"
+        and observed.get("ExitCode") in {"0:15", "0:9"}
+        and {**expected, "ExitCode": observed["ExitCode"]} == observed
+    )
+
+
 def _complete(job: Mapping[str, Any]) -> bool:
     return not job.get("status", {}).get("active", 0) and any(
         c.get("type") == "Complete" and c.get("status") == "True"

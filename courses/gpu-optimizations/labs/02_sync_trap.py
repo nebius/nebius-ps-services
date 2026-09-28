@@ -10,12 +10,13 @@ import time
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     resolve_int_override,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def measure(torch: object, function: object, warmup: int, iterations: int) -> float:
@@ -40,11 +41,11 @@ def main() -> None:
     validate_common_args(args)
     steps = resolve_int_override(
         args.steps,
-        25 if args.profile == "smoke" else 200,
+        25 if args.profile == "small" else 200,
         option="--steps",
     )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     x = torch.randn(8_000_000, device="cuda")
 
@@ -86,4 +87,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

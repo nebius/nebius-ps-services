@@ -8,9 +8,11 @@ installed into a Codex runtime only when `install-skills.sh` is run.
 Validate the full product, not just individual features, before PR creation,
 using the requirements Live Experiment Environment only when it is confirmed
 safe and allowed.
-When the UAT matrix requires `computer-use`, it records that exact harness,
-browser, fresh accessibility state per action, an ordered action ledger, and an
-independent API/database/service oracle for data-backed GUI flows.
+Web GUI rows default to headless Playwright Test with isolated processes and
+contexts, actual browser identity, target SHA, assertions, traces, screenshots
+and cleanup receipts. Optional headless MCP exploration is separate. A locked
+screen does not introduce a native capture prerequisite. Explicit native-desktop
+criteria retain their separately declared harness.
 
 ## Main Boundaries
 

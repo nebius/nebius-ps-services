@@ -1,0 +1,34 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "09_library_epilogue",
+  "measurements": {
+    "columns": 1536,
+    "cublas_plus_separate_bias_relu_median_ms": 0.07576,
+    "cublas_plus_separate_bias_relu_min_ms": 0.075072,
+    "cublas_plus_separate_bias_relu_p90_ms": 0.077664,
+    "cublas_plus_separate_bias_relu_samples": 20,
+    "cutlass_fused_bias_relu_median_ms": 0.07792,
+    "cutlass_fused_bias_relu_min_ms": 0.077312,
+    "cutlass_fused_bias_relu_p90_ms": 0.078848,
+    "cutlass_fused_bias_relu_samples": 20,
+    "depth": 768,
+    "elements": 1572864,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.07576,
+    "kernel_min_ms": 0.075072,
+    "kernel_p90_ms": 0.077664,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 1.78814e-07,
+    "relu_clamped_elements": 770218,
+    "relu_positive_elements": 802646,
+    "rows": 1024,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -106,7 +106,7 @@ def test_tensor_parallel_rejects_each_error_through_rank_consensus(error_index, 
         expected = torch.ones(4)
         observed = expected.clone()
         observed[0] += fault
-        with load_lab("llm-training/labs/19_tensor_parallel_linear.py") as lab:
+        with load_lab("advanced-gpu-communication/labs/18_training_tensor_parallel.py") as lab:
             errors[error_index] = lab.relative_l2(torch, observed, expected)
     votes = []
     minimum = object()
@@ -137,7 +137,7 @@ def test_tensor_parallel_rejects_each_error_through_rank_consensus(error_index, 
     )
     namespace.update(math=math, torch=proxy, device="cpu")
     segment = acceptance_segment(
-        "llm-training/labs/19_tensor_parallel_linear.py",
+        "advanced-gpu-communication/labs/18_training_tensor_parallel.py",
         "row_forward_error",
         "timed_input",
     )
@@ -209,13 +209,13 @@ def test_padding_main_rejects_invalid_prompt_before_publishing(
     records = []
     with load_lab("llm-inference/labs/18_padding_bucketing.py") as lab:
         monkeypatch.setattr(lab, "load_torch", lambda: torch)
-        monkeypatch.setattr(lab, "require_h100", lambda _: {})
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(lab, "seed_everything", lambda *args: None)
         monkeypatch.setattr(lab, "cuda_times_ms", lambda *args, **kwargs: [1.0])
         monkeypatch.setattr(
             lab, "write_result", lambda *args, **kwargs: records.append(kwargs)
         )
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "smoke"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
         if fault is None:
             lab.main()
             assert records[0]["correctness"]["equivalent_last_token_logits"] is True

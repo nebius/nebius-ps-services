@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,sweeps_128_time_median_seconds,value,5.14e-05,s
+baseline-trial1,sweeps_256_time_median_seconds,value,3.33e-05,s
+baseline-trial1,sweeps_512_time_median_seconds,value,2.92e-05,s
+repeat-trial1,sweeps_128_time_median_seconds,value,5.41e-05,s
+repeat-trial1,sweeps_256_time_median_seconds,value,3.4000000000000007e-05,s
+repeat-trial1,sweeps_512_time_median_seconds,value,2.9900000000000002e-05,s

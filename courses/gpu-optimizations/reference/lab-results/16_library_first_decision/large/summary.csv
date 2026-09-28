@@ -1,0 +1,13 @@
+variant,metric,case,value,unit
+baseline-trial1,timing_composed_median_seconds,value,0.0002483,s
+baseline-trial1,timing_library_addmm_median_seconds,value,0.00020569999999999999,s
+baseline-trial2,timing_composed_median_seconds,value,0.0002482,s
+baseline-trial2,timing_library_addmm_median_seconds,value,0.0002075,s
+baseline-trial3,timing_composed_median_seconds,value,0.0002459,s
+baseline-trial3,timing_library_addmm_median_seconds,value,0.000204,s
+repeat-trial1,timing_composed_median_seconds,value,0.0002461,s
+repeat-trial1,timing_library_addmm_median_seconds,value,0.0002049,s
+repeat-trial2,timing_composed_median_seconds,value,0.00024890000000000003,s
+repeat-trial2,timing_library_addmm_median_seconds,value,0.0002072,s
+repeat-trial3,timing_composed_median_seconds,value,0.0002515,s
+repeat-trial3,timing_library_addmm_median_seconds,value,0.0002103,s

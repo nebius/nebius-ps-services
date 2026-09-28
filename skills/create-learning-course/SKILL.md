@@ -68,7 +68,8 @@ Before authoring or revising:
 4. Read `references/research-basis.md` when selecting or updating pedagogy.
 5. For practical work, read `references/practical-work.md`. This applies to
    coding labs and non-code case studies; select the appropriate branches.
-6. Inspect the relevant files under `assets/course-workspace-template/`
+6. For full-course builds or downloads, read `references/portable-publication.md`.
+7. Inspect the relevant files under `assets/course-workspace-template/`
    before reuse. Use `assets/textbook-shell.html` and `assets/styles.css`
    for presentation; `assets/diagram-example.svg` demonstrates SVG structure.
 
@@ -113,10 +114,21 @@ and supporting assets. Keep the preservation audit out of learner content.
 
 ### 3. Author The Complete Course
 
-Use the template inventory and four-section order from `course-format.md` for
-**every lesson**: **Objective → How it works → Practice → Mental model**.
+Use the template inventory and lesson order from `course-format.md` for
+**every lesson**: **Objective → How it works → Practice → Mental model →
+References (if included)**. References always come last.
 Name lessons for the concept or relationship taught, not an inventory of tools
 or components. Keep titles specific enough to signal the learning scope.
+
+Use the same shared stylesheet, fonts and heading hierarchy for every course.
+Keep mission and syllabus as authoring inputs, out of the learner-facing page
+and navigation. Preserve their unique audience, prerequisites, readiness,
+outcomes and safety context in the orientation or owning lesson before removing
+those presentation sections. Give each course exactly one Where to Go Next and
+one Glossary, in that order before final Official references, with their own
+sections and TOC entries. Do not create either section per lesson or guide.
+Use numbered lists for Official references and bullets for each distinct
+course-level Where to Go Next option.
 
 Put the observable Objective first. In How it works, define concepts, connect
 necessary prior knowledge, explain purpose and mechanism step by step, and
@@ -127,8 +139,21 @@ Expand unfamiliar abbreviations at first meaningful use and explain what the
 term does; omit expansions only for vocabulary obvious to the stated audience.
 Verify wording in context, never by global replacement. A glossary or link
 cannot substitute for the teaching. Put practice, feedback and retrieval in the
-owning activity. End with a concise Mental model that synthesizes concepts
+owning activity. End the teaching with a concise Mental model that synthesizes concepts
 already explained; it must not introduce prerequisites or new mechanisms.
+
+Collect concrete onward learning options in the single course Where to Go Next,
+tied to completed course competencies. Optional study must not add required
+prerequisites, installations or completion gates.
+
+Collect all taught key terms and abbreviations in the single course Glossary,
+with full expansions where applicable and concise definitions. Merge repeated
+entries while preserving distinct contextual meanings. Sort A–Z,
+case-insensitively by displayed term or abbreviation, not expansion. Include
+ordinary terms when no abbreviations are used; do not invent abbreviations.
+For lesson-only revisions, update the owning course sections when available.
+For standalone lessons, retain first-use definitions and put onward suggestions
+in the handoff; do not add local appendices or an unrequested course package.
 
 Use one exact lesson/lab identity across syllabus, TOC, guide, metadata and
 source. Lab numbering is identity, not a substitute for prerequisite order.
@@ -151,6 +176,11 @@ SVGs, CSS and full selected source listings. Give it an atomic build and a
 read-only stale/parity check. The shell is a layout template, not a Markdown
 renderer or a finished course; follow the build contract in `course-format.md`.
 
+Use the bundled executable build scaffold for new projects; adapt existing sound
+builders without replacing their renderer. Keep bulky downloads external and
+explicitly declared. Self-contained reading does not mean embedding result ZIPs
+or duplicating runtime files already supplied by the execution workflow.
+
 Keep the package standalone. Make runtime requirements explicit only where
 the subject needs them. Do not invent a GPU lab, container, scheduler launcher
 or dependency matrix for a nontechnical course.
@@ -160,9 +190,13 @@ or dependency matrix for a nontechnical course.
 Use the checklist in `publication-safety.md` and the course's own tests:
 
 - Review every lesson semantically and grammatically, not merely by headings
-  or length: conceptual title, four-section order, definitions before use,
-  causal completeness, contextual abbreviations and a final summary that adds
-  no new teaching. Test whether the outcome can be learned from the text.
+  or length: conceptual title, lesson-section order, definitions before use,
+  causal completeness, contextual abbreviations and a Mental model that adds
+  no new teaching. Verify exactly one course Where to Go Next and one Glossary,
+  with no lesson/guide-local copies. Check onward options, glossary coverage,
+  accurate expansions and A–Z keys; keep course Official references last.
+  Test whether the outcome
+  can be learned from the text.
 - Check a meaningful core diagram inside each How it works; global figure
   counts, headings, captions and word counts cannot prove teaching quality.
 - Verify prerequisites, topic ownership, numbering, TOC targets and practice
@@ -171,9 +205,24 @@ Use the checklist in `publication-safety.md` and the course's own tests:
 - For code, verify documented flags, imports/help, outputs and error paths;
   execute only authorized local checks. Keep external and target runs separate.
 - Inspect diagrams for correctness, text fit, overlap and connector meaning.
-  Render the full page at desktop, 390px and 320px widths when permitted.
+  For permitted full-course browser verification, default to headless
+  Playwright Test with an owned Chrome process and isolated context. Render
+  the full page at desktop, 390px and 320px widths.
   Check keyboard use, zoom/reflow, mobile TOC and local scrollers separately
-  from asset-only inspection. Never evade a browser or runtime denial.
+  from asset-only inspection. Combine repeatable assertions with visual review;
+  screenshots alone do not establish interaction correctness. Record artifact
+  identity, actual browser/version, headless mode, viewports, assertion results,
+  screenshots/traces and cleanup in the publication review. Close owned browser
+  resources on success or failure; never reuse a personal browser profile.
+- Keep optional headless, isolated Playwright MCP exploration separate from
+  repeatable acceptance checks. Do not require screen unlock, a foreground
+  window or monitor selection. If browser execution is unavailable or denied,
+  continue permitted authoring with the required browser gate pending; never
+  evade the denial or claim publication readiness. Follow the evidence contract
+  in `publication-safety.md`.
+- Preserve review-only and lesson-only scope: neither implicitly requires
+  browser work. Browser defaults do not authorize dependency installation,
+  publication or lab execution, and do not change course-specific target gates.
 - Run `scripts/check_course.py` on rendered HTML for the bounded mechanical
   checks it documents. Its pass is not semantic, browser or runtime approval.
 - Revise weak explanations and mismatched exercises; do not weaken checks to

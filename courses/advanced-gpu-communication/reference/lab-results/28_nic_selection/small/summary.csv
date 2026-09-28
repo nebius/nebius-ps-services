@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,median_seconds,0,0.0001749760122038424,s
+baseline-trial1,useful_bytes_per_second,0,23970737172.325928,Bps
+candidate-trial1,median_seconds,0,0.0003244889994675759,s
+candidate-trial1,useful_bytes_per_second,0,12925874241.906649,Bps

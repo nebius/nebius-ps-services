@@ -272,6 +272,9 @@ def normalize_jail_persistent_mounts(
     rootfs_path: str = JAIL_EXTERNAL_ROOTFS_PATH,
     system_path: str = JAIL_EXTERNAL_SYSTEM_PATH,
 ) -> tuple[JailPersistentMount, ...]:
+    from .soperator_jail_protection import retained_rootfs_generations
+
+    retained = retained_rootfs_generations(values or {})
     existing_paths = _existing_submount_paths(values or {})
     normalized: list[JailPersistentMount] = []
     explicit_mounts = [_coerce_jail_persistent_mount(item) for item in mounts]
@@ -354,6 +357,16 @@ def normalize_jail_persistent_mounts(
             )
         for blocked_path in system_paths:
             if _paths_overlap(local_path, blocked_path):
+                if any(
+                    local_path != row["localPath"]
+                    and _path_contains(row["localPath"], local_path)
+                    and not any(
+                        part in {".cxcli", ".nebius-cxcli"}
+                        for part in local_path[len(row["localPath"]) :].split("/")
+                    )
+                    for row in retained
+                ):
+                    continue
                 raise ValueError(
                     "jailPersistentMounts.localPath must not overlap active/passive "
                     f"rootfs or cxcli system paths; got {local_path!r} overlapping {blocked_path!r}."
@@ -388,68 +401,8 @@ def _slot_values(rootfs_path: str, slot: str) -> dict[str, str]:
     }
 
 
-def _upsert_pvc_volume_source(
-    volume_sources: list[Any],
-    *,
-    name: str,
-    pvc_name: str,
-) -> None:
-    entry: MutableMapping[str, Any] | None = None
-    duplicate_indexes: list[int] = []
-    for index, item in enumerate(volume_sources):
-        if not isinstance(item, MutableMapping) or str(item.get("name") or "").strip() != name:
-            continue
-        if entry is None:
-            entry = item
-        else:
-            duplicate_indexes.append(index)
-    for index in reversed(duplicate_indexes):
-        del volume_sources[index]
-    if entry is None:
-        entry = {}
-        volume_sources.append(entry)
-
-    entry.clear()
-    entry.update(
-        {
-            "name": name,
-            "persistentVolumeClaim": {"claimName": pvc_name, "readOnly": False},
-            "createPVC": False,
-            "size": "",
-            "storageClassName": "",
-        }
-    )
-
-
-def _existing_pvc_volume_source_claim_name(volume_sources: Sequence[Any], name: str) -> str:
-    for item in volume_sources:
-        if not isinstance(item, Mapping) or str(item.get("name") or "").strip() != name:
-            continue
-        claim_name = str(_mapping(item.get("persistentVolumeClaim")).get("claimName") or "").strip()
-        if claim_name:
-            return claim_name
-    return ""
-
-
-def _referenced_controller_spool_volume_sources(values: Mapping[str, Any]) -> tuple[str, ...]:
-    slurm_nodes = _mapping(values.get("slurmNodes"))
-    controller = _mapping(slurm_nodes.get("controller"))
-    volumes = _mapping(controller.get("volumes"))
-    spool = _mapping(volumes.get("spool"))
-    names: list[str] = []
-    explicit_name = str(spool.get("volumeSourceName") or "").strip()
-    if explicit_name:
-        names.append(explicit_name)
-    volume = _mapping(values.get("volume"))
-    controller_spool = _mapping(volume.get("controllerSpool"))
-    default_name = str(controller_spool.get("name") or "controller-spool").strip()
-    if default_name and default_name not in names:
-        names.append(default_name)
-    return tuple(names)
-
-
-def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Return values with SlurmCluster volumeSources aligned to jail rootfs state."""
+def normalize_jail_storage_intent(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy and normalize storage intent; only the adapter generates volumeSources."""
 
     patched = copy.deepcopy(dict(to_plain_data(values)))
     jail_rootfs_active_source(patched)
@@ -482,14 +435,8 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
     store["rootfsPath"] = rootfs_path
     store["volumeKey"] = volume_key
 
-    volume_sources = patched.get("volumeSources")
-    if not isinstance(volume_sources, list):
-        volume_sources = []
-        patched["volumeSources"] = volume_sources
-
     slots = _mutable_mapping(jail_rootfs, "slots")
     slot_pvcs: dict[str, str] = {}
-    chart_rendered_source_names: set[str] = set()
     for slot in (JAIL_ROOTFS_SLOT_A, JAIL_ROOTFS_SLOT_B):
         defaults = _slot_values(rootfs_path, slot)
         slot_values = _mutable_mapping(slots, slot)
@@ -497,44 +444,32 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
             slot_values.get("volumeSourceName") or defaults["volumeSourceName"]
         ).strip()
         pvc_name = str(slot_values.get("pvcName") or defaults["pvcName"]).strip()
-        local_path = str(slot_values.get("localPath") or defaults["localPath"]).strip()
+        local_path = _normalize_path(
+            slot_values.get("localPath") or defaults["localPath"],
+            field=f"jailRootfs.slots.{slot}.localPath",
+        )
         slot_values["volumeSourceName"] = volume_source_name
         slot_values["pvcName"] = pvc_name
         slot_values["localPath"] = local_path
         slot_pvcs[slot] = pvc_name
-        chart_rendered_source_names.add(volume_source_name)
 
-    for mount in normalize_jail_persistent_mounts(
+    from .soperator_jail_protection import retained_rootfs_generations, validate_rootfs_generations
+
+    if "retainedGenerations" in jail_rootfs:
+        jail_rootfs["retainedGenerations"] = retained_rootfs_generations(patched)
+    validate_rootfs_generations(patched)
+
+    normalize_jail_persistent_mounts(
         _sequence_of_mappings(patched.get(JAIL_PERSISTENT_MOUNTS_VALUES_KEY)),
         values=patched,
         include_home=False,
         store_path=store_path,
         rootfs_path=rootfs_path,
         system_path=system_path,
-    ):
-        chart_rendered_source_names.add(mount.name)
-
-    # The chart renders active/passive slot and persistent-mount volumeSources
-    # from jailRootfs/jailPersistentMounts. During first adoption, the legacy
-    # `jail` alias and all login/worker consumers must remain on the discovered
-    # legacy PVC until the persistent mount identities and passive-slot
-    # population have both completed. After the switch, the active slot becomes
-    # canonical.
-    volume_sources[:] = [
-        item
-        for item in volume_sources
-        if not (
-            isinstance(item, Mapping)
-            and str(item.get("name") or "").strip() in chart_rendered_source_names
-            and str(item.get("name") or "").strip() != volume_key
-        )
-    ]
-    _upsert_pvc_volume_source(
-        volume_sources,
-        name=volume_key,
-        pvc_name=legacy_pvc_name if legacy_active else slot_pvcs[active_slot],
     )
 
+    # Consumer references follow the admitted existing rootfs until the first
+    # switch, then the selected slot. The adapter alone creates their sources.
     active_volume_source = (
         volume_key
         if legacy_active
@@ -584,15 +519,6 @@ def sync_jail_volume_sources(values: Mapping[str, Any]) -> dict[str, Any]:
             if not isinstance(jail, MutableMapping):
                 continue
             volumes["jail"] = {"persistentVolumeClaim": {"claimName": active_pvc_name}}
-    for source_name in _referenced_controller_spool_volume_sources(patched):
-        _upsert_pvc_volume_source(
-            volume_sources,
-            name=source_name,
-            pvc_name=(
-                _existing_pvc_volume_source_claim_name(volume_sources, source_name)
-                or f"{source_name}-pvc"
-            ),
-        )
     return patched
 
 
@@ -620,6 +546,7 @@ def validate_retained_home_layout(values: Mapping[str, Any]) -> None:
     store_path = str(store.get("mountPath") or "")
     normalize_jail_persistent_mounts(
         mounts,
+        values=values,
         include_home=False,
         store_path=store_path,
         rootfs_path=str(store.get("rootfsPath") or store_path + "/rootfs"),
@@ -664,6 +591,10 @@ def apply_jail_persistent_mount_values(
     jail_rootfs.setdefault("passiveSlot", JAIL_ROOTFS_SLOT_B)
     jail_rootfs.pop("home", None)
     store = _mutable_mapping(jail_rootfs, "store")
+    if store.get("mountPath") in {None, store_path}:
+        rootfs_path = _normalize_path(
+            store.get("rootfsPath") or rootfs_path, field="jailRootfs.store.rootfsPath"
+        )
     store["mountPath"] = store_path
     store["rootfsPath"] = rootfs_path
     store.setdefault("volumeKey", "jail")
@@ -674,7 +605,8 @@ def apply_jail_persistent_mount_values(
     slots = _mutable_mapping(jail_rootfs, "slots")
     for slot in (JAIL_ROOTFS_SLOT_A, JAIL_ROOTFS_SLOT_B):
         slot_values = _mutable_mapping(slots, slot)
-        slot_values.update(_slot_values(rootfs_path, slot))
+        for key, value in _slot_values(rootfs_path, slot).items():
+            slot_values.setdefault(key, value)
     adoption = _mutable_mapping(jail_rootfs, "adoption")
     if legacy_active_source:
         adoption["activeSource"] = JAIL_LEGACY_ACTIVE_SOURCE
@@ -703,9 +635,15 @@ def apply_jail_persistent_mount_values(
         rootfs_path=rootfs_path,
         system_path=system_path,
     )
-    patched[JAIL_PERSISTENT_MOUNTS_VALUES_KEY] = [mount.as_values() for mount in mounts]
+    configured_by_path = {
+        _normalize_path(row["mountPath"], field="jailPersistentMounts.mountPath"): row
+        for row in configured_mounts
+    }
+    patched[JAIL_PERSISTENT_MOUNTS_VALUES_KEY] = [
+        {**configured_by_path.get(mount.mount_path, {}), **mount.as_values()} for mount in mounts
+    ]
     patched.pop("jail_home", None)
-    return sync_jail_volume_sources(patched)
+    return normalize_jail_storage_intent(patched)
 
 
 def jail_rootfs_active_source(values: Mapping[str, Any]) -> str:

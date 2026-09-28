@@ -1,0 +1,96 @@
+{
+  "correctness": {
+    "all_grid_programs_completed_and_match_reference": true,
+    "lane_comparison_preserves_useful_work": true
+  },
+  "lab": "11_scheduler_tail",
+  "measurements": {
+    "cases": [
+      {
+        "max_absolute_error": 1.9371509552001953e-07,
+        "model": {
+          "blocks": 528,
+          "tail_blocks": 528,
+          "tail_utilization": 1.0,
+          "waves": 1
+        },
+        "timing": {
+          "median_ms": 0.0162,
+          "min_ms": 0.0147,
+          "p90_ms": 0.0189
+        }
+      },
+      {
+        "max_absolute_error": 1.9371509552001953e-07,
+        "model": {
+          "blocks": 529,
+          "tail_blocks": 1,
+          "tail_utilization": 0.0019,
+          "waves": 2
+        },
+        "timing": {
+          "median_ms": 0.0162,
+          "min_ms": 0.0143,
+          "p90_ms": 0.0211
+        }
+      },
+      {
+        "max_absolute_error": 6.780028343200684e-07,
+        "model": {
+          "blocks": 1056,
+          "tail_blocks": 528,
+          "tail_utilization": 1.0,
+          "waves": 2
+        },
+        "timing": {
+          "median_ms": 0.0174,
+          "min_ms": 0.0159,
+          "p90_ms": 0.0201
+        }
+      },
+      {
+        "max_absolute_error": 6.780028343200684e-07,
+        "model": {
+          "blocks": 1057,
+          "tail_blocks": 1,
+          "tail_utilization": 0.0019,
+          "waves": 3
+        },
+        "timing": {
+          "median_ms": 0.0164,
+          "min_ms": 0.0156,
+          "p90_ms": 0.0177
+        }
+      }
+    ],
+    "derived_blocks_per_sm": 4,
+    "lane_work_model": {
+      "grouped": {
+        "issued_warp_iterations": 24,
+        "modeled_lane_utilization": 1.0,
+        "useful_lane_iterations": 768,
+        "warps": 2
+      },
+      "mixed": {
+        "issued_warp_iterations": 40,
+        "modeled_lane_utilization": 0.6,
+        "useful_lane_iterations": 768,
+        "warps": 2
+      }
+    },
+    "profiler_confirmation_required": true,
+    "registers_per_thread": 8,
+    "resident_block_slots": 528,
+    "shared_bytes_per_block": 0,
+    "sm_count": 132,
+    "warps_per_block": 16
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

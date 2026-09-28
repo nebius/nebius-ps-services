@@ -18,6 +18,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from .deployment_timing import timed
 from .managed_tools import resolve_terraform_binary
 from .terraform_provider import PROVIDER_MODULE_NAME_MAX_LENGTH
 
@@ -95,7 +96,11 @@ def _format_command(cmd: list[str]) -> str:
 
 
 def _terraform_error_blocks(stderr: str) -> tuple[str, ...]:
-    blocks = tuple(block.strip() for block in stderr.split("╷") if "Error:" in block)
+    blocks = tuple(
+        block.strip()
+        for block in re.split(r"╷|(?=^Error:)", stderr, flags=re.MULTILINE)
+        if "Error:" in block
+    )
     if blocks:
         return blocks
     text = stderr.strip()
@@ -187,19 +192,19 @@ def _state_lock_object_hint(lock_path: str) -> str:
 def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> str:
     command_label = _format_command(cmd)
     prefix = f"Terraform command `{command_label}` failed in {cwd}"
-    diagnostics = stderr.strip()
+    diagnostics = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stderr).strip()
     if not diagnostics:
         return prefix
 
     issues: list[str] = []
-    for block in _terraform_error_blocks(stderr):
+    for block in _terraform_error_blocks(diagnostics):
         location_match = re.search(r"on (?P<path>[^\n]+) line (?P<line>\d+)(?:,|:)", block)
         location = None
         if location_match:
             location = f"{location_match.group('path')}:{location_match.group('line')}"
 
         if "Error acquiring the state lock" in block:
-            lock_info = _parse_state_lock_info(stderr)
+            lock_info = _parse_state_lock_info(block)
             who = lock_info.get("Who", "").strip()
             created = lock_info.get("Created", "").strip()
             path = lock_info.get("Path", "").strip()
@@ -220,6 +225,19 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
                     details.append(f"created `{created}`")
                 guidance += " Reported lock metadata: " + ", ".join(details) + "."
             issues.append(guidance)
+            continue
+
+        # Terraform wraps provider errors across lines and adds box margins.
+        detail = " ".join(line.lstrip("│ ").strip() for line in block.splitlines())
+        if "exchange token:" in detail and re.search(
+            r"\blookup \S+(?: on \S+)?: no such host\b", detail
+        ):
+            issues.append(
+                "DNS resolution failed during provider token exchange. "
+                "Check DNS and network connectivity to the token service from this machine, "
+                "then rerun the same command. This diagnostic does not establish invalid "
+                "credentials or a module-code defect."
+            )
             continue
 
         module_name_match = re.search(
@@ -273,13 +291,6 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
             )
             continue
 
-        if location and ".terraform/modules/" in location:
-            issues.append(
-                f"Terraform error originated inside a source module at `{location}`. "
-                "If this is your own module source, validate and fix that module directly "
-                "with `terraform init -backend=false` and `terraform validate`, then rerender."
-            )
-
     if not issues:
         return f"{prefix}:\n{diagnostics}"
 
@@ -287,9 +298,15 @@ def _translate_terraform_failure(*, cmd: list[str], cwd: Path, stderr: str) -> s
 
 
 def _run(
-    cmd: list[str], *, cwd: Path, timeout: int, extra_env: dict[str, str] | None = None
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    extra_env: dict[str, str] | None = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> None:
-    stdout, stderr = _run_capture(cmd, cwd=cwd, timeout=timeout, extra_env=extra_env)
+    options = {"abort_check": abort_check} if abort_check is not None else {}
+    stdout, stderr = _run_capture(cmd, cwd=cwd, timeout=timeout, extra_env=extra_env, **options)
     if stdout:
         sys.stdout.write(stdout)
         if not stdout.endswith("\n"):
@@ -300,14 +317,22 @@ def _run(
             sys.stderr.write("\n")
 
 
+@timed("terraform-subprocess", category="infrastructure")
 def _run_capture(
-    cmd: list[str], *, cwd: Path, timeout: int, extra_env: dict[str, str] | None = None
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    extra_env: dict[str, str] | None = None,
+    abort_check: Callable[[], str | None] | None = None,
 ) -> tuple[str, str]:
+    from .owned_process import run as owned_run
+
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
     try:
-        completed = subprocess.run(
+        completed = owned_run(
             cmd,
             cwd=cwd,
             check=True,
@@ -315,6 +340,7 @@ def _run_capture(
             env=env,
             capture_output=True,
             text=True,
+            abort_check=abort_check,
         )
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
@@ -332,6 +358,7 @@ def _run_capture(
     return completed.stdout or "", completed.stderr or ""
 
 
+@timed("terraform-subprocess", category="infrastructure")
 def _stream_json_events(
     cmd: list[str],
     *,
@@ -345,7 +372,9 @@ def _stream_json_events(
     if extra_env:
         env.update(extra_env)
 
-    process = subprocess.Popen(
+    from .owned_process import popen as owned_popen
+
+    process = owned_popen(
         cmd,
         cwd=cwd,
         env=env,
@@ -384,24 +413,40 @@ def _stream_json_events(
     stderr_thread.start()
 
     deadline = time.monotonic() + timeout
+    next_abort_check = 0.0
+
+    def stop_process() -> None:
+        with suppress(Exception):
+            process.terminate()
+        with suppress(Exception):
+            process.wait(timeout=5)
+        with suppress(Exception):
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+    def check_abort(*, force: bool = False) -> None:
+        nonlocal next_abort_check
+        if abort_check is None or (not force and time.monotonic() < next_abort_check):
+            return
+        try:
+            reason = abort_check()
+        except BaseException:
+            stop_process()
+            raise
+        # Authority checks can make remote calls. Measure from their completion
+        # so a slow check does not force another one for every queued JSON line.
+        next_abort_check = time.monotonic() + 0.25
+        if reason:
+            stop_process()
+            raise RuntimeError(
+                f"Terraform command `{_format_command(cmd)}` aborted early in {cwd}: {reason}"
+            )
+
     closed_streams = 0
     try:
         while closed_streams < 2:
-            if abort_check is not None:
-                abort_reason = abort_check()
-                if abort_reason:
-                    with suppress(Exception):
-                        process.terminate()
-                    with suppress(Exception):
-                        process.wait(timeout=5)
-                    with suppress(Exception):
-                        if process.poll() is None:
-                            process.kill()
-                            process.wait(timeout=5)
-                    raise RuntimeError(
-                        f"Terraform command `{_format_command(cmd)}` aborted early in {cwd}: "
-                        f"{abort_reason}"
-                    )
+            check_abort()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.kill()
@@ -435,20 +480,33 @@ def _stream_json_events(
                         event_callback(event)
             else:
                 stdout_fallback.append(text)
+    except BaseException:
+        stop_process()
+        raise
     finally:
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
 
-    remaining = deadline - time.monotonic()
     try:
-        return_code = process.wait(timeout=max(0.0, remaining))
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        with suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=5)
-        raise RuntimeError(
-            f"Terraform command `{_format_command(cmd)}` timed out after {timeout} seconds in {cwd}"
-        ) from exc
+        while True:
+            check_abort()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                with suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+                raise RuntimeError(
+                    f"Terraform command `{_format_command(cmd)}` timed out after {timeout} seconds in {cwd}"
+                )
+            try:
+                return_code = process.wait(timeout=min(0.25, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:
+        stop_process()
+        raise
+    check_abort(force=True)
     if return_code == 0:
         return
 
@@ -476,15 +534,40 @@ def terraform_init(
     *,
     extra_env: dict[str, str] | None = None,
     backend: bool = True,
+    quiet: bool = False,
 ) -> None:
     """Run terraform init in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
-    cmd = [terraform_bin, "init", "-input=false"]
+    from .deployment_preparation import current_preparation, initialized_identity, terraform_inputs
+
+    prepared = current_preparation()
+    key = (
+        prepared.key(infra_dir, terraform_bin, extra_env, backend=backend, initialization=True)
+        if prepared
+        else ""
+    )
+    identity = initialized_identity(infra_dir)
+    if prepared is not None and identity is not None and prepared.initialized.get(key) == identity:
+        return
+    cmd = [terraform_bin, "init", "-input=false", "-no-color"]
     if not backend:
         cmd.append("-backend=false")
-    _run(cmd, cwd=infra_dir, timeout=300, extra_env=extra_env)
+    before_inputs = terraform_inputs(infra_dir, initialization=True, ignore_lock=True)
+    run = _run_capture if quiet else _run
+    run(cmd, cwd=infra_dir, timeout=300, extra_env=extra_env)
+    identity = initialized_identity(infra_dir)
+    if (
+        prepared is not None
+        and identity is not None
+        and before_inputs == terraform_inputs(infra_dir, initialization=True, ignore_lock=True)
+    ):
+        # init can create/update the provider lock; remember its postimage.
+        key = prepared.key(
+            infra_dir, terraform_bin, extra_env, backend=backend, initialization=True
+        )
+        prepared.initialized[key] = identity
 
 
 def terraform_plan(
@@ -496,14 +579,25 @@ def terraform_plan(
     plan_file: Path | None = None,
     destroy: bool = False,
     targets: Sequence[str] = (),
+    replace_addresses: Sequence[str] = (),
 ) -> None:
     """Run terraform plan in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if initialize:
-        terraform_init(infra_dir, extra_env=extra_env)
+        if quiet:
+            terraform_init(infra_dir, extra_env=extra_env, quiet=True)
+        else:
+            terraform_init(infra_dir, extra_env=extra_env)
     cmd = [terraform_bin, "plan", "-input=false", "-lock-timeout=5m"]
+    if destroy and replace_addresses:
+        raise ValueError("Terraform replacement planning cannot use destroy mode")
     if destroy:
         cmd.append("-destroy")
+    for address in replace_addresses:
+        normalized = str(address).strip()
+        if not normalized or normalized.startswith("-") or any(c.isspace() for c in normalized):
+            raise ValueError("Terraform replacement address is invalid")
+        cmd.append(f"-replace={normalized}")
     for target in targets:
         normalized = str(target).strip()
         if (
@@ -549,12 +643,22 @@ def terraform_validate(
     terraform_bin = _require_terraform()
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
+    from .deployment_preparation import current_preparation, initialized_identity
+
+    prepared = current_preparation()
+    identity = initialized_identity(infra_dir)
+    key = prepared.key(infra_dir, terraform_bin, extra_env) + str(identity) if prepared else ""
+    if prepared is not None and identity is not None and key in prepared.validated:
+        return
     _run(
         [terraform_bin, "validate", "-no-color"],
         cwd=infra_dir,
         timeout=300,
         extra_env=extra_env,
     )
+
+    if prepared is not None and identity is not None:
+        prepared.validated.add(key)
 
 
 def terraform_state_list(
@@ -652,12 +756,17 @@ def terraform_apply(
     apply_args.append("-lock-timeout=5m")
     if resolved_plan is not None:
         apply_args.append(str(resolved_plan))
+    if abort_check is not None:
+        abort_reason = abort_check()
+        if abort_reason:
+            raise RuntimeError(f"Terraform apply aborted before launch: {abort_reason}")
     if event_callback is None:
         _run(
             apply_args,
             cwd=infra_dir,
             timeout=7200,
             extra_env=extra_env,
+            **({"abort_check": abort_check} if abort_check is not None else {}),
         )
         return
     json_apply_args = [terraform_bin, "apply", "-json", *apply_args[2:]]
@@ -683,12 +792,20 @@ def terraform_destroy(
     terraform_bin = _require_terraform()
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
+    from .destroy_target import require_non_mk8s_destroy
+
+    current = terraform_show_json(infra_dir, extra_env=extra_env, initialize=False, quiet=True)
+    values = current.get("values", {})
+    if not isinstance(values, dict):
+        raise RuntimeError("Terraform destroy state inventory is incomplete")
+    require_non_mk8s_destroy({}, state_values=values)
     if event_callback is None:
         _run(
             [terraform_bin, "destroy", "-input=false", "-auto-approve", "-lock-timeout=5m"],
             cwd=infra_dir,
             timeout=7200,
             extra_env=extra_env,
+            **({"abort_check": abort_check} if abort_check is not None else {}),
         )
         return
     _stream_json_events(
@@ -809,13 +926,17 @@ def terraform_show_json(
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
     plan_file: Path | None = None,
+    quiet: bool = False,
 ) -> dict[str, object]:
     """Render the current Terraform state or a saved plan as JSON."""
     terraform_bin = _require_terraform()
     if not infra_dir.exists():
         raise RuntimeError(f"Rendered infra directory does not exist: {infra_dir}")
     if initialize:
-        terraform_init(infra_dir, extra_env=extra_env)
+        if quiet:
+            terraform_init(infra_dir, extra_env=extra_env, quiet=True)
+        else:
+            terraform_init(infra_dir, extra_env=extra_env)
     command = [terraform_bin, "show", "-json"]
     if plan_file is not None:
         resolved_plan, _plan_identity = _saved_plan_identity(
@@ -831,7 +952,7 @@ def terraform_show_json(
         timeout=120,
         extra_env=extra_env,
     )
-    if stderr:
+    if stderr and not quiet:
         sys.stderr.write(stderr)
         if not stderr.endswith("\n"):
             sys.stderr.write("\n")

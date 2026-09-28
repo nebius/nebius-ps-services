@@ -35,7 +35,8 @@ class ChecksLifecycle:
         return ChecksPhaseContext(
             phase or ChecksPhase(self.checks.state.get("lifecyclePhase", "maintenance")),
             self.checks.state.get("reservation") or "cxcli_" + self.checks.operation_id[:16],
-            self.checks.state.get("passive", {}).get("status") == "enabled-fallback"
+            not self.checks.policy.passive.get("supported")
+            or self.checks.state.get("passive", {}).get("status") == "enabled-fallback"
             or self.checks.state.get("passive", {}).get("fallbackIntent", False),
             self.checks.state["freshInstall"],
             self.admission.state.get("partitions"),
@@ -54,9 +55,12 @@ class ChecksLifecycle:
         self.checks._verify_isolation()
         self.admission.establish()
         self._apply(ChecksPhase.MAINTENANCE)
+        paused = not self.context().passive_fallback
         try:
-            return self.passive.verify(paused=not self.context().passive_fallback)
+            return self.passive.verify(paused=paused)
         except RuntimeError:
+            if not paused:
+                raise
             self.checks._verify_isolation()
             self.admission.verify()
             self.passive.state["fallbackIntent"] = True

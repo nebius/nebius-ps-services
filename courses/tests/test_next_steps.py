@@ -1,30 +1,30 @@
 """Optional current-technology reading stays complete, safe and navigable."""
 
+from course_builder import pages as cb_pages
 import re
 
 import pytest
 
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_next_steps_are_complete_optional_closing_guides(course):
-    builder = load_builder()
     source = ROOT / course / "NEXT-STEPS.md"
     assert source.is_file()
     markdown = source.read_text()
     assert markdown.startswith("# Where to Go Next\n")
     assert "Research reviewed" not in markdown
     assert "optional" in markdown
-    topics = re.split(r"(?m)^## ", markdown)[1:]
+    topics = re.split(r"(?m)^- \*\*", markdown)[1:]
     assert 5 <= len(topics) <= 6
     for topic in topics:
         assert "**Investigate**" in topic
         assert "**Scope**" in topic
         assert re.search(r"\[[^]]+\]\(https://", topic)
     page = (ROOT / course / "index.html").read_text()
-    assert page == builder.render_course(course)
+    assert page == cb_pages.render_course(course)
     assert page.count('id="next-steps"') == 1
     assert page.count('data-source="NEXT-STEPS.md"') == 1
     closing = re.search(r'<section id="next-steps">.*?</section>', page, re.S)[0]

@@ -1,4 +1,4 @@
-"""Bind upstream check workloads to the authoritative active jail claim."""
+"""Bind upstream check workloads to authoritative storage and GPU allocations."""
 
 from __future__ import annotations
 
@@ -12,6 +12,42 @@ import yaml
 
 CHECKS_RELEASE = "soperator-fluxcd-soperator-activechecks"
 AUXILIARY_CRONJOB = "run-extensive-check-on-reservations"
+
+
+def bind_checks_gpu_allocation(
+    overrides: Mapping[str, Any],
+    nodesets: Sequence[Mapping[str, Any]],
+    *,
+    allow_mixed: bool = False,
+) -> dict[str, Any]:
+    """Bind the upstream recurring-job default before desired values are frozen."""
+    result = copy.deepcopy(dict(overrides))
+    counts: set[int] = set()
+    for node in nodesets:
+        if node.get("gpu", {}).get("enabled") is not True:
+            continue
+        count = node.get("slurmd", {}).get("resources", {}).get("gpu")
+        if type(count) is not int or count <= 0:
+            raise ValueError("ActiveChecks require a positive integral GPU count per GPU NodeSet")
+        counts.add(count)
+    if not counts:
+        return result
+    job = result.setdefault("slurmJob", {})
+    if not isinstance(job, dict):
+        raise ValueError("ActiveChecks GPU allocation requires a slurmJob mapping")
+    if "gpusPerNode" not in job:
+        if len(counts) != 1 and not allow_mixed:
+            raise ValueError(
+                "ActiveChecks on mixed GPU shapes require explicit slurmJob.gpusPerNode"
+            )
+        job["gpusPerNode"] = str(min(counts))
+    allocation = job["gpusPerNode"]
+    if not (
+        type(allocation) is int
+        or (isinstance(allocation, str) and re.fullmatch(r"[1-9][0-9]*", allocation))
+    ) or not 0 < int(allocation) <= min(counts):
+        raise ValueError("ActiveChecks GPU allocation must be positive and fit every GPU NodeSet")
+    return result
 
 
 def _retained_volume(mount: Mapping[str, Any]) -> dict[str, Any]:
@@ -181,8 +217,13 @@ def bind_auxiliary_spec(
     mounts: Sequence[Mapping[str, Any]],
     *,
     cluster: str | None = None,
+    suspended: bool = False,
 ) -> dict[str, Any]:
     result = copy.deepcopy(dict(spec))
+    if suspended:
+        if result.get("suspend") is not False:
+            raise ValueError("upstream auxiliary suspension contract changed")
+        result["suspend"] = True
     pod = result["jobTemplate"]["spec"]["template"]["spec"]
     if pod["volumes"][0] != {"name": "jail", "persistentVolumeClaim": {"claimName": "jail-pvc"}}:
         raise ValueError("upstream auxiliary jail template changed")
@@ -223,11 +264,15 @@ def auxiliary_post_renderers(
     values: Mapping[str, Any], *, suspended: bool = False
 ) -> list[dict[str, Any]]:
     """Bind all hardcoded auxiliary resource names to the approved cluster."""
+    from .soperator_deployment_profile import auxiliary_checks_suspended
+
     cluster = values["slurmCluster"]["overrideValues"].get("clusterName")
     if not isinstance(cluster, str) or re.fullmatch(r"[a-z0-9][a-z0-9.-]*", cluster) is None:
         raise ValueError("Auxiliary checks require the exact approved cluster name")
     result = checks_post_renderers(
-        active_checks_pvc(values), retained_check_mounts(values), suspended=suspended
+        active_checks_pvc(values),
+        retained_check_mounts(values),
+        suspended=suspended or auxiliary_checks_suspended(values),
     )
     renderer = result[0]["kustomize"]["patches"][0]
     operations = yaml.safe_load(renderer["patch"])

@@ -7,12 +7,15 @@ import yaml
 
 from nebius_cxcli.soperator_flux_graph import (
     SOPERATOR_GRAPH_CONFIGMAP,
-    expected_soperator_release_names,
     render_soperator_flux_graph_documents,
     soperator_graph_post_render_patches,
     target_soperator_release_name,
 )
-from soperator_fixtures import sample_jail_logs_binding, sample_snapshot
+from soperator_fixtures import (
+    expected_soperator_release_names,
+    sample_jail_logs_binding,
+    sample_snapshot,
+)
 
 
 def _core_values() -> dict[str, object]:
@@ -72,7 +75,9 @@ def test_core_graph_uses_only_immutable_sources() -> None:
     values = _core_values()
     lock = _snapshot(values)
 
-    documents = render_soperator_flux_graph_documents(lock, values)
+    documents = render_soperator_flux_graph_documents(
+        lock, values, release_graph=lock.release_graph
+    )
     repositories = [item for item in documents if item["kind"] == "OCIRepository"]
     configmap = next(
         item
@@ -99,13 +104,18 @@ def test_post_render_replaces_every_child_chart_with_locked_chart_ref() -> None:
     values = _core_values()
     lock = _snapshot(values)
 
-    patches = soperator_graph_post_render_patches(lock, values)
+    patches = soperator_graph_post_render_patches(lock, values, release_graph=lock.release_graph)
 
-    assert {item["target"]["name"] for item in patches} == set(
-        expected_soperator_release_names(values)
-    )
+    assert {
+        item["target"]["name"]
+        for item in patches
+        if isinstance(yaml.safe_load(item["patch"]), list)
+    } == set(expected_soperator_release_names(values))
     for item in patches:
         operations = yaml.safe_load(item["patch"])
+        if isinstance(operations, dict):
+            assert operations["metadata"]["labels"]["soperator.nebius.ai/release-stage"]
+            continue
         assert operations[0] == {"op": "remove", "path": "/spec/chart"}
         chart_ref = operations[1]["value"]
         assert chart_ref["kind"] in {"OCIRepository", "HelmChart"}
@@ -115,17 +125,13 @@ def test_post_render_replaces_every_child_chart_with_locked_chart_ref() -> None:
         )
         assert renamed["value"] == target_soperator_release_name(item["target"]["name"])
         assert not any(operation["path"] == "/metadata/annotations" for operation in operations)
-        assert any(
-            operation["path"] == "/metadata/labels/soperator.nebius.ai~1release-stage"
-            for operation in operations
-        )
 
 
 def test_post_render_repairs_exact_controller_storage_shape() -> None:
     values = _core_values()
     lock = _snapshot(values)
 
-    patches = soperator_graph_post_render_patches(lock, values)
+    patches = soperator_graph_post_render_patches(lock, values, release_graph=lock.release_graph)
 
     slurm_patch = next(
         item for item in patches if item["target"]["name"] == "soperator-fluxcd-slurm-cluster"
@@ -183,7 +189,9 @@ def test_post_render_disables_cleanup_only_on_exact_vm_stack_raw_child() -> None
     values["observability"] = {"enabled": True, "vmStack": {"enabled": True}}
     lock = _vm_stack_snapshot(values)
 
-    patches = soperator_graph_post_render_patches(lock, values, adapter_documents=adapter)
+    patches = soperator_graph_post_render_patches(
+        lock, values, release_graph=lock.release_graph, adapter_documents=adapter
+    )
 
     vm_stack_patch = next(
         item for item in patches if item["target"]["name"] == "soperator-fluxcd-vm-stack"
@@ -228,7 +236,9 @@ def test_post_render_does_not_patch_changed_vm_stack_identity() -> None:
         _vm_stack_snapshot(values, package_sha256="sha256:" + "d" * 64),
         _vm_stack_snapshot(values, chart_key="certManager"),
     ):
-        patches = soperator_graph_post_render_patches(lock, values, adapter_documents=adapter)
+        patches = soperator_graph_post_render_patches(
+            lock, values, release_graph=lock.release_graph, adapter_documents=adapter
+        )
         vm_stack_patch = next(
             item for item in patches if item["target"]["name"] == "soperator-fluxcd-vm-stack"
         )
@@ -334,6 +344,7 @@ def test_readiness_contract_binds_exact_storage_and_nodesets() -> None:
     documents = render_soperator_flux_graph_documents(
         lock,
         values,
+        release_graph=lock.release_graph,
         adapter_documents=adapter_documents,
     )
     configmap = next(item for item in documents if item["kind"] == "ConfigMap")

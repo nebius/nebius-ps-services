@@ -1,0 +1,17 @@
+{
+  "correctness": {},
+  "lab": "30_engine_profile",
+  "measurements": {
+    "elapsed_ms": 411.49,
+    "model_count": null,
+    "trials_required_for_public_claim": 3,
+    "usage": {}
+  },
+  "parameters": {
+    "max_tokens": 16,
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

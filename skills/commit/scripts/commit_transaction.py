@@ -1127,7 +1127,7 @@ def _recover_post_commit_for_prepare(
                 },
             )
         raise TransactionError(
-            "repository history moved outside the transaction; run a fresh explicit $commit"
+            "repository history moved outside the transaction; request a fresh commit after resolving the blocker"
         )
     if claim["state"] == "REVIEW_REQUIRED" and (
         claim.get("commit_head") != head or claim.get("commit_tree") != tree
@@ -1188,6 +1188,66 @@ def _recover_post_commit_for_prepare(
     }
 
 
+def _bind_direct_intent(
+    arguments: argparse.Namespace, root: Path, path: Path, private_root: Path
+) -> None:
+    """Bind the root agent's semantic decision to a hook-owned turn receipt.
+
+    The receipt proves origin and freshness, not natural-language meaning.
+    The calling root agent owns that judgment under the skill instructions.
+    """
+    action = getattr(arguments, "requested_action", None)
+    supplied_digest = getattr(arguments, "intent_sha256", None)
+    if action not in {"commit", "commit-push"} or not supplied_digest:
+        raise TransactionError("direct preparation requires a receipt-bound requested action")
+    if path != expected_authorization_path(root, arguments.session_id):
+        raise TransactionError("commit authorization path is not canonical for this session")
+    receipt_path = path.with_name("intent.json")
+    if not _safe_private_file(receipt_path, private_root):
+        raise TransactionError("current root-turn commit intent receipt is unavailable or unsafe")
+    receipt = _load_json(receipt_path, "commit intent receipt")
+    identity = _identity(root)
+    expected = {
+        "schema": "commit-transaction.intent.v1",
+        "repo_root": identity["repo_root"],
+        "worktree": identity["worktree"],
+        "common_dir": identity["common_dir"],
+        "ref": identity["ref"],
+        "base_head": identity["head"],
+        "session_sha256": _digest_text(arguments.session_id),
+    }
+    if (
+        set(receipt) != {*expected, "turn_sha256", "prompt_sha256"}
+        or any(receipt.get(key) != value for key, value in expected.items())
+        or any(not isinstance(receipt.get(key), str) or not DIGEST_RE.fullmatch(receipt[key])
+               for key in ("turn_sha256", "prompt_sha256"))
+        or _digest_bytes(_stable_json(receipt)) != supplied_digest
+    ):
+        raise TransactionError("commit intent receipt does not match the current request and repository")
+    if action == "commit-push" and arguments.allow_default_branch:
+        raise TransactionError("commit-push never authorizes default-branch commits")
+    authorization = {
+        **receipt,
+        "schema": AUTH_SCHEMA,
+        "state": "AUTHORIZED",
+        "owner": "direct",
+        "owner_evidence_path": None,
+        "owner_evidence_sha256": None,
+        "allow_default_branch": bool(arguments.allow_default_branch),
+    }
+    if path.exists() or path.is_symlink():
+        if not _safe_private_file(path, private_root):
+            raise TransactionError("commit authorization path is unsafe")
+        prior = _load_json(path, "commit authorization")
+        if prior.get("owner") != "direct":
+            raise TransactionError("root intent cannot replace delegated authorization")
+        if prior.get("turn_sha256") == receipt["turn_sha256"]:
+            if prior != authorization:
+                raise TransactionError("commit intent was already consumed or changed within this turn")
+            return
+    _atomic_json(path, authorization)
+
+
 def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     root = _canonical_repo(arguments.repo_root)
     authorization_path = Path(arguments.authorization).resolve(strict=False)
@@ -1195,9 +1255,17 @@ def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     identity = _identity(root)
     with _repository_lock(Path(identity["common_dir"])):
         private_root = _transaction_root(Path(identity["common_dir"]))
+        direct_assertion = bool(
+            getattr(arguments, "requested_action", None)
+            or getattr(arguments, "intent_sha256", None)
+        )
+        if direct_assertion:
+            _bind_direct_intent(arguments, root, authorization_path, private_root)
         if not _safe_private_file(authorization_path, private_root):
             raise TransactionError("commit authorization path is unsafe")
         authorization = _load_json(authorization_path, "commit authorization")
+        if authorization.get("owner") == "direct" and not direct_assertion:
+            raise TransactionError("direct preparation requires a receipt-bound requested action")
         _validate_authorization(
             authorization, root, arguments.session_id, authorization_path
         )
@@ -1365,7 +1433,7 @@ def _reconcile_committed(
             "HEAD is not the transaction's exact direct child",
         )
         raise TransactionError(
-            "repository history moved outside the transaction; run a fresh explicit $commit"
+            "repository history moved outside the transaction; request a fresh commit after resolving the blocker"
         )
     if tree == claim["candidate_tree"] and not _status(root):
         committed = {
@@ -1482,7 +1550,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
                 "repository identity, index, or status changed",
             )
             raise TransactionError(
-                "commit claim is stale; run a fresh explicit $commit"
+                "commit claim is stale; request a fresh commit after resolving the blocker"
             )
         candidate_tree, candidate_index_sha256 = _preview_tree(root, claim_path.parent)
         if (
@@ -1491,7 +1559,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
         ):
             _mark_claim(claim_path, claim, "STALE", "candidate tree changed")
             raise TransactionError(
-                "commit claim is stale because the candidate changed; run a fresh explicit $commit"
+                "commit claim is stale because the candidate changed; request a fresh commit after resolving the blocker"
             )
         conflicts = _active_worktree_claims(_primary_worktree(root), claim["ref"])
         if conflicts:
@@ -1524,7 +1592,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
                 return reconciled
             _mark_claim(claim_path, claim, "STALE", "normal-hook git commit failed")
             raise TransactionError(
-                "normal-hook git commit failed; run a fresh explicit $commit"
+                "normal-hook git commit failed; request a fresh commit after resolving the blocker"
             )
         result = _reconcile_committed(root, claim, claim_path)
         if result is None:  # pragma: no cover - commit success must move HEAD
@@ -1609,6 +1677,8 @@ def _parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--session-id", required=True)
     prepare_parser.add_argument("--authorization", required=True)
     prepare_parser.add_argument("--claim", required=True)
+    prepare_parser.add_argument("--requested-action", choices=("commit", "commit-push"))
+    prepare_parser.add_argument("--intent-sha256")
     prepare_parser.add_argument("--allow-default-branch", action="store_true")
     execute_parser = subparsers.add_parser("execute")
     execute_parser.add_argument("--repo-root", required=True)

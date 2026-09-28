@@ -1,0 +1,19 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "13_h100_preflight",
+  "measurements": {
+    "compute_capability": 9,
+    "driver_api_version": 13030,
+    "global_memory_bytes": 150109880320,
+    "gpu_compute_capability": 9,
+    "runtime_version": 13030,
+    "sm_count": 132
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

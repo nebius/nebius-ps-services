@@ -16,10 +16,10 @@ __global__ void fused_scale_bias_relu(const float* input, const float* bias, flo
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 02_fused_elementwise [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 02_fused_elementwise [--profile small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 4099, 1U << 25);
-    require_h100();
+    require_course_gpu();
     std::vector<float> input(count), bias(count), expected(count), separate_observed(count), fused_observed(count);
     for (std::size_t index = 0; index < count; ++index) {
       input[index] = static_cast<float>(static_cast<int>(index % 101) - 50) / 25.0F;
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
     print_timing("separate", separate_timing);
     print_timing("fused", fused_timing);
     std::cout << "baseline_correctness=passed\ncandidate_correctness=passed\nlogical_separate_bytes=" << count * sizeof(float) * 5 << "\nlogical_fused_bytes=" << count * sizeof(float) * 3 << '\n';
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

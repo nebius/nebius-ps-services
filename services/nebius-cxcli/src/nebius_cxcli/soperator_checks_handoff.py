@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 
 def _acceptance_binding(checks: SoperatorChecksExecution, owner: str) -> dict[str, Any]:
+    from .soperator_acceptance import terminal_proof
+
     state = checks.state
+    validation = terminal_proof(state, checks.policy)
     if state.get("phase") not in {"accepted", "restored"} or not state.get("jobs"):
         raise RuntimeError("schedule handoff requires complete fresh acceptance")
     binding = {
@@ -26,7 +29,7 @@ def _acceptance_binding(checks: SoperatorChecksExecution, owner: str) -> dict[st
         "fingerprint": state["reservationFingerprint"],
         "principalUid": state["principalUid"],
         "acceptanceSha256": checks_digest(
-            {"acceptance": state["acceptance"], "jobs": state["jobs"]}
+            {"acceptance": state["acceptance"], "jobs": state["jobs"], "validation": validation}
         ),
     }
     if checks.lifecycle is not None:

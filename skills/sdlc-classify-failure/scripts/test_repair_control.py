@@ -10,8 +10,10 @@ import multiprocessing
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("repair_control.py")
@@ -288,6 +290,159 @@ class RepairControlTests(unittest.TestCase):
         self.assertEqual(classification["next_recommended_skill"], "sdlc-create-plan")
         self.assertEqual(classification["corrective_mode"], "corrective_plan_v_next")
         self.assertNotEqual(classification["next_recommended_skill"], "troubleshoot")
+
+    def environment_recovery_fixture(self, proposed="ENVIRONMENT_DEFECT"):
+        integration = self.run_dir / "worktrees" / "FEAT-001" / "integration"
+        integration.mkdir(parents=True)
+        for arguments in (
+            ["init", "-b", "integration"],
+            ["config", "user.name", "Repair Test"],
+            ["config", "user.email", "repair@example.com"],
+            ["commit", "--allow-empty", "-m", "baseline"],
+        ):
+            subprocess.run(
+                ["git", *arguments], cwd=integration, check=True, capture_output=True
+            )
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=integration, text=True
+        ).strip()
+        event = self.record_event(failure_payload(proposed=proposed, commit=head))
+        classification = self.classify(event)
+        coordinator = self.run_dir / "execution/FEAT-001/coordinator.json"
+        coordinator.parent.mkdir(parents=True)
+        coordinator.write_text(
+            json.dumps(
+                {
+                    "schema": "agentic-sdlc/execution-coordinator-v7",
+                    "status": "integrated",
+                    "active_wave": None,
+                    "cleanup_retained": [],
+                    "integration_worktree": str(integration),
+                    "integration_head": head,
+                    "integration_branch": "integration",
+                }
+            )
+        )
+        (self.run_dir / "current-state.json").write_text(
+            json.dumps(
+                {
+                    "fingerprint_ids": [
+                        f"{k}:{v}" for k, v in event["fingerprints"].items()
+                    ]
+                }
+            )
+        )
+        payload = revalidation_payload(self.run_dir, "evaluation", 0, commit=head)
+        payload.update(
+            schema="agentic-sdlc/environment-recovery-v1",
+            event_id=event["event_id"],
+            classification_id=classification["classification_id"],
+        )
+        return event, classification, payload, integration
+
+    def test_environment_gate_recovery_preserves_failure_and_budget(self):
+        event, classification, payload, _ = self.environment_recovery_fixture()
+        before = repair_control._load_control(self.run_dir, "FEAT-001")
+        result = repair_control.record_environment_recovery(self.run_dir, payload)
+        self.assertTrue(result["created"])
+        self.assertEqual(result["control"]["status"], "resolved")
+        for key in ("route_history", "feature_dispatches"):
+            self.assertEqual(result["control"][key], before[key])
+        self.assertEqual(result["recovery"]["invalidations"], before["invalidations"])
+        self.assertEqual(result["control"]["invalidations"], [])
+        self.assertEqual(result["control"]["active_blocker"]["total_attempts"], 0)
+        self.assertEqual(
+            repair_control._load_event(self.run_dir, "FEAT-001", event["event_id"]),
+            event,
+        )
+        self.assertEqual(
+            repair_control._load_classification(
+                self.run_dir, "FEAT-001", classification["classification_id"]
+            ),
+            classification,
+        )
+        replay = repair_control.record_environment_recovery(self.run_dir, payload)
+        self.assertFalse(replay["created"])
+        self.assertEqual(replay["control"], result["control"])
+
+        # Exercise the actual existing Stop consumer with a real repair pointer.
+        hook = MODULE_PATH.parents[2] / "sdlc-start/assets/hooks/stop_sdlc_continue.py"
+        code = (
+            "import importlib.util,sys,types; "
+            "s=importlib.util.spec_from_file_location('environment_stop_probe',sys.argv[1]); "
+            "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+            "a=types.SimpleNamespace(run_dir=m.Path(sys.argv[2])); "
+            "state={'current_feature':'FEAT-001','next_recommended_skill':'sdlc-update-documents',"
+            "'repair':{'schema':'agentic-sdlc/repair-state-pointer-v1',"
+            "'control':'repairs/FEAT-001/repair-control.json','failure_event':sys.argv[3]}}; "
+            "assert m._repair_stop_reason(a,state) is None"
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                code,
+                str(hook),
+                str(self.run_dir),
+                f"repairs/FEAT-001/events/{event['event_id']}.json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_environment_recovery_rejects_non_environment_classification(self):
+        _, _, payload, _ = self.environment_recovery_fixture("POLICY_BLOCK")
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_environment_recovery(self.run_dir, payload)
+
+    def test_environment_recovery_preserves_other_pending_invalidations(self):
+        _, _, payload, _ = self.environment_recovery_fixture()
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        control = json.loads(path.read_text())
+        control["invalidations"].append({"surface": "tests", "event_id": "other"})
+        path.write_text(json.dumps(control))
+        before = path.read_bytes()
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_environment_recovery(self.run_dir, payload)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_environment_recovery_rejects_stale_identity_and_dirty_git(self):
+        _, _, payload, integration = self.environment_recovery_fixture()
+        for key, value in (
+            ("event_id", "f" * 64),
+            ("classification_id", "f" * 64),
+            ("integration_commit", "f" * 40),
+            ("surface", "validation"),
+            ("evidence_digest", "f" * 64),
+        ):
+            with (
+                self.subTest(key=key),
+                self.assertRaises(repair_control.RepairControlError),
+            ):
+                repair_control.record_environment_recovery(
+                    self.run_dir, dict(payload, **{key: value})
+                )
+        (integration / "dirty.txt").write_text("uncommitted")
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_environment_recovery(self.run_dir, payload)
+
+    def test_environment_recovery_rejects_failed_gate_and_changed_fingerprints(self):
+        _, _, payload, _ = self.environment_recovery_fixture()
+        evidence = self.run_dir / payload["evidence_reference"]
+        gate = json.loads(evidence.read_text())
+        gate["status"] = "failed"
+        evidence.write_text(json.dumps(gate))
+        payload["evidence_digest"] = hashlib.sha256(evidence.read_bytes()).hexdigest()
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_environment_recovery(self.run_dir, payload)
+        gate["status"] = "passed"
+        evidence.write_text(json.dumps(gate))
+        payload["evidence_digest"] = hashlib.sha256(evidence.read_bytes()).hexdigest()
+        state = self.run_dir / "current-state.json"
+        state.write_text(state.read_text().replace(digest("2"), digest("9")))
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_environment_recovery(self.run_dir, payload)
 
     def test_ambiguous_evaluation_routes_to_troubleshoot_exactly_once(self) -> None:
         event = self.record_event(
@@ -596,6 +751,21 @@ class RepairControlTests(unittest.TestCase):
         )
 
     def test_success_requires_ordered_commit_bound_revalidation(self) -> None:
+        self._exercise_ordered_revalidation()
+
+    def test_route_refresh_invalidates_progress_preserves_audit_and_replays(
+        self,
+    ) -> None:
+        self._exercise_ordered_revalidation(route_refresh=True)
+
+    def _exercise_ordered_revalidation(self, route_refresh: bool = False) -> None:
+        self.assertEqual(repair_control.REVALIDATION_ROUTES["alignment"], "align")
+        old_policy = mock.patch.dict(
+            repair_control.REVALIDATION_ROUTES, {"alignment": "retired-test-owner"}
+        )
+        if route_refresh:
+            old_policy.start()
+            self.addCleanup(old_policy.stop)
         event = self.record_event()
         classification = self.classify(event)
         dispatched = repair_control.begin_remediation(
@@ -738,6 +908,86 @@ class RepairControlTests(unittest.TestCase):
             )
         self.assertEqual(out_of_order.exception.code, "REVALIDATION_OUT_OF_ORDER")
 
+        if route_refresh:
+            original = repair_control.record_revalidation(
+                self.run_dir,
+                revalidation_payload(
+                    self.run_dir,
+                    "validation",
+                    1,
+                    commit=integration_commit,
+                    fingerprints=current_fingerprints,
+                ),
+            )
+            old_control = original["control"]
+            old_cursor = old_control["revalidation"]["cursor_id"]
+            arguments = (
+                self.run_dir,
+                "FEAT-001",
+                old_cursor,
+                "evidence/route-repair.md",
+            )
+            # No route drift is not a general-purpose reset API.
+            with self.assertRaises(repair_control.RepairControlError):
+                repair_control.refresh_revalidation_routes(*arguments)
+            old_policy.stop()
+            with self.assertRaises(repair_control.RepairControlError):
+                repair_control.record_revalidation(
+                    self.run_dir,
+                    revalidation_payload(
+                        self.run_dir,
+                        "tests",
+                        2,
+                        commit=integration_commit,
+                        fingerprints=current_fingerprints,
+                    ),
+                )
+            control_path = repair_control._control_path(self.run_dir, "FEAT-001")
+            for mutation in ("digest", "attempt", "progress"):
+                tampered = json.loads(json.dumps(old_control))
+                if mutation == "digest":
+                    tampered["revalidation"]["required"][0]["surface"] = "commit"
+                elif mutation == "attempt":
+                    tampered["active_blocker"]["attempts"][0]["result"] = (
+                        "failed_same_blocker"
+                    )
+                else:
+                    tampered["revalidation"]["cursor"] = 3
+                control_path.write_text(json.dumps(tampered), encoding="utf-8")
+                with self.assertRaises(repair_control.RepairControlError):
+                    repair_control.refresh_revalidation_routes(*arguments)
+                control_path.write_text(json.dumps(old_control), encoding="utf-8")
+            refreshed = repair_control.refresh_revalidation_routes(*arguments)
+            control = refreshed["control"]
+            self.assertTrue(refreshed["updated"])
+            self.assertEqual(control["active_blocker"], old_control["active_blocker"])
+            self.assertEqual(
+                control["feature_dispatches"], old_control["feature_dispatches"]
+            )
+            self.assertEqual(control["revalidation"]["cursor"], 0)
+            self.assertEqual(control["revalidation"]["completed_revalidation_ids"], [])
+            archive = (
+                self.run_dir
+                / "repairs"
+                / "FEAT-001"
+                / "route-refreshes"
+                / f"{old_cursor}.json"
+            )
+            self.assertEqual(
+                json.loads(archive.read_text())["previous"], old_control["revalidation"]
+            )
+            self.assertTrue(
+                repair_control._revalidation_path(
+                    self.run_dir,
+                    "FEAT-001",
+                    original["revalidation"]["revalidation_id"],
+                ).is_file()
+            )
+            with self.assertRaises(repair_control.RepairControlError):
+                repair_control.refresh_revalidation_routes(
+                    self.run_dir, "FEAT-001", "0" * 64, "evidence/route-repair.md"
+                )
+
         first_payload = None
         first_revalidation_id = None
         promoted_project = Path(self.temporary.name) / "promoted-project"
@@ -792,6 +1042,10 @@ class RepairControlTests(unittest.TestCase):
             if first_payload is None:
                 first_payload = payload
             result = repair_control.record_revalidation(self.run_dir, payload)
+            if route_refresh:
+                replay_refresh = repair_control.refresh_revalidation_routes(*arguments)
+                self.assertFalse(replay_refresh["updated"])
+                self.assertEqual(replay_refresh["control"], result["control"])
             if first_revalidation_id is None:
                 first_revalidation_id = result["revalidation"]["revalidation_id"]
         self.assertFalse(integration.exists())

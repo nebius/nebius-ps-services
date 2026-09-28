@@ -97,7 +97,11 @@ def _preflight_soperator_install_checks(paths: ProjectPaths, target_ref: str) ->
 
 
 def _preflight_soperator_upgrade_checks(values: Mapping[str, Any], frozen: Any) -> None:
-    upstream_values, _ = compile_upstream_soperator_values(values, release=frozen.snapshot)
+    from .soperator_values import with_frozen_observability
+
+    upstream_values, _ = compile_upstream_soperator_values(
+        with_frozen_observability(values, frozen), release=frozen.snapshot
+    )
     upstream_values = bind_checks_login(upstream_values, Path(frozen.source.source_dir))
     _preflight_soperator_checks(
         upstream_values, source_dir=Path(frozen.source.source_dir), installing=False
@@ -125,6 +129,11 @@ def _preflight_soperator_checks(
 ) -> Any:
     """Reject unsupported lifecycle execution before provisioning or scheduling changes."""
     policy = compile_checks_policy(source_dir, values)
+    if policy.diagnostics:
+        from .soperator_fast_readiness import preflight_fast_workers
+
+        preflight_fast_workers(values)
+
     if installing:
         policy.effective_values(values, installing=True)
     nodesets = values.get("nodesets", {}).get("overrideValues", {}).get("nodesets", [])

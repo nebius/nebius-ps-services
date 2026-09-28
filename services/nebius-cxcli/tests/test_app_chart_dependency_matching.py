@@ -103,7 +103,12 @@ def test_soperator_family_is_absent_from_generic_app_catalog() -> None:
         "soperator-notifier",
         "k8up",
     }.isdisjoint(app_ids)
-    assert soperator_install_entry("4.1.7").id == "soperator"
+    assert (
+        soperator_install_entry(
+            "4.1.7", chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"
+        ).id
+        == "soperator"
+    )
 
 
 def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch) -> None:

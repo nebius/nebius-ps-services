@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,divergent_median_seconds,value,5.472e-06,s
+baseline-trial1,grouped_end_to_end_median_seconds,value,1.024e-05,s
+baseline-trial1,grouped_core_only_median_seconds,value,5.392e-06,s
+repeat-trial1,divergent_median_seconds,value,5.4400000000000004e-06,s
+repeat-trial1,grouped_end_to_end_median_seconds,value,1.0784e-05,s
+repeat-trial1,grouped_core_only_median_seconds,value,5.376e-06,s

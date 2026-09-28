@@ -1,0 +1,84 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "06c4442cd0e719b7ee96bf68060042f6bea38883c25d296197494660253873b6",
+      "sha256": "9aa3b63604a70e5e4affc1a6ec8a9fe24f912b1faad90e214bdbb8698f77ff02",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "e8ba798d291cde2f8f9f534a2518b79730e4600197cb0ed72bd00ae0ed974c75",
+      "sha256": "764830a93d373518a69f2c46a15235c3aeb253528329a8cd700798e8d745036a",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "0859edcbe01859a1c600931f789aa7e1f0fe3bfafa696478251f15eb93177c5d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "6eeaaf5b22ce52b73314d4776cf27413c30ac65a654f5dbbd3e9893286a31e36",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "57dff0e0e4b383170fd5cd89aadff38f546e75214a8e370d7a69403a57115c4c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "4f5c54d361fde8e57b807c3b3623f685b766e73d01e8422b56c0b633ebd9bef3",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view5.png",
+      "sha256": "85ae752e537a07acde0dbc0d612c36532218af0a77b988cabd8ba780abc340e7",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "ac0fc0022aafdcc7351435b16a1bde19d92b6fc1e735a2426df704b4afb32eba",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "98967d6c868e04b275e279d39d6ed8dc313766ebfc45ea0db9d4f4f433586ced",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "9ac9b1fc52f19b35a339c1574b08ac7481ac2634559aaf2f695f32db966d4ed6",
+      "tool": "compute"
+    }
+  ],
+  "course": "llm-training",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_tiny_transformer_train",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "unlocked-gpu-clocks"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "47b4b493a3a70ef1a3a6e68f04578f17051ef60c10cae264ba9ebac8e9dcc086",
+  "summary_sha256": "c9de987ff6b52577319a93607ac88b9ef34d4407df5aaa0eda1dbb9854597ebd"
+}

@@ -1,0 +1,16 @@
+{
+  "correctness": {
+    "nccl_all_reduce": true,
+    "two_nodes": true
+  },
+  "lab": "04_inference_readiness",
+  "measurements": {
+    "world_size": 2
+  },
+  "parameters": {
+    "seed": 17,
+    "world_size": 2
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

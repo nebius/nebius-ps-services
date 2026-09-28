@@ -1,0 +1,25 @@
+{
+  "correctness": {},
+  "lab": "30_engine_profile",
+  "measurements": {
+    "elapsed_ms": 404.583,
+    "model_count": 2,
+    "trials_required_for_public_claim": 3,
+    "triton_max_token_field": null,
+    "triton_repository_profile": null,
+    "usage": {
+      "completion_tokens": 16,
+      "completion_tokens_details": null,
+      "total_tokens": 27
+    }
+  },
+  "parameters": {
+    "max_tokens": 16,
+    "seed": 17,
+    "triton_max_token_field": null,
+    "triton_repository_profile": null,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

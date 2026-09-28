@@ -25,7 +25,7 @@ def test_nonfinite_reference_cannot_certify_a_finite_candidate(value, experiment
                     torch, expected.reshape(1, 1, 4), {0: observed}, [1]
                 )
     else:
-        with load_lab("llm-training/labs/19_tensor_parallel_linear.py") as lab:
+        with load_lab("advanced-gpu-communication/labs/18_training_tensor_parallel.py") as lab:
             assert lab.relative_l2(torch, observed, expected) == math.inf
 
 
@@ -41,7 +41,7 @@ def test_finite_inputs_with_overflowing_error_arithmetic_are_rejected():
             lab.validate_last_token_logits(
                 torch, large.reshape(1, 1, 4), {0: large}, [1]
             )
-    with load_lab("llm-training/labs/19_tensor_parallel_linear.py") as lab:
+    with load_lab("advanced-gpu-communication/labs/18_training_tensor_parallel.py") as lab:
         assert lab.relative_l2(torch, large, large) == math.inf
 
 

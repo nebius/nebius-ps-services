@@ -1,0 +1,29 @@
+{
+  "correctness": {
+    "all_streams_complete": true,
+    "fixed_output_token_count": true
+  },
+  "lab": "33_dynamo_routing",
+  "measurements": {
+    "chunk_gap_p99_ms": 15.038801997434348,
+    "elapsed_seconds": 3.646567468007561,
+    "mean_token_spacing_ms": 12.62215532830352,
+    "output_tokens_total": 2048,
+    "request_count": 64,
+    "requests_per_second": 17.550751648362837,
+    "tokens_per_second": 561.6240527476108,
+    "ttft_p50_ms": 63.08374699437991,
+    "ttft_p99_ms": 76.30153698846698
+  },
+  "parameters": {
+    "concurrency": 8,
+    "iterations": 64,
+    "layout": "aggregated",
+    "router": "round-robin",
+    "seed": 17,
+    "warmup": 4,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

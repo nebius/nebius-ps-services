@@ -1,5 +1,7 @@
 # Cluster smoke-test runbook
 
+**Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
+
 Run from the `gpu-fundamentals` course root after activating a cluster-approved environment that satisfies [VERSIONS.md](../VERSIONS.md). Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
 Before submitting jobs, run `umask 077` in the submitting shell. The launchers
@@ -14,9 +16,7 @@ campaign may run these gates together after the concepts have been studied.
 
 ## Gate 1: prove the two-node allocation
 
-```bash
-sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Accept only two distinct hostnames, world size 2, local rank 0 on each node, one visible H100 per rank, no MIG device, successful NCCL initialization, and a correct all-reduce.
 
@@ -25,14 +25,14 @@ Accept only two distinct hostnames, world size 2, local rank 0 on each node, one
 Submit in this order:
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/07_async_streams.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile smoke
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+python3 tools/submit_lab.py --lab 02_tensor_core_precision slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile small
+python3 tools/submit_lab.py --lab 03_transfer_and_pinning slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small
+python3 tools/submit_lab.py --lab 04_layout_and_coalescing slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+python3 tools/submit_lab.py --lab 05_roofline_microbench slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+python3 tools/submit_lab.py --lab 07_async_streams slurm/single_gpu.sbatch labs/07_async_streams.py --profile small
+python3 tools/submit_lab.py --lab 08_operator_to_kernels slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile small
+python3 tools/submit_lab.py --lab 09_triton_launch_geometry slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
 ```
 
 For each job, write the prediction first, require the lab's correctness result,
@@ -44,9 +44,7 @@ finite break-even exists.
 
 ## Gate 3: exercise both nodes
 
-```bash
-sbatch slurm/two_node.sbatch labs/06_distributed_collectives.py --profile smoke
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Accept only an exact reduction and a JSON result that records rank count,
 message size, software versions, and timing/bandwidth evidence. Portable JSON
@@ -56,14 +54,14 @@ site-topology evidence; do not publish those infrastructure identifiers.
 
 ## Gate 4: broaden only after smoke passes
 
-Repeat selected labs with their supported `smoke` or `h100` profiles. Change one factor at a time. A changed dtype, shape, rank count, power state, process placement, or software version starts a new comparison series.
+Repeat selected labs with their supported `small` or `large` profiles. Change one factor at a time. A changed dtype, shape, rank count, power state, process placement, or software version starts a new comparison series.
 
 ## Gate 5: compatibility, scheduling, and read-only health
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/12_read_only_health.py --profile smoke
+python3 tools/submit_lab.py --lab 10_compatibility_stack slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
+python3 tools/submit_lab.py --lab 11_scheduler_tail slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile small
+python3 tools/submit_lab.py --lab 12_read_only_health slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
 ```
 
 Record the wheel/runtime/driver/toolkit roles separately. The lane-work model

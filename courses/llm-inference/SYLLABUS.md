@@ -1,16 +1,26 @@
 # Syllabus
 
-Estimated guided time: **47 hours**.
+## Hardware routes
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a separate two-worker, sixteen-H100 cluster. The conceptual lessons here remain useful prerequisites.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Before the first experiment, complete shared environment setup and read the unnumbered **Using GPU performance tools** lesson. Existing lesson IDs remain stable; distributed lab links use their new advanced-course identities. Each lab applies measure → inspect → predict → change one variable → measure again → explain.
+
+Estimated guided time: **52 hours**, for the conceptual and local practical route; provisioning and queue time are excluded.
 
 ## Learning progression
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice labs → Mental model**. Read the definitions, mechanisms and worked examples in **How it works**, then open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../README.md#how-to-set-up-the-lab) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
 
 First understand fixed-parameter prediction and the token-generation loop in Lab 35. Audit artifacts before loading them, follow generation and fix sampling semantics, then calculate cache capacity and define the workload. Learn basic engine lifecycle before client metrics or live policy experiments. Establish scheduling and an uncompressed attention baseline before quantization, speculation, parallelism and advanced serving.
 
-Follow the lesson order below. Lab numbers are identifiers, not the execution order;
+Follow the numbered conceptual route; distributed practice links open the dedicated advanced course. Lab numbers are identifiers, not the execution order;
 use each lesson's assigned activity and the lab guide's prerequisites. A preview
 means inspecting the explanation or code without running an advanced experiment.
 Return to a repeated lab when the later lesson adds a new interpretation or check.
@@ -19,8 +29,9 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | --- | --- | --- |
 | Correct request mechanics | 1–5 | Control artifact identity, generation, sampling, cache capacity and workload |
 | Engine and scheduling baseline | 6–10 | Start safely, measure clients, and study paging, batching and prefix reuse |
-| Targeted optimization | 11–14 | Compare attention, quantization, speculation and parallel placement |
+| Targeted local optimization | 11–13 | Compare attention, quantization and speculation |
 | Integrated evaluation | 15–16 | Design benchmark campaigns and deliver a causal report |
+| Advanced parallel serving | 14, 17 | Compare partitioned generation and full sixteen-GPU server layouts |
 
 ## Lesson-by-lesson route
 
@@ -31,25 +42,26 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | 3 | Decoding policy and output quality | Fix sampling and quality semantics before comparing optimization variants | Lab 17 |
 | 4 | Attention-cache capacity | Derive per-token KV bytes from model heads, layers and format | Labs 08, 26 |
 | 5 | Inference workload shape | Specify prompt length, output length and concurrency as a workload | Labs 18, 25 |
-| 6 | Model-serving architecture | Launch, probe, warm and stop a controlled single-GPU serving engine | Lab 10; Lab 30 probe after engine setup |
-| 7 | Serving latency and useful throughput | Separate client metric boundaries and interpret throughput versus goodput | Labs 11 and 15; introductory AIPerf profile |
+| 6 | Model-serving architecture | Launch, probe, warm and stop a controlled single-GPU serving engine | Lab 10 offline batching; Lab 11 server workflow; Lab 30 probe after engine setup |
+| 7 | Serving latency and useful throughput | Separate client metric boundaries and interpret throughput versus goodput | Labs 11 and 15; introductory AIPerf profile; Lab 25 as an operator-level contrast |
 | 8 | Attention-cache allocation and reclamation | Track physical cache blocks through growth, release and reuse | Lab 27 |
 | 9 | Request scheduling and prompt chunking | Compare scheduling policies with conserved work and real-engine evidence | Labs 28, 34; reuse Lesson 5's Lab 18 padding evidence |
-| 10 | Prefix reuse and cache retention | Explain when identical prefixes can safely reuse cached state | Lab 36 CPU retention model, then Labs 20, 34 live prefix policies |
+| 10 | Prefix reuse and cache retention | Explain when identical prefixes can safely reuse cached state | Lab 36 CPU retention model, then Lab 20 live prefix reuse; revisit Lab 34 scheduling-equivalence controls |
 | 11 | Efficient attention execution | Establish the actual attention backend for fixed prefill/decode shapes | Lab 24 |
 | 12 | Quantized inference representations | Measure representation savings with numerical and quality checks | Lab 29 |
 | 13 | Speculative generation | Verify draft acceptance and recovery while preserving output semantics | Labs 23, 33 |
-| 14 | Distributed inference placement | Partition models or requests and measure the resulting serving behavior | Labs 00, 12, 19; batch-one control in Lab 19 |
-| 15 | Serving workloads and phase separation | Design token-aware campaigns and bound optional disaggregation claims | Lab 30 revisit; AIPerf campaign and optional disaggregation study |
+| 14 | Distributed inference placement | Partition models or requests and measure the resulting serving behavior | [Advanced Lab 04](../advanced-gpu-communication/reference/labs/04_inference_readiness.md); [Advanced Lab 23](../advanced-gpu-communication/reference/labs/23_inference_expert_parallel.md); [Advanced Lab 24](../advanced-gpu-communication/reference/labs/24_inference_tensor_parallel.md) |
+| 15 | Serving workloads and phase separation | Design matched campaigns and distinguish placement, routing and goodput | Local Lab 30 revisit; [Advanced Lab 32](../advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md), [33](../advanced-gpu-communication/reference/labs/33_dynamo_routing.md) and [34](../advanced-gpu-communication/reference/labs/34_serving_goodput.md) on the fabric cluster |
 | 16 | Evidence-based inference optimization | Distinguish attention microbenchmarks from end-to-end serving acceptance | Lab 32 |
+| 17 | Parallel generation and serving placement | Compare request replication with sharding, then inspect real server layouts | [Advanced Lab 25](../advanced-gpu-communication/reference/labs/25_fabric_inference.md) |
 
 ## Readiness checkpoints
 
 After Lesson 5, freeze a model, sampling contract, KV estimate and workload matrix. After Lesson 7, distinguish client latency from model-forward timing and run the introductory AIPerf profile before policy A/B campaigns. After Lesson 12, compare scheduling/backend/quantization changes one at a time. Dynamo disaggregation is an optional advanced branch, never a core completion gate.
 
 Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice labs**, and ends with a **Mental model**. The linked guides integrate
-examples and commands in **Practice**, with H100 scope, trade-offs, evidence,
+in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
+worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
 failure analysis and review in their relevant sections. Before moving on,
 explain the new mechanism and its limitation in your own words; a completed
 command alone is not evidence of understanding.

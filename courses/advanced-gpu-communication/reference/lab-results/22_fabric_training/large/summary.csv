@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,step_median_seconds,value,0.023464840500309947,s
+baseline-trial1,samples_per_second,value,21819.879832263807,count:samples/s
+baseline-trial1,peak_allocated_bytes,value,415359488,bytes
+baseline-trial1,loss,value,1.0399272441864014,none
+candidate-trial1,step_median_seconds,value,0.0073938519999501295,s
+candidate-trial1,samples_per_second,value,69246.72011333921,count:samples/s
+candidate-trial1,peak_allocated_bytes,value,415359488,bytes
+candidate-trial1,loss,value,1.0399272441864014,none

@@ -1,0 +1,95 @@
+{
+  "correctness": {
+    "all_gradients_finite": true,
+    "all_ratios_finite": true,
+    "serialized_and_overlapped_gradients_match": true
+  },
+  "lab": "19_gradient_overlap",
+  "measurements": {
+    "schedules": {
+      "ascending": {
+        "bucket_mib_in_forward_construction_order": [
+          8,
+          24
+        ],
+        "gradient_validation": {
+          "all_finite": true,
+          "atol_fraction_of_reference_max": 0.01,
+          "buckets": [
+            {
+              "elements": 4194304,
+              "max_abs_error": 0.0,
+              "max_normalized_abs_error": 0.0,
+              "passed": true,
+              "reference_max_abs": 4.76837158203125e-06
+            },
+            {
+              "elements": 12582912,
+              "max_abs_error": 0.0,
+              "max_normalized_abs_error": 0.0,
+              "passed": true,
+              "reference_max_abs": 1.6614794731140137e-06
+            }
+          ],
+          "passed": true,
+          "rtol": 0.01
+        },
+        "gradients_match": true,
+        "observed_gradient_ready_bucket_indices": [
+          1,
+          0
+        ],
+        "overlapped_step_median_ms": 1.3536,
+        "serialized_collective_cuda_event_median_ms": 0.9338,
+        "serialized_step_median_ms": 1.4694,
+        "serialized_to_overlap_ratio": 1.0855
+      },
+      "descending": {
+        "bucket_mib_in_forward_construction_order": [
+          24,
+          8
+        ],
+        "gradient_validation": {
+          "all_finite": true,
+          "atol_fraction_of_reference_max": 0.01,
+          "buckets": [
+            {
+              "elements": 12582912,
+              "max_abs_error": 0.0,
+              "max_normalized_abs_error": 0.0,
+              "passed": true,
+              "reference_max_abs": 1.6838312149047852e-06
+            },
+            {
+              "elements": 4194304,
+              "max_abs_error": 0.0,
+              "max_normalized_abs_error": 0.0,
+              "passed": true,
+              "reference_max_abs": 4.678964614868164e-06
+            }
+          ],
+          "passed": true,
+          "rtol": 0.01
+        },
+        "gradients_match": true,
+        "observed_gradient_ready_bucket_indices": [
+          1,
+          0
+        ],
+        "overlapped_step_median_ms": 1.3443,
+        "serialized_collective_cuda_event_median_ms": 0.889,
+        "serialized_step_median_ms": 1.4314,
+        "serialized_to_overlap_ratio": 1.0648
+      }
+    }
+  },
+  "parameters": {
+    "bucket_mib": null,
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

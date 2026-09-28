@@ -31,7 +31,17 @@ agent performs classification and calls the canonical owner.
 - Project-instruction changes require a separate explicit workflow and are not
   part of automatic lifecycle maintenance.
 
-Existing repository instructions still apply. Advisory lifecycle status does
+An explicit request to repair restrictive project instructions routes directly
+to `project-agent-instructions`; no repeated invocation is needed. Its focused
+human-rule repair path does not require a spec receipt solely to patch prose.
+Generated regions keep their canonical receipt and ownership checks. An
+explicit user revision can change user-owned policy; this owner records that
+intent without writing the instruction file. Necessary new credentials and
+secrets within an authorized task do not acquire a separate approval gate;
+secret values never belong in these documents or private lifecycle evidence.
+
+Existing repository instructions still apply subject to explicit user revisions
+and higher-priority policy. Advisory lifecycle status does
 not bypass security, destructive-action, Git, external-write, or workflow-owned
 controls.
 
@@ -61,6 +71,13 @@ inspection uses the same shared lock and therefore observes one complete pair;
 ad hoc direct reads of the two files are not a transaction API. It never stores
 prompt text, transcripts, repository content, secrets, customer data, or raw
 logs in private lifecycle state.
+
+Missing documents can be bootstrapped through the same paired publisher. The
+coordinator delegates this to the owner before an authoring adapter: preserve
+existing counterpart bytes and create only evidence-backed draft records, with
+new design explicitly pending context and design work. Use `absent` CAS digests
+only for missing files. The result remains pending and grants no workflow
+authority; the requirements and design adapters retain their separate duties.
 
 ## Helper Commands
 

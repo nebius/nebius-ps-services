@@ -1,0 +1,70 @@
+{
+  "artifacts": [
+    {
+      "file": "result-trials-trial1-1.json",
+      "original_sha256": "c0f4c33051f53ed5a49fe8b8fb8ac0533831f02cf284e98f330e6b0858fcd1b8",
+      "sha256": "5251b160b39c35c28933243468f9e2ef741faf6288b5c304c23daee2599baa75",
+      "variant": "trials-trial1"
+    },
+    {
+      "file": "result-trials-trial1-2.json",
+      "original_sha256": "97618a27c5453da3d6f9b52bc688a8d8d4d3a223c98d6e26eaaafa43a0c4e61d",
+      "sha256": "793d978292316e947d97a9d9479574c714f9b3ebb153e1ade0ee15d778c044ed",
+      "variant": "trials-trial1"
+    },
+    {
+      "file": "result-trials-trial1-3.json",
+      "original_sha256": "a2a4a965fd4be60a9d2fd843fb04d2b227293dd44db862dc307ace3ec30a3727",
+      "sha256": "2940a5b8c8287bba3764ebe8136e2cc3215f9b87ae9c96ab00bf4a4f078c2b36",
+      "variant": "trials-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "f232afd855be480e5c743f34787d6e7d4788715963168499918b284f29d52de0",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "99278dd416e6a96a600cbc06189eb1c6d216427efaf268f672d642193b03fa9f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "109315f956ac3ef71addfb3d05219bf79443ca4563c6daad889b01abd8cbbddc",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view2.png",
+      "sha256": "bdaa8546a420954129ad3760c5442961c250803b391d5f19bdd4397df7d2c4fa",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-trials-rank-0.png",
+      "sha256": "d662eaffd8ad89453ecfcda5a7565cd6f2250698725f373edf2681d1976921ab",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-trials-rank-0.png",
+      "sha256": "6c29f9ea5b068bb13774e32aa923217dce27d5d3f3cdf9753436195653befa01",
+      "tool": "compute"
+    }
+  ],
+  "course": "custom-cuda-kernels",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "12_capstone",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "15dcd472b085a4accca88cbe7c619282ff44976e6b263897fbba5664209477f1",
+  "summary_sha256": "404deeffdf6bf11e4582627eeb355553072b51a5ee61ba6b38522c3502d1c5ff"
+}

@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from . import kubernetes_process
 from .component_instances import normalize_component_token
 from .duration_utils import parse_go_duration_seconds
 from .runtime_config import to_plain_data
@@ -847,7 +847,7 @@ def _default_command_runner(
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items()})
     command = [str(item) for item in args]
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         input=input_text,
         text=True,

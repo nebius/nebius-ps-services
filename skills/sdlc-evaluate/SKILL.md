@@ -283,3 +283,12 @@ Return a concise result with:
 - Use `assets/templates/evaluate.md.template` when creating the corresponding artifact.
 - Use `scripts/failure_contract.py` to normalize and record every failed
   criterion before classification.
+
+## Web acceptance
+
+Route required browser evaluation through `sdlc-gui-test` using headless
+Playwright Test against the clean registered integration revision. Freeze the
+independent oracle separately from product TDD tests. Each stage owns a fresh
+process/context and closes it after collecting assertions, screenshots and a
+trace. Optional headless isolated Playwright MCP exploration remains separate.
+Native desktop capture and unlocked-screen checks are not web prerequisites.

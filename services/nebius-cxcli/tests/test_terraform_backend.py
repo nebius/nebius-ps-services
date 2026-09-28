@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
-import subprocess
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
 
 import nebius_cxcli.terraform_backend as terraform_backend
+from nebius_cxcli import object_storage_transport
+from nebius_cxcli.object_storage_errors import ObjectStorageError
+from nebius_cxcli.object_storage_transport import ObjectStorageResponse
 from nebius_cxcli.runtime_config import wrap_runtime_config
 from nebius_cxcli.terraform_backend import (
     backend_settings_from_config,
@@ -71,49 +74,38 @@ def test_terraform_state_lock_object_key_appends_tflock_suffix() -> None:
     assert terraform_state_lock_object_key(settings) == "terraform.tfstate.tflock"
 
 
-def test_read_state_lock_info_returns_none_when_lock_object_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.parametrize("missing", [False, True])
+def test_read_state_lock_info(monkeypatch, missing):
     settings = backend_settings_from_config(_config())
-    monkeypatch.setattr(terraform_backend.shutil, "which", lambda _name: "/usr/bin/aws")
+    calls = []
 
-    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="",
-            stderr="download failed: s3://bucket/key to - An error occurred (404) when calling the HeadObject operation: Not Found",
+    def request(operation, key, **kwargs):
+        calls.append((operation, key, kwargs))
+        if missing:
+            raise ObjectStorageError("NoSuchKey")
+        return ObjectStorageResponse(
+            body=(
+                b'{"ID":"lock-123","Operation":"OperationTypeApply","Info":"","Who":"fixture@host",'
+                b'"Version":"1.15.5","Created":"2026-03-19T02:04:39Z","Path":"bucket/terraform.tfstate"}'
+            )
         )
 
-    monkeypatch.setattr(terraform_backend.subprocess, "run", _fake_run)
+    @contextmanager
+    def transport(*args, **kwargs):
+        assert kwargs["extra_env"] == {"AWS_ACCESS_KEY_ID": "test-key"}
+        yield SimpleNamespace(request=request)
 
-    assert read_state_lock_info(settings) is None
-
-
-def test_read_state_lock_info_parses_lock_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = backend_settings_from_config(_config())
-    monkeypatch.setattr(terraform_backend.shutil, "which", lambda _name: "/usr/bin/aws")
-
-    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=(
-                '{"ID":"lock-123","Operation":"OperationTypeApply","Info":"","Who":"rezab@host",'
-                '"Version":"1.15.5","Created":"2026-03-19T02:04:39Z","Path":"bucket/terraform.tfstate"}'
-            ),
-            stderr="",
-        )
-
-    monkeypatch.setattr(terraform_backend.subprocess, "run", _fake_run)
-
-    lock_info = read_state_lock_info(settings)
-
-    assert lock_info is not None
-    assert lock_info.lock_id == "lock-123"
-    assert lock_info.who == "rezab@host"
-    assert lock_info.bucket == settings.bucket
-    assert lock_info.object_key == "terraform.tfstate.tflock"
+    monkeypatch.setattr(object_storage_transport, "object_storage_transport", transport)
+    result = read_state_lock_info(settings, extra_env={"AWS_ACCESS_KEY_ID": "test-key"})
+    assert calls[0][:2] == ("get_object", "terraform.tfstate.tflock")
+    assert calls[0][2]["deadline"] > terraform_backend.time.monotonic()
+    if missing:
+        assert result is None
+    else:
+        assert result.lock_id == "lock-123"
+        assert result.who == "fixture@host"
+        assert result.bucket == settings.bucket
+        assert result.object_key == "terraform.tfstate.tflock"
 
 
 def test_is_not_found_error_accepts_storage_nosuchbucket_shape() -> None:

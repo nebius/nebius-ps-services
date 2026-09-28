@@ -53,9 +53,9 @@ _CHILD_ROUTES = {
     "soperator-activechecks": "activeChecks",
     "soperator-backup-config": "backupConfig",
     "soperator-notifier": "notifier",
-    "soperator-dcgm-exporter": "dcgmExporter",
+    "observability": "umbrella",
 }
-_HELPERS = frozenset({"sssd", "partitionProfile", "topologyProfile"})
+_HELPERS = frozenset({"sssd", "partitionProfile", "topologyProfile", "deploymentProfile"})
 _DNS_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 _MAX_INPUT_BYTES = 1_048_576
 
@@ -181,6 +181,125 @@ def merge_values(target: dict[str, Any], supplied: Mapping[str, Any]) -> None:
             target[key] = copy.deepcopy(value)
 
 
+def validate_observability_values(values: Mapping[str, Any]) -> None:
+    """Admit native observability input even when no explicit-path metadata exists."""
+    if "soperator-dcgm-exporter" in values:
+        raise ValueError(
+            "Unsupported Soperator values.soperator-dcgm-exporter; reauthor using "
+            "values.observability.dcgmExporter and the selected upstream chart's values"
+        )
+    observability = values.get("observability", {})
+    if not isinstance(observability, Mapping):
+        raise ValueError("Soperator values.observability must be a mapping")
+    for key in (None, "dcgmExporter", "vmStack", "vmLogs", "opentelemetry", "prometheusOperator"):
+        section = observability if key is None else observability.get(key, {})
+        path = "observability" + (f".{key}" if key else "")
+        if not isinstance(section, Mapping):
+            raise ValueError(f"Soperator values.{path} must be a mapping")
+        if "enabled" in section and not isinstance(section["enabled"], bool):
+            raise ValueError(f"Soperator values.{path}.enabled must be a boolean")
+    vm_stack = observability.get("vmStack", {})
+    if not isinstance(vm_stack, Mapping):
+        raise ValueError("Soperator values.observability.vmStack must be a mapping")
+    for key in ("values", "overrideValues"):
+        settings = vm_stack.get(key)
+        if not isinstance(settings, Mapping):
+            continue
+        grafana = settings.get("grafana", {})
+        if isinstance(grafana, Mapping) and grafana.get("enabled") is True:
+            raise ValueError(
+                "Soperator bundled Grafana is disabled; select the optional grafana app "
+                "for local visualization or use remote Nebius Grafana"
+            )
+
+    for component, settings in (
+        ("vmStack", observability.get("vmStack", {})),
+        ("opentelemetry.logs", observability.get("opentelemetry", {}).get("logs", {})),
+        ("opentelemetry.events", observability.get("opentelemetry", {}).get("events", {})),
+    ):
+        if isinstance(settings, Mapping) and settings.get("overrideValues"):
+            raise ValueError(
+                f"Soperator observability.{component}.overrideValues cannot replace protected "
+                "Nebius identity, authentication, or jail bindings; use native values"
+            )
+
+
+def _validate_frozen_dcgm_values(configured: Mapping[str, Any], native: Mapping[str, Any]) -> None:
+    """DCGM uses selected umbrella fields, not an unrestricted child override."""
+    supplied = configured.get("dcgmExporter", {})
+    source = native.get("dcgmExporter", {})
+    if not isinstance(supplied, Mapping) or not isinstance(source, Mapping):
+        raise ValueError("Soperator observability.dcgmExporter must be a mapping")
+    for label, current, expected in (
+        ("dcgmExporter", supplied, source),
+        ("dcgmExporter.values", supplied.get("values", {}), source.get("values", {})),
+    ):
+        if not isinstance(current, Mapping) or not isinstance(expected, Mapping):
+            raise ValueError(f"Soperator observability.{label} must be a mapping")
+        if set(current) - set(expected):
+            raise ValueError(
+                f"Unsupported Soperator observability.{label} field for the frozen umbrella"
+            )
+
+
+def with_frozen_observability(values: Mapping[str, Any], frozen: Any) -> dict[str, Any]:
+    """Resolve release defaults without persisting them into authored configuration."""
+    if frozen is None:
+        raise ValueError("Soperator observability requires the verified frozen release source")
+    return with_source_observability(values, frozen.source_context)
+
+
+def with_source_observability(values: Mapping[str, Any], source: Any) -> dict[str, Any]:
+    path = Path(source.source.source_dir) / source.umbrella.source_path / "values.yaml"
+    return with_observability_defaults(values, read_observability_defaults(path))
+
+
+def read_observability_defaults(path: Path) -> dict[str, Any]:
+    """Read observability defaults from an already verified source values file."""
+    defaults = yaml.safe_load(path.read_text(encoding="utf-8"))
+    native = defaults.get("observability") if isinstance(defaults, Mapping) else None
+    if not isinstance(native, Mapping) or not isinstance(native.get("enabled"), bool):
+        raise ValueError("The frozen upstream observability defaults are incomplete")
+    return copy.deepcopy(dict(native))
+
+
+def with_observability_defaults(
+    values: Mapping[str, Any], native: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Apply authored overrides without altering verified defaults or their ownership."""
+    validate_observability_values(values)
+    _validate_frozen_dcgm_values(values.get("observability", {}), native)
+    result = copy.deepcopy(dict(values))
+    effective = copy.deepcopy(dict(native))
+    merge_values(effective, values.get("observability", {}))
+    result["observability"] = effective
+    return result
+
+
+def assert_frozen_observability_replay(
+    *,
+    receipt: Mapping[str, Any],
+    previous_bundle_sha256: str,
+    desired_bundle_sha256: str,
+    previous_values: Mapping[str, Any],
+    desired_values: Mapping[str, Any],
+) -> None:
+    """An unfinished operation cannot acquire a new telemetry policy."""
+    from .soperator_operation import soperator_sha256
+
+    material = {
+        key: value for key, value in receipt.items() if key not in {"fingerprint", "createdAt"}
+    }
+    if receipt.get("fingerprint") != soperator_sha256(material):
+        raise ValueError("Frozen Soperator admission fingerprint is invalid")
+    if desired_bundle_sha256 == receipt.get("renderedFluxSha256"):
+        return
+    if previous_bundle_sha256 != receipt.get("renderedFluxSha256"):
+        raise ValueError("Cannot authenticate the frozen Soperator render before resuming")
+    if previous_values.get("observability") != desired_values.get("observability"):
+        raise ValueError("Frozen Soperator observability changed; cannot resume this operation")
+
+
 def seed_soperator_values(payload: dict[str, Any], supplied: Mapping[str, Any]) -> None:
     rows = soperator_rows(payload)
     if len(rows) != 1:
@@ -205,6 +324,7 @@ def soperator_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def validate_input_values(values: Mapping[str, Any]) -> None:
+    validate_observability_values(values)
     _validate_tree(values)
     if "values" in values:
         raise ValueError("--values-file must not contain a values wrapper")
@@ -233,6 +353,20 @@ def validate_input_values(values: Mapping[str, Any]) -> None:
         raise ValueError("Configure SSSD enablement and runtime references through values.sssd")
     for pointer in _leaf_paths(values):
         parts = _segments(pointer)
+        protected_observability = (
+            ("observability", "clusterName"),
+            ("observability", "clusterId"),
+            ("observability", "logsProjectId"),
+            ("observability", "metricsProjectId"),
+            ("observability", "projectId"),
+            ("observability", "region"),
+            ("observability", "publicEndpointTokenKind"),
+            ("observability", "opentelemetry", "publicEndpoint"),
+            ("observability", "vmStack", "tsaToken", "writer", "source"),
+            ("observability", "vmStack", "tsaToken", "writer", "namespaces"),
+        )
+        if any(parts[: len(path)] == path for path in protected_observability):
+            raise ValueError(f"Soperator {pointer} is owned by Nebius identity and authentication")
         if parts[:3] == ("controllerManager", "manager", "env") and (
             len(parts) == 3
             or parts[3]
@@ -298,7 +432,10 @@ def validate_input_values(values: Mapping[str, Any]) -> None:
         child = slurm_nodes.get("sssd", {}) if isinstance(slurm_nodes, Mapping) else {}
         if isinstance(child, Mapping) and any(k in sssd and sssd[k] != v for k, v in child.items()):
             raise ValueError("Shared SSSD configuration conflicts with slurmNodes.sssd")
-    for helper in ("partitionProfile", "topologyProfile"):
+    from .soperator_deployment_profile import deployment_profile
+
+    deployment_profile(values)
+    for helper in ("partitionProfile", "topologyProfile", "deploymentProfile"):
         if helper in values and not isinstance(values[helper], str):
             raise ValueError(f"Soperator values.{helper} must be a string")
 
@@ -386,6 +523,7 @@ def validate_schedule(value: Any, label: str) -> None:
 
 
 def validate_feature_values(values: Mapping[str, Any]) -> None:
+    validate_observability_values(values)
     backup = values.get("soperator-backup-config", {})
     if not isinstance(backup, Mapping):
         raise ValueError("Soperator backup configuration must be a mapping")
@@ -463,11 +601,15 @@ def validate_frozen_input(values: Mapping[str, Any], frozen: Any) -> None:
     A chart defaults document is deliberately not treated as a complete schema.
     Nested/open upstream maps are checked by the frozen chart's own contract.
     """
+    validate_source_input(values, frozen.source_context)
+
+
+def validate_source_input(values: Mapping[str, Any], source: Any) -> None:
     validate_input_values(values)
-    root = Path(frozen.source.source_dir)
+    root = Path(source.source.source_dir)
     defaults: dict[str, Mapping[str, Any]] = {}
     for role in {"slurmCluster", *_CHILD_ROUTES.values()}:
-        chart = frozen.snapshot.charts.get(role)
+        chart = source.charts.get(role)
         if chart is None:
             continue
         raw = yaml.safe_load((root / chart.source_path / "values.yaml").read_text())
@@ -479,6 +621,8 @@ def validate_frozen_input(values: Mapping[str, Any], frozen: Any) -> None:
         wrapper = key in _CHILD_ROUTES and key.startswith("soperator-")
         if role not in defaults or (not wrapper and key not in defaults[role]):
             raise ValueError(f"Unsupported Soperator values.{key} for the frozen release")
+        if key == "observability":
+            _validate_frozen_dcgm_values(value, defaults[role][key])
         if wrapper:
             if not isinstance(value, Mapping):
                 raise ValueError(f"Soperator values.{key} must be a mapping")
@@ -516,12 +660,12 @@ def validate_frozen_backup_values(values: Mapping[str, Any], defaults: Mapping[s
     validate(values, defaults, ())
 
 
-def apply_frozen_feature_defaults(payload: dict[str, Any], frozen: Any) -> None:
-    chart = frozen.snapshot.charts.get("backupConfig")
+def apply_source_feature_defaults(payload: dict[str, Any], source: Any) -> None:
+    chart = source.charts.get("backupConfig")
     if chart is None:
         return
     defaults = yaml.safe_load(
-        (Path(frozen.source.source_dir) / chart.source_path / "values.yaml").read_text()
+        (Path(source.source.source_dir) / chart.source_path / "values.yaml").read_text()
     )
     for row in soperator_rows(payload):
         backup = row.setdefault("values", {}).setdefault("soperator-backup-config", {})

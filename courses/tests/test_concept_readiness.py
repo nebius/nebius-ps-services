@@ -74,11 +74,13 @@ def test_numerical_gate_hand_calculations():
 
 
 def test_training_capstone_requires_evidence_from_its_own_workload():
-    practice = lab_section("llm-training", 31, "Practice")
-    assert "different workloads" in practice
-    assert "Lab 31's own baseline and candidate" in practice
+    preparation = lab_section("llm-training", 31, "Before you start")
+    assert "matched linear/GELU/bias baseline and candidate" in preparation
+    assert (
+        "different transformer workload cannot explain this comparison" in preparation
+    )
     guide = (ROOT / "llm-training/reference/labs/31_training_capstone.md").read_text()
-    assert "matched profile" in guide
+    assert "identical input shapes and update semantics" in guide
 
 
 def test_crossover_scales_tolerance_by_the_cpu_reference():

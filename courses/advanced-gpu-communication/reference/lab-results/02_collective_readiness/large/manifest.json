@@ -1,0 +1,55 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "eedceede846d7f13ec8c47f766f727b7bee5ffe84f74315e12a3640b5633cd63",
+      "sha256": "9b98672a83fe6fad12c905ae97770dd99e7772f5d70abd704060d225599925f6",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "705a617e8adfaef7ef6d9e7dffd63c9a26b5eeffb550e6c9e934da8bdcad0f90",
+      "sha256": "9b98672a83fe6fad12c905ae97770dd99e7772f5d70abd704060d225599925f6",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-baseline-repeat-qualification.png",
+      "sha256": "18940df6bccfa3c105d84a4efbe3eddf842e14b0a8ea9f2337522c793bf576c5",
+      "tool": "grafana"
+    },
+    {
+      "file": "nsight-systems-baseline-rank0-timeline.png",
+      "sha256": "165b1c0f9e95bcf8f14313e59b454ff31a60ef4917177527867109fa2b5263d6",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "02_collective_readiness",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "78f7dd96ae4eaaa4013e95977ca72dc9c3d703d9223a5486176a8e703e54a465"
+}

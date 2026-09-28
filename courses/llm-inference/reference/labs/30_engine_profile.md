@@ -4,11 +4,11 @@ Different inference servers expose different readiness endpoints and request sch
 
 ## Before you start
 
-Use the readiness and request-schema exercise after Lesson 6. Return after Lesson 15 for the separately launched AIPerf campaign and the paper disaggregation exercise. Those later activities do not change what this Python readiness probe measures or make disaggregation part of the supplied service.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/30_engine_profile.json).
 
-**Theory preparation:** Read Lesson 6 for engines versus servers, HTTP/JSON, model discovery, readiness, container identity and distinct OpenAI-compatible/Triton schemas. Lessons 1–3 supply model, token and generation semantics. Qualify the selected server route before the bounded request.
+This lab checks readiness and request schemas using prepared qualified engines. Each launcher owns its loopback server and client in one Slurm allocation. The separately launched AIPerf campaign and paper disaggregation exercise are optional activities; neither changes what the Python readiness probe measures.
 
-For OpenAI mode, an authorized qualified loopback server must already be running in the same host context as the client. For Triton, set the reviewed repository, matching profile/model/token field, exact image digest, and container runner from the runbook.
+For OpenAI mode, set `VLLM_IMAGE_DIGEST` and `COURSE_CONTAINER_RUNNER`, and select a model and immutable revision already present in the prepared cache. The launcher runs offline and starts vLLM on the allocated worker. For Triton, set the reviewed repository, matching profile/model/token field, exact image digest, and container runner for this environment.
 
 Use images and engine versions that explicitly support H100/SM90 and the host driver. Do not combine mechanics dependencies with heavyweight engine environments.
 
@@ -16,45 +16,70 @@ Dynamo disaggregation is advanced and conditional. Two one-GPU nodes can run a b
 
 ## Concepts and code path
 
-The Python client selects a protocol, probes readiness or model discovery, sends a bounded generation request, and validates a response field. Triton profiles are explicit: `llmapi` uses `tensorrt_llm` with `sampling_param_max_tokens`; `inflight_batcher` uses `ensemble` or `tensorrt_llm_bls` with `max_tokens`. The Triton launcher owns startup and cleanup; this client does not compile an engine.
+The Python client selects a protocol, probes readiness or model discovery, sends a bounded generation request, and validates a response field. Triton profiles are explicit: `llmapi` uses `tensorrt_llm` with `sampling_param_max_tokens`; `inflight_batcher` uses `ensemble` or `tensorrt_llm_bls` with `max_tokens`. Both launchers own startup, bounded readiness and cleanup; this client does not compile an engine.
+
+The Triton launcher uses the prepared image's `mpirun -n 1` to initialize a
+one-rank Message Passing Interface (MPI) environment inside the allocated GPU
+task. TensorRT-LLM imports MPI even for this single-GPU qualification. Starting
+the server directly under `srun` can make it inherit an incompatible Slurm MPI
+environment. The image must therefore provide both `mpirun` and `tritonserver`.
+It passes `--oversubscribe` to MPI so the backend can spawn its worker alongside
+the launcher when Slurm advertises one MPI task slot. This retains the same
+single-GPU allocation and CPU budget; it does not request additional resources.
+The launcher disables configuration auto-completion, following the matching
+TensorRT-LLM launcher: a temporary Python auto-completion process can initialize
+and finalize the MPI rank before the persistent model instance starts. Prepare
+complete `config.pbtxt` files, including explicit batch and transaction-policy
+settings that match the reviewed model YAML. For `llmapi`, copy the effective
+`triton_config.max_batch_size` and `triton_config.decoupled` values into
+`max_batch_size` and `model_transaction_policy.decoupled`; do not change them
+to work around startup errors.
 
 The launcher exports one validated run ID to the client and passes a results
 directory through `--output-dir`. The client writes
 `results/30_engine_profile-run-RUN_ID.json`; the matching private server log is
-`logs/trtllm-triton-run-RUN_ID.log`. Use that shared identifier to correlate
+`results/30_engine_profile/logs/vllm-server-run-RUN_ID.log` or
+`results/30_engine_profile/logs/trtllm-triton-run-RUN_ID.log`. Use that shared identifier to correlate
 startup and request evidence. An output directory is not a JSON filename.
-
-## Practice
-
-### After Lesson 6
 
 Given a server process started at time zero, weights ready at 45 seconds, graph warm-up complete at 70 seconds, and the first request sent at 10 seconds, that request's TTFT is not a steady-state measurement. Change the launcher to wait for readiness, run a correctness probe, and warm the declared buckets. Expected observation: the benchmark excludes startup while a separate startup metric retains it.
 
-Begin with the single-GPU lifecycle: run Lab 10 for real vLLM offline generation using its dedicated container launcher, then inspect the readiness, deterministic probe and cleanup in the serving launcher before its first measured run in Lesson 7. Lab 30's default `openai` probe requires an already qualified local server and a matching served model name; the regular benchmark launcher runs Lab 11, not Lab 30. For TensorRT-LLM/Triton, use the dedicated launcher and declare the reviewed repository as `llmapi` with `tensorrt_llm`/`sampling_param_max_tokens`, or `inflight_batcher` with `ensemble` or `tensorrt_llm_bls`/`max_tokens`; the launcher rejects mixed schemas before startup. Treat multi-LoRA and multimodal scenarios as advanced revisits after the core scheduling and measurement lessons, not first-server requirements.
-
-### Run the supplied experiment
-
-The first route assumes an already qualified server and a matching served model name in `COURSE_SERVED_MODEL`. The second route starts the reviewed Triton repository through its dedicated launcher after all required environment variables are set.
-
-```bash
-umask 077
-python labs/30_engine_profile.py --protocol openai --server-url http://127.0.0.1:8000 --model "${COURSE_SERVED_MODEL:?set the existing served model name}" --profile smoke
-bash slurm/trtllm_triton.sbatch --help
-sbatch slurm/trtllm_triton.sbatch
-```
-
-### After Lesson 15
+The OpenAI launcher starts the prepared vLLM image with the selected cached model and pins both model and tokenizer revisions. For TensorRT-LLM/Triton, use the dedicated launcher and declare the reviewed repository as `llmapi` with `tensorrt_llm`/`sampling_param_max_tokens`, or `inflight_batcher` with `ensemble` or `tensorrt_llm_bls`/`max_tokens`; the launcher rejects mixed schemas before startup. Multi-LoRA and multimodal workloads are optional extensions.
 
 Given prefill capacity of 200,000 prompt tokens/s, suppose arrivals require 250,000 prompt tokens/s. Decode has enough capacity for the corresponding output workload, but the prefill queue grows; adding decode workers cannot remove that bottleneck. Change the allocation to increase prefill capacity while accounting for KV handoff cost within the TTFT budget. Expected observation: the backlog can drain only if sustained prefill capacity exceeds the offered load and handoff, routing and decode can keep up.
 
-After Lesson 15 and qualification of both images and the container runner, inspect `bash slurm/aiperf.sbatch --help` and submit the campaign with `sbatch slurm/aiperf.sbatch`. It owns its server, workload and cleanup independently of this readiness probe. Treat the disaggregation calculation as a paper exercise: the supplied Dynamo preflight checks GPU visibility only; it does not start phase workers or validate KV transfer.
+After qualifying both images and the container runner, inspect `bash slurm/aiperf.sbatch --help` and submit the optional campaign with `python3 tools/submit_lab.py --lab 15_streaming_client slurm/aiperf.sbatch`. That Lab 15 campaign owns its server, workload, profiler reports and cleanup independently of this readiness probe. The disaggregation calculation is a paper exercise: the supplied Dynamo preflight checks GPU visibility only; it does not start phase workers or validate KV transfer.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+
+The two routes below start their respective prepared servers after the required environment variables are set. Wait for one allocation to finish before submitting the other. Both profiles use the same bounded qualification request.
+
+```bash
+umask 077
+bash slurm/openai_engine.sbatch --help
+python3 tools/submit_lab.py --lab 30_engine_profile slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
+bash slurm/trtllm_triton.sbatch --help
+python3 tools/submit_lab.py --lab 30_engine_profile slurm/trtllm_triton.sbatch
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
+For either launcher, wait for the submitted job to complete and inspect that job's results. The inspector prints exact JSON paths and the numeric fields used by this dashboard:
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 30_engine_profile --job "$LAB_JOB_ID"
+```
+
 Require valid generated-response structure and inspect protocol, model identity, request duration, and available usage fields. One bounded request establishes API activation, not a latency distribution, a semantic-quality score, or a benchmark campaign.
 
-In OpenAI mode, the first completion must contain a nonempty text string; an
-empty choice object is a failed probe. The AIPerf launcher pins its tokenizer to
+In OpenAI mode, the first completion must contain a nonempty text string. In
+Triton mode, `text_output` must be a nonempty string; numbers, booleans, lists,
+objects and empty values fail the probe. The AIPerf launcher pins its tokenizer to
 the same immutable revision as the server so input and output token counts use
 the declared model's vocabulary.
 
@@ -66,6 +91,24 @@ Retain arrival model, ISL/OSL, concurrency, completions, service metrics, route/
 
 Two one-GPU nodes can demonstrate control flow but not production-scale disaggregation or RDMA performance.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Elapsed (seconds) | `elapsed_ms` | `s` |
+| Model count | `model_count` | `none` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 30_engine_profile \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select the workspace and profile. Require **Correctness of selected results** to equal 1 and **Selected comparison generation** to match publication confirmation. Compare the selected artifact fields and experiment timestamps. This dashboard omits GPU telemetry because this recipe cannot attribute device activity to its result.
+
 ## Investigate the behavior
 
 Which component owns model conversion, repository layout, server readiness, and client measurement? Why can a healthy server reject a request with the wrong token-budget field? Keep these boundaries separate in your diagnosis.
@@ -74,13 +117,23 @@ vLLM can simplify flexible serving; TensorRT-LLM can provide more explicit optim
 
 Separate pools scale phases independently but add transfers, more failure modes, and capacity-planning complexity. Cache affinity saves prefill but can concentrate load. Open-loop tests reveal overload while potentially producing long queues and higher test cost.
 
+**Nsight Systems: not applicable.** The HTTP client probes readiness and request schemas. These launchers own server startup and cleanup but do not start a GPU capture; profiling the client cannot capture server kernels. Use the owned serving experiments for GPU traces. Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope.
+
 ## If something goes wrong
 
-Mixed Triton schema combinations fail before meaningful measurement. Inspect repository configuration and engine logs rather than trying arbitrary field names. Do not expose the service publicly or use an unrelated endpoint to bypass qualification.
+Mixed Triton schema combinations fail before meaningful measurement. Inspect repository configuration and engine logs rather than trying arbitrary field names. Backend import errors require qualifying the image's Python dependencies before repeating startup; GPU visibility alone does not establish backend readiness. Retain any corrected dependency pin with the image and repository identity. Do not expose the service publicly or use an unrelated endpoint to bypass qualification.
+
+An `MPI_Init_thread` or Slurm PMI-support error indicates that MPI startup
+failed before model readiness. Confirm the job uses the supplied launcher and
+the image's MPI runtime; preserve the private server log and qualify that
+combination before repeating the request. Do not change cluster MPI libraries
+to repair this single-process engine launch.
 
 Avoid using an unpinned container or collecting server logs that contain prompt content.
 
 Avoid counting a successful deployment as evidence of better latency or capacity.
+
+Publication failure is separate from probe failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. GPU counter permissions and capture completeness belong to the separately owned profiling experiments.
 
 ## Takeaways and next step
 

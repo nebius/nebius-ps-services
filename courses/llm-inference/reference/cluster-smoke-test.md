@@ -1,5 +1,7 @@
 # Cluster smoke-test runbook
 
+**Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
+
 This is a target-qualification checklist, not the lesson execution order.
 Follow the [syllabus](../SYLLABUS.md) for the learning route and complete each
 exercise's relevant safety/setup gate before running it. Distributed and optional
@@ -13,8 +15,8 @@ jobs. Before submitting, set the submitting shell's file-creation mask:
 
 ```bash
 umask 077
-python -m pip check
-python tools/validate_course.py
+"$COURSE_PYTHON" -m pip check
+python3 tools/validate_course.py
 ```
 
 Raw model data, prompts, outputs, Slurm logs, server logs, metrics, and profiler
@@ -24,26 +26,26 @@ follow [evidence-security.md](evidence-security.md) before sharing aggregates.
 ## Gate 1: allocation and artifact identity
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile smoke
+python3 tools/submit_lab.py --lab 16_model_artifact_audit slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small
 ```
 
 Require a full non-MIG H100, compute capability 9.0, immutable model/tokenizer
 identity, compatible configuration and weights, and the stated remote-code
 policy. Separate artifact resolution, CPU staging, GPU loading, warm-up, and
 readiness. Reaching readiness does not establish request correctness.
-Lab 16 checks the local H100. The distinct two-node Lab 00 preflight belongs
+Lab 16 checks the local H100. The distinct two-node Lab 37 preflight belongs
 to Gate 5 and must use the two-node launcher.
 
 ## Gate 2: generation and cache semantics
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda
-sbatch slurm/single_gpu.sbatch labs/08_kv_cache.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile smoke
+python3 tools/submit_lab.py --lab 35_inference_basics slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda
+python3 tools/submit_lab.py --lab 08_kv_cache slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small
+python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
+python3 tools/submit_lab.py --lab 17_sampling_semantics slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small
+python3 tools/submit_lab.py --lab 18_padding_bucketing slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small
+python3 tools/submit_lab.py --lab 23_speculative_decoding slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small
+python3 tools/submit_lab.py --lab 24_sdpa_attention slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small
 ```
 
 Lab 35 can first be studied with `--device cpu` without downloads or an engine.
@@ -63,11 +65,11 @@ shape, dtype, and correctness tolerances fixed.
 ## Gate 3: workload, capacity, and scheduling mechanics
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/27_paged_kv.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/29_quantization.py --profile smoke
+python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small
+python3 tools/submit_lab.py --lab 26_kv_capacity slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small
+python3 tools/submit_lab.py --lab 27_paged_kv slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small
+python3 tools/submit_lab.py --lab 28_continuous_batching slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile small
 ```
 
 Define ISL/OSL, arrival pattern, concurrency, TTFT/ITL timestamp endpoints and AIPerf aggregation conventions, and output
@@ -83,8 +85,8 @@ not establish a faster service.
 Lab 36 is a separate local policy gate with no GPU or serving engine requirement:
 
 ```bash
-python labs/36_kv_tiering.py --storage-gbps 2 --output-dir results/tiering-fast
-python labs/36_kv_tiering.py --storage-gbps 0.2 --output-dir results/tiering-slow
+"$COURSE_PYTHON" labs/36_kv_tiering.py --storage-gbps 2 --output-dir results/tiering-fast
+"$COURSE_PYTHON" labs/36_kv_tiering.py --storage-gbps 0.2 --output-dir results/tiering-slow
 ```
 
 Hold the arrival sequence and capacities fixed. Verify TTL expiry, LRU
@@ -96,10 +98,10 @@ KV persistence, GPUDirect Storage activation, TTFT or storage performance.
 ## Gate 4: one-GPU serving and streaming
 
 ```bash
-sbatch slurm/vllm_offline.sbatch --profile smoke
-sbatch slurm/vllm_benchmark.sbatch
-sbatch slurm/vllm_streaming_benchmark.sbatch
-sbatch slurm/vllm_prefix_cache.sbatch
+python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small
+python3 tools/submit_lab.py --lab 11_serving_client slurm/vllm_benchmark.sbatch
+python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch
+python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch
 ```
 
 Use the launchers' documented model and immutable revision inputs. Keep cold
@@ -113,13 +115,7 @@ necessarily correspond one-to-one with model tokens.
 
 ## Gate 5: two-node serving and placement
 
-```bash
-sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke
-sbatch slurm/two_node.sbatch labs/12_moe_expert_parallel.py --profile smoke
-sbatch slurm/two_node.sbatch labs/19_tensor_parallel_linear.py --profile smoke
-sbatch slurm/two_node.sbatch labs/19_tensor_parallel_linear.py --profile smoke --batch-size 1 --output-dir outputs/tp-batch1-run1
-sbatch slurm/vllm_two_node.sbatch tp
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Require two distinct nodes, world size 2, local-rank binding, exact collective
 correctness, endpoint health, nonempty successful responses, and clean shutdown
@@ -141,7 +137,7 @@ bash slurm/trtllm_triton.sbatch --help
 bash slurm/aiperf.sbatch --help
 bash slurm/dynamo_disaggregated_preflight.sbatch --help
 bash slurm/vllm_speculative_ab.sbatch --help
-sbatch slurm/capstone_three_trials.sbatch --profile smoke
+python3 tools/submit_lab.py --lab 32_inference_capstone slurm/capstone_three_trials.sbatch --profile small
 ```
 
 Lab 30 and its engine profiles document TensorRT-LLM/Triton, AIPerf, and

@@ -1,9 +1,11 @@
-# LLM Inference and GPU Optimization on NVIDIA H100
+# Course mission
 
 Teach engineers to connect autoregressive model mechanics with KV capacity,
 scheduling, latency, throughput, quality, parallel placement, and serving
-engine behavior on one or two H100 GPUs.
+engine behavior through single-GPU experiments and distributed-serving concepts.
 
-The course owns vLLM, TensorRT-LLM, Triton, AIPerf, and advanced Dynamo
-profiles. Heavy engines fail closed until their exact containers and artifacts
-are qualified on the target cluster.
+The course owns local serving-engine comparisons and request measurement.
+Distributed practice, Dynamo placement/routing and multi-worker goodput belong
+to the advanced communication course on two eight-H100 workers. Engine
+experiments require their exact runtime and model artifacts to pass target
+qualification before any performance claim.

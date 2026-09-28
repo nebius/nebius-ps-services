@@ -86,10 +86,12 @@ safe, reversible, and easy to validate later.
 
 ### 2. Understand Existing System
 
-For brownfield work, inspect the current system before proposing changes:
+For every selected project, including an unused prototype, read its design
+documents before proposing changes and then inspect its implemented paths:
 
-- `README.md`, `docs/design.md`, `design.md`, ADRs, runbooks, changelog, and
-  repo-specific instructions
+- applicable instructions and the selected project's `README.md`, canonical
+  design and requirements, ADRs, runbooks and changelog; use declared ownership
+  to resolve candidates such as `docs/design.md` and `design.md`
 - package manifests, lockfiles, build files, deployment configs, schemas, and
   generated artifacts
 - source modules, public interfaces, command entrypoints, routes, handlers,
@@ -99,9 +101,32 @@ For brownfield work, inspect the current system before proposing changes:
 Map the existing architecture in concise terms: components, responsibilities,
 data ownership, call flow, extension points, validation paths, and constraints.
 
-For greenfield work, confirm that there is no relevant existing implementation
-after a quick local check. Then design from requirements, research-backed
-technology choices, and the user's intended deployment or operating context.
+Trace executable behavior through affected callers and consumers. Tests are
+supporting evidence, not a substitute for reading code. Do not use a sibling
+project's design as the selected project's authority. If documentation is
+missing, disclose the gap and proceed with bounded code-grounded planning. If
+source is inaccessible, name the uncertainty rather than claiming alignment.
+
+When design prose and implemented code disagree, code always wins as the
+current-state baseline. Report each material conflict in this form:
+
+| Document claim and reference | Implemented behavior and reference | Design impact and disposition |
+| --- | --- | --- |
+| What the project design says | What the executable path does | Follow code; identify proposal changes and spec-owner correction |
+
+Do not rewrite code to satisfy stale prose or directly correct canonical docs.
+Send findings and design decisions to `maintain-project-specs`. Code precedence
+describes the current system; it does not certify a defect as correct, override
+safety, or prevent an intentional user-requested change.
+
+Separate code existence from application usage. Confirm no users or dependent
+consumers through explicit user context or reliable project evidence before
+applying the unused-greenfield refactor exception. Sparse code, an unreleased
+label, missing docs or a local-only checkout are insufficient evidence. Ask if
+usage is unknown and the proposed refactor relies on this exception.
+Inspect all relevant prototype code. Only skip source discovery when no
+relevant implementation exists; then design from requirements and intended
+deployment or operating context without inventing local constraints.
 
 ### 3. Use `research` For Missing Knowledge
 
@@ -211,9 +236,25 @@ Use horizontal foundation steps only when they are true prerequisites for
 multiple slices, such as schema contracts, auth, migrations, shared test
 harnesses, infrastructure safety, or observability needed before safe delivery.
 
-Brownfield designs should name likely files/modules and how the design fits the
-existing architecture. Greenfield designs should name the initial project
-shape, runtime, framework, storage, deployment target, and bootstrap order.
+Before finalizing, compare the proposal with inspected callers, interfaces,
+data ownership, persistence, configuration and workflows. For each mismatch,
+either redesign the proposal to fit or identify an intentional requested
+transition with affected consumers and regression checks. Unresolved material
+conflicts remain open decisions, not implementation-ready assumptions.
+
+When confirmed unused greenfield code contains an anti-pattern, cite concrete
+harm against the intended behavior rather than style preference. Plan the
+smallest necessary refactor as a prerequisite to dependent feature work, update
+all affected consumers and tests, and keep one canonical implementation. Do not
+retain legacy aliases, wrappers, dual paths or compatibility shims unless the
+user explicitly asks. Existing users or unknown usage do not qualify for this
+exception; surface any decision needed to change their established contracts.
+Do not silently add a compatibility layer as a substitute for that decision.
+
+For any existing code, name likely files/modules and integration points,
+including intentional removals and replacements. Where no implementation
+exists, name the initial project shape, runtime, framework, storage, deployment
+target and bootstrap order. Planning a refactor does not itself authorize it.
 
 ### 6. Apply `system-design-rules` And Evaluate Alternatives
 
@@ -249,8 +290,11 @@ burden, migration effort, reversibility, and revisit trigger.
 
 ### 7. Create Implementation Plan
 
-The final design should be ready for Codex `/plan`. The plan content should be
-specific enough that implementation can start without re-deciding architecture.
+The final design should be ready for the host's plan handoff. Make it specific
+enough to implement without re-deciding architecture. For design-only work,
+use available host planning mode or a plan tool. When implementation is already
+requested, produce the plan with a plan tool or response without entering a
+write-prohibiting mode. An already-active host Plan Mode still prevents execution.
 
 Use this template:
 
@@ -262,6 +306,14 @@ Objective:
 
 Design Summary:
 - ...
+
+Existing-System Evidence And Conflicts:
+- selected project and documents read: ...
+- implemented paths and consumers inspected: ...
+- document/code conflicts, with code taking precedence: ...
+- proposal conflicts resolved or still blocking readiness: ...
+- intentional changes and confirmed unused-greenfield evidence, if relevant: ...
+- missing or inaccessible evidence: ...
 
 Selected Option:
 - ...
@@ -301,6 +353,7 @@ Tests And Validation:
 
 Docs And Changelog:
 - ...
+- maintain-project-specs decisions/corrections (no direct doc writes): ...
 
 Rollout And Rollback:
 - ...
@@ -319,6 +372,23 @@ Optional Scaffold Handoff:
 
 When the active Codex surface cannot switch to plan mode, output the same
 content under `/plan handoff`.
+
+### Optional Implementation Continuation
+
+Design-only work ends with the response. An explicit request to design and
+implement, or to implement this agreed design afterward, can continue without
+another routine confirmation only when the active host permits writes. Actual
+host Plan Mode and tool restrictions remain authoritative; a skill instruction
+or user-prompt assertion cannot disable them.
+
+Recheck code and conflict findings if the working tree changed. Use
+`maintain-project-specs` for canonical reconciliation, then suitable implementation
+skills or native tools for the scoped changes. Perform prerequisite refactors
+before dependent work, run focused verification and `align`, and return delivery
+evidence to the spec owner. If that owner is unavailable, report the pending
+handoff rather than writing specs yourself or inventing a lifecycle gate.
+Preserve enclosing workflow gates. Commits, publishing, scaffolding workflows
+and live changes retain their existing owners and authorization boundaries.
 
 ## Depth Guidance
 
@@ -344,8 +414,11 @@ ownership, new platform, or costly rollback.
   and `/plan` creation.
 - Active Agentic SDLC run owns committed requirements/design: route to
   `sdlc-create-design` or `sdlc-create-plan`.
-- Design is complete and code should change: use `/plan`, then the relevant
-  implementation, infrastructure, frontend, testing, or alignment skill.
+- Design is complete and implementation was explicitly requested: follow the
+  optional continuation when host mode permits, using the relevant specialist.
+  Otherwise return the plan without code writes.
+- Canonical design persistence or documentation drift: return decisions and
+  corrections to `maintain-project-specs`, the sole canonical document writer.
 - Approved design needs a complete or multi-component repository skeleton:
   include the optional scaffold handoff and let the user explicitly invoke
   `scaffold-project`. Do not scaffold directly or start Agentic SDLC.

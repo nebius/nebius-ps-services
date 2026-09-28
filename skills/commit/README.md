@@ -15,15 +15,37 @@ apply $commit [commit-message]
 execute $commit [commit-message]
 ```
 
-The message is optional. The bounded grammar accepts optional `please`, then
-either `$commit` directly or one of `run`, `apply`, `execute`, `invoke`, or
-`use` immediately before `$commit`. Casual mentions, questions, quotations,
-and later prose references remain inert. There are no additional public flags;
-all transaction state and helper arguments stay internal. On a known default
-branch, explicit
-authorization uses `$commit on <current-branch> [commit-message]` (or a bounded
-leading directive before it), or `$commit on the default branch
-[commit-message]`; other invocations stop.
+The message is optional. Natural-language action requests and native skill
+mentions anywhere in a request are supported: "please commit all changes",
+"could you commit this?", or "use commit for these changes". No additional
+public flags exist. Help, discussion, examples, negation, and requests to edit
+the skill are non-actions. A default-branch commit needs separate clear consent
+for that branch; commit-push always rejects default-branch publication.
+
+The hook records nonauthorizing root-turn metadata for the current checkout.
+The root agent interprets user intent and passes the receipt digest and typed
+action to preparation. The helper then binds a one-use authorization under the
+repository lock. Receipt validity proves origin and freshness, not meaning;
+semantic judgment belongs to the root agent. Neither implicit skill selection
+nor a receipt grants Git authority. Never ask users to repeat a magic phrase.
+Unrelated turns update a separate receipt without overwriting active claims.
+A fresh action after a consumed transaction gets a new receipt; replaying the
+same receipt cannot create another authorization.
+
+Capture failures report a fixed nonblocking reason: `PROMPT_UNAVAILABLE`,
+`NATIVE_IDENTITY_UNAVAILABLE`, `REPOSITORY_UNAVAILABLE`,
+`RECEIPT_WRITE_FAILED`, or `CAPTURE_FAILED`. They expose no raw prompt,
+exception details or usable receipt digest. Validation failures preserve the
+previous receipt; a publication error may occur after atomic replacement.
+Neither outcome changes authorization or claim state. Do not reuse an earlier
+receipt when the current prompt has no successful capture context.
+
+Diagnose native event delivery, required identity fields, Git discovery and
+private-state publication at their owning boundary. Codex uses native
+`turn_id`; Claude uses its native `prompt_id` through the host adapter.
+Do not invent identifiers or derive them from transcripts. Installation and
+fixture tests do not prove active-session dispatch: verify native hook trust
+and observe a real prompt produce fresh receipt context before publication.
 
 ## What It Does
 
@@ -37,13 +59,13 @@ leading directive before it), or `$commit on the default branch
 - Reports the final branch status and whether anything remains dirty.
 - Uses a hidden one-shot authorization and claim so the helper can execute
   exactly this whole-repository commit without allowing raw Git mutation.
-- Shares that local transaction owner with a fresh explicit `$commit-push`;
+- Shares that local transaction owner with a semantic commit-and-push request;
   the publication skill still owns and bounds the later remote effect.
 
 ## Architecture
 
 ```text
-Explicit `$commit` authorization
+Semantic root-user request and receipt binding
   |
   v
 Current branch and fast safety checks
@@ -117,8 +139,8 @@ Final status report
 
 - `SKILL.md`: Runtime workflow, guardrails, commands, and output contract.
 - `agents/openai.yaml`: UI metadata and default prompt.
-- `assets/hooks/commit_intent.py`: Bounded root-turn authorization for
-  `$commit` and the local transaction phase of `$commit-push`.
+- `assets/hooks/commit_intent.py`: Nonauthorizing root-turn metadata for
+  semantic commit and commit-push action binding.
 - `scripts/commit_transaction.py`: Temporary-index preview, one-shot claim,
   locked staging, normal-hook commit, exact recovery verification, and private
   acknowledgement of a reviewed hook-modified direct child.

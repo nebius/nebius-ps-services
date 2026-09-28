@@ -47,14 +47,14 @@ barrier and buffer-management costs can erase either predicted benefit.
 After the documented CMake build, submit:
 
 ```bash
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --smoke --work-iterations 32
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small --work-iterations 32
 ```
 
 The first command runs all four work points. The second isolates one point for
 profiling. `--work-iterations` accepts an integer from zero through 1024;
 invalid, duplicate or incomplete arguments fail before GPU execution. Omit
-`--smoke` for the larger bounded input. Smoke uses 4099 elements and full uses
+`--profile small` for the larger bounded input. Smoke uses 4099 elements and full uses
 1,048,579, so both include a partial final tile rather than testing only perfect
 multiples of the 256-thread block.
 

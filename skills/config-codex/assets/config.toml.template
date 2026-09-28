@@ -62,7 +62,7 @@ env_vars = ["CONTEXT7_API_KEY"]
 
 [mcp_servers.playwright]
 command = "npx"
-args = ["-y", "@playwright/mcp@0.0.78"]
+args = ["-y", "@playwright/mcp@0.0.81", "--headless", "--browser", "chrome", "--isolated"]
 
 [mcp_servers.terraform]
 command = "docker"

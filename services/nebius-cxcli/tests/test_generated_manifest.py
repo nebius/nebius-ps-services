@@ -56,6 +56,7 @@ def _runtime_payload() -> dict:
             "nebius": {
                 "tenant_id": "tenant-123",
                 "project_id": "project-456",
+                "region_id": "eu-north1",
             },
             "notifications": {"email": "ops@example.com"},
         },

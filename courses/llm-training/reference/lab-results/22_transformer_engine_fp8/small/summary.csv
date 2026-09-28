@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,bf16_median_device_region_seconds,value,0.0004734,s
+baseline-trial1,fp8_median_device_region_seconds,value,0.0008629,s
+baseline-trial1,max_output_relative_l2,value,0.037408,none
+baseline-trial1,max_gradient_relative_l2,value,0.052774,none
+repeat-trial1,bf16_median_device_region_seconds,value,0.0004775,s
+repeat-trial1,fp8_median_device_region_seconds,value,0.0008559,s
+repeat-trial1,max_output_relative_l2,value,0.037408,none
+repeat-trial1,max_gradient_relative_l2,value,0.052774,none

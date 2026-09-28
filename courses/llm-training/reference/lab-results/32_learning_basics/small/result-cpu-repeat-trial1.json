@@ -1,0 +1,26 @@
+{
+  "correctness": {
+    "held_out_prediction_matches": true,
+    "inference_preserves_parameters": true,
+    "learned_expected_weight": true
+  },
+  "lab": "32_learning_basics",
+  "measurements": {
+    "final_weight": 2.0,
+    "first_gradient": -10.0,
+    "held_out_input": 3.0,
+    "held_out_prediction": 6.0,
+    "initial_weight": 0.0,
+    "loss_after": 0.0,
+    "loss_before": 10.0,
+    "updates": 30,
+    "weight_after_inference": 2.0
+  },
+  "parameters": {
+    "device": "cpu",
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

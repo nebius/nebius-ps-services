@@ -12,10 +12,10 @@ __global__ void stencil(const float* input, float* output, std::size_t count) {
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 05_tiled_stencil [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 05_tiled_stencil [--profile small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
-    require_h100();
+    require_course_gpu();
     std::vector<float> input(count), expected(count), observed(count);
     for (std::size_t index = 0; index < count; ++index) input[index] = static_cast<float>(index % 101) / 101.0F;
     for (std::size_t index = 0; index < count; ++index) {
@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
     check_close(expected, observed);
     print_result("05_tiled_stencil", timing, count);
     std::cout << "shared_bytes_per_block=" << (threads + 2) * sizeof(float) << "\nhalo_values_per_full_block=2\n";
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

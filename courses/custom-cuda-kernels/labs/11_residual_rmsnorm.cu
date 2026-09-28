@@ -21,10 +21,10 @@ __global__ void fused_residual_rmsnorm(const float* input, const float* residual
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 11_residual_rmsnorm [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 11_residual_rmsnorm [--profile small|large]\n"; return 0; }
   try {
     const int rows = static_cast<int>(problem_size(argc, argv, 17, 4096));
-    require_h100();
+    require_course_gpu();
     constexpr int width = 256;
     const std::size_t count = static_cast<std::size_t>(rows) * width;
     std::vector<float> input(count), residual(count), scale(width), expected(count), observed(count);
@@ -47,6 +47,8 @@ int main(int argc, char** argv) {
     check_close(expected, observed);
     print_result("11_residual_rmsnorm", timing, count);
     std::cout << "accumulation_dtype=float32\nepsilon=1e-5\n";
+    std::cout << "rows=" << rows << "\nwidth=" << width << '\n';
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

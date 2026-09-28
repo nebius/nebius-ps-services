@@ -13,9 +13,17 @@ import statistics
 from pathlib import Path
 from typing import IO, Any, Callable
 
+from course_evidence import (
+    annotated_operation,
+    atomic_result,
+    begin_experiment,
+    enrich_result,
+    gpu_family,
+)
+
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--profile", choices=("smoke", "h100"), default="smoke")
+    parser.add_argument("--profile", choices=("small", "large"), default=os.environ.get("COURSE_WORKLOAD_PROFILE", "small"))
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
@@ -23,6 +31,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def validate_common_args(args: argparse.Namespace) -> None:
+    begin_experiment(args)
     if args.warmup < 0 or args.iterations < 1:
         raise SystemExit(
             "--warmup must be non-negative and --iterations must be positive"
@@ -72,23 +81,18 @@ def seed_everything(torch: Any, seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def require_h100(torch: Any) -> dict[str, Any]:
+def require_course_gpu(torch: Any) -> dict[str, Any]:
     if not torch.cuda.is_available():
-        raise SystemExit(
-            "CUDA is unavailable; this course requires an NVIDIA H100 GPU."
-        )
+        raise SystemExit("CUDA is unavailable; allocate a full course GPU.")
     props = torch.cuda.get_device_properties(torch.cuda.current_device())
-    if (
-        "H100" not in props.name
-        or "MIG" in props.name.upper()
-        or (props.major, props.minor) != (9, 0)
-    ):
-        raise SystemExit(
-            f"Expected one full H100 (SM90); detected {props.name!r} "
-            f"with compute capability {props.major}.{props.minor}."
-        )
+    try:
+        family = gpu_family(props.name)
+        if (props.major, props.minor) != (9, 0):
+            raise ValueError("Expected compute capability 9.0")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     return {
-        "gpu_family": "NVIDIA H100",
+        "gpu_family": family,
         "compute_capability": "9.0",
         "memory_gib": round(props.total_memory / 2**30, 1),
         "torch_version": torch.__version__,
@@ -103,8 +107,10 @@ def cuda_times_ms(
     warmup: int,
     iterations: int,
 ) -> list[float]:
+    warmup_operation = annotated_operation(operation, "course_warmup")
+    operation = annotated_operation(operation, "course_measure")
     for _ in range(warmup):
-        operation()
+        warmup_operation()
     torch.cuda.synchronize()
     samples: list[float] = []
     for _ in range(iterations):
@@ -168,9 +174,8 @@ def open_private_exclusive(target: Path, *, binary: bool = False) -> IO[Any]:
 
 
 def write_json_exclusive(target: Path, payload: dict[str, Any]) -> Path:
-    document = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    with open_private_exclusive(target) as stream:
-        stream.write(document)
+    document = json.dumps(enrich_result(payload), indent=2, sort_keys=True) + "\n"
+    atomic_result(target, document)
     return target
 
 
@@ -194,7 +199,11 @@ def init_nccl(torch: Any, *, expected_world_size: int = 2) -> tuple[int, int, in
         if not os.environ.get(required):
             raise SystemExit(f"{required} is missing; use the supplied Slurm launcher.")
     torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(backend="nccl", init_method="env://")
+    # A first barrier otherwise falls back to global rank modulo visible GPUs.
+    # Bind the communicator to the same local device as the workload tensors.
+    torch.distributed.init_process_group(
+        backend="nccl", init_method="env://", device_id=torch.device("cuda", local_rank)
+    )
     return rank, world_size, local_rank
 
 

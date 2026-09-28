@@ -33,7 +33,7 @@
       "lessons": [
         3
       ],
-      "after": "Practice",
+      "after": "Concepts and code path",
       "home": "lab:07_profile_workload"
     },
     {
@@ -80,7 +80,7 @@
       "lessons": [
         8
       ],
-      "after": "Practice",
+      "after": "Concepts and code path",
       "home": "lab:12_allocator_lifetime"
     },
     {
@@ -91,15 +91,6 @@
       ],
       "after": "How it works",
       "home": "lesson"
-    },
-    {
-      "path": "reference/diagrams/serialized-versus-overlapped-two-node-work.svg",
-      "title": "Serialized versus overlapped two-node work",
-      "lessons": [
-        12
-      ],
-      "after": "Practice",
-      "home": "lab:13_collective_overlap"
     },
     {
       "path": "reference/diagrams/optimization-keep-or-reject-decision.svg",
@@ -118,15 +109,6 @@
       ],
       "after": "How it works",
       "home": "lesson"
-    },
-    {
-      "path": "reference/diagrams/all-reduce-result-units.svg",
-      "title": "Reading an illustrative all-reduce result",
-      "lessons": [
-        11
-      ],
-      "after": "Check your results",
-      "home": "lab:17_nccl_transport_sweep"
     },
     {
       "path": "reference/diagrams/h2d-slot-ownership.svg",

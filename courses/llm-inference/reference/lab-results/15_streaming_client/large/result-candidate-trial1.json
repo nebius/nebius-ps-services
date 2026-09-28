@@ -1,0 +1,24 @@
+{
+  "correctness": {
+    "all_streams_produced_content": true
+  },
+  "lab": "15_streaming_client",
+  "measurements": {
+    "concurrency": 4,
+    "median_e2e_ms": 374.207,
+    "median_inter_chunk_gap_ms": 1.604,
+    "median_ttft_ms": 297.038,
+    "p90_e2e_ms": 657.633,
+    "p90_ttft_ms": 580.586,
+    "received_characters": 1701,
+    "request_throughput_per_second": 10.634,
+    "requests": 8
+  },
+  "parameters": {
+    "concurrency": 4,
+    "requests": 8,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

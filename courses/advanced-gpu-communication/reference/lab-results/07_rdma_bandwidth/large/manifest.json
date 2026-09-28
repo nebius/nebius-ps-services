@@ -1,0 +1,71 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "3bbe80fe73124dc831b8ee2ed4a7f7628245a0a1b17edd79c4298222b2754e64",
+      "sha256": "a584e4c8c031e5816457423be90de24944817f27cbe4c0632f78d63390bd8161",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "353ca9336cee9afe59d114f3dc028a97ed0120004f39d6f1b7b3a1c9fa32c819",
+      "sha256": "7756a557955be2772664adde69552f8f878e072f821b8aaf9cecd7fe8a0e2a5a",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "result-depth64-trial1.json",
+      "original_sha256": "e42ad86cdd2115313ce34f1894295aaf8dd069ee1acf961014bfb31113df5e96",
+      "sha256": "fb75200208d7e4c0623ce985553589011e2f24d59dd15cad23bc00824e474939",
+      "variant": "depth64-trial1"
+    },
+    {
+      "file": "grafana-baseline-candidate-overview.png",
+      "sha256": "31104e9e3ba240443400400c2017e94af881e7e8f7a0876c56107f4868f77524",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-candidate-bidirectional-gbps-page1.png",
+      "sha256": "4f2b86cd500c34b04fdc30cce5c7c14c0ed33112aba414c4300977bb61e50900",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-candidate-validated-bytes-min-page1.png",
+      "sha256": "baba3fedf1e418c373a1ccfc614b82d7ac8c448c888bd7a2b93290db406989ef",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-candidate-depth64-overview.png",
+      "sha256": "3df805364fb3f78e9f0e0b4364cf780b4c7cc72d72c9e9f362b94b15525b34e2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-candidate-depth64-bidirectional-gbps-page1.png",
+      "sha256": "c76038816d4aee962d44c218aaade8fa4c4ec03119d9ee386ef6ba6cee6776e6",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-candidate-depth64-validated-bytes-min-page1.png",
+      "sha256": "fa1bc0c7a9fa0c1480ab261c5d258be3109c4430b0d77633dd0b8b43d200771e",
+      "tool": "grafana"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "07_rdma_bandwidth",
+  "limitations": [
+    "unlocked-gpu-clocks",
+    "vendor-display-unit"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "9d4f3fba6fb34cc6a32ef3f98d3dbff45cf57e19307c13b111e1b74e5d3e1531"
+}

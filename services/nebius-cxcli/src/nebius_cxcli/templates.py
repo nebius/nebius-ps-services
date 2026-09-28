@@ -34,6 +34,7 @@ def _generated_workflow_path_glob(deployments_dir: str) -> str:
 def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_ref: str) -> str:
     """Render the customer GitHub Actions workflow scaffold."""
     generated_path_glob = _generated_workflow_path_glob(deployments_dir)
+    config_path_glob = generated_path_glob.removesuffix("generated/**") + "config.yaml"
     return (
         dedent(
             f"""
@@ -43,11 +44,13 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
           pull_request:
             paths:
               - "{generated_path_glob}"
+              - "{config_path_glob}"
               - ".github/workflows/nebius-deployments.yml"
           push:
             branches: [ "main" ]
             paths:
               - "{generated_path_glob}"
+              - "{config_path_glob}"
               - ".github/workflows/nebius-deployments.yml"
           workflow_dispatch:
 
@@ -55,8 +58,8 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
           contents: read
 
         concurrency:
-          group: nebius-deployments-${{{{ github.workflow }}}}-${{{{ github.ref }}}}
-          cancel-in-progress: true
+          group: nebius-deployments-${{{{ github.workflow }}}}
+          cancel-in-progress: false
 
         defaults:
           run:
@@ -179,12 +182,22 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
+              - name: Validate desired configuration
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli validate "${{{{ matrix.config }}}}"
+
+              - name: Render complete deployment bundle
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli render "${{{{ matrix.config }}}}" --force
+
               - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
-              - name: Terraform plan
+              - name: Preview deployment
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
@@ -193,10 +206,10 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   # If config uses infra.mysterybox payloads, set
                   # TF_VAR_mysterybox_payload_values here as a
                   # secret_name -> payload_key map.
-                  nebius-cxcli terraform plan "${{{{ matrix.generated }}}}"
+                  nebius-cxcli deploy "${{{{ matrix.config }}}}" --dry-run
 
           apply:
-            if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.discover.outputs.has_changes == 'true'
+            if: (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && needs.discover.outputs.has_changes == 'true'
             needs: [ discover ]
             runs-on: ubuntu-latest
             environment:
@@ -267,12 +280,22 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                     echo "AWS_SECRET_ACCESS_KEY=${{NEBIUS_S3_SECRET_ACCESS_KEY}}"
                   }} >> "$GITHUB_ENV"
 
+              - name: Validate desired configuration
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli validate "${{{{ matrix.config }}}}"
+
+              - name: Render complete deployment bundle
+                run: |
+                  set -euo pipefail
+                  nebius-cxcli render "${{{{ matrix.config }}}}" --force
+
               - name: Validate generated artifacts and readiness
                 run: |
                   set -euo pipefail
                   nebius-cxcli validate-generated --portable "${{{{ matrix.generated }}}}"
 
-              - name: Terraform apply
+              - name: Deploy infrastructure and applications
                 env:
                   NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
                   NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
@@ -281,17 +304,7 @@ def customer_workflow_yaml(*, deployments_dir: str, discover_target: str, cli_re
                   # If config uses infra.mysterybox payloads, set
                   # TF_VAR_mysterybox_payload_values here as a
                   # secret_name -> payload_key map.
-                  nebius-cxcli terraform apply "${{{{ matrix.generated }}}}"
-
-              - name: Bootstrap/reconcile Flux
-                env:
-                  GITHUB_TOKEN: ${{{{ secrets.FLUX_GITHUB_TOKEN }}}}
-                  NEBIUS_SA_ID: ${{{{ secrets.NEBIUS_SA_ID }}}}
-                  NEBIUS_AUTH_PUBLIC_KEY_ID: ${{{{ secrets.NEBIUS_AUTH_PUBLIC_KEY_ID }}}}
-                  NEBIUS_AUTH_PRIVATE_KEY_PEM: ${{{{ secrets.NEBIUS_AUTH_PRIVATE_KEY_PEM }}}}
-                run: |
-                  set -euo pipefail
-                  nebius-cxcli flux bootstrap "${{{{ matrix.generated }}}}"
+                  nebius-cxcli deploy "${{{{ matrix.config }}}}"
 
               - name: Send deploy report email
                 env:

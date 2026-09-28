@@ -8,7 +8,8 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from typing import Any
 
 from .component_instances import (
@@ -2373,19 +2374,6 @@ def _soperator_node_group_resources(group: Mapping[str, Any]) -> dict[str, int]:
     return resources
 
 
-def _soperator_resource_cpu_value(value: Any) -> int | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if text.endswith("m"):
-        with suppress(ValueError):
-            return max(1, int(text[:-1]) // 1000)
-        return None
-    with suppress(ValueError):
-        return int(float(text))
-    return None
-
-
 def _soperator_format_cpu_millicores(value: int) -> str:
     if value % 1000 == 0:
         return str(value // 1000)
@@ -2469,12 +2457,91 @@ def _soperator_fit_gpu_node_config_to_group(
         node_config["static"] = f"{static} Gres=gpu:{gpu_count}".strip()
 
 
-def _soperator_resource_memory_gib(value: Any) -> int | None:
-    text = str(value or "").strip()
-    match = re.fullmatch(r"([0-9]+)(?:Gi|G|GB|gb)?", text)
-    if not match:
-        return None
-    return int(match.group(1))
+def _soperator_default_worker_topology(group: Mapping[str, Any]) -> str:
+    """Physical topology from the reference deployment, never a quota topology."""
+    preset = _soperator_parse_preset_resources(_soperator_node_group_resource_preset(group))
+    platform = group.get("platform")
+    cpu = preset.get("vcpu", 0)
+    gpu = preset.get("gpu", 0)
+    sockets, threads = 1, 2
+    supported = False
+    if platform == "cpu-e2":
+        supported = cpu in {2, 4, 8, 16, 32, 48, 64, 80} and not gpu
+        sockets = 2 if cpu >= 48 else 1
+    elif platform == "cpu-d3":
+        supported = cpu in {2, 4, 8, 16, 32, 48, 64, 96, 128, 160, 192, 224, 256} and not gpu
+        sockets = 2 if cpu >= 160 else 1
+    else:
+        gpu_shapes = {
+            "gpu-h100-sxm": {(1, 16), (8, 128)},
+            "gpu-h200-sxm": {(1, 16), (8, 128)},
+            "gpu-b200-sxm": {(1, 20), (8, 160)},
+            "gpu-b200-sxm-a": {(1, 20), (8, 160)},
+            "gpu-b300-sxm": {(1, 24), (8, 192)},
+            "gpu-gb300": {(4, 112)},
+        }
+        supported = (gpu, cpu) in gpu_shapes.get(str(platform), set())
+        sockets = 2 if gpu > 1 else 1
+        threads = 1 if platform == "gpu-gb300" else 2
+    if not supported:
+        raise ValueError("Soperator worker preset has no verified physical CPU topology")
+    return (
+        f"Boards=1 SocketsPerBoard={sockets} "
+        f"CoresPerSocket={cpu // sockets // threads} ThreadsPerCore={threads}"
+    )
+
+
+def _soperator_worker_memory_mib(value: Any) -> int | None:
+    from .mk8s_gpu import _parse_kubernetes_quantity
+
+    quantity = _parse_kubernetes_quantity(value)
+    # Requests round up for admission; the Kubernetes quantity itself is kept.
+    return math.ceil(quantity / (1 << 20)) if quantity is not None and quantity > 0 else None
+
+
+def _soperator_default_worker_resources(
+    nodeset: Mapping[str, Any], group: Mapping[str, Any], *, sssd_enabled: bool | None = None
+) -> tuple[int, int, int, int]:
+    """Nebius solutions-library preset reserve and resident worker deductions.
+
+    Policy: soperator/modules/{available_resources/reserve,slurm/flux_release_nodesets}.tf
+    at 400d53abbcc7daa5553216aab1f0973ac40cb406. This is an offline install
+    budget; observed allocatable remains a separate admission bound.
+    """
+    preset = _soperator_parse_preset_resources(_soperator_node_group_resource_preset(group))
+    if not {"vcpu", "memory"} <= preset.keys():
+        raise ValueError("Soperator worker resource defaults require a known CPU/memory preset")
+    resident_cpu = 0
+    resident_memory = 0
+    for name in ("munge", "sssd"):
+        sidecar = nodeset.get(name, {})
+        if not isinstance(sidecar, Mapping):
+            raise ValueError(f"Soperator worker resource settings for {name} must be a mapping")
+        if name == "sssd":
+            enabled = sidecar.get("enabled", False) if sssd_enabled is None else sssd_enabled
+            if not enabled:
+                continue
+        request = sidecar.get("resources", {})
+        if not isinstance(request, Mapping):
+            raise ValueError(f"Soperator worker resource settings for {name} must be a mapping")
+        cpu = _soperator_parse_cpu_millicores(request.get("cpu"))
+        memory = _soperator_worker_memory_mib(request.get("memory"))
+        if cpu is None or memory is None or cpu <= 0 or memory <= 0:
+            raise ValueError(
+                f"Soperator worker resource defaults require explicit {name} resources"
+            )
+        resident_cpu += cpu
+        resident_memory += memory
+    base_cpu = (preset["vcpu"] - 1) * 1000
+    base_memory = preset["memory"] * 1024 * 9 // 10 - 2 * 1024
+    # Upstream floors sidecar-adjusted cores/GiB before its Kruise reserve.
+    cpu = (base_cpu - resident_cpu) // 1000 * 1000 - 50
+    memory = ((base_memory - resident_memory) // 1024 * 1024 - 132) // 1024 * 1024
+    if cpu <= 0 or memory <= 0:
+        raise ValueError(
+            "Soperator worker capacity is insufficient after system and sidecar reserves"
+        )
+    return cpu, memory, resident_cpu + 50, resident_memory + 132
 
 
 def _soperator_fit_nodeset_resources_to_group(
@@ -2483,6 +2550,7 @@ def _soperator_fit_nodeset_resources_to_group(
     group_key: str,
     inputs: Mapping[str, Any],
     install_mode: str = "",
+    sssd_enabled: bool | None = None,
 ) -> None:
     node_groups = inputs.get("node_groups")
     group = node_groups.get(group_key) if isinstance(node_groups, Mapping) else None
@@ -2503,10 +2571,10 @@ def _soperator_fit_nodeset_resources_to_group(
     cpu_millicores = resources.get("vcpu_millicores")
     current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
     if install_mode == _SOPERATOR_TARGET_MODE_REGISTERED:
-        if current_cpu is not None and current_cpu > 500:
+        if current_cpu is None or current_cpu > 500:
             slurmd_resources["cpu"] = "500m"
         current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
-        if current_memory is not None and current_memory > 1024:
+        if current_memory is None or current_memory > 1024:
             slurmd_resources["memory"] = "1024Mi"
         if not gpu_enabled:
             node_config = nodeset.setdefault("nodeConfig", {})
@@ -2514,42 +2582,49 @@ def _soperator_fit_nodeset_resources_to_group(
                 node_config["static"] = _soperator_cpu_node_config_static(cpu_millicores)
         return
 
-    if cpu_millicores is not None and (
-        not gpu_enabled or (current_cpu is not None and current_cpu > cpu_millicores)
-    ):
-        target_cpu_millicores = max(1000, int(cpu_millicores * 0.75))
-        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(target_cpu_millicores)
-        current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
+    current_memory = _soperator_worker_memory_mib(slurmd_resources.get("memory"))
+    for name, parsed in (("cpu", current_cpu), ("memory", current_memory)):
+        if name in slurmd_resources and (parsed is None or parsed <= 0):
+            raise ValueError(f"Soperator worker resource {name} must be a positive quantity")
 
-    memory_mib = resources.get("memory_mib")
-    current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
-    if memory_mib is not None and (
-        not gpu_enabled or (current_memory is not None and current_memory > memory_mib)
+    # Numeric values already saved in configuration are intentional. Only absent
+    # fields request defaults; never infer ownership by comparing magic constants.
+    missing_defaults = current_cpu is None or current_memory is None
+    resident_cpu = resident_memory = 0
+    if missing_defaults or "munge" in nodeset:
+        default_cpu, default_memory, resident_cpu, resident_memory = (
+            _soperator_default_worker_resources(nodeset, group, sssd_enabled=sssd_enabled)
+        )
+        if current_cpu is None:
+            current_cpu = default_cpu
+            slurmd_resources["cpu"] = _soperator_format_cpu_millicores(current_cpu)
+        if current_memory is None:
+            current_memory = default_memory
+            slurmd_resources["memory"] = _soperator_format_memory_mib(current_memory)
+    # Preserve explicit values but never silently clamp an impossible allocation.
+    # Allocatable, when known, is already host-reserved and gets no percentage.
+    for requested, overhead, available in (
+        (current_cpu, resident_cpu, cpu_millicores),
+        (current_memory, resident_memory, resources.get("memory_mib")),
     ):
-        target_memory_mib = max(1024, int(memory_mib * 0.75))
-        slurmd_resources["memory"] = _soperator_format_memory_mib(target_memory_mib)
+        if available is not None and requested is not None and requested + overhead > available:
+            raise ValueError("Soperator worker resource request exceeds available node capacity")
 
-    # Keep the legacy whole-node fallback for managed profile presets that do
-    # not expose allocatable data.
-    if "vcpu_millicores" not in resources:
-        vcpu_count = resources.get("vcpu")
-        legacy_current_cpu = _soperator_resource_cpu_value(slurmd_resources.get("cpu"))
-        if (
-            vcpu_count is not None
-            and legacy_current_cpu is not None
-            and legacy_current_cpu > vcpu_count
-        ):
-            slurmd_resources["cpu"] = str(max(1, vcpu_count // 2))
-            current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
-    if "memory_mib" not in resources:
-        memory_gib = resources.get("memory")
-        legacy_current_memory = _soperator_resource_memory_gib(slurmd_resources.get("memory"))
-        if (
-            memory_gib is not None
-            and legacy_current_memory is not None
-            and legacy_current_memory > memory_gib
-        ):
-            slurmd_resources["memory"] = f"{max(1, memory_gib // 4)}Gi"
+    node_config = nodeset.setdefault("nodeConfig", {})
+    if isinstance(node_config, dict) and not str(node_config.get("static") or "").strip():
+        node_config["static"] = _soperator_default_worker_topology(group)
+        if gpu_enabled and gpu_count:
+            node_config["static"] += f" Gres=gpu:{gpu_count}"
+
+    if (
+        isinstance(node_config, dict)
+        and gpu_enabled
+        and gpu_count is not None
+        and gpu_count > 0
+        and "gresConfig" not in node_config
+    ):
+        device = "/dev/nvidia0" if gpu_count == 1 else f"/dev/nvidia[0-{gpu_count - 1}]"
+        node_config["gresConfig"] = [f"AutoDetect=off Name=gpu File={device}"]
 
     if gpu_enabled and (group.get("platform"), _soperator_node_group_resource_preset(group)) == (
         "gpu-h200-sxm",
@@ -2567,10 +2642,6 @@ def _soperator_fit_nodeset_resources_to_group(
             slurmd_cpu_millicores=current_cpu,
             gpu_count=gpu_count,
         )
-    else:
-        node_config = nodeset.setdefault("nodeConfig", {})
-        if isinstance(node_config, dict):
-            node_config["static"] = _soperator_cpu_node_config_static(current_cpu or cpu_millicores)
 
 
 def _soperator_template_nodesets_by_name(values: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -3346,6 +3417,7 @@ def _materialize_soperator_mapping_chart_values(
                 group_key=group_key,
                 inputs=inputs,
                 install_mode=install_mode,
+                sssd_enabled=_soperator_guided_sssd_enabled(values),
             )
             generated_nodesets.append(nodeset)
             replacement_names.append(nodeset_name)
@@ -3572,7 +3644,6 @@ def _materialize_soperator_mapping_chart_values(
 
 def _materialize_soperator_node_group(
     *,
-    target_ref: str,
     group_key: str,
     group: dict[str, Any],
     inputs: Mapping[str, Any],
@@ -3589,9 +3660,14 @@ def _materialize_soperator_node_group(
     _materialize_soperator_node_group_filesystems(group)
     service_account = group.get("service_account")
     if service_account is None:
-        identity = f"{target_ref}:{group_key}"
+        # The starter target is shared by independent installations. Wait for
+        # the operator's cluster name before allocating project-wide IAM names.
+        cluster_name = _non_empty_text(_profile_mapping(inputs, "cluster").get("cluster_name"))
+        if not cluster_name:
+            return
+        identity = json.dumps([cluster_name, group_key], separators=(",", ":"))
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
-        target_token = normalize_component_token(target_ref)[:18] or "cluster"
+        target_token = normalize_component_token(cluster_name)[:18] or "cluster"
         group_token = normalize_component_token(group_key)[:18] or "nodes"
         group["service_account"] = {
             "name": f"sop-{target_token}-{group_token}-{digest}",
@@ -3605,7 +3681,6 @@ def _materialize_soperator_node_group(
 
 def _materialize_soperator_worker_node_groups(
     *,
-    target_ref: str,
     inputs: dict[str, Any],
     node_groups: dict[str, Any],
     worker_profiles: list[Any],
@@ -3728,6 +3803,13 @@ def _materialize_soperator_worker_node_groups(
             nodeset_name=nodeset_name,
             key_prefix=key_prefix,
         )
+        retained_accounts = {
+            key: copy.deepcopy(node_groups[key]["service_account"])
+            for key in existing_group_keys
+            if key in desired_counts
+            and isinstance(node_groups[key], Mapping)
+            and "service_account" in node_groups[key]
+        }
         if existing_group_keys:
             existing_key_set = set(existing_group_keys)
             desired_key_set = set(desired_counts)
@@ -3769,7 +3851,6 @@ def _materialize_soperator_worker_node_groups(
                             autoscaling=desired_autoscaling.get(group_key),
                         )
                         _materialize_soperator_node_group(
-                            target_ref=target_ref,
                             group_key=group_key,
                             group=group,
                             inputs=inputs,
@@ -3789,13 +3870,14 @@ def _materialize_soperator_worker_node_groups(
                 },
             )
             if isinstance(group, dict):
+                if group_key in retained_accounts:
+                    group["service_account"] = retained_accounts[group_key]
                 _soperator_set_node_group_scale(
                     group,
                     node_count=shard_size,
                     autoscaling=desired_autoscaling.get(group_key),
                 )
                 _materialize_soperator_node_group(
-                    target_ref=target_ref,
                     group_key=group_key,
                     group=group,
                     inputs=inputs,
@@ -3810,7 +3892,6 @@ def _materialize_soperator_worker_node_groups(
 
 def _materialize_soperator_mk8s_profile(
     *,
-    target_ref: str,
     inputs: dict[str, Any],
     profile: Mapping[str, Any],
     values: Mapping[str, Any],
@@ -3876,14 +3957,12 @@ def _materialize_soperator_mk8s_profile(
     for group_key, group in node_groups.items():
         if isinstance(group, dict):
             _materialize_soperator_node_group(
-                target_ref=target_ref,
                 group_key=str(group_key),
                 group=group,
                 inputs=inputs,
                 prefer_shape_defaults=True,
             )
     _materialize_soperator_worker_node_groups(
-        target_ref=target_ref,
         inputs=inputs,
         node_groups=node_groups,
         worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
@@ -3917,12 +3996,18 @@ def _render_soperator_sfs_profile_filesystems(
     profile: Mapping[str, Any],
     target_ref: str,
 ) -> dict[str, Any]:
+    from .filesystem_mount_tags import default_mount_tag
+
     sfs_profile = _profile_mapping(profile, "sfs")
     profile_filesystems = _profile_mapping(sfs_profile, "filesystems")
-    return {
+    filesystems = {
         key: _render_soperator_profile_value(value, target_ref=target_ref)
         for key, value in profile_filesystems.items()
     }
+    for spec in filesystems.values():
+        if isinstance(spec, dict) and isinstance(spec.get("mount_tag"), str):
+            spec["mount_tag"] = default_mount_tag(spec["mount_tag"])
+    return filesystems
 
 
 def _materialize_soperator_partition_profile(
@@ -4023,15 +4108,21 @@ def _materialize_soperator_dcgm_exporter_values(
     inputs: Mapping[str, Any],
 ) -> None:
     node_groups = iter_mk8s_node_groups(inputs)
-    dcgm_exporter = values.setdefault("soperator-dcgm-exporter", {})
+    from .soperator_values import validate_observability_values
+
+    validate_observability_values(values)
     if not any(group.gpu for group in node_groups):
-        if isinstance(dcgm_exporter, dict):
-            dcgm_exporter["enabled"] = False
         return
     if not any(group.gpu and group.gpu_stack_source == "nebius_image" for group in node_groups):
         return
-    if isinstance(dcgm_exporter, dict):
-        dcgm_exporter.setdefault("validateToolkit", False)
+    observability = values.setdefault("observability", {})
+    dcgm_exporter = observability.setdefault("dcgmExporter", {})
+    if not isinstance(dcgm_exporter, dict):
+        raise ValueError("Soperator values.observability.dcgmExporter must be a mapping")
+    child_values = dcgm_exporter.setdefault("values", {})
+    if not isinstance(child_values, dict):
+        raise ValueError("Soperator values.observability.dcgmExporter.values must be a mapping")
+    child_values.setdefault("validateToolkit", False)
 
 
 def _materialize_soperator_worker_ephemeral_values(
@@ -4056,16 +4147,50 @@ def _materialize_soperator_worker_ephemeral_values(
     slurm_config["suspendTime"] = suspend_time_seconds
 
 
+_FROZEN_SOPERATOR_TOPOLOGY: ContextVar[bool] = ContextVar(
+    "frozen_soperator_topology", default=False
+)
+
+
+@contextmanager
+def frozen_soperator_topology():
+    """Compile an admitted generation without re-synthesizing its node inventory.
+
+    Only the deployment engine enters this scope, after the ordinary config
+    renderer has resolved profiles, counts, account names, and topology. There is
+    no YAML switch that can bypass authoring validation.
+    """
+    token = _FROZEN_SOPERATOR_TOPOLOGY.set(True)
+    try:
+        yield
+    finally:
+        _FROZEN_SOPERATOR_TOPOLOGY.reset(token)
+
+
 def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
-    selected = [(row, explicit_values(row)) for row in soperator_rows(payload)]
-    changed = _materialize_soperator_generated_defaults(payload)
-    for row, supplied in selected:
+    from .soperator_worker_defaults import prepare_worker_defaults, remember_worker_defaults
+
+    original = copy.deepcopy(payload)
+    modes = _soperator_target_mode_by_target(payload)
+    selected = []
+    for row in soperator_rows(payload):
+        supplied = explicit_values(row)
+        target = app_chart_target_ref(row) or component_instance_id(row)
+        managed = modes.get(target) == _SOPERATOR_TARGET_MODE_MANAGED
+        before = (
+            prepare_worker_defaults(row)
+            if managed and not _FROZEN_SOPERATOR_TOPOLOGY.get()
+            else None
+        )
+        selected.append((row, supplied, before))
+    _materialize_soperator_generated_defaults(payload)
+    for row, supplied, worker_before in selected:
         values = row.setdefault("values", {})
-        before = copy.deepcopy(values)
         merge_values(values, supplied)
         _materialize_soperator_guided_sssd_values(values)
-        changed = changed or before != values
-    return changed
+        if worker_before is not None:
+            remember_worker_defaults(row, worker_before)
+    return original != payload
 
 
 def _materialize_soperator_generated_defaults(payload: dict[str, Any]) -> bool:
@@ -4145,22 +4270,22 @@ def _materialize_soperator_generated_defaults(payload: dict[str, Any]) -> bool:
         before = copy.deepcopy(row)
         if component_id == "mk8s" and component_instance_id(row) in soperator_targets:
             target_ref = component_instance_id(row)
-            _materialize_soperator_mk8s_profile(
-                target_ref=target_ref,
-                inputs=inputs,
-                profile=profile_by_target.get(target_ref, {}),
-                values=soperator_values_by_target.get(target_ref, {}),
-                placements=soperator_placements_by_target.get(target_ref, {}),
-                install_mode=install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_target_mode(),
-                ),
-                replace_profile_managed_groups=generated_placements_by_target.get(
-                    target_ref,
-                    False,
-                ),
-                placements_configured=configured_placements_by_target.get(target_ref, False),
-            )
+            if not _FROZEN_SOPERATOR_TOPOLOGY.get():
+                _materialize_soperator_mk8s_profile(
+                    inputs=inputs,
+                    profile=profile_by_target.get(target_ref, {}),
+                    values=soperator_values_by_target.get(target_ref, {}),
+                    placements=soperator_placements_by_target.get(target_ref, {}),
+                    install_mode=install_mode_by_target.get(
+                        target_ref,
+                        _default_soperator_target_mode(),
+                    ),
+                    replace_profile_managed_groups=generated_placements_by_target.get(
+                        target_ref,
+                        False,
+                    ),
+                    placements_configured=configured_placements_by_target.get(target_ref, False),
+                )
         elif component_id == "sfs":
             sfs_instance_id = component_instance_id(row)
             target_ref = ""
@@ -4203,6 +4328,8 @@ def _materialize_soperator_generated_defaults(payload: dict[str, Any]) -> bool:
                     profile=profile_by_target.get(target_ref, {}),
                     inferred_placements=inferred_placements,
                 )
+            if _FROZEN_SOPERATOR_TOPOLOGY.get():
+                replace_generated_placements = True
             if replace_generated_placements:
                 generated_placements_by_target[target_ref] = True
             _soperator_set_app_placements(

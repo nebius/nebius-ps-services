@@ -1,0 +1,36 @@
+{
+  "correctness": {
+    "exact_copy": true
+  },
+  "lab": "03_transfer_and_pinning",
+  "measurements": {
+    "modes": [
+      {
+        "effective_gib_per_s": 11.43,
+        "median_ms": 10.9329
+      },
+      {
+        "effective_gib_per_s": 11.56,
+        "median_ms": 10.8129
+      },
+      {
+        "effective_gib_per_s": 51.32,
+        "median_ms": 2.4357
+      },
+      {
+        "effective_gib_per_s": 51.44,
+        "median_ms": 2.4302
+      }
+    ],
+    "size_mib": 128
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "size_mib": 128,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -23,6 +23,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import sdlc_execution_core as execution_core  # noqa: E402
 import sdlc_execution_interop as execution_interop  # noqa: E402
+from sdlc_evidence_security import contains_sensitive  # noqa: E402
 from sdlc_execution_core import (  # noqa: E402
     ExecutionError,
     _claim_worker_session,
@@ -217,6 +218,32 @@ MANAGED_PLAN = """# FEAT-001 Plan v1
 """
 
 
+class SensitiveEvidenceTests(unittest.TestCase):
+    def test_dynamic_cookie_lookup_and_secret_factory_are_not_literals(self):
+        for line in (
+            'token = client.cookies["csrftoken"].value',
+            '+    token = client.cookies["csrftoken"].value',
+            'secret = secrets.token_urlsafe(32)',
+        ):
+            with self.subTest(line=line):
+                self.assertFalse(contains_sensitive(line))
+
+    def test_literals_and_ambiguous_expressions_remain_blocked(self):
+        synthetic = "z" * 24
+        for line in (
+            "token = " + synthetic,
+            'token = "' + synthetic + '"',
+            "password: '" + synthetic + "'",
+            'token = "client.cookies[csrftoken]"',
+            'token = client.cookies[',
+            'token = client.cookies["csrf"]; secret = ' + synthetic,
+            'token = client.cookies["csrf"]\nsecret = ' + synthetic,
+            'secret = secrets.token_urlsafe(32); OPENAI_API_KEY = sk-' + synthetic,
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(contains_sensitive(line))
+
+
 class WorktreeInteropBoundaryTests(unittest.TestCase):
     def test_private_interop_rejects_public_lifecycle_before_subprocess(self) -> None:
         for action in ("add", "integrate", "remove"):
@@ -405,6 +432,158 @@ class SchedulerTests(unittest.TestCase):
 
 
 class GitLifecycleTests(unittest.TestCase):
+    def integrated_failure_fixture(self):
+        self.complete_first_wave()
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
+        self.start_assignment(assignment, "WAVE-002")
+        (Path(assignment["worktree"]) / "src/c.py").write_text("VALUE = 3\n")
+        finish_task(self.run_dir, "FEAT-001", "WAVE-002", "TASK-003",
+                    "focused tests passed", "review passed", "feat: TASK-003",
+                    summary="original implementation")
+        integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
+        sys.path.insert(0, str(SCRIPT_DIR.parents[1] / "sdlc-classify-failure/scripts"))
+        import repair_control
+        from test_repair_control import failure_payload, localized_diagnosis
+        event = repair_control.record_failure_event(self.run_dir, failure_payload(
+            commit=integrated["integration_head"], lifecycle="integrated_wave",
+        ))["event"]
+        diagnosis = repair_control.record_diagnosis(self.run_dir, localized_diagnosis(event))["diagnosis"]
+        classification = repair_control.classify_failure(
+            self.run_dir, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"],
+        )["classification"]
+        attempt = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", classification["classification_id"],
+            "localized", "Correct the proven mapping at its owner.", "evidence/new-localization.md",
+        )["attempt"]
+        return assignment, integrated, diagnosis, classification, attempt
+
+    def test_integrated_failed_wave_correction_preserves_failure_and_blocks_bypass(self):
+        assignment, integrated, diagnosis, classification, attempt = self.integrated_failure_fixture()
+        fail_args = (self.run_dir, "FEAT-001", "WAVE-002", classification["classification_id"],
+                     attempt["dispatch_id"], "combined oracle failed")
+        failed = execution_core.fail_wave(*fail_args)
+        self.assertEqual(failed["status"], "failed")
+        self.assertFalse(Path(assignment["worktree"]).exists())
+        self.assertEqual(execution_core.fail_wave(*fail_args), failed)
+        with self.assertRaises(ExecutionError):
+            complete_wave(self.run_dir, "FEAT-001", "WAVE-002", "pretend passed")
+        with self.assertRaises(ExecutionError):
+            seal_feature(self.run_dir, "FEAT-001", "cannot pass", "feat: blocked")
+        addition = """
+
+### TASK-004
+
+- Requirements: REQ-001
+- Goal: correct the original combined oracle
+- Depends on: TASK-003
+- Write claims: exact: src/c.py
+- Conflict domains: code:c
+- Validation: original oracle and combined tests
+- Done criteria: original oracle passes
+- Rollback or stop conditions: stop on changed repair identity
+"""
+        replacement = self.run_dir / "plans/FEAT-001.plan.v2.md"
+        replacement.write_text(PLAN.replace("Plan v1", "Plan v2") + addition)
+        replacement.with_suffix(".md.lock").write_text("locked\n")
+        replan_future(self.run_dir, "FEAT-001", replacement, 1)
+        with self.assertRaises(ExecutionError):
+            prepare_wave(self.run_dir, "FEAT-001", "WAVE-003")
+        replacement = self.run_dir / "plans/FEAT-001.plan.v3.md"
+        replacement.write_text(PLAN.replace("Plan v1", "Plan v3") + addition +
+                               f"- Diagnosis: {diagnosis['diagnosis_id']}\n" +
+                               f"- Regression oracle: {diagnosis['regression_oracle']}\n")
+        replacement.with_suffix(".md.lock").write_text("locked\n")
+        replan_future(self.run_dir, "FEAT-001", replacement, 1)
+        correction = prepare_wave(self.run_dir, "FEAT-001", "WAVE-003")[0]
+        self.start_assignment(correction, "WAVE-003")
+        (Path(correction["worktree"]) / "src/c.py").write_text("VALUE = 4\n")
+        finish_task(self.run_dir, "FEAT-001", "WAVE-003", "TASK-004",
+                    "original oracle passed", "review passed", "fix: TASK-004",
+                    summary="corrected original oracle", regression_oracle_evidence={
+                        "oracle": diagnosis["regression_oracle"], "outcome": "passed",
+                        "evidence_reference": "evidence/original-oracle.md",
+                    })
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-003")
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-003", "combined oracle passed at corrected tip")
+        resolved_path = wave_path(self.run_dir, "FEAT-001", "WAVE-002")
+        resolved = json.loads(resolved_path.read_text())
+        self.assertEqual(resolved["status"], "failed")
+        self.assertEqual(resolved["combined_failure"], failed["combined_failure"])
+        self.assertEqual(resolved["integration_head"], integrated["integration_head"])
+        coordinator_before = coordinator_path(self.run_dir, "FEAT-001").read_bytes()
+        execution_core.fail_wave(*fail_args)
+        complete_wave(self.run_dir, "FEAT-001", "WAVE-001", "old success replay")
+        self.assertEqual(coordinator_path(self.run_dir, "FEAT-001").read_bytes(), coordinator_before)
+        corrupted = json.loads(resolved_path.read_text())
+        corrupted["failure_resolution"]["integration_head"] = "f" * 40
+        resolved_path.write_text(json.dumps(corrupted))
+        with self.assertRaises(ExecutionError):
+            seal_feature(self.run_dir, "FEAT-001", "must reject tampered proof", "feat: blocked")
+        resolved_path.write_text(json.dumps(resolved))
+        seal_feature(self.run_dir, "FEAT-001", "corrected evidence", "feat: corrected feature")
+        promoted = promote_feature(self.run_dir, "FEAT-001", "corrected evidence")
+        self.assertEqual(promoted["status"], "done")
+
+    def test_failed_wave_cleanup_refusal_and_retry_preserve_original_evidence(self):
+        assignment, _, _, classification, attempt = self.integrated_failure_fixture()
+        args = (self.run_dir, "FEAT-001", "WAVE-002", classification["classification_id"],
+                attempt["dispatch_id"], "combined oracle failed")
+        worker = Path(assignment["worktree"])
+        stray = worker / "uncommitted.txt"
+        stray.write_text("preserve me\n")
+        with self.assertRaises(ExecutionError) as blocked:
+            execution_core.fail_wave(*args)
+        self.assertEqual(blocked.exception.code, "CLEANUP_BLOCKED")
+        self.assertTrue(stray.exists())
+        failure = json.loads(wave_path(self.run_dir, "FEAT-001", "WAVE-002").read_text())["combined_failure"]
+        stray.unlink()
+        retired = execution_core.fail_wave(*args)
+        self.assertEqual(retired["combined_failure"], failure)
+        self.assertEqual(retired["status"], "failed")
+
+    def test_failed_wave_rejects_inactive_or_tampered_dispatch_without_cleanup(self):
+        assignment, integrated, _, classification, attempt = self.integrated_failure_fixture()
+        import repair_control
+        args = (self.run_dir, "FEAT-001", "WAVE-002", classification["classification_id"],
+                attempt["dispatch_id"], "combined oracle failed")
+        receipt = self.run_dir / "repairs/FEAT-001/dispatches" / f"{attempt['dispatch_id']}.json"
+        original = receipt.read_bytes()
+        altered = json.loads(original)
+        altered["diagnosis_id"] = "f" * 64
+        receipt.write_text(json.dumps(altered))
+        with self.assertRaises(ExecutionError):
+            execution_core.fail_wave(*args)
+        receipt.write_bytes(original)
+        repair_control.complete_remediation(
+            self.run_dir, "FEAT-001", attempt["dispatch_id"],
+            "failed_same_blocker", "evidence/failed-repair.md",
+        )
+        with self.assertRaises(ExecutionError):
+            execution_core.fail_wave(*args)
+        self.assertTrue(Path(assignment["worktree"]).exists())
+        self.assertEqual(json.loads(wave_path(self.run_dir, "FEAT-001", "WAVE-002").read_text()), integrated)
+
+    def test_integrated_failure_has_explicit_retirement_transition(self) -> None:
+        self.complete_first_wave()
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
+        self.start_assignment(assignment, "WAVE-002")
+        (Path(assignment["worktree"]) / "src/c.py").write_text("VALUE = 3\n")
+        finish_task(
+            self.run_dir, "FEAT-001", "WAVE-002", "TASK-003",
+            "focused tests passed", "review passed", "feat: TASK-003",
+            summary="completed original implementation",
+        )
+        integrated = integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
+        with self.assertRaises(ExecutionError):
+            execution_core.fail_wave(
+                self.run_dir, "FEAT-001", "WAVE-002", "a" * 64,
+                "b" * 64, "combined validation failed",
+            )
+        self.assertEqual(
+            json.loads(wave_path(self.run_dir, "FEAT-001", "WAVE-002").read_text()),
+            integrated,
+        )
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -1765,6 +1944,18 @@ class GitLifecycleTests(unittest.TestCase):
             ["first-batch handoff"],
         )
 
+    def test_tdd_seal_accepts_dynamic_csrf_cookie_lookup(self) -> None:
+        coordinator = self.prepare()
+        integration = Path(coordinator["integration_worktree"])
+        (integration / "tests").mkdir()
+        (integration / "tests" / "test_csrf.py").write_text(
+            'token = client.cookies["csrftoken"].value\n', encoding="utf-8"
+        )
+        result = seal_tdd_base(self.run_dir, "FEAT-001", "test: csrf contract")
+        self.assertEqual(result["status"], "tdd_sealed")
+        self.assertEqual(git(integration, "status", "--porcelain"), "")
+        self.assertNotEqual(git(integration, "rev-parse", "HEAD"), coordinator["base_head"])
+
     def test_finish_rejects_sensitive_staged_content_without_leaking(self) -> None:
         coordinator = self.prepare()
         integration = Path(coordinator["integration_worktree"])
@@ -1861,6 +2052,22 @@ class GitLifecycleTests(unittest.TestCase):
         self,
     ) -> None:
         self.complete_first_wave()
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-002")[0]
+        self.start_assignment(assignment, "WAVE-002")
+        (Path(assignment["worktree"]) / "src/c.py").write_text("VALUE = 3\n")
+        finish_task(
+            self.run_dir, "FEAT-001", "WAVE-002", "TASK-003",
+            "focused tests passed", "review passed", "feat: TASK-003",
+            summary="completed original implementation",
+        )
+        integrate_wave(self.run_dir, "FEAT-001", "WAVE-002")
+        complete_wave(
+            self.run_dir, "FEAT-001", "WAVE-002", "combined tests passed"
+        )
+        completed = json.loads(
+            (self.run_dir / "execution/FEAT-001/coordinator.json").read_text()
+        )
+        self.assertEqual(completed["status"], "integrated")
         original_task_records = {
             task_id: json.loads(
                 task_path(self.run_dir, "FEAT-001", "WAVE-001", task_id).read_text(
@@ -1904,6 +2111,9 @@ class GitLifecycleTests(unittest.TestCase):
             corrective["task"]["regression_oracle"],
             "original AC-001 evaluator oracle",
         )
+        assignments = prepare_wave(self.run_dir, "FEAT-001", "WAVE-003")
+        self.assertEqual([item["task_id"] for item in assignments], ["TASK-004"])
+        self.assertEqual(assignments[0]["base_head"], completed["integration_head"])
         for task_id, original in original_task_records.items():
             preserved = json.loads(
                 task_path(self.run_dir, "FEAT-001", "WAVE-001", task_id).read_text(

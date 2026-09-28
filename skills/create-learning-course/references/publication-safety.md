@@ -46,8 +46,9 @@ it to the static template.
 
 Escape all source listings; do not interpret example code as page markup.
 Reject unsafe URL schemes, event attributes, active SVG content and external
-SVG references. Keep manifests, source files and output inside the course;
-reject traversal and symlink paths. A builder must not run learner code,
+SVG references. Keep manifests and embedded sources inside the course. Companion links may use
+an explicitly declared publication root and exact allowlist; reject escapes and
+symlinks. See [Portable publication](portable-publication.md). A builder must not run learner code,
 download packages or start services.
 
 Check less-obvious request paths too: hyperlink `ping` tracking,
@@ -91,11 +92,60 @@ Respect tool restrictions and never bypass a denied browser, service or live
 operation using an alternative route. Do not upload, deploy, provision,
 install or contact a live target without authority for those effects.
 
+## Browser Verification
+
+For permitted full-course web verification, default to headless Playwright
+Test with an owned Chrome process and isolated context. Use the course's
+existing tooling when available; this default does not install packages or
+introduce a dependency on the SDLC lifecycle harness. Never reuse a personal
+browser profile. Close owned browser resources on success or failure.
+
+Render the complete publication at desktop, 390px and 320px widths. Preserve
+keyboard, zoom/reflow, mobile TOC, local scroller and diagram checks. Use
+repeatable assertions for interaction and layout expectations, alongside
+agent visual inspection for text fit, overlap, connector meaning and reading
+quality. Screenshots alone cannot establish interaction correctness; passing
+assertions do not replace semantic visual review.
+
+Record the inspected artifact path and revision or content digest, actual
+browser/version, headless mode, viewport sizes, assertion results, screenshot
+and trace paths, visual findings and owned-browser cleanup in
+`PUBLICATION-REVIEW.md`. Keep evidence local and free of secrets or personal
+browser data. Report omitted evidence and unavailable checks explicitly.
+
+Optional agent exploration uses a separate headless, isolated Playwright MCP
+session. Its observations do not replace repeatable acceptance assertions.
+Neither lane requires an unlocked screen, foreground window or selected
+monitor. This removes desktop prerequisites; it does not guarantee execution
+through system sleep, a closed lid or an unattended multi-day run.
+
+Unavailable or denied browser execution leaves the applicable gate pending.
+Continue permitted authoring without bypassing the denial or declaring the
+course publication-ready. Review-only and lesson-only requests do not
+implicitly trigger browser execution. Preserve separately declared native
+application and course-specific lab/target requirements; this browser default
+does not authorize installations, external publication or live lab execution.
+
+Official references: [headless test execution](https://playwright.dev/docs/running-tests),
+[browser isolation](https://playwright.dev/docs/browser-contexts), and
+[Playwright MCP configuration](https://github.com/microsoft/playwright-mcp#configuration).
+
 ## Final Review
 
 - Read all changed public prose and files, not only keyword scan matches.
 - Check conceptual titles, Objective first, connected How it works, owning
-  Practice and Mental model last; no removed standalone authoring labels.
+  Practice and Mental model as the teaching close, then optional References
+  last; no removed standalone authoring labels.
+- Verify exactly one course Where to Go Next followed by exactly one Glossary
+  before final Official references, with no lesson/guide-local copies. Onward
+  options relate to completed competencies without adding optional-study gates.
+- Verify the shared Glossary covers all taught key terms and abbreviations,
+  gives accurate expansions/definitions and sorts unique displayed keys A–Z,
+  ignoring case. Preserve distinct meanings and first-use explanations.
+- Check shared typography and heading hierarchy across courses, numbered Official
+  references, bulleted next-step options and an independent course Glossary.
+  Remove mission/syllabus presentation only after preserving unique learner
+  context in the orientation or owning lesson; planning sources may remain.
 - Check definitions before use cases, supported assumptions and calculation units.
 - Verify unfamiliar abbreviations locally and contextually; preserve official
   names and mathematical meanings instead of mechanically expanding tokens.

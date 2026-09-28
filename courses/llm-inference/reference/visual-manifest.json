@@ -6,7 +6,7 @@
       "lessons": [
         1
       ],
-      "after": "Practice",
+      "after": "Concepts and code path",
       "home": "lab:16_model_artifact_audit"
     },
     {
@@ -62,7 +62,7 @@
       "lessons": [
         8
       ],
-      "after": "Practice",
+      "after": "Concepts and code path",
       "home": "lab:27_paged_kv"
     },
     {

@@ -1,0 +1,23 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "05_tiled_stencil",
+  "measurements": {
+    "elements": 1003,
+    "gpu_compute_capability": 9,
+    "halo_values_per_full_block": 2,
+    "kernel_median_ms": 0.005248,
+    "kernel_min_ms": 0.004832,
+    "kernel_p90_ms": 0.00576,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 0,
+    "shared_bytes_per_block": 1032,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

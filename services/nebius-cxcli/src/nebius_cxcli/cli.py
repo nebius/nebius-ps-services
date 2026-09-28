@@ -30,14 +30,16 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
+from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
-from functools import lru_cache, partial, wraps
+from functools import lru_cache, wraps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
+
+from . import kubernetes_process
 
 try:
     import fcntl as _fcntl
@@ -48,6 +50,10 @@ try:
     import termios as _termios
 except ImportError:  # pragma: no cover - non-POSIX runtime fallback
     _termios = None
+
+# Composition adapters shared with the private campaign service.
+from contextlib import AbstractContextManager as AbstractContextManager
+from functools import partial as partial
 
 import typer
 import yaml
@@ -67,6 +73,12 @@ from rich.table import Table
 from . import __version__, native_logs, runtime_introspection
 from .app_mutation import app_mutation_scope, assert_app_mutation_authority, guarded_app_manifest
 from .capacity_dashboard import CapacityResourceAdvice, capacity_vm_slots_text
+from .compatibility_execution import (
+    admit_compatibility,
+    freeze_compatibility,
+    frozen_manifest_inputs,
+)
+from .compatibility_runtime import assess_config, materialize_selection
 from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
@@ -160,9 +172,16 @@ from .deploy_validation_report import (
     status_label,
     validation_section_lines,
 )
+from .deployment_cli import DeployOptions, deploy_rendered_bundle, read_local_deployment_record
+from .deployment_cli import deployment_execution as _deployment_execution
+from .deployment_local import LocalExecutionOwner
+from .deployment_plan import DeploymentPlan
+from .deployment_preparation import PreparedRelease, prepared_deployment
+from .deployment_recovery import checkpoint_execution as checkpoint_execution
 from .deployment_status import deployment_status_reporting
+from .deployment_target import deploy_application_target
 from .discover_ops import discover_configs
-from .duration_utils import parse_go_duration_seconds
+from .duration_utils import parse_optional_duration_seconds as _soperator_upgrade_duration_seconds
 from .email_settings import (
     EmailSettings,
     disable_email_settings,
@@ -215,35 +234,17 @@ from .github_secrets import (
     upsert_environment_secrets,
     upsert_environment_variables,
 )
-from .grafana_dashboard_export import (
-    CatalogDatasource,
-    ExportedDashboard,
-    GrafanaAuth,
-    GrafanaDashboard,
-    GrafanaFolder,
-    attach_dashboards_to_catalog,
-    basic_auth_candidate,
-    bearer_auth_candidates,
-    catalog_datasources,
-    dashboard_json,
-    dashboard_json_from_file,
-    list_dashboards,
-    list_folders,
-    rewrite_dashboard_datasources,
-    safe_slug,
-    select_catalog_datasource,
-    write_dashboard_file,
-)
+from .grafana_cli import app as grafana_app
 from .grafana_dashboard_validation import validate_grafana_dashboard_fits
 from .grafana_runtime import (
     GRAFANA_TARGET_CLUSTER_ID_ENV,
     GRAFANA_TARGET_KUBE_CONTEXT_ENV,
     collect_grafana_runtime_status,
-    ensure_grafana_runtime_secrets,
     grafana_enabled_for_target,
     read_grafana_status,
     write_grafana_status,
 )
+from .helm_chart_versions import exact_helm_chart_version
 from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_findings
 from .helm_readiness import SubprocessHelmCommandRunner, verify_helm_chart_ready
 from .iam_bootstrap import (
@@ -259,19 +260,9 @@ from .infra_render import (
     is_portable_module_source,
     render_terraform_artifacts,
     rendered_module_sources,
-    rendered_soperator_observability_iam_instances,
 )
 from .inventory_ops import ssh_jump_access_hints, wireguard_access_command_hints, write_inventory
 from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
-from .mk8s_destroy_recovery import (
-    Mk8sNodeGroupDestroyCandidate,
-)
-from .mk8s_destroy_recovery import (
-    delete_node_group as delete_stuck_mk8s_node_group,
-)
-from .mk8s_destroy_recovery import (
-    find_stuck_node_groups as find_stuck_mk8s_node_groups,
-)
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     has_mk8s_gpu_health_checker_app,
@@ -328,7 +319,6 @@ from .mk8s_upgrade import (
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
     format_node_template_upgrade_plan,
-    live_node_group_from_sdk,
     node_group_node_template_rollout_complete,
     node_group_uses_nebius_gpu_image,
     node_template_target_drivers_preset,
@@ -353,6 +343,7 @@ from .mk8s_upgrade import (
     verify_mk8s_upgrade_plan_ready,
     wait_for_node_template_rollout,
 )
+from .mk8s_upgrade import live_node_group_from_sdk as live_node_group_from_sdk
 from .mysterybox_eso import (
     EXTERNAL_SECRETS_APP_ID,
     MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
@@ -376,6 +367,8 @@ from .nfs_csi import (
     nfs_csi_terraform_output_specs,
 )
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
+from .nsight_install import profiling_app
+from .nsight_profiling import profiling_fingerprint
 from .observability import (
     ensure_observability_app_rows,
     kubernetes_observability_agent_selected,
@@ -401,13 +394,12 @@ from .operation_maintenance import maintenance_reservation_recovery_action
 from .ordinary_apps import (
     OrdinaryAppServices,
     OrdinaryAppWorkflow,
-    ordinary_config,
     preserve_ordinary_app_generation,
     publish_ordinary_app_config,
-    render_ordinary_apps,
-    runtime_app_mutations,
-    validate_ordinary_app_scope,
     validate_ordinary_bundle,
+)
+from .ordinary_apps import (
+    runtime_app_mutations as runtime_app_mutations,
 )
 from .paths import (
     ProjectPaths,
@@ -424,7 +416,6 @@ from .paths import (
 from .project_bundle_transaction import (
     ProjectBundleSafetyError,
     ProjectBundleTransaction,
-    recover_project_bundle,
 )
 from .project_creation import ProjectCreationServices, ProjectCreationWorkflow
 from .provider_options import (
@@ -440,6 +431,7 @@ from .quota_checks import (
     QuotaRequirement,
     assess_live_quota_requirements,
     assess_live_quotas,
+    deployment_quota_report,
     estimate_mk8s_quota_requirements,
     format_quota_report_lines,
     format_quota_request_lines,
@@ -451,6 +443,7 @@ from .regions import DEFAULT_REGION_ID, SUPPORTED_REGION_IDS
 from .render import (
     ProjectGenerationPlan,
     build_project_generation_plan,
+    completed_render_generation_matches,
     project_generation_snapshot_sha256,
     promote_staged_generated_paths,
     render_replaceable_generated_files,
@@ -471,6 +464,7 @@ from .runtime_introspection import (
 from .sdk_auth import (
     NEBIUS_SDK_USER_AGENT_PREFIX,
     acquire_operator_access_token,
+    concise_refresh_logs,
     init_nebius_sdk,
     suppress_expected_refresh_logs,
 )
@@ -492,14 +486,12 @@ from .slurm_jobs import (
     SlurmPartitionPauseRecord,
     SlurmPartitionState,
     affected_slurm_partitions_from_scontrol_show_node,
-    applied_slurm_held_job_records,
     dedupe_slurm_jobs,
     filter_affected_pending_slurm_jobs,
     parse_scontrol_show_partition_states,
     parse_squeue_jobs,
     selected_display_job_ids,
     slurm_job_control_is_held,
-    slurm_job_control_record_from_payload,
     slurm_job_control_record_from_query,
     slurm_job_is_held,
     slurm_job_is_pending,
@@ -513,45 +505,57 @@ from .slurm_jobs import (
     slurm_partitions_overlapping_nodes,
     slurm_requeuehold_eligibility,
 )
+from .slurm_jobs import applied_slurm_held_job_records as applied_slurm_held_job_records
+from .slurm_jobs import (
+    slurm_job_control_record_from_payload as slurm_job_control_record_from_payload,
+)
+from .soperator_acceptance import AcceptanceProfile, acceptance_command
 from .soperator_adapter import (
     SOPERATOR_ADAPTER_LABEL,
     SOPERATOR_ADAPTER_LABEL_VALUE,
-    prepare_soperator_upgrade_adapter_handoff,
+    load_soperator_adapter_documents,
     rendered_soperator_jail_image_authority,
-    resolve_soperator_jail_image_authority,
     soperator_adapter_state_from_documents,
     soperator_persistent_mount_bindings_from_adapter_state,
     soperator_rest_jwt_config_gate_patch_is_exact,
+)
+
+# Explicit service exports consumed by the release preparation boundary.
+from .soperator_adapter import (
+    resolve_soperator_jail_image_authority as resolve_soperator_jail_image_authority,
 )
 from .soperator_artifacts import (
     SoperatorClusterArtifactIdentity,
     soperator_cluster_artifact_identity_from_payload,
 )
 from .soperator_backup_runtime import (
-    preflight_soperator_backup_inputs,
+    preflight_soperator_backup_inputs as preflight_soperator_backup_inputs,
 )
+from .soperator_campaign_cli import run_upgrade_campaign as _run_soperator_upgrade_campaign
 from .soperator_checks import SoperatorChecksExecution
 from .soperator_checks_admission import diagnostic_partition_preimages
 from .soperator_checks_campaign import SoperatorCampaignChecks
-from .soperator_checks_campaign_release import CampaignChecksRelease
+from .soperator_checks_campaign_release import CampaignChecksRelease as CampaignChecksRelease
 from .soperator_checks_handoff import ChecksScheduleHandoff
 from .soperator_checks_lifecycle import ChecksLifecycle
 from .soperator_checks_maintenance import SoperatorChecksMaintenance
-from .soperator_checks_phase import ChecksPhaseContext
+from .soperator_checks_phase import ChecksPhaseContext as ChecksPhaseContext
 from .soperator_checks_policy import (
     apply_checks_proposal,
-    checks_proposal_changed,
     compile_checks_policy,
-    freeze_checks_proposal,
 )
+from .soperator_checks_policy import checks_proposal_changed as checks_proposal_changed
+from .soperator_checks_policy import freeze_checks_proposal as freeze_checks_proposal
 from .soperator_checks_preflight import (
     _preflight_soperator_checks,
-    _preflight_soperator_install_checks,
     _preflight_soperator_upgrade_checks,
     _rendered_soperator_upstream_values,
     _soperator_checks_kubernetes_payload,
     _soperator_checks_target_writers,
     _soperator_upgrade_expected_static_slurm_nodes,
+)
+from .soperator_checks_preflight import (
+    _preflight_soperator_install_checks as _preflight_soperator_install_checks,
 )
 from .soperator_checks_source import SourceChecksMaintenance
 from .soperator_child_charts import (
@@ -596,26 +600,15 @@ from .soperator_config_materialization import (
     _soperator_string_list,
     _soperator_target_mode_by_target,
 )
-from .soperator_destroy import (
-    build_soperator_destroy_receipt,
-    delete_onboarded_soperator_cluster,
-    expected_soperator_destroy_confirmation,
-    format_soperator_destroy_inventory,
-    load_soperator_destroy_receipt,
-    run_soperator_destroy,
-    soperator_cluster_is_absent,
-    validate_soperator_destroy_terraform_plan,
-    verify_soperator_filesystems_exist,
-    verify_soperator_vm_nfs_exists,
-    write_soperator_destroy_receipt,
+from .soperator_deployment_profile import (
+    FAST_DEPLOY_NOTICE,
+    FAST_DEV_TEST,
+    deployment_profile_summary,
+    resolve_create_profile,
 )
 from .soperator_discovery import (
     SOPERATOR_PUBLIC_DISCOVERY_COMPLETE,
     load_soperator_discovery_bundle,
-    soperator_discovery_jail_rootfs_record,
-)
-from .soperator_discovery import (
-    soperator_discovery_workload_namespace as _soperator_discovery_workload_namespace,
 )
 from .soperator_failures import (
     SoperatorFailureDisposition,
@@ -625,26 +618,49 @@ from .soperator_failures import (
 )
 from .soperator_flux_graph import target_soperator_release_name
 from .soperator_full_stack_upgrade import (
-    CampaignConfigTransitionStore,
+    CampaignConfigTransitionStore as CampaignConfigTransitionStore,
+)
+from .soperator_full_stack_upgrade import (
     CampaignControllerSpoolMigrationStore,
-    CampaignMainWorkloadAuthority,
-    CampaignSegmentResult,
     FrozenCompatibilityRow,
     FrozenNodeGroupTarget,
-    apply_frozen_node_group_rows,
-    assert_campaign_node_group_inventory,
-    assert_frozen_compatibility_row_supported,
-    build_campaign_intent,
-    campaign_intent_from_payload,
-    campaign_receipt_path,
     campaign_validation_target,
-    final_node_group_capacity_snapshot,
-    load_campaign_receipt,
-    record_campaign_maintenance_event,
-    record_campaign_supervisor_state,
     resolve_kubernetes_upgrade_path,
-    run_campaign,
-    run_final_runtime_validation_boundary,
+)
+from .soperator_full_stack_upgrade import (
+    CampaignMainWorkloadAuthority as CampaignMainWorkloadAuthority,
+)
+from .soperator_full_stack_upgrade import CampaignSegmentResult as CampaignSegmentResult
+from .soperator_full_stack_upgrade import (
+    SoperatorUpgradeCampaignIntent as SoperatorUpgradeCampaignIntent,
+)
+from .soperator_full_stack_upgrade import (
+    apply_frozen_node_group_rows as apply_frozen_node_group_rows,
+)
+from .soperator_full_stack_upgrade import (
+    assert_campaign_phase_inventory as assert_campaign_phase_inventory,
+)
+from .soperator_full_stack_upgrade import (
+    assert_frozen_compatibility_row_supported as assert_frozen_compatibility_row_supported,
+)
+from .soperator_full_stack_upgrade import build_campaign_intent as build_campaign_intent
+from .soperator_full_stack_upgrade import (
+    campaign_intent_from_payload as campaign_intent_from_payload,
+)
+from .soperator_full_stack_upgrade import campaign_receipt_path as campaign_receipt_path
+from .soperator_full_stack_upgrade import (
+    final_node_group_capacity_snapshot as final_node_group_capacity_snapshot,
+)
+from .soperator_full_stack_upgrade import load_campaign_receipt as load_campaign_receipt
+from .soperator_full_stack_upgrade import (
+    record_campaign_maintenance_event as record_campaign_maintenance_event,
+)
+from .soperator_full_stack_upgrade import (
+    record_campaign_supervisor_state as record_campaign_supervisor_state,
+)
+from .soperator_full_stack_upgrade import run_campaign as run_campaign
+from .soperator_full_stack_upgrade import (
+    run_final_runtime_validation_boundary as run_final_runtime_validation_boundary,
 )
 from .soperator_infrastructure_identity import (
     SoperatorInfrastructureReceipt,
@@ -665,7 +681,6 @@ from .soperator_install_docker_drains import InstallDockerDrainRecovery
 from .soperator_install_docker_recovery import close_docker_repair_reservation
 from .soperator_install_docker_repair import docker_reservation_handoff
 from .soperator_install_gpu_repair import gpu_maintenance_reservation_handoff
-from .soperator_install_lease import SoperatorInstallLocalLock, SoperatorInstallRemoteLease
 from .soperator_install_policy import (
     app_ids_on_soperator_targets,
 )
@@ -675,14 +690,6 @@ from .soperator_install_progress import (
     install_progress_scope,
     install_progress_step,
 )
-from .soperator_install_recovery import (
-    archive_failed_receipt,
-    failed_infrastructure_receipt,
-    recovery_provenance,
-    refresh_install_terraform_root,
-    validate_recovery_archive,
-    validate_recovery_plan,
-)
 from .soperator_install_render_repair import (
     CHECKS_REPAIR_REASON as INSTALL_CHECKS_REPAIR_REASON,
 )
@@ -690,10 +697,12 @@ from .soperator_install_render_repair import (
     COLLECTOR_REPAIR_REASON,
     CPU_MASK_REPAIR_REASON,
     DOCKER_REPAIR_REASON,
+    DOCKER_STORAGE_REPAIR_REASON,
     GPU_MAINTENANCE_REPAIR_REASON,
     INPUT_REPAIR_EVIDENCE_KEYS,
     INPUT_REPAIR_RELEASE_KEYS,
     LOGIN_REPAIR_REASON,
+    OBSERVABILITY_REPAIR_REASON,
     RUNTIME_REPAIR_REASON,
     STORAGE_REPAIR_REASON,
     TOPOLOGY_REPAIR_REASON,
@@ -705,6 +714,7 @@ from .soperator_install_render_repair import (
 from .soperator_install_render_repair import (
     REST_REPAIR_REASON as INSTALL_REST_REPAIR_REASON,
 )
+from .soperator_install_resume import bound_install_infrastructure_identity
 from .soperator_install_runtime_recovery import InstallRuntimeRecovery
 from .soperator_install_runtime_repair import runtime_reservation_handoff
 from .soperator_install_storage_recovery import InstallStorageRecovery
@@ -713,12 +723,11 @@ from .soperator_install_userns_recovery import close_userns_repair_reservation
 from .soperator_install_userns_repair import userns_reservation_handoff
 from .soperator_jail_mounts import (
     JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS,
-    apply_jail_persistent_mount_values,
     jail_persistent_mounts_from_paths,
-    jail_rootfs_active_source,
     validate_retained_home_layout,
 )
-from .soperator_login_keys import explicit_root_keys, prompt_root_keys
+from .soperator_jail_observation import observe_protected_directories
+from .soperator_login_keys import ROOT_KEY_PATH, explicit_root_keys, prompt_root_keys
 from .soperator_operation import (
     SoperatorOperationAnchor,
     SoperatorOperationSpec,
@@ -743,7 +752,6 @@ from .soperator_populate_jail import (
     active_passive_jail_rootfs_slots,
     active_passive_populate_jail_job_manifest,
     observe_login_service_continuity,
-    switch_active_passive_jail_rootfs_values,
     wait_for_active_passive_populate_jail_job,
 )
 from .soperator_protected_data_plane import (
@@ -785,7 +793,6 @@ from .soperator_registration import (
     SOPERATOR_REGISTRATION_STATE_SUPPORTED,
     collect_kubectl_soperator_snapshot,
     soperator_protected_storage_evidence,
-    soperator_registration_app_row,
     soperator_registration_fingerprint,
     soperator_registration_target,
     validate_soperator_registration,
@@ -802,6 +809,7 @@ from .soperator_registration_projection import (
     soperator_registration_optional_service_topology_from_discovery,
 )
 from .soperator_release import (
+    SoperatorArtifactRequest,
     load_soperator_release_snapshot,
     normalize_soperator_release_selector,
     resolve_soperator_release,
@@ -836,16 +844,24 @@ from .soperator_release_reconciler import (
 )
 from .soperator_release_resolver import (
     freeze_soperator_release,
-    frozen_soperator_release_from_snapshot,
     inspect_soperator_release_contract,
+    resolve_soperator_source,
     use_frozen_soperator_release,
+)
+from .soperator_release_resolver import (
+    frozen_soperator_release_from_snapshot as frozen_soperator_release_from_snapshot,
 )
 from .soperator_release_source import ensure_soperator_release_source
 from .soperator_rootfs_manifest import RootfsManifest
-from .soperator_rootfs_transition import plan_soperator_rootfs_transition
+from .soperator_rootfs_transition import (
+    plan_soperator_rootfs_transition,
+    recover_soperator_rootfs_transition,
+)
 from .soperator_runtime_prerequisites import (
     ensure_soperator_runtime_before_flux as _ensure_soperator_runtime_before_flux,
 )
+from .soperator_sfs_wizard import SfsPrompt, prompt_sfs_filesystems
+from .soperator_sfs_wizard import print_sfs_summary as _print_soperator_sfs_summary
 from .soperator_slurm_recovery import (
     SOPERATOR_SLURM_RECOVERY_SCHEMA,
     SlurmRecoveryDisposition,
@@ -857,7 +873,9 @@ from .soperator_slurm_recovery import (
     validate_slurm_recovery_actions,
 )
 from .soperator_spool_migration import SoperatorControllerSpoolMigration
-from .soperator_sssd_runtime import preflight_soperator_sssd_inputs
+from .soperator_sssd_runtime import (
+    preflight_soperator_sssd_inputs as preflight_soperator_sssd_inputs,
+)
 from .soperator_status import (
     SoperatorLiveStatusContext,
     read_soperator_completed_upgrade_evidence,
@@ -867,9 +885,13 @@ from .soperator_status import (
 from .soperator_strategy import SoperatorStrategy, SoperatorStrategyPlan
 from .soperator_telemetry import verify_soperator_observability
 from .soperator_upgrade_backend import (
-    OnboardedProviderApiUpgradeBackend,
-    TerraformManagedUpgradeBackend,
-    build_soperator_infrastructure_authority,
+    OnboardedProviderApiUpgradeBackend as OnboardedProviderApiUpgradeBackend,
+)
+from .soperator_upgrade_backend import (
+    TerraformManagedUpgradeBackend as TerraformManagedUpgradeBackend,
+)
+from .soperator_upgrade_backend import (
+    build_soperator_infrastructure_authority as build_soperator_infrastructure_authority,
 )
 from .soperator_upgrade_progress import (
     SoperatorUpgradeProgress,
@@ -881,8 +903,10 @@ from .soperator_upgrade_safety import (
     capture_protected_customer_state,
 )
 from .soperator_upgrade_supervisor import (
-    single_use_soperator_upgrade_plan_printer,
-    supervise_committed_soperator_upgrade,
+    execute_committed_soperator_upgrade,
+)
+from .soperator_upgrade_supervisor import (
+    single_use_soperator_upgrade_plan_printer as single_use_soperator_upgrade_plan_printer,
 )
 from .soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -895,12 +919,14 @@ from .soperator_values import (
     EXPLICIT_VALUES_FIELD,
     mark_explicit_value,
     read_soperator_values_file,
-    validate_frozen_input,
+    soperator_rows,
     value_pointer,
 )
 from .soperator_values import (
     explicit_values as soperator_explicit_values,
 )
+from .soperator_values import validate_frozen_input as validate_frozen_input
+from .soperator_wizard_deployment import _prompt_fast_deploy_profile, reconcile_wizard_deployment
 from .ssh_jumphost import (
     SshJumphostAllowedCidrRequest,
     normalize_allowed_cidr_csv,
@@ -931,7 +957,6 @@ from .terraform_ops import (
     terraform_output_json,
     terraform_output_raw,
     terraform_plan,
-    terraform_provider_schema_json,
     terraform_show_json,
     terraform_state_list,
     terraform_state_show,
@@ -1013,7 +1038,7 @@ _HELP_EXAMPLE_LABEL_COMMAND_RE = re.compile(
     r"(?P<label>(?!nebius-cxcli\b)[^\n.;|]*?:)[ \t]+(?=nebius-cxcli\b)"
 )
 _HELP_EXAMPLE_COMMENT_SPLIT_RE = re.compile(
-    r"(?<!\d)\.\s+(?=(?:--[A-Za-z][\w-]*\s+|[A-Z][A-Za-z/]))"
+    r"(?<!\.)\.\s+(?=(?:--[A-Za-z][\w-]*\s+|[A-Z][A-Za-z/]))"
 )
 _HELP_EXAMPLE_COMMA_COMMENT_SPLIT_RE = re.compile(r",\s+(?=then\b)")
 _HELP_EXAMPLE_TRAILING_PAREN_COMMENT_RE = re.compile(
@@ -1043,8 +1068,8 @@ _GENERIC_SOPERATOR_LIFECYCLE_COMMAND: ContextVar[str | None] = ContextVar(
     "generic_soperator_lifecycle_command",
     default=None,
 )
-_SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE: ContextVar[Any | None] = ContextVar(
-    "soperator_release_snapshot_override",
+_SOPERATOR_SOURCE_OVERRIDE: ContextVar[Any | None] = ContextVar(
+    "soperator_verified_source_override",
     default=None,
 )
 _SOPERATOR_UPGRADE_JOB_PROMPT_PAUSE: ContextVar[Callable[[], Any] | None] = ContextVar(
@@ -1072,7 +1097,6 @@ _SOPERATOR_CHILD_CHART_VALUE_KEYS = frozenset(
         "soperator-activechecks",
         "soperator-backup-config",
         "soperator-checks",
-        "soperator-dcgm-exporter",
         "soperator-notifier",
     }
 )
@@ -1097,10 +1121,12 @@ def _print_deployment_status_message(message: str) -> None:
     console.print(message, highlight=False)
 
 
-def _quota_failure_message(report: QuotaReport, *, phase: str) -> str:
+def _quota_failure_message(report: QuotaReport, *, phase: str, allowance_only: bool = False) -> str:
     lines = [
         (
-            f"Nebius quota/capacity is insufficient for {phase}. "
+            f"Nebius quota allowance is insufficient for {phase}. Increase the quota and retry."
+            if allowance_only
+            else f"Nebius quota/capacity is insufficient for {phase}. "
             "Increase the quota, or for GPU shortages choose a platform/preset/fabric "
             "with available Capacity Dashboard capacity, and retry."
         ),
@@ -1187,33 +1213,30 @@ def _prefix_help_example_paragraphs(body: str) -> str:
 
 def _split_help_example_comments(formatted_body: str) -> str:
     formatted_body, comments = _extract_help_example_parenthetical_comments(formatted_body)
-    marker_index = formatted_body.rfind(_HELP_EXAMPLE_SEPARATOR_MARKUP)
-    if marker_index < 0:
-        return _append_help_example_comments(formatted_body, comments)
-    tail_start = marker_index + len(_HELP_EXAMPLE_SEPARATOR_MARKUP)
-    tail = formatted_body[tail_start:]
-    comma_match = _HELP_EXAMPLE_COMMA_COMMENT_SPLIT_RE.search(tail)
-    period_match = _HELP_EXAMPLE_COMMENT_SPLIT_RE.search(tail)
-    match = None
-    split_at_comma = False
-    if comma_match is not None and (
-        period_match is None or comma_match.start() < period_match.start()
-    ):
-        match = comma_match
-        split_at_comma = True
-    elif period_match is not None:
-        match = period_match
-    if match is None:
-        return _append_help_example_comments(formatted_body, comments)
-    trailing_comment = tail[match.end() :].strip()
-    if not trailing_comment:
-        return _append_help_example_comments(formatted_body, comments)
-    example_tail_end = match.start() if split_at_comma else match.start() + 1
-    example_tail = tail[:example_tail_end].rstrip()
-    if split_at_comma and not example_tail.endswith((".", ";")):
-        example_tail = f"{example_tail}."
-    comments.append(trailing_comment)
-    return _append_help_example_comments(f"{formatted_body[:tail_start]}{example_tail}", comments)
+    paragraphs: list[str] = []
+    prefix = f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} nebius-cxcli "
+    for paragraph in formatted_body.split("\n\n"):
+        if paragraph.startswith(prefix):
+            # Apply to every example, not just the final paragraph: punctuation
+            # on a flag or path changes the command when copied into a shell.
+            matches = [
+                match
+                for pattern in (
+                    _HELP_EXAMPLE_COMMA_COMMENT_SPLIT_RE,
+                    _HELP_EXAMPLE_COMMENT_SPLIT_RE,
+                    re.compile(r";\s+"),
+                )
+                if (match := pattern.search(paragraph)) is not None
+            ]
+            if matches:
+                match = min(matches, key=lambda item: item.start())
+                comments.append(paragraph[match.end() :].strip())
+                paragraph = paragraph[: match.start()].rstrip()
+            paragraph = paragraph.removesuffix(";")
+            if paragraph.endswith(".") and paragraph.rsplit(maxsplit=1)[-1] not in {".", ".."}:
+                paragraph = paragraph[:-1]
+        paragraphs.append(paragraph)
+    return _append_help_example_comments("\n\n".join(paragraphs), comments)
 
 
 def _extract_help_example_parenthetical_comments(body: str) -> tuple[str, list[str]]:
@@ -2160,10 +2183,21 @@ def _raise_on_generated_bundle_live_quota_issues(
             ),
         )
     _print_live_quota_report(report, phase=phase)
-    if report.has_confirmed_insufficiency:
-        _print_quota_remediation_hint(paths.config_path, report)
+    blocking_report = deployment_quota_report(report) if phase == "deploy" else report
+    if blocking_report.has_confirmed_insufficiency:
+        _print_quota_remediation_hint(paths.config_path, blocking_report)
         _print_quota_check_all_regions_hint(paths.config_path, enabled=True)
-        raise RuntimeError(_quota_failure_message(report, phase=phase))
+        raise RuntimeError(
+            _quota_failure_message(blocking_report, phase=phase, allowance_only=phase == "deploy")
+        )
+    if phase == "deploy" and any(
+        check.source_scope.startswith("capacity-dashboard") and check.sufficient is False
+        for check in report.checks
+    ):
+        console.print(
+            "GPU capacity is advisory: continuing deployment while cloud capacity is pending. "
+            "Readiness remains subject to provisioning and execution deadlines."
+        )
     return report
 
 
@@ -2416,8 +2450,9 @@ _UPGRADE_NODE_TEMPLATE_EPILOG = (
     "Dry-run plan: nebius-cxcli upgrade node-template <config.yaml> "
     "infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 "
     "--to-gpu-stack-preset cuda13.0 --dry-run. "
-    "Omitted --to-version, --to-os, and --to-gpu-stack-preset values keep the "
-    "selected live node-group value when it is unambiguous and compatible. "
+    "Omitted --to-version defaults to the current control-plane minor. Omitted "
+    "--to-os and --to-gpu-stack-preset keep the selected live node-group value "
+    "when it is unambiguous and compatible. "
     "This command upgrades the control plane first when --to-version changes, "
     "then writes selected node-group version, OS, and Nebius-image GPU stack "
     "changes together so each selected node group rolls once. It does not change "
@@ -2440,12 +2475,14 @@ app = typer.Typer(
         "root when missing, and overwrites existing resolved project folders only with "
         "confirmation unless --force is provided; component list/add/remove use "
         "--config CONFIG_YAML as the day-2 config.yaml editing surface; "
-        "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
-        "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
-        "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "acceptance-test, soperator, upgrade, migrate, and bootstrap-ci use config.yaml; "
-        "soperator onboard registers existing Nebius MK8s targets in config.yaml; "
-        "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
+        "discover uses a deployment-scope directory; grafana install persists target observability "
+        "settings and installs Grafana and its backends; grafana also manages dashboard JSON; "
+        "validate, quota-check, quota-request, render, deploy, "
+        "acceptance-test, upgrade, migrate, and bootstrap-ci use config.yaml; "
+        "soperator create uses a deployments root, discover uses an output directory, "
+        "onboard accepts an existing config/project directory or a deployments root, "
+        "and soperator upgrade/status and destroy use config.yaml; "
+        "destroy uses config.yaml and --target CLUSTER_ID for one MK8s cluster; projects without MK8s use rendered-resource teardown; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "wireguard uses config.yaml to generate client configs and manage VM-local "
         "WireGuard route defaults from a deployed VPN gateway; "
@@ -2453,21 +2490,22 @@ app = typer.Typer(
         "validate-generated uses generated/, terraform uses generated/infra, flux uses generated/flux, "
         "validate-sources accepts optional component_sources.yaml plus its sibling settings file, and "
         "auth has no positional path. "
-        "Soperator installation, adoption, upgrades, and other day-2 actions are owned "
-        "exclusively by the `soperator` command group."
+        "Use soperator create to author Soperator configurations, then the common "
+        "validate, render, validate-generated, and deploy pipeline."
     ),
     epilog=(
         "Quickstart: nebius-cxcli create ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT  |  "
         "nebius-cxcli render ./deployments/tenant/project/config.yaml  |  "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml. "
-        "Soperator quickstart: nebius-cxcli soperator install ./deployments "
+        "Soperator quickstart: nebius-cxcli soperator create ./deployments "
         "--client-name acme --tenant-id TENANT --project-id PROJECT --profile gpu. "
         f"Upgrade example: nebius-cxcli upgrade node-template {_UPGRADE_EXAMPLE_CONFIG} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run. "
         "Run `nebius-cxcli upgrade --help` for in-place updates and "
         "`nebius-cxcli migrate --help` for replacement migrations. "
-        "Run `nebius-cxcli soperator --help` for Soperator-owned workflows."
+        "Run `nebius-cxcli soperator --help` for Soperator-owned workflows. "
+        "Replace example tenant/project folders with the paths printed by create."
     ),
 )
 component_app = typer.Typer(
@@ -2488,27 +2526,42 @@ component_app = typer.Typer(
     ),
 )
 terraform_app = typer.Typer(
-    help="Run infra-only Terraform operations against generated/ or generated/infra."
+    help=(
+        "Run infra-only Terraform operations against generated/ or generated/infra. "
+        "Soperator bundles are rejected; use deploy CONFIG_YAML or destroy."
+    ),
+    epilog=(
+        "Examples: nebius-cxcli terraform plan ./deployments/tenant/project/generated; "
+        "nebius-cxcli terraform apply ./deployments/tenant/project/generated."
+    ),
 )
 flux_app = typer.Typer(
-    help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
+    help=(
+        "Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux. "
+        "Multiple targets require --target or --all-targets, which are mutually exclusive. "
+        "Soperator bundles require deploy CONFIG_YAML or destroy."
+    ),
+    epilog=(
+        "Examples: nebius-cxcli flux apply ./deployments/tenant/project/generated --all-targets; "
+        "nebius-cxcli flux bootstrap ./deployments/tenant/project/generated --target mk8s-prod."
+    ),
 )
 soperator_app = typer.Typer(
     help=(
         "Manage cxcli-owned and pre-existing Soperator clusters through one command "
-        "surface. Fresh role-separated MK8s/SFS clusters start only with `soperator install`; "
+        "surface. Create role-separated MK8s/SFS configuration with `soperator create`, then use render and deploy;  "
         "inspect an existing MK8s cluster without config through `soperator discover`; "
         "existing supported products enter through adoption-only `soperator onboard`. "
-        "The registered target selects the infrastructure backend. Install and upgrade "
+        "The registered target selects the infrastructure backend. Create and upgrade "
         "freeze an exact official upstream release; upgrade also freezes the dynamic "
         "Nebius Kubernetes path, node OS/GPU driver compatibility, and Jail CUDA target "
         "into one end-to-end campaign. Destroy removes "
         "one exact cluster only after protected-storage proof."
     ),
     epilog=(
-        "Examples: nebius-cxcli soperator install ./deployments --client-name acme "
+        "Examples: nebius-cxcli soperator create ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --profile mixed --release latest "
-        "--no-interactive --dry-run; "
+        "--no-interactive; "
         "nebius-cxcli soperator discover ./support-bundles --tenant-id TENANT "
         "--project-id PROJECT --cluster-id CLUSTER --region-id eu-north1; "
         "nebius-cxcli soperator upgrade <config.yaml> "
@@ -2516,27 +2569,26 @@ soperator_app = typer.Typer(
         "--to-os auto --to-gpu-stack-preset auto "
         "--dry-run; nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-release 4.1.7 --to-k8s-version latest "
-        "--to-os auto --to-gpu-stack-preset auto --execute --approve; "
+        "--to-os auto --to-gpu-stack-preset auto; "
         "nebius-cxcli soperator onboard <config.yaml> --cluster-id <mk8s-cluster-id>; "
         "nebius-cxcli soperator status <config.yaml> --target <target> --no-live; "
-        "nebius-cxcli soperator destroy <config.yaml> --target <target> --dry-run. "
-        "Install and upgrade execution use their reviewed approval contracts. Destroy "
-        "requires a TTY and exact cluster-ID phrase; it has no approval bypass."
+        "nebius-cxcli destroy <config.yaml> --target <cluster-id> --dry-run. "
+        "Deploy executes the rendered configuration directly. Destroy "
+        "requires an exact cluster-ID phrase or --yes after the same safety checks."
     ),
 )
 _SOPERATOR_COMMAND_ORDER = (
-    "install",
+    "create",
     "discover",
     "onboard",
     "upgrade",
     "status",
-    "destroy",
 )
+soperator_app.add_typer(profiling_app, name="profiling")
 _SOPERATOR_CONDITIONAL_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "install": (
-        "Fresh non-interactive install requires project identity, profile, release, and --dry-run.",
-        "--resume requires an existing install-owned CONFIG_YAML and rejects fresh-install identity/profile flags.",
-        "Non-interactive execution requires --resume --execute --approve --approval-fingerprint.",
+    "create": (
+        "Fresh non-interactive creation requires project identity, profile, and release.",
+        "Creates config.yaml; use validate, render, validate-generated, and deploy afterward.",
     ),
     "discover": (
         "--tenant-id, --project-id, and --cluster-id are always parser-required.",
@@ -2550,16 +2602,13 @@ _SOPERATOR_CONDITIONAL_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "--region-id is optional and must match the derived live cluster region when supplied.",
     ),
     "upgrade": (
-        "Exactly one of --dry-run or --execute is required; --execute also requires --approve.",
+        "Execution is the default; --dry-run provides an optional read-only preview.",
         "A fresh non-interactive plan requires --to-release, --to-k8s-version, --to-os, and --to-gpu-stack-preset.",
-        "The approved target ownership selects exactly one backend: managed/terraform or onboarded/provider-api.",
+        "Registered target ownership selects exactly one backend: managed/terraform or onboarded/provider-api.",
     ),
     "status": (
         "--target may be omitted only when one Soperator target is configured or interactive selection is available.",
         "--verify-observability requires --live.",
-    ),
-    "destroy": (
-        "--target is always parser-required; execution additionally requires a TTY and the exact cluster-ID phrase.",
     ),
 }
 acceptance_test_app = typer.Typer(
@@ -2611,6 +2660,7 @@ app.add_typer(soperator_app, name="soperator")
 app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 app.add_typer(migrate_app, name="migrate")
+app.add_typer(grafana_app, name="grafana")
 
 
 def _version_callback(value: bool) -> bool:
@@ -2635,6 +2685,7 @@ atexit.register(_cleanup_temp_private_key_files)
 
 @app.callback()
 def main_callback(
+    ctx: typer.Context,
     version: Annotated[
         bool,
         typer.Option("--version", callback=_version_callback, is_eager=True, help="Show version"),
@@ -2658,7 +2709,8 @@ def main_callback(
             "--source-profile",
             help=(
                 "Global optional override for the active component source profile. "
-                "Defaults to portable. portable always uses source.portable. "
+                "Uses NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE when set, otherwise portable. "
+                "portable always uses source.portable. "
                 "local prefers source.local and falls back to source.portable when "
                 "source.local is unset."
             ),
@@ -2668,6 +2720,10 @@ def main_callback(
 ) -> None:
     global _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT
 
+    from .object_storage_transport import object_storage_scope
+
+    ctx.with_resource(object_storage_scope())
+    ctx.with_resource(concise_refresh_logs())
     _ = version
     _RUNTIME_AUTH_READY_PROJECTS.clear()
     _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
@@ -2689,7 +2745,6 @@ def _ensure_project_auth_identity(*, project_id: str, client_name: str) -> None:
 
 
 def _load_context(config_path: Path) -> tuple:
-    recover_project_bundle(config_path.absolute().parent)
     generic_command = _GENERIC_SOPERATOR_LIFECYCLE_COMMAND.get()
     if generic_command:
         _require_soperator_lifecycle_scope(
@@ -2700,7 +2755,7 @@ def _load_context(config_path: Path) -> tuple:
     if generic_command:
         _require_soperator_lifecycle_scope(readonly_config, command=generic_command)
     _ensure_runtime_auth_material(readonly_config, need_terraform=False)
-    config = load_config(config_path, persist_normalized=True)
+    config = readonly_config
     payload = to_plain_data(config)
     if isinstance(payload, dict) and materialize_compute_boot_disk_defaults(payload):
         strip_app_chart_target_refs(payload)
@@ -2711,7 +2766,6 @@ def _load_context(config_path: Path) -> tuple:
 
 
 def _load_context_readonly(config_path: Path) -> tuple:
-    recover_project_bundle(config_path.absolute().parent)
     generic_command = _GENERIC_SOPERATOR_LIFECYCLE_COMMAND.get()
     if generic_command:
         _require_soperator_lifecycle_scope(
@@ -2801,12 +2855,14 @@ def _load_deploy_context_readonly(target_path: Path) -> tuple:
     if generic_command:
         _require_soperator_lifecycle_scope(config, command=generic_command)
     _apply_generated_tool_version_overrides(manifest)
-    _ensure_runtime_auth_material(config, need_terraform=False)
+    from .deployment_recovery import is_deployment_preview
+
+    if not is_deployment_preview():
+        _ensure_runtime_auth_material(config, need_terraform=False)
     return config, paths, manifest
 
 
 def _load_source_payload(config_path: Path) -> dict[str, Any]:
-    recover_project_bundle(config_path.absolute().parent)
     if not config_path.exists():
         raise ValueError(f"Config file not found: {config_path}")
     if config_path.is_dir():
@@ -2958,7 +3014,7 @@ _SOPERATOR_UPGRADE_JOB_POLICIES = frozenset(
 _SOPERATOR_DEPLOY_JOB_POLICIES = _SOPERATOR_UPGRADE_JOB_POLICIES | {"fail"}
 _SOPERATOR_UPGRADE_JOB_POLICY_HELP = (
     "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
-    "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, "
+    "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, or requeue-hold-all. "
     "The wizard first displays the required pause-all-active Partition Policy. Default: "
     "requeue-hold-all in both the wizard and non-interactive execution. That "
     "policy requeues and holds eligible active batch jobs, reports and waits for jobs "
@@ -2970,7 +3026,7 @@ _SOPERATOR_DEPLOY_JOB_POLICY_HELP = (
     "Slurm job policy: interactive, wait-to-finish, wait-then-cancel, cancel-selected, "
     "cancel-all, requeue-selected, requeue-all, requeue-hold-selected, requeue-hold-all, "
     "or fail. Default: interactive in a prompt-capable terminal and wait-then-cancel "
-    "with --no-interactive or non-TTY."
+    "otherwise. Applies when deployment requires Slurm maintenance."
 )
 _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL = "30s"
 _SOPERATOR_UPGRADE_DEFAULT_JOB_WAIT_TIMEOUT = "0s"
@@ -4679,28 +4735,6 @@ def _upgrade_helm_chart_dry_run_command(
     )
 
 
-def _soperator_upgrade_dry_run_command(
-    *,
-    config_path: Path,
-    target_ref: str,
-    to_chart_version: str,
-) -> str:
-    return shlex.join(
-        [
-            "nebius-cxcli",
-            "soperator",
-            "upgrade",
-            str(config_path),
-            "--target",
-            target_ref,
-            "--to-release",
-            to_chart_version,
-            "--no-interactive",
-            "--dry-run",
-        ]
-    )
-
-
 def _source_helm_chart_row_path(
     payload: dict[str, Any],
     target: _HelmChartUpgradeTarget,
@@ -4787,8 +4821,8 @@ def _format_helm_chart_upgrade_plan(
                 "- warnings:",
                 (
                     "  - requested chart version appears lower than the current "
-                    "config version; cxcli will allow this for rollback or "
-                    "recovery, but Helm chart downgrades are not guaranteed safe."
+                    "config version; compatibility admission must approve the transition. "
+                    "Helm chart downgrades are not guaranteed safe."
                 ),
                 (
                     "  - review the chart release notes, CRDs/schema migrations, "
@@ -4802,8 +4836,8 @@ def _format_helm_chart_upgrade_plan(
             lines.append("- repeat dry-run command:")
             lines.append(repeat_dry_run_command)
         lines.append(
-            "Dry run only: no config.yaml write, generated bundle render, "
-            "or Flux apply was performed."
+            "Dry run: prepare and assess the candidate without publishing "
+            "configuration or applying to the cluster."
         )
     return tuple(lines)
 
@@ -4876,16 +4910,6 @@ def _soperator_upgrade_sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _soperator_upgrade_duration_seconds(value: str, *, option_name: str) -> int:
-    raw = _non_empty_text(value) or "0s"
-    if raw in {"0", "0s", "none"}:
-        return 0
-    try:
-        return parse_go_duration_seconds(raw)
-    except Exception as exc:
-        raise RuntimeError(f"Invalid {option_name} duration {raw!r}.") from exc
-
-
 def _run_soperator_upgrade_process(
     args: Sequence[str],
     *,
@@ -4897,7 +4921,7 @@ def _run_soperator_upgrade_process(
     env = os.environ.copy()
     if extra_env:
         env.update(dict(extra_env))
-    result = subprocess.run(
+    result = kubernetes_process.run(
         list(args),
         input=input_text,
         env=env,
@@ -5048,7 +5072,7 @@ def _ensure_protected_data_plane_job(
             )
         return uid, observed.workload_sha256
 
-    existing = subprocess.run(
+    existing = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5080,11 +5104,15 @@ def _ensure_protected_data_plane_job(
             f"could not inspect protected rootfs Job {namespace}/{name}"
             + (f": {detail}" if detail else "")
         )
+    if expected_job_uid is not None:
+        raise RuntimeError(
+            f"recovery-required: recorded protected rootfs Job {namespace}/{name} is missing"
+        )
     if not allow_create:
         raise RuntimeError(
             f"recovery-required: completed protected rootfs Job {namespace}/{name} is missing"
         )
-    admitted = subprocess.run(
+    admitted = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5134,7 +5162,7 @@ def _ensure_protected_data_plane_job(
         requested_workload_sha256=requested.workload_sha256,
         admitted_workload_sha256=admitted_identity.workload_sha256,
     )
-    created = subprocess.run(
+    created = kubernetes_process.run(
         ["kubectl", "--context", kube_context, "create", "-f", "-"],
         env=env,
         input=yaml.safe_dump(bound_manifest, sort_keys=False),
@@ -5148,7 +5176,7 @@ def _ensure_protected_data_plane_job(
             f"could not create protected rootfs Job {namespace}/{name}"
             + (f": {detail}" if detail else "")
         )
-    observed = subprocess.run(
+    observed = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5194,7 +5222,7 @@ def _wait_protected_data_plane_job(
     deadline = time.monotonic() + 2700
     payload: Mapping[str, object]
     while True:
-        observed = subprocess.run(
+        observed = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -5269,7 +5297,7 @@ def _wait_protected_data_plane_job(
         if remaining <= 0:
             raise RuntimeError(f"protected rootfs Job {namespace}/{name} did not complete")
         time.sleep(min(5.0, remaining))
-    pods = subprocess.run(
+    pods = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5304,7 +5332,7 @@ def _wait_protected_data_plane_job(
     protected_job_pod_identity(job=payload, pod=pod_items[0])
     if not include_logs:
         return ""
-    logs = subprocess.run(
+    logs = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5340,7 +5368,7 @@ def _verify_protected_data_plane_job_pod(
     """Verify the persisted Job and its one exact controller-owned Pod."""
 
     env = _post_flux_subprocess_env(extra_env or {})
-    job_result = subprocess.run(
+    job_result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5358,7 +5386,7 @@ def _verify_protected_data_plane_job_pod(
         text=True,
         timeout=30,
     )
-    pods_result = subprocess.run(
+    pods_result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -5577,7 +5605,15 @@ _SOPERATOR_SUPERVISOR_SECRET_VALUE = re.compile(
 def _soperator_upgrade_supervisor_failure_detail(exc: BaseException) -> str:
     """Return one bounded, secret-safe line for a durable supervisor retry."""
 
-    detail = " ".join(str(exc).split())
+    raw = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(exc))
+    if raw.startswith("Terraform command") and "\n" in raw:
+        raw = raw.partition("\n")[2]
+    command_prefix = "Command failed during Soperator upgrade:"
+    if raw.startswith(command_prefix) and "\n" in raw:
+        # A patch command can exceed the entire display budget. Prefer its
+        # failure output to argv so the cause survives bounded reporting.
+        raw = command_prefix + " " + raw.partition("\n")[2]
+    detail = " ".join(raw.split())
     if not detail:
         return type(exc).__name__
     if "-----BEGIN" in detail.upper():
@@ -5595,7 +5631,6 @@ def _acquire_soperator_upgrade_lease(
     *,
     stack: ExitStack,
     lease: SoperatorOperationLease,
-    sleep: Callable[[float], None] = time.sleep,
 ) -> SoperatorOperationLease:
     """Re-prove a possibly written Lease without changing holder identity."""
 
@@ -5610,19 +5645,9 @@ def _acquire_soperator_upgrade_lease(
             )
         parent_lease.assert_held()
         return parent_lease
-    attempt = 0
-    while True:
-        try:
-            return stack.enter_context(lease)
-        except RuntimeError as exc:
-            if "locked by another operation" in str(exc).lower():
-                raise
-            attempt += 1
-            console.print(
-                "[yellow]Soperator upgrade Lease authority is not yet provable; "
-                "cxcli will retry in this invocation.[/yellow]"
-            )
-            sleep(min(5.0 * (2 ** min(attempt - 1, 4)), 60.0))
+    # A failed lease write may have reached the API. Leave recovery to the
+    # identity-bound lease owner; never re-enter an entire acquisition blindly.
+    return stack.enter_context(lease)
 
 
 def _soperator_upgrade_login_tcp_probe(host: str, port: int) -> bool:
@@ -7995,48 +8020,31 @@ def _verify_helm_chart_upgrade_ready(
     paths: ProjectPaths,
     manifest: Mapping[str, Any],
     plan: _HelmChartUpgradePlan,
+    *,
+    observations: Mapping[str, Any],
 ) -> None:
+    from .application_execution import observe_application_targets, require_same_upgrade_target
+
     selected_targets = _resolve_selected_deploy_targets(
         manifest,
         requested_target_ref=plan.target.target_ref,
         all_targets=False,
     )
-    target = selected_targets[0] if selected_targets else None
-    if target is None:
-        raise RuntimeError(
-            f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
-            f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
-        )
-    ordinary = _payload_has_soperator_lifecycle(config)
-    if ordinary:
-        baseline = validate_ordinary_bundle(paths, manifest)
-        identity = baseline.get("identities", {}).get(plan.target.target_ref, {})
-        if not identity.get("cluster_id") or not identity.get("kubernetes_uid"):
-            raise RuntimeError("Helm readiness target has no accepted cluster identity")
-        target = {**target, "cluster_id": identity["cluster_id"]}
-        target.pop("kube_context", None)
-    else:
-        _ensure_terraform_backend_ready(config)
     with ExitStack() as stack:
-        kube_env = _prepare_cluster_handoff_kube_env(
+        kube_envs: dict[str, dict[str, str] | None] = {}
+        current = observe_application_targets(
+            sys.modules[__name__],
             config,
             paths,
+            manifest,
+            selected_targets,
+            plan=plan,
             stack=stack,
-            target=target,
-            persist_local_kubeconfig=False,
-            set_current_context=False,
-            allow_terraform_output=not ordinary,
+            kube_envs=kube_envs,
         )
-        if ordinary and (
-            not kube_env
-            or _read_kube_system_namespace_uid(
-                kube_context=kube_env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV, ""), extra_env=kube_env
-            )
-            != identity["kubernetes_uid"]
-        ):
-            raise RuntimeError("Helm readiness handoff changed cluster identity")
+        require_same_upgrade_target(observations, current)
         result = verify_helm_chart_ready(
-            command_runner=SubprocessHelmCommandRunner(extra_env=kube_env),
+            command_runner=SubprocessHelmCommandRunner(extra_env=kube_envs[plan.target.target_ref]),
             release_name=plan.release_name,
             namespace=plan.namespace or "default",
             expected_version=plan.target_version,
@@ -8434,7 +8442,8 @@ def _execute_node_template_upgrade(
             "--to-gpu-stack-preset",
             help=(
                 "Target Nebius GPU stack/drivers_preset value, for example cuda13.0. "
-                "Required when selected groups include Nebius-image GPU groups."
+                "Omission keeps the unambiguous compatible live preset; provide an explicit "
+                "value when that default cannot be resolved."
             ),
         ),
     ] = None,
@@ -8848,8 +8857,15 @@ def _execute_node_template_upgrade(
                 )
             )
 
+            from .compatibility_transitions import assess_node_template_plan
+
+            compatibility_report = assess_node_template_plan(manifest, plan)
+
             if dry_run:
                 return
+            write_owner_only_json(
+                paths.reports_dir / "compatibility-transitions.json", compatibility_report
+            )
             if plan.compatibility_failures:
                 raise RuntimeError(
                     "Node-template upgrade is blocked by the live Nebius MK8s "
@@ -9526,42 +9542,45 @@ def _commit_upgrade_source_payload(
     transition_stage: str = "",
     assert_authority: Callable[[], None] = lambda: None,
 ) -> str:
-    paths = resolve_project_paths(config_path)
-    if transition_store is None:
-        assert_authority()
-        _write_text_atomic(config_path, render_updated_source_payload(dict(payload)))
-        _run_internal_render_command(config_path, force=True)
-        return _sha256_file(config_path)
+    from .destroy_state import existing_project_write_lease
 
-    admission_stage: SoperatorUpgradeAdmissionStage | None = None
+    with existing_project_write_lease(config_path):
+        paths = resolve_project_paths(config_path)
+        if transition_store is None:
+            assert_authority()
+            _write_text_atomic(config_path, render_updated_source_payload(dict(payload)))
+            _run_internal_render_command(config_path, force=True)
+            return _sha256_file(config_path)
 
-    def _build_plan() -> ProjectGenerationPlan:
-        nonlocal admission_stage
-        admission_stage = _render_soperator_upgrade_admission(
-            source_payload=payload,
-            config_path=config_path,
-            paths=paths,
-            require_soperator_flux=False,
-        )
-        return admission_stage.project_generation_plan
+        admission_stage: SoperatorUpgradeAdmissionStage | None = None
 
-    try:
-        if not transition_owner or not transition_stage:
-            raise ValueError("receipt-owned config commits require owner and stage")
-        transition = apply_project_generation_transition(
-            project_dir=paths.project_dir,
-            config_path=config_path,
-            owner=transition_owner,
-            stage=transition_stage,
-            store=transition_store,
-            build_plan=_build_plan,
-            assert_authority=assert_authority,
-            current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
-        )
-        return transition.project_generation_sha256
-    finally:
-        if admission_stage is not None:
-            admission_stage.cleanup()
+        def _build_plan() -> ProjectGenerationPlan:
+            nonlocal admission_stage
+            admission_stage = _render_soperator_upgrade_admission(
+                source_payload=payload,
+                config_path=config_path,
+                paths=paths,
+                require_soperator_flux=False,
+            )
+            return admission_stage.project_generation_plan
+
+        try:
+            if not transition_owner or not transition_stage:
+                raise ValueError("receipt-owned config commits require owner and stage")
+            transition = apply_project_generation_transition(
+                project_dir=paths.project_dir,
+                config_path=config_path,
+                owner=transition_owner,
+                stage=transition_stage,
+                store=transition_store,
+                build_plan=_build_plan,
+                assert_authority=assert_authority,
+                current_project_snapshot_sha256=lambda: project_generation_snapshot_sha256(paths),
+            )
+            return transition.project_generation_sha256
+        finally:
+            if admission_stage is not None:
+                admission_stage.cleanup()
 
 
 def _apply_node_group_migration_terraform_stage(
@@ -10166,12 +10185,15 @@ def migrate_node_group_command(
         bool,
         typer.Option(
             "--dry-run",
-            help="Resolve and print the migration without config, cloud, or cluster mutation.",
+            help="Resolve and print the migration without config, cloud, or cluster mutation. Choose exactly one of --dry-run or --execute.",
         ),
     ] = False,
     execute: Annotated[
         bool,
-        typer.Option("--execute", help="Execute or resume the exact frozen migration."),
+        typer.Option(
+            "--execute",
+            help="Execute or resume the exact frozen migration. Requires --approve; mutually exclusive with --dry-run.",
+        ),
     ] = False,
     approve: Annotated[
         bool,
@@ -11099,12 +11121,13 @@ def upgrade_helm_chart_command(
     ] = None,
     to_version: Annotated[
         str | None,
-        typer.Option("--to-version", help="Target chart/app version."),
+        typer.Option("--to-version", help="Target Helm chart version."),
     ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
-            "--dry-run", help="Print the app upgrade plan without writing files or applying."
+            "--dry-run",
+            help="Prepare and assess the app upgrade using read-only live checks; do not publish or apply.",
         ),
     ] = False,
     interactive: Annotated[
@@ -11159,567 +11182,6 @@ def _onboarded_soperator_cluster_context(
             yield spec.context_name
 
 
-def _normalize_soperator_discovery_redaction(raw_value: str | None) -> str:
-    redaction = normalize_component_token(raw_value) or "support"
-    if redaction not in {"support", "local"}:
-        raise RuntimeError("Soperator discovery --redaction must be one of: support, local.")
-    return redaction
-
-
-def _soperator_discovery_command_args(
-    *,
-    config_path: Path,
-    target_ref: str,
-    output_dir: Path | None,
-    namespace: str | None,
-    release_name: str | None,
-    kube_context: str | None,
-    redaction: str,
-) -> tuple[str, ...]:
-    args = ["nebius-cxcli", "soperator", "discover", str(config_path)]
-    args.extend(["--target", target_ref])
-    if output_dir is not None:
-        args.extend(["--output-dir", str(output_dir)])
-    if _non_empty_text(namespace):
-        args.extend(["--namespace", str(namespace)])
-    if _non_empty_text(release_name):
-        args.extend(["--release-name", str(release_name)])
-    if _non_empty_text(kube_context):
-        args.extend(["--kube-context", str(kube_context)])
-    args.extend(["--redaction", redaction])
-    args.append("--no-interactive")
-    return tuple(args)
-
-
-def _collect_soperator_discovery_helm_values(
-    *,
-    namespace: str,
-    release_name: str,
-    kube_context: str | None,
-) -> dict[str, Any]:
-    if not namespace or not release_name:
-        return {
-            "status": "not_collected",
-            "reason": "Soperator namespace or Helm release name is unknown.",
-        }
-    args = ["helm"]
-    context = _non_empty_text(kube_context)
-    if context:
-        args.extend(["--kube-context", context])
-    args.extend(["-n", namespace, "get", "values", release_name, "-a", "-o", "json"])
-    result = _run_soperator_upgrade_process(args, timeout_seconds=120, check=False)
-    if result.returncode != 0:
-        return {
-            "status": "not_collected",
-            "command": shlex.join(args),
-            "reason": f"helm get values failed with exit code {result.returncode}",
-        }
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return {
-            "status": "not_collected",
-            "command": shlex.join(args),
-            "reason": "helm get values returned invalid JSON",
-        }
-    if not isinstance(payload, dict):
-        return {
-            "status": "not_collected",
-            "command": shlex.join(args),
-            "reason": "helm get values returned a non-object payload",
-        }
-    return payload
-
-
-def _collect_soperator_discovery_login_commands(
-    *,
-    namespace: str,
-    kube_context: str | None,
-    commands: Mapping[str, str],
-) -> dict[str, Any]:
-    if not namespace:
-        return {
-            "available": False,
-            "collection_errors": [
-                {
-                    "severity": "recommended",
-                    "message": "Soperator namespace is unknown; login-pod discovery was skipped.",
-                }
-            ],
-        }
-    results: dict[str, Any] = {"available": True, "commands": {}}
-    errors: list[dict[str, Any]] = []
-    for name, command in commands.items():
-        result = _run_soperator_upgrade_login_command(
-            namespace,
-            command,
-            kube_context=kube_context,
-            timeout_seconds=180,
-            check=False,
-        )
-        results["commands"][name] = {
-            "status": "collected" if result.returncode == 0 else "not_collected",
-            "returncode": result.returncode,
-        }
-        if result.returncode != 0:
-            errors.append(
-                {
-                    "severity": "recommended",
-                    "collector": name,
-                    "message": "Soperator support collector command failed",
-                }
-            )
-    if errors:
-        results["collection_errors"] = errors
-    return results
-
-
-def _collect_soperator_discovery_slurm_snapshot(
-    *,
-    namespace: str,
-    kube_context: str | None,
-) -> dict[str, Any]:
-    return _collect_soperator_discovery_login_commands(
-        namespace=namespace,
-        kube_context=kube_context,
-        commands={
-            "slurm_conf": "cat ${SLURM_CONF:-/etc/slurm/slurm.conf} 2>/dev/null || true",
-            "scontrol_config": "scontrol show config",
-            "scontrol_partitions": "scontrol show partition",
-            "scontrol_nodes": "scontrol show nodes",
-            "sinfo": "sinfo",
-            "squeue": "squeue",
-        },
-    )
-
-
-def _collect_soperator_discovery_accounting_snapshot(
-    *,
-    namespace: str,
-    kube_context: str | None,
-) -> dict[str, Any]:
-    return _collect_soperator_discovery_login_commands(
-        namespace=namespace,
-        kube_context=kube_context,
-        commands={
-            "sacctmgr_clusters": "sacctmgr -nP show cluster format=Cluster,ControlHost,ControlPort,RPC,Share",
-            "sacctmgr_accounts": "sacctmgr -nP show account format=Account,Description,Organization",
-            "sacctmgr_users": "sacctmgr -nP show user format=User,DefaultAccount,AdminLevel",
-            "sacctmgr_qos": "sacctmgr -nP show qos format=Name,Priority,UsageFactor,GrpTRES,MaxTRES,MaxWall,Flags",
-            "sacctmgr_associations": (
-                "sacctmgr -nP show assoc format=Cluster,Account,User,Partition,QOS,"
-                "DefaultQOS,Fairshare,GrpTRES,MaxTRES,Priority"
-            ),
-            "sacctmgr_wckeys": "sacctmgr -nP show wckey format=Cluster,User,WCKey",
-        },
-    )
-
-
-def _soperator_discovery_report_from_snapshot(
-    snapshot: Mapping[str, Any],
-    *,
-    target_ref: str,
-) -> dict[str, Any]:
-    """Describe one live release without constructing an upgrade operation."""
-
-    release = _soperator_discovery_soperator_release(snapshot)
-    source_version = ""
-    for key in ("chart_version", "chart", "app_version", "appVersion", "version"):
-        match = re.search(
-            r"(?:^|[-v])(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$",
-            _non_empty_text(release.get(key)),
-        )
-        if match is not None:
-            source_version = match.group("version")
-            break
-    collection_errors = snapshot.get("collection_errors")
-    errors = list(collection_errors) if isinstance(collection_errors, list) else []
-    findings: list[dict[str, Any]] = []
-    state = "observed"
-    if errors:
-        state = "analysis-incomplete"
-        findings.append(
-            {
-                "status": "blocked",
-                "message": "Live discovery is incomplete; upgrade admission will fail closed.",
-            }
-        )
-    elif not source_version:
-        state = "release-unknown"
-        findings.append(
-            {
-                "status": "blocked",
-                "message": "No exact installed Soperator release could be identified.",
-            }
-        )
-    else:
-        findings.append(
-            {
-                "status": "observed",
-                "message": "The installed Soperator release was observed without planning an upgrade.",
-            }
-        )
-    return {
-        "schema": "nebius-cxcli.soperator-discovery-report.v1",
-        "target_ref": normalize_component_token(target_ref),
-        "state": state,
-        "source_version": source_version,
-        "findings": findings,
-        "collection_errors": errors,
-    }
-
-
-def _write_soperator_discovery_bundle_from_snapshot(
-    *,
-    config_path: Path,
-    target_ref: str,
-    snapshot: Mapping[str, Any],
-    source_kind: str,
-    output_dir: Path | None,
-    namespace: str | None,
-    release_name: str | None,
-    kube_context: str | None,
-    durable_kube_context: str | None,
-    cluster_id: str = "",
-    cluster_name: str = "",
-    redaction: str = "support",
-) -> Path:
-    project_dir = config_path.parent
-    normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
-    report = _soperator_discovery_report_from_snapshot(
-        snapshot,
-        target_ref=target_ref,
-    )
-    requested_namespace = _non_empty_text(namespace)
-    release = _soperator_discovery_soperator_release(snapshot)
-    release_namespace = (
-        requested_namespace or _non_empty_text(release.get("namespace")) or "soperator"
-    )
-    helm_storage_namespace = (
-        requested_namespace
-        or _non_empty_text(release.get("storage_namespace"))
-        or release_namespace
-    )
-    workload_namespace = (
-        requested_namespace
-        or _soperator_discovery_workload_namespace(snapshot)
-        or release_namespace
-    )
-    release_value = _non_empty_text(release_name)
-    if not release_value:
-        release_value = release_value or _non_empty_text(release.get("name")) or "soperator"
-    chart_values = _collect_soperator_discovery_helm_values(
-        namespace=helm_storage_namespace,
-        release_name=release_value,
-        kube_context=kube_context,
-    )
-    slurm_snapshot = _collect_soperator_discovery_slurm_snapshot(
-        namespace=workload_namespace,
-        kube_context=kube_context,
-    )
-    accounting_snapshot = _collect_soperator_discovery_accounting_snapshot(
-        namespace=workload_namespace,
-        kube_context=kube_context,
-    )
-    target_versions: dict[str, object] = {}
-    report_payload = report.to_dict() if hasattr(report, "to_dict") else dict(report)
-    report_payload["jail_rootfs"] = soperator_discovery_jail_rootfs_record(
-        snapshot=snapshot,
-        report=report_payload,
-        target_versions=target_versions,
-    )
-    command_args = _soperator_discovery_command_args(
-        config_path=config_path,
-        target_ref=target_ref,
-        output_dir=output_dir,
-        namespace=namespace,
-        release_name=release_name,
-        kube_context=durable_kube_context,
-        redaction=normalized_redaction,
-    )
-    return write_source_soperator_discovery_report(
-        project_dir,
-        target_ref=target_ref,
-        snapshot=snapshot,
-        report=report_payload,
-        cluster_id=cluster_id,
-        cluster_name=cluster_name,
-        source_kind=source_kind,
-        command=command_args,
-        namespace=workload_namespace,
-        release_name=release_value,
-        kube_context=durable_kube_context or "",
-        chart_values=chart_values,
-        slurm_snapshot=slurm_snapshot,
-        accounting_snapshot=accounting_snapshot,
-        target_versions=target_versions,
-        guidance_lines=(
-            "Discovery is support-only; use `soperator upgrade --dry-run` for authoritative upgrade admission.",
-        ),
-        output_dir=output_dir,
-        redaction=normalized_redaction,
-    )
-
-
-def _soperator_discovery_soperator_release(
-    snapshot: Mapping[str, Any],
-    *,
-    namespace: str | None = None,
-    release_name: str | None = None,
-) -> Mapping[str, Any]:
-    releases = snapshot.get("helm_releases")
-    if not isinstance(releases, Sequence) or isinstance(releases, (str, bytes, bytearray)):
-        return {}
-    requested_namespace = _non_empty_text(namespace).lower()
-    requested_release_name = _non_empty_text(release_name).lower()
-    if requested_namespace or requested_release_name:
-        for item in releases:
-            if not isinstance(item, Mapping):
-                continue
-            name = _non_empty_text(item.get("name")).lower()
-            release_namespace = _non_empty_text(item.get("namespace")).lower()
-            chart = _non_empty_text(item.get("chart") or item.get("chart_name")).lower()
-            if requested_release_name and name != requested_release_name:
-                continue
-            if requested_namespace and release_namespace != requested_namespace:
-                continue
-            if (
-                name in {"soperator", "slurm-operator", "soperator-controller"}
-                or "soperator" in chart
-                or "slurm-operator" in chart
-            ):
-                return item
-    for item in releases:
-        if not isinstance(item, Mapping):
-            continue
-        name = _non_empty_text(item.get("name")).lower()
-        chart = _non_empty_text(item.get("chart") or item.get("chart_name")).lower()
-        if (
-            name in {"soperator", "slurm-operator", "soperator-controller"}
-            or "soperator" in chart
-            or "slurm-operator" in chart
-        ):
-            return item
-    return {}
-
-
-def _run_managed_soperator_discovery_command(
-    *,
-    config_path: Path,
-    source_payload: dict[str, Any],
-    target_ref: str | None,
-    output_dir: Path | None,
-    namespace: str | None,
-    release_name: str | None,
-    kube_context: str | None,
-    redaction: str,
-    interactive: bool,
-) -> Path:
-    normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
-    target, _target_row, is_onboarded = _resolve_soperator_command_target(
-        source_payload,
-        target_ref=target_ref,
-        interactive=interactive,
-    )
-    if is_onboarded:
-        raise RuntimeError("managed Soperator discovery received an onboarded target")
-    chart_row = _source_helm_chart_row(source_payload, target)
-    namespace_value = (
-        _non_empty_text(namespace) or _non_empty_text(chart_row.get("namespace")) or "soperator"
-    )
-    release_value = (
-        _non_empty_text(release_name)
-        or _non_empty_text(chart_row.get("release-name"))
-        or "soperator-fluxcd"
-    )
-    artifact_identity = _soperator_upgrade_artifact_identity(
-        source_payload,
-        target_ref=target.target_ref,
-        kube_context=kube_context or "",
-    )
-    generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-    explicit_context = _non_empty_text(kube_context)
-    snapshot: dict[str, Any]
-    collection_context = explicit_context
-    env: Mapping[str, str] = {}
-    if explicit_context:
-        snapshot = collect_kubectl_soperator_snapshot(kube_context=explicit_context)
-        _validate_managed_soperator_kube_context_identity(
-            config_path=config_path,
-            target_ref=target.target_ref,
-            kube_context=explicit_context,
-            explicit_snapshot=snapshot,
-        )
-    else:
-        mk8s_target = _resolve_managed_mk8s_upgrade_target(
-            manifest,
-            target_instance_id=target.target_ref,
-        )
-        with ExitStack() as stack:
-            env = (
-                _prepare_cluster_handoff_kube_env(
-                    generated_config,
-                    paths,
-                    stack=stack,
-                    target=mk8s_target,
-                    persist_local_kubeconfig=False,
-                    set_current_context=False,
-                )
-                or {}
-            )
-            collection_context = _non_empty_text(env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV))
-            if not collection_context:
-                raise RuntimeError(
-                    f"Could not establish a Kubernetes context for managed target '{target.target_ref}'."
-                )
-            snapshot = collect_kubectl_soperator_snapshot(
-                kube_context=collection_context,
-                extra_env=env,
-            )
-            with _temporary_env(env):
-                return _write_soperator_discovery_bundle_from_snapshot(
-                    config_path=config_path,
-                    target_ref=target.target_ref,
-                    snapshot=snapshot,
-                    source_kind="managed",
-                    output_dir=output_dir,
-                    namespace=namespace_value,
-                    release_name=release_value,
-                    kube_context=collection_context,
-                    durable_kube_context=None,
-                    cluster_id=artifact_identity.cluster_id,
-                    cluster_name=artifact_identity.cluster_name,
-                    redaction=normalized_redaction,
-                )
-    return _write_soperator_discovery_bundle_from_snapshot(
-        config_path=config_path,
-        target_ref=target.target_ref,
-        snapshot=snapshot,
-        source_kind="managed",
-        output_dir=output_dir,
-        namespace=namespace_value,
-        release_name=release_value,
-        kube_context=collection_context,
-        durable_kube_context=explicit_context,
-        cluster_id=artifact_identity.cluster_id,
-        cluster_name=artifact_identity.cluster_name,
-        redaction=normalized_redaction,
-    )
-
-
-def _run_onboarded_soperator_discovery_command(
-    *,
-    config_path: Path,
-    payload: dict[str, Any],
-    target_ref: str,
-    kube_context: str | None,
-    output_dir: Path | None,
-    namespace: str | None,
-    release_name: str | None,
-    redaction: str,
-) -> Path:
-    normalized_redaction = _normalize_soperator_discovery_redaction(redaction)
-    target = soperator_registration_target(payload, target_ref=target_ref)
-    if not isinstance(target, Mapping):
-        raise RuntimeError(
-            f"Onboarded Soperator discovery requires registered target '{target_ref}'."
-        )
-    explicit_context = _non_empty_text(kube_context)
-    resolved_cluster_id = _non_empty_text(target.get("cluster_id"))
-    resolved_access = _normalize_mk8s_handoff_access(_non_empty_text(target.get("access")))
-    explicit_context = explicit_context or _non_empty_text(target.get("kube_context"))
-    if resolved_cluster_id and not explicit_context:
-        with _onboarded_soperator_cluster_context(
-            payload,
-            cluster_id=resolved_cluster_id,
-            access=resolved_access,
-        ) as collection_context:
-            snapshot = collect_kubectl_soperator_snapshot(
-                kube_context=collection_context,
-            )
-            return _write_soperator_discovery_bundle_from_snapshot(
-                config_path=config_path,
-                target_ref=target_ref,
-                snapshot=snapshot,
-                source_kind="onboarded",
-                output_dir=output_dir,
-                namespace=namespace,
-                release_name=release_name,
-                kube_context=collection_context,
-                durable_kube_context=None,
-                cluster_id=resolved_cluster_id,
-                cluster_name="",
-                redaction=normalized_redaction,
-            )
-    if not explicit_context:
-        raise RuntimeError(
-            f"Onboarded Soperator target '{target_ref}' has no kube context or cluster ID."
-        )
-    snapshot = collect_kubectl_soperator_snapshot(
-        kube_context=explicit_context,
-    )
-    _validate_registered_soperator_kube_context_identity(
-        target=target,
-        target_ref=target_ref,
-        kube_context=explicit_context,
-        explicit_snapshot=snapshot,
-    )
-    return _write_soperator_discovery_bundle_from_snapshot(
-        config_path=config_path,
-        target_ref=target_ref,
-        snapshot=snapshot,
-        source_kind="onboarded",
-        output_dir=output_dir,
-        namespace=namespace,
-        release_name=release_name,
-        kube_context=explicit_context,
-        durable_kube_context=explicit_context,
-        cluster_id=resolved_cluster_id,
-        cluster_name="",
-        redaction=normalized_redaction,
-    )
-
-
-def _print_soperator_discovery_result(path: Path) -> None:
-    console.print(f"Soperator discovery manifest: {path}", soft_wrap=True)
-    summary = path.parent / "summary.md"
-    if summary.exists():
-        console.print(f"Soperator discovery summary: {summary}", soft_wrap=True)
-    with suppress(Exception):
-        payload = load_soperator_discovery_bundle(path)
-        current_k8s_version = _non_empty_text(payload.get("current_k8s_version"))
-        target_k8s_version = _non_empty_text(payload.get("target_k8s_version"))
-        if current_k8s_version:
-            console.print(f"Current Kubernetes version: {current_k8s_version}")
-        if target_k8s_version:
-            console.print(f"Target Kubernetes version: {target_k8s_version}")
-        soperator_status = _non_empty_text(payload.get("soperator_status"))
-        source_version = _non_empty_text(payload.get("source_version"))
-        chart_version = _non_empty_text(payload.get("chart_version"))
-        app_version = _non_empty_text(payload.get("app_version"))
-        if soperator_status:
-            console.print(f"Soperator status: {soperator_status}")
-        if source_version:
-            console.print(f"Soperator version: {source_version}")
-        elif soperator_status and soperator_status != "not installed":
-            console.print("Soperator version: unknown")
-        if chart_version and chart_version != source_version:
-            console.print(f"Soperator chart version: {chart_version}")
-        if app_version and app_version not in {source_version, chart_version}:
-            console.print(f"Soperator app version: {app_version}")
-        jail_rootfs = payload.get("jail_rootfs")
-        jail_rootfs_version = (
-            _non_empty_text(jail_rootfs.get("current_version"))
-            if isinstance(jail_rootfs, Mapping)
-            else ""
-        )
-        if jail_rootfs_version:
-            console.print(f"Jail rootfs version: {jail_rootfs_version}")
-
-
-_SOPERATOR_INSTALL_PLAN_SCHEMA = "nebius-cxcli.soperator-install-plan.v1"
-_SOPERATOR_INSTALL_PLAN_FILENAME = "soperator-install-plan.json"
-_SOPERATOR_INSTALL_TERRAFORM_PLAN_FILENAME = ".soperator-install.tfplan"
 _SOPERATOR_INSTALL_PROFILE_IDS = {
     "cpu": "nebius-cpu-v1",
     "gpu": "nebius-gpu-v1",
@@ -11739,662 +11201,9 @@ def _write_owner_only_json(path: Path, payload: Mapping[str, Any]) -> None:
     write_owner_only_json(path, to_plain_data(dict(payload)))
 
 
-def _soperator_install_plan_paths(paths: ProjectPaths) -> tuple[Path, Path]:
-    return (
-        paths.infra_dir / _SOPERATOR_INSTALL_TERRAFORM_PLAN_FILENAME,
-        paths.reports_dir / _SOPERATOR_INSTALL_PLAN_FILENAME,
-    )
-
-
-def _managed_soperator_install_target_ref(
-    config: Any,
-    manifest: Mapping[str, Any],
-) -> str:
-    soperator_refs = set(_soperator_app_target_refs(to_plain_data(config)))
-    candidates = [
-        target
-        for target in _manifest_deploy_targets(manifest)
-        if target.get(DEPLOY_TARGET_OWNERSHIP_FIELD) == MANAGED_TARGET_OWNERSHIP
-        and target.get("target_ref") in soperator_refs
-    ]
-    if len(candidates) != 1:
-        raise RuntimeError(
-            "soperator install requires exactly one cxcli-managed MK8s target bound to "
-            f"apps:soperator; found {len(candidates)}."
-        )
-    return str(candidates[0]["target_ref"])
-
-
-def _soperator_install_plan_material(
-    *,
-    config_path: Path,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    terraform_plan_path: Path,
-    target_ref: str,
-    plan_generation: str | None = None,
-    recovery: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    material = _soperator_install_plan_authority(
-        config_path=config_path,
-        paths=paths,
-        manifest=manifest,
-        target_ref=target_ref,
-    )
-    inputs = material["inputs"]
-    if not isinstance(inputs, dict):  # pragma: no cover - internal invariant
-        raise RuntimeError("Soperator install plan inputs are invalid")
-    inputs["terraformPlanSha256"] = _sha256_file(terraform_plan_path)
-    if recovery is not None:
-        inputs["recovery"] = dict(recovery)
-    material["planGeneration"] = plan_generation or ("sha256:" + secrets.token_hex(32))
-    material["status"] = "planned"
-    material["approvalFingerprint"] = _soperator_install_approval_fingerprint(material)
-    return material
-
-
-def _soperator_install_plan_authority(
-    *,
-    config_path: Path,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-) -> dict[str, Any]:
-    snapshot = load_soperator_release_snapshot(
-        soperator_release_snapshot_path(paths.reports_dir, target_ref)
-    )
-    manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
-    operation_id = _soperator_install_operation_id(
-        config_path=config_path,
-        manifest_path=manifest_path,
-        target_ref=target_ref,
-    )
-    return {
-        "schema": _SOPERATOR_INSTALL_PLAN_SCHEMA,
-        "operationId": operation_id,
-        "target": {
-            "ref": target_ref,
-            "kind": "managed-mk8s",
-            "ownership": MANAGED_TARGET_OWNERSHIP,
-        },
-        "inputs": {
-            "configSha256": _sha256_file(config_path),
-            "generatedManifestSha256": _sha256_file(manifest_path),
-        },
-        "release": {
-            "selector": snapshot.selector,
-            "version": snapshot.release,
-            "tag": snapshot.tag,
-            "commit": snapshot.commit,
-            "tree": snapshot.tree,
-            "snapshotSha256": snapshot.snapshot_sha256,
-            "sourceManifestSha256": snapshot.source_manifest_sha256,
-            "umbrellaDigest": snapshot.umbrella.digest,
-        },
-    }
-
-
-def _soperator_install_approval_fingerprint(plan: Mapping[str, Any]) -> str:
-    material = {
-        key: plan.get(key)
-        for key in (
-            "schema",
-            "operationId",
-            "target",
-            "inputs",
-            "release",
-            "planGeneration",
-            "status",
-        )
-    }
-    fingerprint_payload = json.dumps(material, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest()
-
-
-def _soperator_install_operation_id(
-    *,
-    config_path: Path,
-    manifest_path: Path,
-    target_ref: str,
-) -> str:
-    reports_dir = manifest_path.parent / "reports"
-    snapshot = load_soperator_release_snapshot(
-        soperator_release_snapshot_path(reports_dir, target_ref)
-    )
-    identity = {
-        "configSha256": _sha256_file(config_path),
-        "generatedManifestSha256": _sha256_file(manifest_path),
-        "targetRef": target_ref,
-        "releaseSnapshotSha256": snapshot.snapshot_sha256,
-        "releaseCommit": snapshot.commit,
-        "releaseTree": snapshot.tree,
-    }
-    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _plan_soperator_install(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-) -> tuple[Path, Path, dict[str, Any]]:
-    target = next(
-        item for item in _manifest_deploy_targets(manifest) if item["target_ref"] == target_ref
-    )
-    target_paths = _paths_for_target_flux_dir(paths, target)
-    snapshot = load_soperator_release_snapshot(
-        soperator_release_snapshot_path(paths.reports_dir, target_ref)
-    )
-    source = ensure_soperator_release_source(snapshot)
-    verify_soperator_release_artifacts(
-        snapshot, source, values=_rendered_soperator_upstream_values(target_paths.flux_dir)
-    )
-    mysterybox_payload_env = _run_deploy_preflight(config, paths, manifest=manifest)
-    runtime_env = _terraform_runtime_env(config)
-    runtime_env.update(mysterybox_payload_env)
-    terraform_plan_path, receipt_path = _soperator_install_plan_paths(paths)
-    with install_phase("terraform-plan", "Planning the Soperator infrastructure"):
-        terraform_plan(
-            paths.infra_dir,
-            extra_env=runtime_env,
-            initialize=False,
-            plan_file=terraform_plan_path,
-        )
-        plan_json = terraform_show_json(
-            paths.infra_dir,
-            extra_env=runtime_env,
-            initialize=False,
-            plan_file=terraform_plan_path,
-        )
-    _validate_soperator_install_terraform_plan_scope(config, plan_json)
-    receipt = _soperator_install_plan_material(
-        config_path=paths.config_path,
-        paths=paths,
-        manifest=manifest,
-        terraform_plan_path=terraform_plan_path,
-        target_ref=target_ref,
-    )
-    _write_owner_only_json(receipt_path, receipt)
-    return terraform_plan_path, receipt_path, receipt
-
-
-_SOPERATOR_INSTALL_EXECUTION_MARKERS = (
-    "startedAt",
-    "infraCompleteAt",
-    "completedAt",
-    "failedAt",
-    "failureType",
-)
-
-
-def _validate_soperator_install_replan_receipt(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-) -> tuple[Path, Path, dict[str, Any]]:
-    terraform_plan_path, receipt_path = _soperator_install_plan_paths(paths)
-    try:
-        raw = read_owner_only_json(
-            receipt_path,
-            label="Saved Soperator install plan receipt",
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            "Soperator install --replan requires a readable owner-only saved plan receipt."
-        ) from exc
-    if not isinstance(raw, dict) or raw.get("schema") != _SOPERATOR_INSTALL_PLAN_SCHEMA:
-        raise RuntimeError("The saved Soperator install plan receipt is invalid.")
-    execution_markers = tuple(
-        marker for marker in _SOPERATOR_INSTALL_EXECUTION_MARKERS if marker in raw
-    )
-    failed_infra = failed_infrastructure_receipt(raw)
-    if not failed_infra and (raw.get("status") != "planned" or execution_markers):
-        detail = ", ".join(execution_markers) or str(raw.get("status") or "unknown status")
-        raise RuntimeError(
-            "Soperator install --replan requires a never-executed saved plan or a failed "
-            "infrastructure apply without an infrastructure completion checkpoint; "
-            f"the receipt contains execution evidence: {detail}."
-        )
-    plan_generation = _non_empty_text(raw.get("planGeneration"))
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", plan_generation):
-        raise RuntimeError("The saved Soperator install plan receipt is invalid.")
-    raw_inputs = raw.get("inputs")
-    if (
-        not isinstance(raw_inputs, Mapping)
-        or not re.fullmatch(
-            r"sha256:[0-9a-f]{64}",
-            _non_empty_text(raw_inputs.get("terraformPlanSha256")),
-        )
-        or raw.get("approvalFingerprint")
-        != _soperator_install_approval_fingerprint({**raw, "status": "planned"})
-    ):
-        raise RuntimeError("The saved Soperator install plan receipt is invalid.")
-
-    expected = _soperator_install_plan_authority(
-        config_path=paths.config_path,
-        paths=paths,
-        manifest=manifest,
-        target_ref=target_ref,
-    )
-    for key in ("operationId", "target", "release"):
-        if raw.get(key) != expected.get(key):
-            raise RuntimeError(
-                "The saved Soperator install plan authority no longer matches the saved "
-                "project, target, configuration, generated manifest, or frozen release."
-            )
-    expected_inputs = expected["inputs"]
-    if not isinstance(raw_inputs, Mapping) or any(
-        raw_inputs.get(key) != value for key, value in expected_inputs.items()
-    ):
-        raise RuntimeError(
-            "The saved Soperator install plan authority no longer matches the saved "
-            "project, target, configuration, generated manifest, or frozen release."
-        )
-    if "recovery" in raw_inputs:
-        validate_recovery_archive(paths.reports_dir, raw_inputs["recovery"])
-    if failed_infra or "recovery" in raw_inputs:
-        _require_owner_only_soperator_install_plan(terraform_plan_path)
-        if (
-            not terraform_plan_path.exists()
-            or _sha256_file(terraform_plan_path) != raw_inputs["terraformPlanSha256"]
-        ):
-            raise RuntimeError(
-                "Failed install recovery requires the exact previously approved Terraform plan"
-            )
-    return terraform_plan_path, receipt_path, raw
-
-
-def _require_owner_only_soperator_install_plan(path: Path) -> None:
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_nlink != 1
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-    ):
-        raise RuntimeError("The saved Soperator Terraform plan is not an owner-only regular file.")
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _publish_soperator_install_replan(
-    *,
-    candidate_plan_path: Path,
-    terraform_plan_path: Path,
-    receipt_path: Path,
-    previous_receipt: Mapping[str, Any],
-    receipt: Mapping[str, Any],
-) -> None:
-    _require_owner_only_soperator_install_plan(terraform_plan_path)
-    plan_backup_path: Path | None = None
-    receipt_backup_path = receipt_path.parent / (
-        f".{receipt_path.name}.{secrets.token_hex(16)}.backup"
-    )
-    publication_started = False
-    installed_candidate = False
-    committed = False
-    try:
-        _write_owner_only_json(receipt_backup_path, previous_receipt)
-        publication_started = True
-        if terraform_plan_path.exists():
-            descriptor, raw_backup_path = tempfile.mkstemp(
-                prefix=f".{terraform_plan_path.name}.",
-                suffix=".backup",
-                dir=terraform_plan_path.parent,
-            )
-            os.close(descriptor)
-            allocated_backup_path = Path(raw_backup_path)
-            try:
-                os.replace(terraform_plan_path, allocated_backup_path)
-            except Exception:
-                allocated_backup_path.unlink(missing_ok=True)
-                raise
-            plan_backup_path = allocated_backup_path
-        os.replace(candidate_plan_path, terraform_plan_path)
-        installed_candidate = True
-        _fsync_directory(terraform_plan_path.parent)
-        _write_owner_only_json(receipt_path, receipt)
-        committed = True
-    except Exception as exc:
-        if not publication_started:
-            with suppress(OSError):
-                receipt_backup_path.unlink(missing_ok=True)
-            raise
-
-        rollback_failures: list[str] = []
-        plan_restored = plan_backup_path is None
-        if installed_candidate:
-            try:
-                terraform_plan_path.unlink(missing_ok=True)
-            except OSError as rollback_exc:
-                plan_restored = False
-                rollback_failures.append(f"remove replacement plan: {rollback_exc}")
-        if plan_backup_path is not None and plan_backup_path.exists():
-            try:
-                os.replace(plan_backup_path, terraform_plan_path)
-                _fsync_directory(terraform_plan_path.parent)
-                plan_backup_path = None
-                plan_restored = True
-            except OSError as rollback_exc:
-                plan_restored = False
-                rollback_failures.append(f"restore prior plan: {rollback_exc}")
-        elif plan_restored:
-            with suppress(OSError):
-                _fsync_directory(terraform_plan_path.parent)
-
-        if plan_restored and receipt_backup_path.exists():
-            try:
-                os.replace(receipt_backup_path, receipt_path)
-                _fsync_directory(receipt_path.parent)
-            except OSError as rollback_exc:
-                rollback_failures.append(f"restore prior receipt: {rollback_exc}")
-
-        if rollback_failures:
-            recovery_paths = [
-                str(path)
-                for path in (plan_backup_path, receipt_backup_path)
-                if path is not None and path.exists()
-            ]
-            recovery_detail = ", ".join(recovery_paths) or "no recovery copy remains"
-            raise RuntimeError(
-                "Soperator install replan publication failed and rollback was incomplete; "
-                f"recovery evidence: {recovery_detail}."
-            ) from exc
-        raise
-    finally:
-        if committed:
-            for backup_path in (plan_backup_path, receipt_backup_path):
-                if backup_path is not None:
-                    with suppress(OSError):
-                        backup_path.unlink(missing_ok=True)
-
-
-def _replan_soperator_install(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-    expected_receipt: Mapping[str, Any],
-) -> tuple[Path, Path, dict[str, Any]]:
-    terraform_plan_path, receipt_path, current_receipt = _validate_soperator_install_replan_receipt(
-        config=config,
-        paths=paths,
-        manifest=manifest,
-        target_ref=target_ref,
-    )
-    if current_receipt != dict(expected_receipt):
-        raise RuntimeError(
-            "The saved Soperator install plan receipt changed while replanning; retry "
-            "from the current saved authority."
-        )
-
-    if failed_infrastructure_receipt(current_receipt):
-        archive_failed_receipt(paths.reports_dir, current_receipt)
-        with install_phase("render", "Refreshing failed-install Terraform root wiring"):
-            refresh_install_terraform_root(config, paths, manifest)
-        if (
-            _validate_soperator_install_replan_receipt(
-                config=config, paths=paths, manifest=manifest, target_ref=target_ref
-            )[2]
-            != current_receipt
-        ):
-            raise RuntimeError("Saved install authority changed during root refresh")
-
-    mysterybox_payload_env = _run_deploy_preflight(config, paths, manifest=manifest)
-    runtime_env = _terraform_runtime_env(config)
-    runtime_env.update(mysterybox_payload_env)
-    previous_plan = None
-    recovery = current_receipt.get("inputs", {}).get("recovery")
-    if failed_infrastructure_receipt(current_receipt) or recovery is not None:
-        previous_plan = terraform_show_json(
-            paths.infra_dir,
-            extra_env=runtime_env,
-            initialize=False,
-            plan_file=terraform_plan_path,
-        )
-    paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_candidate_path = tempfile.mkstemp(
-        prefix=f".{terraform_plan_path.name}.",
-        suffix=".replan",
-        dir=paths.infra_dir,
-    )
-    os.close(descriptor)
-    candidate_plan_path = Path(raw_candidate_path)
-    try:
-        with install_phase("plan", "Refreshing the saved Terraform install plan"):
-            terraform_plan(
-                paths.infra_dir,
-                extra_env=runtime_env,
-                initialize=False,
-                plan_file=candidate_plan_path,
-            )
-            plan_json = terraform_show_json(
-                paths.infra_dir,
-                extra_env=runtime_env,
-                initialize=False,
-                plan_file=candidate_plan_path,
-            )
-        if previous_plan is not None:
-            provider_schema = terraform_provider_schema_json(paths.infra_dir, extra_env=runtime_env)
-            if failed_infrastructure_receipt(current_receipt):
-                allowed_permits = frozenset(
-                    address
-                    for address in rendered_soperator_observability_iam_instances(
-                        config,
-                        rendered_module_sources(
-                            config, source_profile=resolve_component_sources_profile()
-                        ),
-                    )
-                    if address.startswith("nebius_iam_v1_access_permit.")
-                )
-                recovery = recovery_provenance(
-                    current_receipt,
-                    previous_plan,
-                    plan_json,
-                    allowed_new_access_permits=allowed_permits,
-                    provider_schema=provider_schema,
-                )
-            else:
-                validate_recovery_plan(previous_plan, plan_json, provider_schema=provider_schema)
-        _validate_soperator_install_terraform_plan_scope(
-            config, plan_json, allow_unchanged_infrastructure=recovery is not None
-        )
-        receipt = _soperator_install_plan_material(
-            config_path=paths.config_path,
-            paths=paths,
-            manifest=manifest,
-            terraform_plan_path=candidate_plan_path,
-            target_ref=target_ref,
-            recovery=recovery,
-        )
-        if failed_infrastructure_receipt(current_receipt):
-            archive_failed_receipt(paths.reports_dir, current_receipt)
-        _publish_soperator_install_replan(
-            candidate_plan_path=candidate_plan_path,
-            terraform_plan_path=terraform_plan_path,
-            receipt_path=receipt_path,
-            previous_receipt=current_receipt,
-            receipt=receipt,
-        )
-        return terraform_plan_path, receipt_path, receipt
-    finally:
-        candidate_plan_path.unlink(missing_ok=True)
-
-
-def _validate_soperator_install_terraform_plan_scope(
-    config: Any,
-    plan: Mapping[str, Any],
-    *,
-    allow_unchanged_infrastructure: bool = False,
-) -> None:
-    module_sources = rendered_module_sources(
-        config,
-        source_profile=resolve_component_sources_profile(),
-    )
-    allowed = {
-        item.module_name: item.component_id
-        for item in module_sources
-        if item.component_id in _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS
-    }
-    unexpected_components = sorted(
-        {
-            item.component_id
-            for item in module_sources
-            if item.component_id not in _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS
-        }
-    )
-    if unexpected_components:
-        raise RuntimeError(
-            "Soperator install Terraform scope contains unrelated infrastructure "
-            "components: " + ", ".join(unexpected_components)
-        )
-    missing_components = sorted(
-        set(_SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS) - set(allowed.values())
-    )
-    if missing_components:
-        raise RuntimeError(
-            "Soperator install Terraform scope is missing required infrastructure "
-            "components: " + ", ".join(missing_components)
-        )
-    allowed_root_instances = rendered_soperator_observability_iam_instances(config, module_sources)
-    raw_changes = plan.get("resource_changes")
-    if not isinstance(raw_changes, list):
-        raise RuntimeError("Saved Soperator Terraform plan has no resource_changes inventory")
-    changed_components: set[str] = set()
-    for raw_change in raw_changes:
-        if not isinstance(raw_change, Mapping):
-            raise RuntimeError("Saved Soperator Terraform plan contains a malformed change")
-        address = _non_empty_text(raw_change.get("address"))
-        change = raw_change.get("change")
-        actions = change.get("actions") if isinstance(change, Mapping) else None
-        action_set = {
-            _non_empty_text(action) for action in actions or [] if _non_empty_text(action)
-        }
-        if not action_set or action_set <= {"no-op", "read"}:
-            continue
-        module_match = re.match(r"^module\.([A-Za-z_][A-Za-z0-9_]*)\.", address)
-        module_name = module_match.group(1) if module_match else ""
-        component_id = allowed.get(module_name)
-        if not component_id and address not in allowed_root_instances:
-            raise RuntimeError(
-                "Soperator install Terraform plan would mutate an address outside its "
-                f"MK8s/SFS ownership closure: {address or '<missing>'}"
-            )
-        if "delete" in action_set:
-            raise RuntimeError(
-                "Soperator install Terraform plan contains a delete or replacement action "
-                f"for {address}; fresh installation and recovery are forward-only."
-            )
-        if not action_set <= {"create", "update", "read", "no-op"}:
-            raise RuntimeError(
-                f"Soperator install Terraform plan has unsupported actions for {address}: "
-                + ", ".join(sorted(action_set))
-            )
-        if component_id:
-            changed_components.add(component_id)
-    if not changed_components and not allow_unchanged_infrastructure:
-        raise RuntimeError(
-            "Soperator install Terraform plan contains no MK8s or SFS changes. Refusing "
-            "to treat an existing infrastructure state as a fresh installation."
-        )
-
-
-@install_progress_step("saved-plan", "Verifying the saved install plan")
-def _load_soperator_install_plan(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-) -> tuple[Path, Path, dict[str, Any]]:
-    terraform_plan_path, receipt_path = _soperator_install_plan_paths(paths)
-    if not receipt_path.exists() or not terraform_plan_path.exists():
-        raise RuntimeError(
-            "No resumable Soperator install plan exists. Run `soperator install` without "
-            "--resume to create a new immutable plan and approval fingerprint."
-        )
-    raw = read_owner_only_json(
-        receipt_path,
-        label="Saved Soperator install plan receipt",
-    )
-    if not isinstance(raw, dict) or raw.get("schema") != _SOPERATOR_INSTALL_PLAN_SCHEMA:
-        raise RuntimeError("The saved Soperator install plan receipt is invalid.")
-    _require_owner_only_soperator_install_plan(terraform_plan_path)
-    if raw.get("status") == "complete":
-        raise RuntimeError(
-            "This Soperator install receipt is already complete; refusing to replay its "
-            "Terraform plan or in-cluster release. Use Soperator day-2 commands instead."
-        )
-    plan_generation = _non_empty_text(raw.get("planGeneration"))
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", plan_generation):
-        raise RuntimeError("The saved Soperator install plan receipt is invalid.")
-    raw_inputs = raw.get("inputs")
-    recovery = None
-    if isinstance(raw_inputs, Mapping) and "recovery" in raw_inputs:
-        recovery = validate_recovery_archive(paths.reports_dir, raw_inputs["recovery"])
-    expected = _soperator_install_plan_material(
-        config_path=paths.config_path,
-        paths=paths,
-        manifest=manifest,
-        terraform_plan_path=terraform_plan_path,
-        target_ref=target_ref,
-        plan_generation=plan_generation,
-        recovery=recovery,
-    )
-    for key in ("operationId", "target", "inputs", "release", "approvalFingerprint"):
-        if raw.get(key) != expected.get(key):
-            raise RuntimeError(
-                "The saved Soperator install plan no longer matches config, generated "
-                "artifacts, target identity, or the pinned release. Replan and approve again."
-            )
-    return terraform_plan_path, receipt_path, raw
-
-
-@contextmanager
-def _soperator_install_execution_lease(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    target_ref: str,
-    operation_id: str,
-) -> Iterator[SoperatorInstallRemoteLease]:
-    # The state bucket is the only durable coordination surface that exists
-    # before the target cluster. Bootstrap it first, then fence every
-    # target-specific plan/apply action with conditional Object Storage writes.
-    _ensure_terraform_backend_ready(config)
-    settings = backend_settings_from_config(config)
-    local_lock = paths.project_dir / ".nebius-cxcli" / "soperator-install.lock"
-    with ExitStack() as stack:
-        with install_phase("install-lease", "Acquiring the install execution lease"):
-            stack.enter_context(SoperatorInstallLocalLock(local_lock))
-            lease = stack.enter_context(
-                SoperatorInstallRemoteLease(
-                    settings=settings,
-                    target_ref=target_ref,
-                    operation_id=operation_id,
-                )
-            )
-            lease.assert_held()
-        yield lease
-
-
-def _soperator_install_anchor_name(cluster_id: str) -> str:
-    digest = hashlib.sha256(cluster_id.encode("utf-8")).hexdigest()[:20]
-    return f"nebius-cxcli-soperator-install-{digest}"
+def _soperator_install_anchor_name(cluster_id: str, operation_id: str) -> str:
+    digest = hashlib.sha256(f"{cluster_id}|{operation_id}".encode()).hexdigest()[:20]
+    return f"nebius-cxcli-deploy-{digest}"
 
 
 def _apply_soperator_install_operation_anchor(
@@ -12406,10 +11215,10 @@ def _apply_soperator_install_operation_anchor(
     operation_id: str,
     approval_fingerprint: str,
 ) -> str:
-    name = _soperator_install_anchor_name(cluster_id)
+    name = _soperator_install_anchor_name(cluster_id, operation_id)
     env = os.environ.copy()
     env.update(extra_env)
-    get_result = subprocess.run(
+    get_result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -12476,7 +11285,7 @@ def _apply_soperator_install_operation_anchor(
             "status": "active",
         },
     }
-    create_result = subprocess.run(
+    create_result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -12517,7 +11326,7 @@ def _complete_soperator_install_operation_anchor(
         {"op": "test", "path": "/data/operationId", "value": operation_id},
         {"op": "replace", "path": "/data/status", "value": "complete"},
     ]
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -12548,12 +11357,12 @@ def _soperator_install_profile_id(profile: str | None, *, non_interactive: bool)
     if not normalized:
         if non_interactive:
             raise RuntimeError(
-                "Non-interactive Soperator install requires --profile cpu, gpu, or mixed."
+                "Non-interactive Soperator create requires --profile cpu, gpu, or mixed."
             )
         return None
     profile_id = _SOPERATOR_INSTALL_PROFILE_IDS.get(normalized)
     if profile_id is None:
-        raise RuntimeError("Soperator install --profile must be one of: cpu, gpu, mixed.")
+        raise RuntimeError("Soperator create --profile must be one of: cpu, gpu, mixed.")
     return profile_id
 
 
@@ -12691,7 +11500,15 @@ def _register_existing_soperator_target(
     provenance = observation.provenance
     protected_storage_sha256 = observation.protected_storage_sha256
     protected_storage_bindings = observation.protected_storage_bindings
-    app_entries = (*app_entries, soperator_install_entry(metadata.release))
+    from .soperator_release import SOPERATOR_UPSTREAM_UMBRELLA_CHART, soperator_upstream_registry
+
+    app_entries = (
+        *app_entries,
+        soperator_install_entry(
+            metadata.release,
+            chart_repo=f"{soperator_upstream_registry(Path(source.source_dir))}/{SOPERATOR_UPSTREAM_UMBRELLA_CHART}",
+        ),
+    )
 
     _, configured_tenant_id, configured_project_id, _configured_region_id, _ = (
         _identity_values_from_payload(payload)
@@ -12782,7 +11599,31 @@ def _register_existing_soperator_target(
         target_row["kube_context"] = explicit_context
 
     config_lock_path = config_path.parent / ".nebius-cxcli" / "config.lock"
-    with SoperatorOperationLocalLock(config_lock_path):
+    lease_payload = copy.deepcopy(payload)
+    _set_mapping_path_value(lease_payload, "client_info.nebius.region_id", observed_region_id)
+    # The scaffold has no registered target yet; backend derivation validates
+    # its project identity without normalizing an incomplete application graph.
+    lease_config = lease_payload
+    from .deployment_local import LocalObjectStore
+    from .deployment_state import DeploymentGeneration, DeploymentState
+
+    with (
+        _deployment_execution(
+            config=lease_config,
+            paths=resolve_project_paths(config_path),
+            target_ref=target_ref,
+            operation_id="onboard:" + normalized_cluster_id,
+        ) as deployment_lease,
+        SoperatorOperationLocalLock(config_lock_path),
+    ):
+        settings = backend_settings_from_config(lease_config)
+        deployment_state = DeploymentState(
+            LocalObjectStore.for_project(resolve_project_paths(config_path)),
+            settings,
+            assert_held=deployment_lease.assert_held,
+        )
+        if (deployment_state.read() or SimpleNamespace(value={})).value.get("active"):
+            raise RuntimeError("Finish the active deployment before onboarding")
         expected_config_bytes = config_path.read_bytes()
         if live_region_config_sha256:
             if (
@@ -12847,12 +11688,37 @@ def _register_existing_soperator_target(
             SoperatorOnboardConfigTarget.bootstrap_marker_path(config_path).unlink(missing_ok=True)
         load_config(config_path, persist_normalized=False)
         _run_internal_render_command(config_path, force=True)
-        accept_ordinary_app_baseline(
-            resolve_project_paths(config_path),
+        onboard_paths = resolve_project_paths(config_path)
+        generation = DeploymentGeneration.capture(
+            onboard_paths, load_generated_manifest(onboard_paths.generated_dir)
+        )
+        deployment_state.register(
+            generation,
+            evidence={
+                "identities": {
+                    target_ref: {
+                        "cluster_id": normalized_cluster_id,
+                        "kubernetes_uid": kubernetes_uid,
+                    }
+                },
+                "release": metadata.release,
+                "registrationVerified": True,
+            },
+        )
+        baseline_published = accept_ordinary_app_baseline(
+            onboard_paths,
             identities={
                 target_ref: {"cluster_id": normalized_cluster_id, "kubernetes_uid": kubernetes_uid}
             },
+            deployment_generation=generation.identity,
+            expected_generation=generation,
         )
+        if baseline_published is False:
+            console.print(
+                "Onboarding succeeded, but local source or generated files changed during "
+                "acceptance. The ordinary-app baseline was not refreshed; repeat onboarding "
+                "with the intended configuration before applying ordinary apps."
+            )
 
     discovery_path = write_source_soperator_discovery_report(
         config_path.parent,
@@ -12912,127 +11778,93 @@ def _configure_soperator_upgrade_persistent_paths(
     ownership: str,
     interactive: bool,
     frozen_paths: Sequence[str] | None = None,
+    validate_values: Callable[[Mapping[str, Any]], object] | None = None,
 ) -> tuple[str, ...]:
-    """Freeze mandatory and optional data paths into the prospective chart values."""
+    """Add zero-copy data bindings before the public upgrade campaign is frozen."""
+    from .soperator_jail_protection import protect_jail_directories
 
     chart_row = _source_helm_chart_row(source_payload, target)
     current_values = chart_row.get("values")
     if not isinstance(current_values, Mapping):
         raise RuntimeError("protected Soperator upgrade requires chart values for jail mounts")
     validate_retained_home_layout(current_values)
-    raw_mounts = current_values.get("jailPersistentMounts")
-    current_rows = raw_mounts if isinstance(raw_mounts, list) else []
-    current_rows_by_path = {
-        str(item.get("mountPath") or "").strip(): item
-        for item in current_rows
-        if isinstance(item, Mapping)
-        and str(item.get("mountPath") or "").strip()
-        and str(item.get("localPath") or "").strip()
-    }
-    current_extras = sorted(
-        {
-            str(item.get("mountPath") or "").strip()
-            for item in current_rows
-            if isinstance(item, Mapping)
-            and str(item.get("mountPath") or "").strip()
-            and str(item.get("mountPath") or "").strip()
-            not in JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS
-        }
+    current_paths = tuple(
+        str(row["mountPath"]) for row in current_values.get("jailPersistentMounts", [])
     )
     if frozen_paths is not None:
-        selected = tuple(sorted({str(path).strip() for path in frozen_paths if str(path).strip()}))
-        if not set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS).issubset(selected):
+        if not set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS).issubset(frozen_paths):
             raise SoperatorSafetyPauseError(
                 "The active Soperator admission omitted a mandatory persistent data path"
             )
-        extra_paths = tuple(
-            path for path in selected if path not in JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS
-        )
-    elif interactive:
-        prompted = _prompt_upgrade_scalar(
-            "soperator.upgrade.additional_persistent_data_paths",
-            current_extras,
-            type_hint="list(string)",
-            required=False,
-            missing="additional persistent data paths",
-            prompt_hint=(
-                "optional data-only directories; /home, /data, /scripts, /models, and /opt/soperator-home "
-                "are always protected"
-            ),
-        )
-        if not isinstance(prompted, list) or not all(isinstance(item, str) for item in prompted):
-            raise ValueError("additional persistent data paths must be a list of absolute paths")
-        extra_paths = tuple(prompted)
+        if not set(current_paths).issubset(frozen_paths):
+            raise SoperatorSafetyPauseError("The frozen persistent data paths changed")
+        paths = tuple(frozen_paths)
     else:
-        extra_paths = tuple(current_extras)
-
-    layout = "external" if ownership == "onboarded" else "managed"
-    seed_values = copy.deepcopy(dict(current_values))
-    current_active_source = jail_rootfs_active_source(seed_values)
-    already_slot_backed = current_active_source == "slot"
-    derived_mount_rows = jail_persistent_mounts_from_paths(
-        extra_paths,
-        layout=layout,
-        legacy_active_source=not already_slot_backed,
-    )
-    normalized_extra_paths = tuple(mount.mount_path for mount in derived_mount_rows)
-    if len(normalized_extra_paths) != len(set(normalized_extra_paths)):
-        raise ValueError("additional persistent data paths must be unique after normalization")
-    newly_selected_paths = tuple(
-        path for path in normalized_extra_paths if path not in current_rows_by_path
-    )
-    if already_slot_backed and newly_selected_paths:
-        raise ValueError(
-            "additional persistent paths can be introduced only during first rootfs "
-            "adoption; an active/passive installation may retain or remove existing "
-            "path-specific mounts but cannot relocate new live data without copying it"
-        )
-    derived_mounts = {mount.mount_path: mount for mount in derived_mount_rows}
-    optional_mounts = tuple(
-        current_rows_by_path.get(path, derived_mounts[path]) for path in normalized_extra_paths
-    )
-    seed_values["jailPersistentMounts"] = [
-        (
-            {
-                "mountPath": str(mount.get("mountPath") or "").strip(),
-                "localPath": str(mount.get("localPath") or "").strip(),
-            }
-            if isinstance(mount, Mapping)
-            else mount.as_values()
-        )
-        for mount in optional_mounts
-    ]
-    configured_values = apply_jail_persistent_mount_values(
-        seed_values,
+        paths = ()
+        if interactive:
+            console.print("Always protected: " + ", ".join(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS))
+            extras = sorted(set(current_paths) - set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS))
+            if extras:
+                console.print("Also protected: " + ", ".join(extras))
+            keep = _prompt_upgrade_scalar(
+                "Keep any additional folders during the Jail upgrade?",
+                False,
+                type_hint="bool",
+                required=False,
+                missing="additional folder protection",
+            )
+            if keep is True:
+                while True:
+                    prompted = _prompt_upgrade_scalar(
+                        "soperator.upgrade.additional_persistent_data_paths",
+                        [],
+                        type_hint="list(string)",
+                        required=False,
+                        missing="additional persistent data paths",
+                        prompt_hint="existing absolute data directories, for example /datasets, /workspace; existing protections are kept",
+                    )
+                    try:
+                        if not isinstance(prompted, list) or not all(
+                            isinstance(item, str) for item in prompted
+                        ):
+                            raise ValueError(
+                                "additional persistent data paths must be a list of absolute paths"
+                            )
+                        configured = protect_jail_directories(
+                            current_values,
+                            paths=prompted,
+                            layout="external" if ownership == "onboarded" else "managed",
+                            target_ref=target.target_ref,
+                        )
+                        if validate_values is not None:
+                            validate_values(configured)
+                    except ValueError as error:
+                        console.print(f"[red]{error}[/red]")
+                        continue
+                    chart_row["values"] = configured
+                    return tuple(
+                        sorted(
+                            set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS).union(
+                                row["mountPath"] for row in configured["jailPersistentMounts"]
+                            )
+                        )
+                    )
+    configured = protect_jail_directories(
+        current_values,
+        paths=paths,
+        layout="external" if ownership == "onboarded" else "managed",
         target_ref=target.target_ref,
-        layout=layout,
-        legacy_active_source=not already_slot_backed,
     )
-    if already_slot_backed:
-        source_rootfs = seed_values.get("jailRootfs")
-        source_rootfs_map = source_rootfs if isinstance(source_rootfs, Mapping) else {}
-        source_adoption = source_rootfs_map.get("adoption")
-        source_adoption_map = source_adoption if isinstance(source_adoption, Mapping) else {}
-        if str(source_adoption_map.get("rollbackSource") or "").strip() == "legacy-rootfs":
-            legacy_pvc_name = str(source_adoption_map.get("legacyPvcName") or "").strip()
-            if not legacy_pvc_name:
-                raise ValueError(
-                    "slot-backed Jail rootfs legacy rollback authority requires "
-                    "jailRootfs.adoption.legacyPvcName"
-                )
-            configured_rootfs = configured_values.setdefault("jailRootfs", {})
-            if not isinstance(configured_rootfs, dict):
-                raise RuntimeError("protected Soperator jailRootfs values are invalid")
-            configured_adoption = configured_rootfs.setdefault("adoption", {})
-            if not isinstance(configured_adoption, dict):
-                raise RuntimeError("protected Soperator jailRootfs adoption is invalid")
-            configured_adoption["rollbackSource"] = "legacy-rootfs"
-            configured_adoption["legacyPvcName"] = legacy_pvc_name
-    chart_row["values"] = configured_values
-    protected_paths = tuple(
-        sorted({*JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS, *normalized_extra_paths})
+    if validate_values is not None:
+        validate_values(configured)
+    chart_row["values"] = configured
+    return tuple(
+        sorted(
+            set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS).union(
+                row["mountPath"] for row in configured["jailPersistentMounts"]
+            )
+        )
     )
-    return protected_paths
 
 
 def _parse_soperator_node_group_overrides(
@@ -13176,7 +12008,7 @@ def _format_soperator_full_stack_campaign_plan(
         (
             "- mutation authority: review only; no backend is authorized"
             if dry_run
-            else "- mutation authority: --execute --approve for the ownership-selected backend"
+            else "- mutation authority: shared deployment fence for the ownership-selected backend"
         ),
         f"- Soperator release: {intent.source_release} -> {intent.target_release}",
         f"- Jail CUDA: {intent.target_jail_cuda_version}",
@@ -13360,28 +12192,20 @@ def _soperator_maintenance_held_job_ids(
 
 
 @soperator_app.command(
-    "install",
-    short_help="Create fresh role-separated MK8s/SFS infrastructure and install official upstream Soperator.",
+    "create",
+    short_help="Run the Soperator wizard and write the desired project configuration.",
     epilog=(
-        "Examples: nebius-cxcli soperator install ./deployments --client-name acme "
-        "--tenant-id TENANT --project-id PROJECT --profile gpu --release latest "
-        "--no-interactive --dry-run; "
-        "nebius-cxcli soperator install ./deployments --client-name acme "
-        "--tenant-id TENANT --project-id PROJECT --profile mixed; "
-        "nebius-cxcli soperator install <config.yaml> --resume --no-interactive "
-        "--execute --approve --approval-fingerprint sha256:... . Generic "
-        "create/render/deploy are not Soperator lifecycle paths."
+        "Example: nebius-cxcli soperator create ./deployments --client-name acme "
+        "--tenant-id TENANT --project-id PROJECT --profile gpu --release latest. "
+        "Next run validate, render, validate-generated, and deploy with the saved config.yaml."
     ),
 )
-def soperator_install_command(
+def soperator_create_command(
     target_path: Annotated[
         Path,
         typer.Argument(
-            metavar="CONFIG_OR_DEPLOYMENTS_ROOT",
-            help=(
-                "Deployments root for a fresh install, or the exact config.yaml created by "
-                "an interrupted `soperator install` when used with --resume."
-            ),
+            metavar="DEPLOYMENTS_ROOT",
+            help=("Deployments root in which to write the Soperator project config.yaml."),
         ),
     ],
     client_name: Annotated[
@@ -13402,7 +12226,7 @@ def soperator_install_command(
         str | None,
         typer.Option(
             "--region-id",
-            help="Nebius region identifier; defaults to eu-north1 for a fresh install.",
+            help="Nebius region identifier; defaults to eu-north1 for a new project.",
         ),
     ] = None,
     email: Annotated[
@@ -13411,13 +12235,27 @@ def soperator_install_command(
     ] = None,
     profile: Annotated[
         str | None,
-        typer.Option("--profile", help="Worker topology: cpu, gpu, or mixed."),
+        typer.Option(
+            "--profile",
+            help="Worker topology: cpu, gpu, or mixed. Required with --no-interactive.",
+        ),
+    ] = None,
+    fast_deploy: Annotated[
+        bool | None,
+        typer.Option(
+            "--fast-deploy/--no-fast-deploy",
+            help=(
+                "Use --fast-deploy for Dev/Test with reduced diagnostics; "
+                "--no-fast-deploy for Standard. Non-interactive default: Standard "
+                "unless set in --values-file. The interactive wizard always asks."
+            ),
+        ),
     ] = None,
     values_file: Annotated[
         Path | None,
         typer.Option(
             "--values-file",
-            help="Values-only YAML for fresh Soperator install; wizard answers may override it. Not accepted with --resume.",
+            help="Values-only YAML for Soperator configuration; wizard answers may override it.",
         ),
     ] = None,
     release: Annotated[
@@ -13427,332 +12265,142 @@ def soperator_install_command(
             help=(
                 "Official stable Soperator release selector: latest or exact X.Y.Z. "
                 "Interactive omission prompts with latest(<resolved-version>); "
-                "a fresh --no-interactive install requires this option, while --resume "
-                "rejects it and reuses the frozen release."
+                "--no-interactive creation requires this option. The resolved version is saved."
             ),
         ),
     ] = None,
     network_ids: Annotated[
         list[str] | None,
-        typer.Option("--network-id", help="Existing VPC network binding; repeatable."),
+        typer.Option(
+            "--network-id",
+            help=(
+                "VPC network ID for selected network-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcnetwork-id>'. Repeatable."
+            ),
+        ),
     ] = None,
     subnet_ids: Annotated[
         list[str] | None,
-        typer.Option("--subnet-id", help="Existing VPC subnet binding; repeatable."),
+        typer.Option(
+            "--subnet-id",
+            help=(
+                "VPC subnet ID for selected subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcsubnet-id>'. Repeatable."
+            ),
+        ),
     ] = None,
     network_refs: Annotated[
         list[str] | None,
-        typer.Option("--network-ref", help="Planned VPC network ref; repeatable."),
+        typer.Option(
+            "--network-ref",
+            help=(
+                "Planned VPC network ref for selected network-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.network_id'. Repeatable."
+            ),
+        ),
     ] = None,
     subnet_refs: Annotated[
         list[str] | None,
-        typer.Option("--subnet-ref", help="Planned VPC subnet ref; repeatable."),
-    ] = None,
-    execute: Annotated[
-        bool,
-        typer.Option("--execute", help="Apply the exact saved plan and pinned release graph."),
-    ] = False,
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Create or verify the immutable plan without applying it."),
-    ] = False,
-    approve: Annotated[
-        bool,
-        typer.Option("--approve", help="Approve mutation for non-interactive execution."),
-    ] = False,
-    approval_fingerprint: Annotated[
-        str | None,
         typer.Option(
-            "--approval-fingerprint",
-            help="Exact fingerprint printed by the preceding --dry-run; required for automated resume.",
-        ),
-    ] = None,
-    resume: Annotated[
-        bool,
-        typer.Option(
-            "--resume",
+            "--subnet-ref",
             help=(
-                "Resume the exact previously saved config/plan/receipt; fresh-install "
-                "identity, profile, network, subnet, release, and overwrite options are rejected."
+                "Planned VPC subnet ref for selected subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.subnets.<subnet-key>.id'. Repeatable."
             ),
         ),
-    ] = False,
-    replan: Annotated[
-        bool,
-        typer.Option(
-            "--replan",
-            help=(
-                "With --resume --dry-run, refresh a never-executed or failed infrastructure plan and "
-                "approval fingerprint."
-            ),
-        ),
-    ] = False,
+    ] = None,
     interactive: Annotated[
         bool,
         typer.Option(
             "--interactive/--no-interactive",
-            help="Prompt for missing identity/profile inputs when running from a terminal.",
+            help="Run the identity, infrastructure, and Soperator configuration wizard in a terminal.",
         ),
     ] = True,
     force: Annotated[
         bool,
-        typer.Option("--force", help="Overwrite only the resolved fresh install project."),
+        typer.Option(
+            "--force",
+            help="Recreate the resolved tenant/project folder without an overwrite prompt.",
+        ),
     ] = False,
 ) -> None:
-    """Plan or execute the only supported fresh Soperator installation workflow."""
-
-    if resume:
-        fresh_only_options = tuple(
-            option
-            for option, supplied in (
-                ("--client-name", client_name is not None),
-                ("--tenant-id", tenant_id is not None),
-                ("--project-id", project_id is not None),
-                ("--region-id", region_id is not None),
-                ("--email", email is not None),
-                ("--profile", profile is not None),
-                ("--values-file", values_file is not None),
-                ("--network-id", network_ids is not None),
-                ("--subnet-id", subnet_ids is not None),
-                ("--network-ref", network_refs is not None),
-                ("--subnet-ref", subnet_refs is not None),
-                ("--force", force),
-            )
-            if supplied
-        )
-        if fresh_only_options:
-            _exit_with_error(
-                RuntimeError(
-                    "Soperator install --resume reuses its exact saved plan and does not "
-                    "accept fresh-install options: " + ", ".join(fresh_only_options)
-                )
-            )
+    """Create configuration using the shared project wizard and authentication bootstrap."""
 
     try:
         supplied_values = (
             read_soperator_values_file(values_file) if values_file is not None else None
         )
+        supplied_values = resolve_create_profile(
+            supplied_values,
+            fast_deploy=fast_deploy,
+            choose=_prompt_fast_deploy_profile if interactive else None,
+        )
+        if supplied_values["deploymentProfile"] == FAST_DEV_TEST:
+            console.print(warning_markup(FAST_DEPLOY_NOTICE))
         resolved_profile_id = _soperator_install_profile_id(
             profile,
-            non_interactive=not interactive and not resume,
+            non_interactive=not interactive,
         )
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
     lifecycle_token = _SOPERATOR_LIFECYCLE_INTERNAL.set(True)
-    install_progress = SoperatorUpgradeProgress(progress_console, prefix="Soperator install")
+    install_progress = SoperatorUpgradeProgress(progress_console, prefix="Soperator create")
     progress_context = install_progress_scope(install_progress)
     progress_context.__enter__()
     snapshot_token = None
-    frozen_context = None
     try:
-        if dry_run and execute:
-            raise RuntimeError("Soperator install accepts exactly one of --dry-run or --execute.")
-        if approve and not execute:
-            raise RuntimeError("--approve is valid only together with --execute.")
-        if approval_fingerprint and not execute:
-            raise RuntimeError("--approval-fingerprint is valid only together with --execute.")
-        if replan and (not resume or not dry_run or execute):
-            raise RuntimeError("--replan is valid only with --resume --dry-run.")
-        if resume and _non_empty_text(release):
-            raise RuntimeError(
-                "Soperator install --resume reuses its frozen release; do not pass --release."
-            )
-        if not interactive and not dry_run and not execute:
-            raise RuntimeError(
-                "Non-interactive Soperator install requires --dry-run, or exact "
-                "--resume --execute --approve --approval-fingerprint execution."
-            )
-        if (
-            execute
-            and not interactive
-            and (not resume or not approve or not _non_empty_text(approval_fingerprint))
-        ):
-            raise RuntimeError(
-                "Non-interactive Soperator install execution requires --resume --execute "
-                "--approve and the exact --approval-fingerprint printed by --dry-run."
-            )
         resolved_target = target_path.resolve()
-        if resume:
-            if resolved_target.name != "config.yaml" or not resolved_target.is_file():
-                raise RuntimeError("--resume requires the exact existing Soperator config.yaml.")
-            config_path = resolved_target
-        else:
-            normalized_release = _new_soperator_release_selector(
-                release,
-                interactive=interactive,
-                command_name="install",
-                option_name="--release",
-                progress=install_progress,
-            )
-            with install_phase("release", "Verifying the official Soperator release") as phase:
-                frozen_release = freeze_soperator_release(
-                    normalized_release, emit=phase.update if phase is not None else None
-                )
-            frozen_context = use_frozen_soperator_release(frozen_release)
-            frozen_context.__enter__()
-            snapshot_token = _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.set(frozen_release.snapshot)
-            if resolved_target.name == "config.yaml":
-                raise RuntimeError(
-                    "A fresh Soperator install takes a deployments root. Use --resume with "
-                    "an existing install-owned config.yaml."
-                )
-            config_path = _create_project(
-                target_path=target_path,
-                client_name=client_name,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                region_id=region_id,
-                email=email,
-                infra_components_opt=["mk8s", "sfs"],
-                apps_components_opt=[_SOPERATOR_APP_ID],
-                soperator_release=frozen_release.snapshot,
-                soperator_profile=resolved_profile_id,
-                soperator_values=supplied_values,
-                network_ids_opt=network_ids,
-                subnet_ids_opt=subnet_ids,
-                network_refs_opt=network_refs,
-                subnet_refs_opt=subnet_refs,
-                validate_sources=True,
-                validate_config=True,
-                no_interactive=not interactive,
-                force=force,
-            )
-            if config_path is None:
-                return
-
-        if not resume:
-            with _suppress_render_deploy_hint():
-                render_command(config_path=config_path, force=True)
-        config, paths, manifest = _load_deploy_context(config_path)
-        if not _payload_has_enabled_soperator(config):
-            raise RuntimeError("The install-owned config does not contain apps:soperator.")
-        target_ref = _managed_soperator_install_target_ref(config, manifest)
-        _preflight_soperator_install_checks(paths, target_ref)
-        replan_receipt: Mapping[str, Any] | None = None
-        if replan:
-            _terraform_plan_path, _receipt_path, replan_receipt = (
-                _validate_soperator_install_replan_receipt(
-                    config=config,
-                    paths=paths,
-                    manifest=manifest,
-                    target_ref=target_ref,
-                )
-            )
-        operation_id = _soperator_install_operation_id(
-            config_path=paths.config_path,
-            manifest_path=manifest_path_for_generated_dir(paths.generated_dir),
-            target_ref=target_ref,
+        normalized_release = _new_soperator_release_selector(
+            release,
+            interactive=interactive,
+            command_name="create",
+            option_name="--release",
+            progress=install_progress,
         )
-        with _soperator_install_execution_lease(
-            config=config,
-            paths=paths,
-            target_ref=target_ref,
-            operation_id=operation_id,
-        ) as install_lease:
-            if replan:
-                if replan_receipt is None:  # pragma: no cover - internal invariant
-                    raise RuntimeError("Soperator install replan authority is missing")
-                terraform_plan_path, receipt_path, plan = _replan_soperator_install(
-                    config=config,
-                    paths=paths,
-                    manifest=manifest,
-                    target_ref=target_ref,
-                    expected_receipt=replan_receipt,
-                )
-            elif resume:
-                terraform_plan_path, receipt_path, plan = _load_soperator_install_plan(
-                    config=config,
-                    paths=paths,
-                    manifest=manifest,
-                    target_ref=target_ref,
-                )
-            else:
-                terraform_plan_path, receipt_path, plan = _plan_soperator_install(
-                    config=config,
-                    paths=paths,
-                    manifest=manifest,
-                    target_ref=target_ref,
-                )
-            install_lease.assert_held()
-            fingerprint = str(plan["approvalFingerprint"])
-            console.print(f"Soperator install plan: {receipt_path}")
-            console.print(f"Approval fingerprint: {fingerprint}")
-            console.print(f"Pinned upstream Soperator release: {plan['release']['version']}")
-            console.print(
-                f"Managed target: {target_ref} (CPU/GPU topology is frozen in config.yaml)"
+        with install_phase("release", "Verifying the official Soperator release") as phase:
+            verified_source = resolve_soperator_source(
+                normalized_release, emit=phase.update if phase is not None else None
             )
-            if approval_fingerprint and _non_empty_text(approval_fingerprint) != fingerprint:
-                raise RuntimeError(
-                    "The supplied Soperator install approval fingerprint does not match "
-                    "the exact saved plan. Run --resume --dry-run and review the current fingerprint."
-                )
-            should_execute = execute
-            if dry_run:
-                should_execute = False
-            elif interactive:
-                should_execute = _confirm_explicit_action(
-                    f"Execute this exact Soperator install plan ({fingerprint})?"
-                )
-            if not should_execute:
-                console.print(
-                    "Plan complete; the remote-state coordination bucket may have been "
-                    "bootstrapped, but no target infrastructure or Kubernetes resources were applied."
-                )
-                return
-            runtime_input_env: dict[str, str] = {}
-            if not plan.get("startedAt"):
-                preflight_soperator_backup_inputs(config, target_ref=target_ref, prompt=interactive)
-                runtime_input_env = preflight_soperator_sssd_inputs(
-                    config, target_ref=target_ref, prompt=interactive
-                )
-            executing_plan = dict(plan)
-            executing_plan["status"] = "executing"
-            executing_plan["startedAt"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            _write_owner_only_json(receipt_path, executing_plan)
-            progress_plan = dict(executing_plan)
-
-            def _mark_install_infrastructure_complete() -> None:
-                progress_plan["infraCompleteAt"] = (
-                    datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                )
-                _write_owner_only_json(receipt_path, progress_plan)
-
-            try:
-                install_lease.assert_held()
-                summary = _deploy_generated_artifacts(
-                    config,
-                    paths,
-                    manifest,
-                    skip_validations=False,
-                    skip_validation_kinds=set(),
-                    requested_target_ref=target_ref,
-                    all_targets=False,
-                    terraform_plan_file=terraform_plan_path,
-                    expected_terraform_plan_sha256=str(
-                        plan.get("inputs", {}).get("terraformPlanSha256") or ""
-                    ),
-                    skip_terraform_apply=bool(plan.get("infraCompleteAt")),
-                    on_terraform_complete=_mark_install_infrastructure_complete,
-                    soperator_install_lease=install_lease,
-                    soperator_install_approval_fingerprint=fingerprint,
-                    soperator_runtime_input_env=runtime_input_env,
-                    soperator_runtime_prompt=interactive,
-                )
-                install_lease.assert_held()
-            except Exception as exc:
-                failed_plan = dict(progress_plan)
-                failed_plan["status"] = "failed"
-                failed_plan["failedAt"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                failed_plan["failureType"] = type(exc).__name__
-                _write_owner_only_json(receipt_path, failed_plan)
-                raise
-            accept_ordinary_app_baseline(paths, identities=summary.cluster_identities)
-            completed_plan = dict(progress_plan)
-            completed_plan["status"] = "complete"
-            completed_plan["completedAt"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            _write_owner_only_json(receipt_path, completed_plan)
-        _print_deploy_command_footer(config, paths, summary, succeeded=True)
-        console.print(f"Soperator install completed for target {target_ref}.")
+        snapshot_token = _SOPERATOR_SOURCE_OVERRIDE.set(verified_source)
+        if resolved_target.name == "config.yaml":
+            raise RuntimeError(
+                "Soperator create takes a deployments root, not an existing config.yaml."
+            )
+        config_path = _create_project(
+            target_path=target_path,
+            client_name=client_name,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            email=email,
+            infra_components_opt=["mk8s", "sfs"],
+            apps_components_opt=[_SOPERATOR_APP_ID],
+            soperator_release=verified_source,
+            soperator_profile=resolved_profile_id,
+            soperator_values=supplied_values,
+            network_ids_opt=network_ids,
+            subnet_ids_opt=subnet_ids,
+            network_refs_opt=network_refs,
+            subnet_refs_opt=subnet_refs,
+            validate_sources=True,
+            validate_config=True,
+            no_interactive=not interactive,
+            force=force,
+        )
+        if config_path is None:
+            return
+        console.print(f"Soperator configuration: {config_path}")
+        console.print(f"Next: nebius-cxcli validate {config_path}")
+        console.print(f"      nebius-cxcli render {config_path}")
+        console.print(f"      nebius-cxcli validate-generated {config_path.parent / 'generated'}")
+        console.print(f"      nebius-cxcli deploy {config_path}")
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -13761,10 +12409,8 @@ def soperator_install_command(
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
     finally:
-        if frozen_context is not None:
-            frozen_context.__exit__(None, None, None)
         if snapshot_token is not None:
-            _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.reset(snapshot_token)
+            _SOPERATOR_SOURCE_OVERRIDE.reset(snapshot_token)
         progress_context.__exit__(None, None, None)
         _SOPERATOR_LIFECYCLE_INTERNAL.reset(lifecycle_token)
 
@@ -13857,7 +12503,13 @@ def soperator_discover_command(
 
 @soperator_app.command(
     "status",
-    short_help="Show registered ownership, active recovery, and live release status.",
+    short_help="Show lifecycle, installed release, and live Slurm component health.",
+    epilog=(
+        "Examples: nebius-cxcli soperator status ./deployments/tenant/project/config.yaml --no-live "
+        "(reads configured ownership and local receipts); "
+        "nebius-cxcli soperator status ./deployments/tenant/project/config.yaml --target mk8s --live "
+        "--verify-observability (queries live status and verifies metrics/logs)."
+    ),
 )
 def soperator_status_command(
     config_path: Annotated[
@@ -13866,7 +12518,10 @@ def soperator_status_command(
     ],
     target_ref: Annotated[
         str | None,
-        typer.Option("--target", help="cxcli Soperator target ref."),
+        typer.Option(
+            "--target",
+            help="cxcli Soperator target ref; a single target is automatic, multiple targets require selection or terminal prompting.",
+        ),
     ] = None,
     kube_context: Annotated[
         str | None,
@@ -13876,16 +12531,23 @@ def soperator_status_command(
         bool,
         typer.Option(
             "--live/--no-live",
-            help="Query the cluster without mutation; use --no-live for configured status only.",
+            help="Query live health; unhealthy or incomplete reports exit nonzero. --no-live reads configured state and local receipts.",
         ),
     ] = True,
+    show_checks: Annotated[
+        bool,
+        typer.Option(
+            "--show-checks",
+            help="Show all recorded checks without running checks or adding queries. With --no-live, history is not checked.",
+        ),
+    ] = False,
     verify_observability: Annotated[
         bool,
         typer.Option(
             "--verify-observability",
             help=(
                 "Explicitly verify current Soperator metrics and logs with the existing "
-                "operator Nebius CLI identity."
+                "operator Nebius CLI identity. Requires --live."
             ),
         ),
     ] = False,
@@ -13900,15 +12562,30 @@ def soperator_status_command(
         ),
     ] = True,
 ) -> None:
-    """Report the canonical upstream release and target ownership."""
+    """Report lifecycle, installed release and current Slurm component health."""
+
+    from rich.text import Text
+
+    from .deployment_applications import recorded_application_identity
+    from .soperator_status_checks import CheckHistory
+    from .soperator_status_collect import collect_status_snapshot, read_status_identity
+    from .soperator_status_health import StatusReadError, project_status_health
+    from .soperator_status_health import safe_text as safe_status_text
+    from .soperator_status_render import (
+        print_check_history,
+        print_health_table,
+        print_installed_release,
+        print_overall_health,
+    )
 
     if verify_observability and not live:
         raise typer.BadParameter(
             "--verify-observability requires live cluster access; remove --no-live.",
             param_hint="--verify-observability",
         )
+    progress = SoperatorUpgradeProgress(progress_console, prefix="Soperator status")
     try:
-        source_payload = _load_source_payload(config_path)
+        source_payload = _read_config_payload(config_path)
         target, target_row, is_onboarded = _resolve_soperator_command_target(
             source_payload,
             target_ref=target_ref,
@@ -13918,19 +12595,74 @@ def soperator_status_command(
             _source_helm_chart_row(source_payload, target).get("version")
         )
         if not configured_release:
-            raise RuntimeError("registered Soperator target has no exact source release")
+            raise StatusReadError("registered Soperator target has no exact source release")
         configured_release = normalize_soperator_release_selector(configured_release)
         ownership = EXTERNAL_TARGET_OWNERSHIP if is_onboarded else "managed"
         console.print(f"Target: {target.target_ref}")
         console.print(f"Infrastructure ownership: {ownership}")
         console.print(f"Configured upstream Soperator release: {configured_release}")
         console.print(f"Upstream source: https://github.com/nebius/soperator@{configured_release}")
+        if (
+            _source_helm_chart_row(source_payload, target)
+            .get("values", {})
+            .get("deploymentProfile")
+            == "fast-dev-test"
+        ):
+            console.print(
+                "Configured deployment profile: fast-dev-test "
+                "(reduced GPU coverage; configuration only)."
+            )
+        active = None
+        bound_identity = None
+        if live:
+            with progress.phase("deployment", "Reading deployment records"):
+                remote = read_local_deployment_record(config_path)
+            active = remote.value.get("active") if remote else None
+            accepted = remote.value.get("accepted") if remote else None
+            if remote and not is_onboarded:
+                bound_identity = recorded_application_identity(
+                    remote.value,
+                    paths=resolve_project_paths(config_path),
+                    target_ref=target.target_ref,
+                )
+            console.print(
+                "Deployment generation: "
+                + str((active or accepted or {}).get("generation") or "unregistered")
+            )
+            if active:
+                console.print(
+                    "Deployment: active; recover through deploy with the original execution options."
+                )
+                for stage, evidence in active.get("stages", {}).items():
+                    console.print(f"Deployment stage {stage}: {evidence.get('status', 'unknown')}")
+            elif accepted:
+                console.print("Deployment: accepted")
+                for outcome in (
+                    accepted.get("evidence", {})
+                    .get("acceptanceControl", {})
+                    .get("outcomes", {})
+                    .values()
+                ):
+                    validation = outcome.get("validation", {})
+                    from .soperator_deployment_profile import diagnostics_notice
+
+                    notice = diagnostics_notice(validation.get("contract", {}))
+                    console.print(
+                        "Recorded acceptance: readiness "
+                        + str(validation.get("readiness", "unknown"))
+                        + "; extended tests "
+                        + str(validation.get("extended", "unknown"))
+                    )
+                    if notice:
+                        console.print(notice)
         operation = read_soperator_operation_status(
             paths=resolve_project_paths(config_path),
             target_ref=target.target_ref,
         )
         if operation is None:
-            console.print("Operation: none")
+            if not active:
+                label = "Lifecycle" if live else "Local lifecycle"
+                console.print(f"{label}: idle — no active operation or pending recovery recorded")
         else:
             console.print(f"Operation: {operation.operation}")
             console.print(f"Operation status: {operation.status}")
@@ -13940,7 +12672,8 @@ def soperator_status_command(
             if operation.detail:
                 console.print(f"Recovery: {operation.detail}")
             console.print(f"Operation receipt: {operation.receipt_path}")
-            console.print(f"Resume: {operation.resume_command}")
+            if operation.resume_command:
+                console.print(f"Resume: {operation.resume_command}")
         completed_upgrade = read_soperator_completed_upgrade_evidence(
             paths=resolve_project_paths(config_path),
             target_ref=target.target_ref,
@@ -13952,146 +12685,214 @@ def soperator_status_command(
                 f"{completed_upgrade.target_kubernetes_version} "
                 f"({completed_upgrade.ownership}/{completed_upgrade.backend})"
             )
-            for item in completed_upgrade.provider_compatibility:
-                console.print(f"Frozen provider compatibility: {item}")
             for item in completed_upgrade.gpu_runtime:
                 console.print(f"GPU runtime evidence: {item}")
             console.print(f"Completed upgrade receipt: {completed_upgrade.receipt_path}")
         if not live:
+            if show_checks:
+                print_check_history(console, CheckHistory("not_checked", "--no-live"))
+            print_overall_health(console, "Not checked", "--no-live")
             return
+        if (
+            not is_onboarded
+            and active
+            and target.target_ref
+            in active.get("plan", {}).get("semanticPlan", {}).get("selectedTargets", [])
+            and bound_identity is None
+        ):
+            console.print("Live status: cluster identity not yet published by deployment")
+            print_overall_health(console, "Unknown", "Cluster identity not yet published")
+            raise typer.Exit(code=1)
         with ExitStack() as live_stack:
-            effective_context = _non_empty_text(kube_context)
-            if not effective_context and isinstance(target_row, Mapping):
-                effective_context = _non_empty_text(target_row.get("kube_context"))
-            if effective_context:
-                snapshot = collect_kubectl_soperator_snapshot(kube_context=effective_context)
+            with progress.phase("access", "Establishing cluster access and verifying identity"):
+                effective_context = _non_empty_text(kube_context)
+                if not effective_context and isinstance(target_row, Mapping):
+                    effective_context = _non_empty_text(target_row.get("kube_context"))
+                if effective_context:
+                    snapshot = read_status_identity(kube_context=effective_context)
+                    if is_onboarded:
+                        assert isinstance(target_row, Mapping)
+                        _validate_registered_soperator_kube_context_identity(
+                            target=target_row,
+                            target_ref=target.target_ref,
+                            kube_context=effective_context,
+                            explicit_snapshot=snapshot,
+                        )
+                        cluster_id = _non_empty_text(target_row.get("cluster_id"))
+                    elif bound_identity is not None:
+                        cluster_id = bound_identity["cluster_id"]
+                    else:
+                        _validate_managed_soperator_kube_context_identity(
+                            config_path=config_path,
+                            target_ref=target.target_ref,
+                            kube_context=effective_context,
+                            explicit_snapshot=snapshot,
+                        )
+                        cluster_id = _soperator_upgrade_artifact_identity(
+                            source_payload,
+                            target_ref=target.target_ref,
+                            kube_context=effective_context,
+                        ).cluster_id
+                    live_context = SoperatorLiveStatusContext(
+                        snapshot=snapshot,
+                        kube_context=effective_context,
+                        extra_env={},
+                        cluster_id=cluster_id,
+                    )
+                elif is_onboarded:
+                    assert isinstance(target_row, Mapping)
+                    cluster_id = _non_empty_text(target_row.get("cluster_id"))
+                    if not cluster_id:
+                        raise StatusReadError(
+                            "soperator status could not resolve the registered external "
+                            "MK8s cluster id."
+                        )
+                    access = _non_empty_text(target_row.get("access")) or "external"
+                    collection_context = live_stack.enter_context(
+                        _onboarded_soperator_cluster_context(
+                            source_payload,
+                            cluster_id=cluster_id,
+                            access=access,
+                        )
+                    )
+                    live_context = SoperatorLiveStatusContext(
+                        snapshot=read_status_identity(
+                            kube_context=collection_context,
+                        ),
+                        kube_context=collection_context,
+                        extra_env={},
+                        cluster_id=cluster_id,
+                    )
+                else:
+                    generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+                    selected_targets = _resolve_selected_deploy_targets(
+                        manifest,
+                        requested_target_ref=target.target_ref,
+                        all_targets=False,
+                    )
+                    if len(selected_targets) != 1:
+                        raise StatusReadError(
+                            "soperator status could not resolve the exact managed MK8s target."
+                        )
+                    selected_target = dict(selected_targets[0])
+                    if bound_identity is not None:
+                        if selected_target.get("cluster_id") not in (
+                            None,
+                            "",
+                            bound_identity["cluster_id"],
+                        ):
+                            raise StatusReadError(
+                                "Rendered and recorded cluster identities conflict"
+                            )
+                        selected_target["cluster_id"] = bound_identity["cluster_id"]
+                        selected_target.pop("kube_context", None)
+                    kube_env = _prepare_cluster_handoff_kube_env(
+                        generated_config,
+                        paths,
+                        stack=live_stack,
+                        target=selected_target,
+                        persist_local_kubeconfig=False,
+                        set_current_context=False,
+                        allow_terraform_output=False,
+                    )
+                    effective_context = _non_empty_text(
+                        (kube_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
+                    )
+                    if not effective_context:
+                        raise StatusReadError(
+                            "soperator status could not establish the managed MK8s handoff."
+                        )
+                    cluster_id = _non_empty_text(
+                        (kube_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV)
+                    )
+                    if not cluster_id and bound_identity is not None:
+                        cluster_id = bound_identity["cluster_id"]
+                    if not cluster_id:
+                        cluster_id = _soperator_upgrade_artifact_identity(
+                            source_payload,
+                            target_ref=target.target_ref,
+                            kube_context=effective_context,
+                        ).cluster_id
+                    live_context = SoperatorLiveStatusContext(
+                        snapshot=read_status_identity(
+                            kube_context=effective_context,
+                            extra_env=kube_env,
+                        ),
+                        kube_context=effective_context,
+                        extra_env=dict(kube_env or {}),
+                        cluster_id=cluster_id,
+                    )
+                identity_snapshot = live_context.snapshot
+                if bound_identity is not None and (
+                    live_context.cluster_id != bound_identity["cluster_id"]
+                    or identity_snapshot.get("cluster_identity", {}).get("kubernetes_uid")
+                    != bound_identity["kubernetes_uid"]
+                ):
+                    raise StatusReadError(
+                        "Live status cluster identity differs from recorded deployment"
+                    )
                 if is_onboarded:
                     assert isinstance(target_row, Mapping)
                     _validate_registered_soperator_kube_context_identity(
                         target=target_row,
                         target_ref=target.target_ref,
-                        kube_context=effective_context,
-                        explicit_snapshot=snapshot,
+                        kube_context=live_context.kube_context,
+                        explicit_snapshot=identity_snapshot,
                     )
-                    cluster_id = _non_empty_text(target_row.get("cluster_id"))
-                else:
-                    _validate_managed_soperator_kube_context_identity(
-                        config_path=config_path,
-                        target_ref=target.target_ref,
-                        kube_context=effective_context,
-                        explicit_snapshot=snapshot,
-                    )
-                    cluster_id = _soperator_upgrade_artifact_identity(
-                        source_payload,
-                        target_ref=target.target_ref,
-                        kube_context=effective_context,
-                    ).cluster_id
-                live_context = SoperatorLiveStatusContext(
-                    snapshot=snapshot,
-                    kube_context=effective_context,
-                    extra_env={},
-                    cluster_id=cluster_id,
-                )
-            elif is_onboarded:
-                assert isinstance(target_row, Mapping)
-                cluster_id = _non_empty_text(target_row.get("cluster_id"))
-                if not cluster_id:
-                    raise RuntimeError(
-                        "soperator status could not resolve the registered external "
-                        "MK8s cluster id."
-                    )
-                access = _non_empty_text(target_row.get("access")) or "external"
-                collection_context = live_stack.enter_context(
-                    _onboarded_soperator_cluster_context(
-                        source_payload,
-                        cluster_id=cluster_id,
-                        access=access,
-                    )
-                )
-                live_context = SoperatorLiveStatusContext(
-                    snapshot=collect_kubectl_soperator_snapshot(
-                        kube_context=collection_context,
-                    ),
-                    kube_context=collection_context,
-                    extra_env={},
-                    cluster_id=cluster_id,
-                )
-            else:
-                generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-                selected_targets = _resolve_selected_deploy_targets(
-                    manifest,
-                    requested_target_ref=target.target_ref,
-                    all_targets=False,
-                )
-                if len(selected_targets) != 1:
-                    raise RuntimeError(
-                        "soperator status could not resolve the exact managed MK8s target."
-                    )
-                kube_env = _prepare_cluster_handoff_kube_env(
-                    generated_config,
-                    paths,
-                    stack=live_stack,
-                    target=selected_targets[0],
-                    persist_local_kubeconfig=False,
-                    set_current_context=False,
-                    allow_terraform_output=False,
-                )
-                effective_context = _non_empty_text(
-                    (kube_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
-                )
-                if not effective_context:
-                    raise RuntimeError(
-                        "soperator status could not establish the managed MK8s handoff."
-                    )
-                cluster_id = _non_empty_text((kube_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV))
-                if not cluster_id:
-                    cluster_id = _soperator_upgrade_artifact_identity(
-                        source_payload,
-                        target_ref=target.target_ref,
-                        kube_context=effective_context,
-                    ).cluster_id
-                live_context = SoperatorLiveStatusContext(
-                    snapshot=collect_kubectl_soperator_snapshot(
-                        kube_context=effective_context,
-                        extra_env=kube_env,
-                    ),
-                    kube_context=effective_context,
-                    extra_env=dict(kube_env or {}),
-                    cluster_id=cluster_id,
-                )
-            snapshot = live_context.snapshot
-            collection_errors = snapshot.get("collection_errors", [])
-            if not isinstance(collection_errors, list) or collection_errors:
-                raise RuntimeError("soperator status requires a complete live Kubernetes inventory")
-            live_release = _soperator_discovery_soperator_release(snapshot)
-            status = _non_empty_text(live_release.get("status")) or "unknown"
-            chart_version = _non_empty_text(
-                live_release.get("chart_version") or live_release.get("version")
+            registered_identity = (
+                target_row.get("inventory", {}).get("cluster_identity", {})
+                if isinstance(target_row, Mapping)
+                else {}
             )
-            app_version = _non_empty_text(live_release.get("app_version"))
-            console.print(f"Live Soperator status: {status}")
-            if chart_version:
-                console.print(f"Live chart version: {chart_version}")
-            if app_version and app_version != chart_version:
-                console.print(f"Live app version: {app_version}")
+            with progress.phase("health", "Collecting live Soperator health") as health_progress:
+                snapshot = collect_status_snapshot(
+                    kube_context=live_context.kube_context,
+                    identity=identity_snapshot,
+                    extra_env=live_context.extra_env,
+                    expected_slurmcluster_uid=str(
+                        registered_identity.get("slurmcluster_uid") or ""
+                    ),
+                    progress=health_progress.milestone,
+                )
+                health_report = project_status_health(snapshot)
+                if health_report.overall != "Healthy":
+                    health_progress.failure("Health collection requires attention")
+            live_context = SoperatorLiveStatusContext(
+                snapshot=snapshot,
+                kube_context=live_context.kube_context,
+                extra_env=live_context.extra_env,
+                cluster_id=live_context.cluster_id,
+            )
+            print_installed_release(console, snapshot.get("status_release", {}))
+            print_health_table(console, health_report, show_checks=show_checks)
             if verify_observability:
                 project_id = _non_empty_text(
                     target_row.get("project_id") if isinstance(target_row, Mapping) else None
                 ) or _non_empty_text(
                     _read_payload_field(source_payload, "client_info.nebius.project_id")
                 )
-                verification = run_soperator_observability_verification(
-                    paths=resolve_project_paths(config_path),
-                    target_ref=target.target_ref,
-                    project_id=project_id,
-                    release=configured_release,
-                    live_context=live_context,
-                    interactive=interactive,
-                    command_runner=_run_soperator_upgrade_process,
-                    token_acquirer=acquire_operator_access_token,
-                    verifier=verify_soperator_observability,
-                    emit=lambda message: console.print(f"[yellow]{message}[/yellow]"),
-                )
+                with progress.phase(
+                    "observability", "Verifying metrics and logs"
+                ) as observation_progress:
+
+                    def acquire_status_token(**kwargs: Any) -> str:
+                        with observation_progress.paused():
+                            return acquire_operator_access_token(**kwargs)
+
+                    verification = run_soperator_observability_verification(
+                        paths=resolve_project_paths(config_path),
+                        target_ref=target.target_ref,
+                        project_id=project_id,
+                        release=configured_release,
+                        live_context=live_context,
+                        interactive=interactive,
+                        command_runner=_run_soperator_upgrade_process,
+                        token_acquirer=acquire_status_token,
+                        verifier=verify_soperator_observability,
+                        emit=lambda message: console.print(f"[yellow]{message}[/yellow]"),
+                    )
+                    if verification.receipt.status != "passed":
+                        observation_progress.failure("Observability verification failed")
                 receipt = verification.receipt
                 if receipt.status != "passed":
                     console.print(
@@ -14100,6 +12901,14 @@ def soperator_status_command(
                     console.print(
                         f"Observability receipt: {verification.receipt_path}",
                         soft_wrap=True,
+                    )
+                    overall = (
+                        health_report.overall
+                        if health_report.overall in {"Unhealthy", "Degraded"}
+                        else "Unknown"
+                    )
+                    print_overall_health(
+                        console, overall, "Requested observability verification failed"
                     )
                     raise typer.Exit(code=1)
                 console.print("Observability verification: passed")
@@ -14117,776 +12926,55 @@ def soperator_status_command(
                     f"Observability receipt: {verification.receipt_path}",
                     soft_wrap=True,
                 )
+            print_overall_health(console, health_report.overall, health_report.summary)
+            if health_report.overall != "Healthy":
+                raise typer.Exit(code=1)
     except typer.Exit:
         raise
     except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-
-
-def _soperator_destroy_receipt_path(paths: ProjectPaths, target_ref: str) -> Path:
-    token = (
-        normalize_component_token(target_ref)
-        or hashlib.sha256(target_ref.encode("utf-8")).hexdigest()[:16]
-    )
-    return paths.reports_dir / f"soperator-destroy-{token}.json"
-
-
-def _soperator_destroy_filesystem_ids(
-    infrastructure: SoperatorInfrastructureReceipt,
-) -> tuple[str, ...]:
-    if infrastructure.storage.sfs is None:
-        return ()
-    return tuple(item.filesystem_id for item in infrastructure.storage.sfs.filesystems)
-
-
-def _assert_soperator_destroy_storage_bindings(
-    *,
-    snapshot: Mapping[str, Any],
-    infrastructure: SoperatorInfrastructureReceipt,
-) -> None:
-    raw_pvcs = snapshot.get("pvcs")
-    raw_pvs = snapshot.get("pvs")
-    pvcs = [item for item in raw_pvcs or () if isinstance(item, Mapping)]
-    pvs = [item for item in raw_pvs or () if isinstance(item, Mapping)]
-    observed: set[tuple[str, str, str]] = set()
-    for pvc in pvcs:
-        metadata = pvc.get("metadata") if isinstance(pvc.get("metadata"), Mapping) else {}
-        if _non_empty_text(metadata.get("namespace")) != "soperator":
-            continue
-        pvc_name = _non_empty_text(metadata.get("name"))
-        spec = pvc.get("spec") if isinstance(pvc.get("spec"), Mapping) else {}
-        pv_name = _non_empty_text(spec.get("volumeName"))
-        pv = next(
-            (
-                item
-                for item in pvs
-                if isinstance(item.get("metadata"), Mapping)
-                and _non_empty_text(item["metadata"].get("name")) == pv_name
-            ),
-            None,
+        message = (
+            str(exc)
+            if isinstance(exc, StatusReadError)
+            else "Status collection failed; verify configuration, cluster identity and access."
         )
-        pv_spec = (
-            pv.get("spec")
-            if isinstance(pv, Mapping) and isinstance(pv.get("spec"), Mapping)
-            else {}
-        )
-        csi = pv_spec.get("csi") if isinstance(pv_spec.get("csi"), Mapping) else {}
-        filesystem_id = _non_empty_text(csi.get("volumeHandle"))
-        if pvc_name and pv_name and filesystem_id:
-            observed.add((pvc_name, pv_name, filesystem_id))
-    if infrastructure.storage.vm_nfs is not None:
-        if observed:
-            raise RuntimeError("Soperator VM-NFS destroy found an unbound CSI backing filesystem")
-        return
-    if infrastructure.storage.sfs is None:
-        raise RuntimeError("Soperator destroy has no protected storage variant")
-    observed_by_filesystem = {
-        filesystem_id: (
-            {pvc for pvc, _pv, current_id in observed if current_id == filesystem_id},
-            {pv for _pvc, pv, current_id in observed if current_id == filesystem_id},
-        )
-        for filesystem_id in {item[2] for item in observed}
-    }
-    expected_by_filesystem = {
-        filesystem.filesystem_id: (
-            set(filesystem.pvc_names),
-            set(filesystem.pv_names),
-        )
-        for filesystem in infrastructure.storage.sfs.filesystems
-    }
-    if observed_by_filesystem != expected_by_filesystem:
-        raise RuntimeError(
-            "Soperator protected PVC/PV/CSI bindings differ from the frozen destroy receipt"
-        )
-
-
-def _soperator_destroy_inventory(
-    *,
-    target_ref: str,
-    cluster_id: str,
-    ownership: str,
-    snapshot: Mapping[str, Any],
-    infrastructure: SoperatorInfrastructureReceipt,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    destroy = {f"mk8s:{cluster_id}", f"soperator-target:{target_ref}"}
-    for namespace in snapshot.get("namespaces") or ():
-        normalized = _non_empty_text(namespace)
-        if normalized:
-            destroy.add(f"namespace:{normalized}")
-    cluster_resources = snapshot.get("cluster_namespace_resources")
-    if not isinstance(cluster_resources, Sequence) or isinstance(
-        cluster_resources, (str, bytes, bytearray)
-    ):
-        cluster_resources = snapshot.get("soperator_namespace_resources") or ()
-    for resource in cluster_resources:
-        if not isinstance(resource, Mapping):
-            continue
-        kind = _non_empty_text(resource.get("kind"))
-        metadata = resource.get("metadata")
-        name = _non_empty_text(metadata.get("name")) if isinstance(metadata, Mapping) else ""
-        namespace = (
-            _non_empty_text(metadata.get("namespace")) if isinstance(metadata, Mapping) else ""
-        ) or "cluster"
-        if kind and name:
-            destroy.add(f"kubernetes:{namespace}/{kind}/{name}")
-    if ownership == "managed":
-        for node_group_id in snapshot.get("node_groups") or ():
-            destroy.add(f"mk8s-node-group:{node_group_id}")
-
-    preserve: set[str] = set()
-    if infrastructure.storage.sfs is not None:
-        for filesystem in infrastructure.storage.sfs.filesystems:
-            preserve.add(f"sfs:{filesystem.filesystem_id}")
-            preserve.update(f"pv:{item}" for item in filesystem.pv_names)
-            preserve.update(f"pvc-backing:{item}" for item in filesystem.pvc_names)
-    if infrastructure.storage.vm_nfs is not None:
-        vm_nfs = infrastructure.storage.vm_nfs
-        preserve.add(f"vm-nfs-instance:{vm_nfs.instance_id}")
-        preserve.update(f"vm-nfs-disk:{item}" for item in vm_nfs.data_disk_ids)
-        preserve.update(f"vm-nfs-allocation:{item}" for item in vm_nfs.allocation_ids)
-        preserve.add(f"vm-nfs-export:{vm_nfs.export_sha256}")
-    return tuple(sorted(destroy)), tuple(sorted(preserve))
-
-
-def _apply_managed_soperator_destroy_plan(
-    *,
-    config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    target_ref: str,
-    expected_cluster_id: str,
-) -> str:
-    module_names = tuple(
-        module_name
-        for module_name, (_component_id, instance_id) in sorted(
-            _generated_bundle_mk8s_module_index(manifest).items()
-        )
-        if instance_id == target_ref
-    )
-    if len(module_names) != 1:
-        raise RuntimeError(
-            "Soperator destroy could not resolve exactly one managed MK8s Terraform module"
-        )
-    module_name = module_names[0]
-    resource_name = f"{module_name}_soperator_observability"
-    root_addresses = (
-        f"nebius_iam_v1_group.{resource_name}",
-        f"nebius_iam_v1_group_membership.{resource_name}",
-        f"nebius_iam_v1_access_permit.{resource_name}",
-    )
-    targets = (f"module.{module_name}", *root_addresses)
-    plan_path = paths.infra_dir / f".soperator-destroy-{target_ref}.tfplan"
-    runtime_env = _terraform_runtime_env(config)
-    terraform_init(paths.infra_dir, extra_env=runtime_env)
-    terraform_plan(
-        paths.infra_dir,
-        extra_env=runtime_env,
-        initialize=False,
-        plan_file=plan_path,
-        destroy=True,
-        targets=targets,
-    )
-    plan = terraform_show_json(
-        paths.infra_dir,
-        extra_env=runtime_env,
-        initialize=False,
-        plan_file=plan_path,
-    )
-    validate_soperator_destroy_terraform_plan(
-        plan,
-        allowed_module_names=module_names,
-        expected_cluster_id=expected_cluster_id,
-        allowed_root_addresses=root_addresses,
-    )
-    _run_terraform_apply_with_status(
-        config,
-        paths,
-        initialize=False,
-        run_mk8s_preflight=False,
-        plan_file=plan_path,
-        expected_plan_sha256=_sha256_file(plan_path),
-    )
-    return _sha256_file(plan_path)
-
-
-def _soperator_destroy_cleanup_payload(
-    *,
-    source_payload: Mapping[str, Any],
-    target_ref: str,
-    ownership: str,
-    base_dir: Path,
-) -> dict[str, Any]:
-    next_payload = copy.deepcopy(dict(source_payload))
-    removed_apps = _remove_target_scoped_app_rows(
-        payload=next_payload,
-        target_instance_ids={target_ref},
-    )
-    _remove_deploy_target_rows(
-        payload=next_payload,
-        target_instance_ids={target_ref},
-    )
-    if ownership == "managed":
-        removed_mk8s = _remove_component_instance_row(
-            payload=next_payload,
-            scope="infra",
-            instance_id=target_ref,
-            component_id="mk8s",
-        )
-        if removed_mk8s is None:
-            raise RuntimeError("managed Soperator MK8s config row is missing")
-    if not any(label.startswith("soperator@") for label in removed_apps):
-        raise RuntimeError("selected Soperator app config row is missing")
-    _refresh_soperator_registration_fingerprints(next_payload)
-    validate_config(copy.deepcopy(next_payload), base_dir=base_dir)
-    normalize_runtime_config_payload(next_payload, base_dir=base_dir)
-    return next_payload
-
-
-def _soperator_destroy_cleanup_config_sha256(payload: Mapping[str, Any]) -> str:
-    encoded = yaml.safe_dump(dict(payload), sort_keys=False).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _commit_soperator_destroy_config_cleanup(
-    *,
-    config_path: Path,
-    source_payload: Mapping[str, Any],
-    target_ref: str,
-    ownership: str,
-    expected_config_sha256: str,
-    paths: ProjectPaths | None = None,
-) -> None:
-    expected_bytes = config_path.read_bytes()
-    if "sha256:" + hashlib.sha256(expected_bytes).hexdigest() != expected_config_sha256:
-        raise RuntimeError(
-            "Soperator destroy config changed after approval; refusing to overwrite it"
-        )
-    next_payload = _soperator_destroy_cleanup_payload(
-        source_payload=source_payload,
-        target_ref=target_ref,
-        ownership=ownership,
-        base_dir=config_path.parent,
-    )
-    project_paths = paths or resolve_project_paths(config_path)
-    stage = _render_soperator_upgrade_admission(
-        source_payload=next_payload,
-        config_path=config_path,
-        paths=project_paths,
-        require_soperator_flux=False,
-    )
-    try:
-        config_preimage = stage.project_generation_plan.expected_preimages.get(config_path)
-        if config_preimage != expected_config_sha256:
-            raise RuntimeError(
-                "Soperator destroy config changed after approval; refusing to overwrite it"
-            )
-        ProjectBundleTransaction(project_paths.project_dir).commit(
-            stage.project_generation_plan.writes,
-            removals=stage.project_generation_plan.removals,
-            expected_preimages=stage.project_generation_plan.expected_preimages,
-            generation_sha256=stage.project_generation_sha256,
-        )
-    except ProjectBundleSafetyError as exc:
-        raise RuntimeError(
-            "recovery-required: Soperator destroy project generation cannot advance safely"
-        ) from exc
-    finally:
-        stage.cleanup()
-
-
-@soperator_app.command(
-    "destroy",
-    short_help="Destroy one registered Soperator cluster while preserving backing storage.",
-)
-def soperator_destroy_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_ref: Annotated[
-        str,
-        typer.Option("--target", help="Exact cxcli Soperator target ref; always required."),
-    ],
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run",
-            help="Write and print the immutable destroy/preserve plan without mutation.",
-        ),
-    ] = False,
-) -> None:
-    """Run the only supported Soperator teardown with protected-storage proof."""
-
-    lifecycle_token = _SOPERATOR_LIFECYCLE_INTERNAL.set(True)
-    local_lock: SoperatorOperationLocalLock | None = None
-    local_lock_acquired = False
-    execution_stack: ExitStack | None = None
-    try:
-        local_lock = SoperatorOperationLocalLock(
-            config_path.parent / ".nebius-cxcli" / "config.lock"
-        )
-        local_lock.__enter__()
-        local_lock_acquired = True
-        source_payload = _load_source_payload(config_path)
-        source_config_sha256 = _sha256_file(config_path)
-        parsed_target = _parse_soperator_upgrade_target(target_ref)
-        paths = resolve_project_paths(config_path)
-        receipt_path = _soperator_destroy_receipt_path(paths, parsed_target.target_ref)
-        receipt = load_soperator_destroy_receipt(receipt_path) if receipt_path.exists() else None
-        if dry_run and receipt is not None and not receipt.checkpoints:
-            receipt = None
-        project_id = _non_empty_text(
-            _read_payload_field(source_payload, "client_info.nebius.project_id")
-        )
-        if not project_id:
-            raise RuntimeError("Soperator destroy requires client_info.nebius.project_id")
-        foreign_operation = read_soperator_operation_status(
-            paths=paths,
-            target_ref=parsed_target.target_ref,
-            include_destroy=False,
-        )
-        if foreign_operation is not None:
-            raise RuntimeError(
-                "Soperator destroy is blocked by an active foreign operation: "
-                f"{foreign_operation.operation} {foreign_operation.status} at "
-                f"{foreign_operation.receipt_path}"
-            )
-        app_row = soperator_registration_app_row(
-            source_payload,
-            target_ref=parsed_target.target_ref,
-        )
-        if (
-            receipt is not None
-            and "storage_verified_after_delete" in receipt.checkpoints
-            and app_row is None
-        ):
-            if receipt.target_ref != parsed_target.target_ref or receipt.project_id != project_id:
-                raise RuntimeError("Soperator destroy receipt belongs to a different target")
-            if _sha256_file(config_path) != receipt.post_cleanup_config_sha256:
-                raise RuntimeError(
-                    "Soperator destroy found a post-cleanup config that differs from the "
-                    "frozen transaction"
-                )
-            soperator_infrastructure_receipt_from_payload(receipt.infrastructure_receipt)
-            for line in format_soperator_destroy_inventory(receipt):
-                console.print(line)
-            console.print(f"Destroy receipt: {receipt_path}")
-            if dry_run or receipt.status == "complete":
-                return
-
-            def _finish_post_cleanup_render() -> None:
-                current_payload = _load_source_payload(config_path)
-                if _sha256_file(config_path) != receipt.post_cleanup_config_sha256:
-                    raise RuntimeError(
-                        "Soperator destroy post-cleanup config changed before recovery"
-                    )
-                validate_config(
-                    copy.deepcopy(dict(current_payload)),
-                    base_dir=config_path.parent,
-                )
-                _run_internal_render_command(config_path, force=True)
-
-            result = run_soperator_destroy(
-                receipt_path=receipt_path,
-                dry_run=False,
-                interactive=False,
-                confirmation=None,
-                verify_storage_before_cleanup=lambda: None,
-                cleanup_cluster=lambda: None,
-                request_cluster_delete=lambda: "already-requested",
-                cluster_is_absent=lambda _operation: True,
-                verify_preserved_storage=lambda: None,
-                commit_config_cleanup=_finish_post_cleanup_render,
-            )
-            console.print(
-                f"Soperator destroy {result.status}: cluster {result.cluster_id}; "
-                "protected backing storage preserved."
-            )
-            return
-        target, target_row, is_onboarded = _resolve_soperator_command_target(
-            source_payload,
-            target_ref=target_ref,
-            interactive=False,
-        )
-        config, deploy_paths, manifest = _load_deploy_context_readonly(config_path)
-        paths = deploy_paths
-        selected_targets = _resolve_selected_deploy_targets(
-            manifest,
-            requested_target_ref=target.target_ref,
-            all_targets=False,
-        )
-        if len(selected_targets) != 1:
-            raise RuntimeError("Soperator destroy could not resolve the exact deploy target")
-        ownership = "onboarded" if is_onboarded else "managed"
-        infrastructure: SoperatorInfrastructureReceipt | None = None
-        kube_env: Mapping[str, str] | None = None
-        if receipt is None:
-            with ExitStack() as stack:
-                kube_env = _prepare_cluster_handoff_kube_env(
-                    config,
-                    paths,
-                    stack=stack,
-                    target=selected_targets[0],
-                    persist_local_kubeconfig=False,
-                    set_current_context=False,
-                    allow_terraform_output=False,
-                )
-                cluster_id = _non_empty_text(
-                    (kube_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV)
-                ) or _non_empty_text((target_row or {}).get("cluster_id"))
-                kube_context = _non_empty_text(
-                    (kube_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
-                )
-                if not cluster_id or not kube_context:
-                    raise RuntimeError(
-                        "Soperator destroy requires immutable cluster and Kubernetes context identity"
-                    )
-                kubernetes_uid = _read_kube_system_namespace_uid(
-                    kube_context=kube_context,
-                    extra_env=kube_env,
-                )
-                snapshot = collect_kubectl_soperator_snapshot(
-                    kube_context=kube_context,
-                    extra_env=kube_env,
-                    include_cluster_inventory=True,
-                )
-                errors = snapshot.get("collection_errors")
-                if not isinstance(errors, list) or errors:
-                    raise RuntimeError(
-                        "Soperator destroy requires a complete fresh Kubernetes inventory"
-                    )
-                chart_values = _source_helm_chart_row(source_payload, target).get("values")
-                if not isinstance(chart_values, Mapping):
-                    raise RuntimeError("Soperator destroy requires protected chart values")
-                storage_inputs = _soperator_protected_storage_discovery_inputs(
-                    payload=source_payload,
-                    target_ref=target.target_ref,
-                    chart_values=chart_values,
-                    kube_context=kube_context,
-                    extra_env=kube_env,
-                )
-
-                def _observation_runner(
-                    args: Sequence[str],
-                    *,
-                    input_text: str | None = None,
-                    timeout_seconds: int = 120,
-                    check: bool = True,
-                ) -> _SoperatorUpgradeCommandResult:
-                    return _run_soperator_upgrade_process(
-                        args,
-                        input_text=input_text,
-                        timeout_seconds=timeout_seconds,
-                        check=check,
-                        extra_env=kube_env,
-                    )
-
-                infrastructure = discover_soperator_infrastructure_receipt(
-                    project_id=project_id,
-                    nebius_cluster_id=cluster_id,
-                    kubernetes_uid=kubernetes_uid,
-                    login_observation=observe_login_service_continuity(
-                        _observation_runner,
-                        namespace="soperator",
-                        kube_context=kube_context,
-                        tcp_probe=_soperator_upgrade_login_tcp_probe,
-                    ),
-                    namespace="soperator",
-                    **storage_inputs,
-                )
-                _assert_soperator_destroy_storage_bindings(
-                    snapshot=snapshot,
-                    infrastructure=infrastructure,
-                )
-                destroy_inventory, preserve_inventory = _soperator_destroy_inventory(
-                    target_ref=target.target_ref,
-                    cluster_id=cluster_id,
-                    ownership=ownership,
-                    snapshot=snapshot,
-                    infrastructure=infrastructure,
-                )
-                cleanup_payload = _soperator_destroy_cleanup_payload(
-                    source_payload=source_payload,
-                    target_ref=target.target_ref,
-                    ownership=ownership,
-                    base_dir=config_path.parent,
-                )
-                receipt = build_soperator_destroy_receipt(
-                    target_ref=target.target_ref,
-                    ownership=ownership,
-                    project_id=project_id,
-                    cluster_id=cluster_id,
-                    kubernetes_uid=kubernetes_uid,
-                    destroy_inventory=destroy_inventory,
-                    preserve_inventory=preserve_inventory,
-                    protected_storage_sha256=infrastructure.receipt_sha256,
-                    infrastructure_receipt=infrastructure.as_payload(),
-                    config_sha256=source_config_sha256,
-                    post_cleanup_config_sha256=(
-                        _soperator_destroy_cleanup_config_sha256(cleanup_payload)
-                    ),
-                )
-                if _sha256_file(config_path) != source_config_sha256:
-                    raise RuntimeError(
-                        "Soperator destroy config changed while the fresh inventory was built"
-                    )
-                write_soperator_destroy_receipt(receipt_path, receipt)
-        assert receipt is not None
-        if infrastructure is None:
-            infrastructure = soperator_infrastructure_receipt_from_payload(
-                receipt.infrastructure_receipt
-            )
-        if receipt.target_ref != target.target_ref or receipt.project_id != project_id:
-            raise RuntimeError("Soperator destroy receipt belongs to a different target")
-        if "config_committed" not in receipt.checkpoints and receipt.config_sha256 != _sha256_file(
-            config_path
-        ):
-            raise RuntimeError("Soperator destroy config changed after inventory was frozen")
-        for line in format_soperator_destroy_inventory(receipt):
-            console.print(line)
-        console.print(f"Destroy receipt: {receipt_path}")
-        if dry_run or receipt.status == "complete":
-            return
-        confirmation = None
-        if "approved" not in receipt.checkpoints:
-            if not _is_tty_session():
-                raise RuntimeError("Soperator destroy execution requires an interactive TTY")
-            expected = expected_soperator_destroy_confirmation(receipt.cluster_id)
-            confirmation = typer.prompt(f"Type exactly `{expected}` to continue", default="")
-
-        cluster_lease: SoperatorOperationLease | None = None
-        cluster_absent_before_request = bool(
-            "cleanup_complete" in receipt.checkpoints
-            and "delete_requested" not in receipt.checkpoints
-            and soperator_cluster_is_absent(
-                project_id=project_id,
-                cluster_id=receipt.cluster_id,
-            )
-        )
-        if "delete_requested" not in receipt.checkpoints and not cluster_absent_before_request:
-            execution_stack = ExitStack()
-            lease_env = _prepare_cluster_handoff_kube_env(
-                config,
-                paths,
-                stack=execution_stack,
-                target=selected_targets[0],
-                persist_local_kubeconfig=False,
-                set_current_context=False,
-                allow_terraform_output=False,
-            )
-            lease_context = _non_empty_text((lease_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV))
-            lease_cluster_id = _non_empty_text((lease_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV))
-            lease_kubernetes_uid = _read_kube_system_namespace_uid(
-                kube_context=lease_context,
-                extra_env=lease_env,
-            )
-            if (
-                lease_cluster_id != receipt.cluster_id
-                or lease_kubernetes_uid != receipt.kubernetes_uid
-            ):
-                raise RuntimeError(
-                    "Soperator destroy live cluster identity changed before writer fencing"
-                )
-            cluster_lease = execution_stack.enter_context(
-                SoperatorOperationLease(
-                    kube_context=lease_context,
-                    cluster_id=receipt.cluster_id,
-                    operation_fingerprint=receipt.approval_fingerprint,
-                    extra_env=lease_env,
-                )
-            )
-            cluster_lease.assert_held()
-            if "cleanup_complete" not in receipt.checkpoints:
-                fresh_snapshot = collect_kubectl_soperator_snapshot(
-                    kube_context=lease_context,
-                    extra_env=lease_env,
-                    include_cluster_inventory=True,
-                )
-                fresh_errors = fresh_snapshot.get("collection_errors")
-                if not isinstance(fresh_errors, list) or fresh_errors:
-                    raise RuntimeError(
-                        "Soperator destroy could not refresh the approved cluster inventory"
-                    )
-                _assert_soperator_destroy_storage_bindings(
-                    snapshot=fresh_snapshot,
-                    infrastructure=infrastructure,
-                )
-                current_destroy, current_preserve = _soperator_destroy_inventory(
-                    target_ref=target.target_ref,
-                    cluster_id=receipt.cluster_id,
-                    ownership=ownership,
-                    snapshot=fresh_snapshot,
-                    infrastructure=infrastructure,
-                )
-                if (
-                    current_destroy != receipt.destroy_inventory
-                    or current_preserve != receipt.preserve_inventory
-                ):
-                    raise RuntimeError(
-                        "Soperator destroy inventory changed after planning; rerun "
-                        "`soperator destroy --dry-run` and approve the refreshed receipt"
-                    )
-
-        def _assert_live_cluster_identity() -> None:
-            if cluster_lease is None:
-                raise RuntimeError("Soperator destroy has no live writer authority")
-            cluster_lease.assert_held()
-            with ExitStack() as stack:
-                fresh_env = _prepare_cluster_handoff_kube_env(
-                    config,
-                    paths,
-                    stack=stack,
-                    target=selected_targets[0],
-                    persist_local_kubeconfig=False,
-                    set_current_context=False,
-                    allow_terraform_output=False,
-                )
-                fresh_context = _non_empty_text(
-                    (fresh_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
-                )
-                fresh_cluster_id = _non_empty_text(
-                    (fresh_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV)
-                )
-                fresh_uid = _read_kube_system_namespace_uid(
-                    kube_context=fresh_context,
-                    extra_env=fresh_env,
-                )
-                if fresh_cluster_id != receipt.cluster_id or fresh_uid != receipt.kubernetes_uid:
-                    raise RuntimeError(
-                        "Soperator destroy live cluster identity changed after approval"
-                    )
-
-        def _cleanup_cluster() -> None:
-            _assert_live_cluster_identity()
-            _destroy_rendered_flux_bundle(
-                config,
-                paths,
-                manifest,
-                requested_target_ref=target.target_ref,
-                all_targets=False,
-            )
-
-        def _verify_storage_before_cleanup() -> None:
-            if infrastructure is None:
-                raise RuntimeError("Soperator destroy lost protected-storage authority")
-            if infrastructure.storage.sfs is not None:
-                verify_soperator_filesystems_exist(
-                    project_id=project_id,
-                    filesystem_ids=_soperator_destroy_filesystem_ids(infrastructure),
-                )
-                return
-            if infrastructure.storage.vm_nfs is None:
-                raise RuntimeError("Soperator destroy has no protected storage identity")
-            vm_nfs = infrastructure.storage.vm_nfs
-            verify_soperator_vm_nfs_exists(
-                project_id=project_id,
-                identity=vm_nfs,
-            )
-
-        def _verify_storage() -> None:
-            current = infrastructure
-            if current is None:
-                raise RuntimeError(
-                    "post-delete storage verification requires the frozen infrastructure receipt"
-                )
-            if current.storage.sfs is not None:
-                verify_soperator_filesystems_exist(
-                    project_id=project_id,
-                    filesystem_ids=_soperator_destroy_filesystem_ids(current),
-                )
-            elif current.storage.vm_nfs is not None:
-                vm_nfs = current.storage.vm_nfs
-                verify_soperator_vm_nfs_exists(
-                    project_id=project_id,
-                    identity=vm_nfs,
-                )
-
-        def _request_delete() -> str:
-            if soperator_cluster_is_absent(
-                project_id=project_id,
-                cluster_id=receipt.cluster_id,
-            ):
-                return "cluster-already-absent"
-            _assert_live_cluster_identity()
-            if ownership == "managed":
-                return _apply_managed_soperator_destroy_plan(
-                    config=config,
-                    paths=paths,
-                    manifest=manifest,
-                    target_ref=target.target_ref,
-                    expected_cluster_id=receipt.cluster_id,
-                )
-            return delete_onboarded_soperator_cluster(
-                project_id=project_id,
-                cluster_id=receipt.cluster_id,
-                idempotency_key=receipt.approval_fingerprint.removeprefix("sha256:"),
-            )
-
-        result = run_soperator_destroy(
-            receipt_path=receipt_path,
-            dry_run=False,
-            interactive=_is_tty_session(),
-            confirmation=confirmation,
-            verify_storage_before_cleanup=_verify_storage_before_cleanup,
-            cleanup_cluster=_cleanup_cluster,
-            request_cluster_delete=_request_delete,
-            cluster_is_absent=lambda _operation: soperator_cluster_is_absent(
-                project_id=project_id,
-                cluster_id=receipt.cluster_id,
-            ),
-            verify_preserved_storage=_verify_storage,
-            commit_config_cleanup=lambda: _commit_soperator_destroy_config_cleanup(
-                config_path=config_path,
-                source_payload=source_payload,
-                target_ref=target.target_ref,
-                ownership=ownership,
-                expected_config_sha256=receipt.config_sha256,
-                paths=paths,
-            ),
-        )
-        console.print(
-            f"Soperator destroy {result.status}: cluster {result.cluster_id}; "
-            "protected backing storage preserved."
-        )
-    except typer.Exit:
-        raise
-    except (KeyboardInterrupt, EOFError, typer.Abort):
-        console.print("[yellow]Cancelled by user[/yellow].")
-        raise typer.Exit(code=130) from None
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-    finally:
-        if execution_stack is not None:
-            execution_stack.close()
-        if local_lock_acquired and local_lock is not None:
-            local_lock.__exit__(None, None, None)
-        _SOPERATOR_LIFECYCLE_INTERNAL.reset(lifecycle_token)
+        console.print(Text(safe_status_text(message), style="red"))
+        print_overall_health(console, "Error", "Status could not safely complete")
+        raise typer.Exit(code=1) from exc
 
 
 @soperator_app.command(
     "upgrade",
-    short_help="Plan or execute an upgrade for any registered Soperator cluster.",
+    short_help="Select upgrade targets and deploy them through the common workflow.",
     epilog=(
         "Examples: nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
         "--to-release latest --to-k8s-version latest --to-os auto "
         "--to-gpu-stack-preset auto --dry-run; "
         "nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
         "--to-release latest --to-k8s-version latest --to-os auto "
-        "--to-gpu-stack-preset auto --execute --approve. "
+        "--to-gpu-stack-preset auto. "
         "The command freezes one end-to-end campaign covering the official Soperator release, "
         "every sequential provider-supported Kubernetes minor hop, node OS and Nebius drivers "
         "preset, and the release-defined Jail CUDA version. The wizard dynamically "
         "queries Nebius and recommends its highest reachable Kubernetes endpoint. Scheduling "
         "stays in operation-owned maintenance until final release and runtime readiness. "
-        "Hardware platform, preset, GPU-cluster, reservation, and fabric changes are excluded; "
-        "use migrate node-group for those replacement migrations."
+        "Interactive upgrades also ask whether to protect additional existing jail folders; "
+        "comma-separated absolute paths use retained PVC mounts without copying data. "
+        "For hardware, capacity, or topology changes, edit config.yaml, render, and deploy."
     ),
 )
+@acceptance_command
 def soperator_upgrade_command(
     config_path: Annotated[
         Path,
         typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
     ],
+    acceptance: Annotated[
+        AcceptanceProfile | None,
+        typer.Option(
+            "--acceptance",
+            help="Soperator acceptance: readiness or full. Terminal omission prompts after readiness; unattended omission runs full. Ctrl+G finishes extended tests safely.",
+        ),
+    ] = None,
     target_ref: Annotated[
         str | None,
         typer.Option(
@@ -14904,8 +12992,8 @@ def soperator_upgrade_command(
             help=(
                 "Target official upstream release: latest or exact X.Y.Z. Interactive "
                 "omission prompts with latest(<resolved-version>). A fresh "
-                "--no-interactive upgrade requires this option. Recovery may omit it; "
-                "a supplied selector must match the frozen campaign."
+                "--no-interactive upgrade requires this option. Recover an interrupted "
+                "deployment with deploy CONFIG_YAML."
             ),
         ),
     ] = None,
@@ -14916,7 +13004,7 @@ def soperator_upgrade_command(
             help=(
                 "Target Kubernetes endpoint: latest or exact major.minor. latest is resolved "
                 "dynamically from the Nebius control-plane version API and frozen with every "
-                "required sequential minor hop."
+                "required sequential minor hop. Required with --no-interactive."
             ),
         ),
     ] = None,
@@ -14924,7 +13012,7 @@ def soperator_upgrade_command(
         str | None,
         typer.Option(
             "--to-os",
-            help="Target node OS: auto, keep, or an exact provider-supported image.",
+            help="Target node OS: auto, keep, or an exact provider-supported image. Required with --no-interactive.",
         ),
     ] = None,
     to_gpu_stack_preset: Annotated[
@@ -14934,7 +13022,7 @@ def soperator_upgrade_command(
             help=(
                 "Target Nebius-image drivers preset: auto, keep, or an exact provider "
                 "value. This is not an exact NVIDIA driver build. "
-                "Operator-managed/driverless groups remain driverless."
+                "Operator-managed/driverless groups remain driverless. Required with --no-interactive."
             ),
         ),
     ] = None,
@@ -14956,14 +13044,14 @@ def soperator_upgrade_command(
         str | None,
         typer.Option(
             "--node-group-strategy",
-            help="Node rollout strategy: zero-surge, safe-surge, or force-delete.",
+            help="Node rollout strategy: zero-surge (default), safe-surge, or force-delete.",
         ),
     ] = None,
     strategy_max_surge_count: Annotated[
         int | None,
         typer.Option(
             "--strategy-max-surge-count",
-            help="Temporary nodes per group for safe-surge; defaults to 1.",
+            help="Positive temporary node count per group; only valid with safe-surge; defaults to 1.",
         ),
     ] = None,
     drain_timeout: Annotated[
@@ -14983,7 +13071,8 @@ def soperator_upgrade_command(
     cancel_job: Annotated[
         list[str] | None,
         typer.Option(
-            "--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."
+            "--cancel-job",
+            help="Slurm job id to cancel; repeatable. Required with --job-policy cancel-selected.",
         ),
     ] = None,
     requeue_job: Annotated[
@@ -14991,8 +13080,8 @@ def soperator_upgrade_command(
         typer.Option(
             "--requeue-job",
             help=(
-                "Slurm job id to requeue with --job-policy requeue-selected "
-                "or requeue-hold-selected."
+                "Slurm job id to requeue; repeatable. Required with --job-policy "
+                "requeue-selected or requeue-hold-selected."
             ),
         ),
     ] = None,
@@ -15019,24 +13108,7 @@ def soperator_upgrade_command(
             help=(
                 "Explicit read-only planning mode. Resolves the requested official release and "
                 "validates live cluster, release, capability, and protected-state identity "
-                "without cloud or Kubernetes mutation. Mutually exclusive with --execute."
-            ),
-        ),
-    ] = False,
-    execute: Annotated[
-        bool,
-        typer.Option(
-            "--execute",
-            help="Execute the frozen operation. Mutually exclusive with --dry-run.",
-        ),
-    ] = False,
-    approve: Annotated[
-        bool,
-        typer.Option(
-            "--approve/--no-approve",
-            help=(
-                "Confirm the registered-target upgrade plan and its ownership-selected "
-                "Terraform or provider-API backend; required with --execute."
+                "without cloud or Kubernetes mutation."
             ),
         ),
     ] = False,
@@ -15044,2243 +13116,121 @@ def soperator_upgrade_command(
         bool,
         typer.Option(
             "--interactive/--no-interactive",
-            help="Prompt for missing Soperator upgrade flags when running from a terminal.",
+            help="Prompt for upgrade targets and additional protected jail folders when running from a terminal.",
         ),
     ] = True,
 ) -> None:
-    sdk: Any | None = None
-    upgrade_progress = SoperatorUpgradeProgress(progress_console)
+    """Select exact upgrade targets, save desired configuration, and use render/deploy."""
+    from .deployment_recovery import deployment_preview
+
     try:
-        if dry_run == execute:
-            raise RuntimeError(
-                "soperator upgrade requires an explicit execution mode: pass exactly one "
-                "of --dry-run or --execute. Use --execute --approve for mutation."
-            )
-        if execute and not approve:
-            raise RuntimeError("soperator upgrade --execute requires --approve.")
-        cancel_job_ids = tuple(cancel_job or ())
-        requeue_job_ids = tuple(requeue_job or ())
-        if job_policy or cancel_job_ids or requeue_job_ids:
-            _validate_soperator_upgrade_job_controls(
+        with deployment_preview(True):
+            intent = _run_soperator_upgrade_campaign(
+                config_path=config_path,
+                target_ref=target_ref,
+                to_chart_version=to_chart_version,
+                to_k8s_version=to_k8s_version,
+                to_os=to_os,
+                to_gpu_stack_preset=to_gpu_stack_preset,
+                node_group_os=node_group_os,
+                node_group_gpu_stack_preset=node_group_gpu_stack_preset,
+                node_group_strategy=node_group_strategy,
+                strategy_max_surge_count=strategy_max_surge_count,
+                drain_timeout=drain_timeout,
                 job_policy=job_policy,
-                cancel_job_ids=cancel_job_ids,
-                requeue_job_ids=requeue_job_ids,
+                cancel_job=cancel_job,
+                requeue_job=requeue_job,
+                job_wait_timeout=job_wait_timeout,
+                job_refresh_interval=job_refresh_interval,
                 interactive=interactive,
+                dry_run=True,
             )
-        if dry_run and not interactive:
-            missing_selectors = [
-                flag
-                for flag, value in (
-                    ("--to-release", to_chart_version),
-                    ("--to-k8s-version", to_k8s_version),
-                    ("--to-os", to_os),
-                    ("--to-gpu-stack-preset", to_gpu_stack_preset),
-                )
-                if not _non_empty_text(value)
-            ]
-            if missing_selectors:
-                raise RuntimeError(
-                    "Non-interactive Soperator upgrade requires "
-                    + ", ".join(missing_selectors)
-                    + "."
-                )
-        with upgrade_progress.phase(
-            "source-config",
-            "Loading Soperator upgrade source configuration",
-            success="Soperator upgrade source configuration loaded",
-        ):
-            loaded_source_config_sha256 = _sha256_file(config_path) if execute else ""
-            source_payload = _load_source_payload(config_path)
-            if execute and _sha256_file(config_path) != loaded_source_config_sha256:
-                raise RuntimeError(
-                    "soperator upgrade config changed while the source plan was being loaded; "
-                    "rerun from the current config"
-                )
-        target, target_row, is_onboarded = _resolve_soperator_command_target(
+        if dry_run:
+            return
+        if intent is None:
+            raise RuntimeError("Soperator upgrade did not resolve a target campaign")
+        source_preimage = config_path.read_bytes()
+        if "sha256:" + hashlib.sha256(source_preimage).hexdigest() != intent.source_config_sha256:
+            raise RuntimeError("Upgrade configuration changed after target admission")
+        source_payload = yaml.safe_load(source_preimage)
+        target, _, onboarded = _resolve_soperator_command_target(
             source_payload,
-            target_ref=target_ref,
-            interactive=interactive,
+            target_ref=intent.target_ref,
+            interactive=False,
         )
-        with upgrade_progress.phase(
-            "target-ownership",
-            "Resolving registered target ownership and generated deployment context",
-            success="Registered target ownership and deployment context resolved",
-        ):
-            generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-            selected_targets = _resolve_selected_deploy_targets(
-                manifest,
-                requested_target_ref=target.target_ref,
-                all_targets=False,
+        _update_source_helm_chart_version(
+            source_payload, target=target, target_version=intent.target_release
+        )
+        chart = _source_helm_chart_row(source_payload, target)
+        if intent.jail_protection:
+            from .soperator_jail_protection import apply_frozen_jail_protection
+
+            chart["values"] = apply_frozen_jail_protection(
+                chart.get("values") or {}, intent.jail_protection
             )
-            if len(selected_targets) != 1:
-                raise RuntimeError("Soperator upgrade could not resolve the exact deploy target")
-            selected_target = selected_targets[0]
-            managed_source_component: Mapping[str, Any] | None
-            try:
-                managed_source_component = find_source_mk8s_component(
-                    source_payload,
-                    target.target_ref,
-                )
-            except ValueError:
-                managed_source_component = None
-            terraform_modules = tuple(
-                module_name
-                for module_name, (_component_id, instance_id) in sorted(
-                    _generated_bundle_mk8s_module_index(manifest).items()
-                )
-                if instance_id == target.target_ref
-            )
-            selected_kind = _non_empty_text(selected_target.get("kind")).lower()
-            selected_ownership = _non_empty_text(selected_target.get("ownership")).lower()
-            selected_component = _non_empty_text(selected_target.get("component_id")).lower()
-            if is_onboarded:
-                if (
-                    not isinstance(target_row, Mapping)
-                    or _non_empty_text(target_row.get("kind")).lower() != "external-mk8s"
-                    or _non_empty_text(target_row.get("ownership")).lower() != "external"
-                    or selected_kind != "external-mk8s"
-                    or selected_ownership != "external"
-                    or managed_source_component is not None
-                    or terraform_modules
-                ):
-                    raise RuntimeError(
-                        "Soperator onboarded ownership is contradictory or overlaps Terraform"
-                    )
-            elif (
-                managed_source_component is None
-                or selected_ownership != "managed"
-                or selected_component != "mk8s"
-                or len(terraform_modules) != 1
-            ):
-                raise RuntimeError(
-                    "Soperator managed ownership requires one exact MK8s component and "
-                    "Terraform module"
-                )
-        receipt_path = campaign_receipt_path(paths.project_dir, target_ref=target.target_ref)
-        loaded_campaign_receipt = load_campaign_receipt(receipt_path) if execute else None
-        campaign_receipt = (
-            loaded_campaign_receipt
-            if loaded_campaign_receipt is not None and loaded_campaign_receipt.status == "active"
-            else None
+        chart["values"], _ = apply_checks_proposal(
+            chart.get("values") or {}, intent.checks_policy_proposal
         )
-        explicit_release_selector = (
-            normalize_soperator_release_selector(to_chart_version)
-            if _non_empty_text(to_chart_version)
-            else None
-        )
-        explicit_kubernetes_selector = _non_empty_text(to_k8s_version).lower()
-        recovery_intent = (
-            campaign_intent_from_payload(campaign_receipt.intent)
-            if campaign_receipt is not None
-            else None
-        )
-        if recovery_intent is not None:
-            if campaign_receipt is None:
-                raise RuntimeError("active campaign recovery receipt is unavailable")
-            assert_config_authority_current(
-                campaign_receipt.config_generations,
-                initial_config_sha256=recovery_intent.source_config_sha256,
-                initial_project_snapshot_sha256=(recovery_intent.source_project_snapshot_sha256),
-                current_config_sha256=_sha256_file(config_path),
-                current_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
-                current_project_generation_sha256=ProjectBundleTransaction(
-                    paths.project_dir
-                ).current_generation_sha256(),
-            )
-            if recovery_intent.target_ref != target.target_ref:
-                raise RuntimeError(
-                    "recovery-required: the active full-stack campaign belongs to another target"
-                )
-            if (
-                explicit_release_selector is not None
-                and explicit_release_selector != recovery_intent.requested_release_selector
-            ):
-                raise RuntimeError(
-                    "recovery-required: --to-release differs from the frozen campaign"
-                )
-            if (
-                explicit_kubernetes_selector
-                and explicit_kubernetes_selector != recovery_intent.requested_kubernetes_selector
-            ):
-                raise RuntimeError(
-                    "recovery-required: --to-k8s-version differs from the frozen campaign"
-                )
-            if job_policy and job_policy != recovery_intent.job_policy:
-                raise RuntimeError(
-                    "recovery-required: --job-policy differs from the frozen campaign"
-                )
-            frozen_option_pairs = {
-                "--to-os": (to_os, recovery_intent.target_os),
-                "--to-gpu-stack-preset": (
-                    to_gpu_stack_preset,
-                    recovery_intent.target_gpu_stack_preset,
-                ),
-                "--node-group-strategy": (
-                    node_group_strategy,
-                    recovery_intent.node_group_strategy,
-                ),
-                "--drain-timeout": (drain_timeout, recovery_intent.drain_timeout),
-            }
-            changed_options = [
-                flag
-                for flag, (supplied, frozen) in frozen_option_pairs.items()
-                if _non_empty_text(supplied) and _non_empty_text(supplied) != frozen
-            ]
-            if changed_options:
-                raise RuntimeError(
-                    "recovery-required: supplied option(s) differ from the frozen campaign: "
-                    + ", ".join(changed_options)
-                )
-            if (
-                strategy_max_surge_count is not None
-                and strategy_max_surge_count != recovery_intent.strategy_max_surge_count
-            ):
-                raise RuntimeError(
-                    "recovery-required: --strategy-max-surge-count differs from the frozen campaign"
-                )
-            if cancel_job_ids and tuple(sorted(set(cancel_job_ids))) != (
-                recovery_intent.cancel_job_ids
-            ):
-                raise RuntimeError(
-                    "recovery-required: --cancel-job differs from the frozen campaign"
-                )
-            if requeue_job_ids and tuple(sorted(set(requeue_job_ids))) != (
-                recovery_intent.requeue_job_ids
-            ):
-                raise RuntimeError(
-                    "recovery-required: --requeue-job differs from the frozen campaign"
-                )
-            frozen_groups = {
-                alias: group
-                for group in recovery_intent.node_groups
-                for alias in (group.key, group.provider_name, group.provider_id)
-            }
-            for flag, values, attribute in (
-                ("--node-group-os", tuple(node_group_os or ()), "target_os"),
-                (
-                    "--node-group-gpu-stack-preset",
-                    tuple(node_group_gpu_stack_preset or ()),
-                    "target_drivers_preset",
-                ),
-            ):
-                for alias, value in _parse_soperator_node_group_overrides(
-                    values,
-                    option_name=flag,
-                ).items():
-                    group = frozen_groups.get(alias)
-                    if group is None or value != getattr(group, attribute):
-                        raise RuntimeError(
-                            f"recovery-required: {flag} differs from the frozen campaign"
-                        )
-            intent = recovery_intent
-            cancel_job_ids = intent.cancel_job_ids
-            requeue_job_ids = intent.requeue_job_ids
-            job_wait_timeout = intent.job_wait_timeout
-            job_refresh_interval = intent.job_refresh_interval
-            resolved_job_policy = intent.job_policy
-            policy = validate_disruption_policy(intent.node_group_strategy)
-            resolved_drain_timeout = resolve_drain_timeout(policy, intent.drain_timeout)
-            resolved_max_surge = intent.strategy_max_surge_count or 0
+        if not onboarded:
+            component = find_source_mk8s_component(source_payload, intent.target_ref)
+            inputs = component.setdefault("inputs", {})
+            inputs.setdefault("cluster", {})["k8s_version"] = intent.target_kubernetes_version
+            groups = inputs.setdefault("node_groups", {})
+            for group_target in intent.node_groups:
+                group = groups[group_target.key]
+                group["version"] = group_target.target_version
+                group["os"] = group_target.target_os
+                if group_target.gpu:
+                    group["gpu_stack_preset"] = group_target.target_drivers_preset
         else:
-            missing_non_interactive = []
-            if not _non_empty_text(to_chart_version):
-                missing_non_interactive.append("--to-release")
-            if not explicit_kubernetes_selector:
-                missing_non_interactive.append("--to-k8s-version")
-            if not _non_empty_text(to_os):
-                missing_non_interactive.append("--to-os")
-            if not _non_empty_text(to_gpu_stack_preset):
-                missing_non_interactive.append("--to-gpu-stack-preset")
-            if not interactive and missing_non_interactive:
-                raise RuntimeError(
-                    "Non-interactive Soperator upgrade requires "
-                    + ", ".join(missing_non_interactive)
-                    + "."
-                )
-            intent = None
-            resolved_job_policy = _validate_soperator_upgrade_job_controls(
-                job_policy=job_policy,
-                cancel_job_ids=cancel_job_ids,
-                requeue_job_ids=requeue_job_ids,
-                interactive=interactive,
+            registration = soperator_registration_target(
+                source_payload, target_ref=intent.target_ref
             )
-            requested_strategy = _non_empty_text(node_group_strategy)
-            if not requested_strategy and interactive:
-                requested_strategy = _prompt_upgrade_choice(
-                    "soperator.upgrade.node_group_strategy",
-                    DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-                    choices=[
-                        OptionChoice(
-                            value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-                            label="zero-surge  (no spare quota; one node unavailable per group)",
-                            recommended=True,
-                        ),
-                        OptionChoice(
-                            value=DISRUPTION_POLICY_SAFE,
-                            label="safe-surge  (temporary spare nodes)",
-                        ),
-                        OptionChoice(
-                            value=DISRUPTION_POLICY_FORCE_DELETE,
-                            label="force-delete  (shorter finite drain timeout)",
-                        ),
-                    ],
-                    missing="node-group rollout strategy",
-                )
-            policy = validate_disruption_policy(
-                requested_strategy or DISRUPTION_POLICY_ALLOW_UNAVAILABLE
-            )
-            requested_drain_timeout = _non_empty_text(drain_timeout)
-            if not requested_drain_timeout and interactive:
-                requested_drain_timeout = str(
-                    _prompt_upgrade_scalar(
-                        "soperator.upgrade.drain_timeout",
-                        "auto",
-                        type_hint="str",
-                        required=True,
-                        missing="node drain timeout",
-                    )
-                )
-            requested_drain_timeout = requested_drain_timeout or "auto"
-            resolved_drain_timeout = resolve_drain_timeout(
-                policy,
-                requested_drain_timeout,
-            )
-            resolved_max_surge = resolve_strategy_max_surge_count(
-                policy,
-                strategy_max_surge_count,
-            )
-
-        with ExitStack() as stack:
-            with upgrade_progress.phase(
-                "cluster-handoff",
-                "Preparing the target Kubernetes handoff",
-                success="Target Kubernetes handoff prepared",
-            ):
-                kube_env = dict(
-                    _prepare_cluster_handoff_kube_env(
-                        generated_config,
-                        paths,
-                        stack=stack,
-                        target=selected_target,
-                        persist_local_kubeconfig=False,
-                        set_current_context=False,
-                        allow_terraform_output=not is_onboarded,
-                        require_renewable_auth=True,
-                    )
-                    or {}
-                )
-                cluster_id = _non_empty_text(
-                    (kube_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV)
-                ) or _non_empty_text((target_row or {}).get("cluster_id"))
-                kube_context = _non_empty_text(
-                    (kube_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
-                )
-                if not cluster_id or not kube_context:
-                    raise RuntimeError(
-                        "Soperator full-stack upgrade requires immutable cluster and "
-                        "Kubernetes context identity"
-                    )
-                kubernetes_uid = _read_kube_system_namespace_uid(
-                    kube_context=kube_context,
-                    extra_env=kube_env,
-                )
-                if not kubernetes_uid:
-                    raise RuntimeError("Soperator upgrade could not read the Kubernetes UID")
-            project_id = str(generated_config.client_info.nebius.project_id).strip()
-            with upgrade_progress.phase(
-                "provider-inventory",
-                "Reading Nebius cluster and node-group inventory",
-                success="Nebius cluster and node-group inventory read",
-            ) as provider_phase:
-                sdk = init_nebius_sdk(
-                    parent_id=project_id or None,
-                    endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
-                    context="Soperator full-stack upgrade",
-                    prefer_operator_auth=True,
-                )
-                executor = Mk8sKubernetesVersionExecutor(sdk)
-                if is_onboarded:
-                    cluster = executor.get_cluster(cluster_id)
-                    source_component: Mapping[str, Any] | None = None
-                else:
-                    source_component = managed_source_component
-                    if source_component is None:
-                        raise RuntimeError("managed Soperator source component disappeared")
-                    cluster_name = source_mk8s_cluster_name(
-                        source_component,
-                        fallback=target.target_ref,
-                    )
-                    cluster = executor.get_cluster_by_name(
-                        project_id=project_id,
-                        name=cluster_name,
-                    )
-                    observed_cluster_id = _live_mk8s_cluster_id(
-                        cluster,
-                        cluster_name=cluster_name,
-                    )
-                    if observed_cluster_id != cluster_id:
-                        raise RuntimeError(
-                            "generated Kubernetes handoff and Nebius API resolved different "
-                            "MK8s cluster identities"
-                        )
-                current_kubernetes_version = _cluster_control_plane_minor_version(
-                    cluster,
-                    cluster_id=cluster_id,
-                )
-                provider_phase.update("Listing Nebius node groups")
-                raw_node_groups = tuple(executor.list_node_groups(cluster_id))
-                provider_phase.update(
-                    f"Read {len(raw_node_groups)} Nebius node groups",
-                    current=len(raw_node_groups),
-                    total=len(raw_node_groups),
-                )
-            if recovery_intent is not None:
-                if (
-                    recovery_intent.cluster_id != cluster_id
-                    or recovery_intent.kubernetes_uid != kubernetes_uid
-                ):
-                    raise RuntimeError(
-                        "recovery-required: live cluster identity differs from the frozen "
-                        "Soperator campaign"
-                    )
-                infrastructure_authority = build_soperator_infrastructure_authority(
-                    target_ref=target.target_ref,
-                    source_target=target_row,
-                    generated_target=selected_target,
-                    managed_component_instance=(
-                        target.target_ref if managed_source_component is not None else ""
-                    ),
-                    terraform_modules=terraform_modules,
-                    cluster_id=cluster_id,
-                    kubernetes_uid=kubernetes_uid,
-                    node_group_ids=tuple(
-                        group.provider_id for group in recovery_intent.node_groups
-                    ),
-                    registration_sha256=(
-                        "sha256:"
-                        + soperator_registration_fingerprint(
-                            source_payload,
-                            target_ref=target.target_ref,
-                        )
-                        if is_onboarded
-                        else ""
-                    ),
-                    provider_api_authorized=recovery_intent.provider_api_authorized,
-                    require_mutation_authorization=False,
-                )
-                if (
-                    infrastructure_authority.digest != recovery_intent.backend_authority_sha256
-                    or infrastructure_authority.ownership != recovery_intent.ownership
-                    or infrastructure_authority.backend != recovery_intent.backend
-                ):
-                    raise RuntimeError(
-                        "recovery-required: Soperator infrastructure ownership or backend "
-                        "differs from the frozen campaign"
-                    )
-            else:
-                with upgrade_progress.phase(
-                    "supported-kubernetes-versions",
-                    "Reading provider-supported Kubernetes versions",
-                    success="Provider-supported Kubernetes versions resolved",
-                ):
-                    supported_versions = tuple(executor.control_plane_versions())
-                requested_kubernetes_selector = explicit_kubernetes_selector
-                if not requested_kubernetes_selector:
-                    requested_kubernetes_selector = _prompt_upgrade_choice(
-                        "soperator.upgrade.kubernetes_version",
-                        "latest",
-                        choices=_soperator_kubernetes_selector_choices(
-                            current_version=current_kubernetes_version,
-                            supported_versions=supported_versions,
-                        ),
-                        missing="target Kubernetes endpoint",
-                    )
-                target_kubernetes_version, kubernetes_hops = resolve_kubernetes_upgrade_path(
-                    selector=requested_kubernetes_selector,
-                    current_version=current_kubernetes_version,
-                    supported_versions=supported_versions,
-                )
-                release_selector = _new_soperator_release_selector(
-                    explicit_release_selector,
-                    interactive=interactive,
-                    command_name="upgrade",
-                    option_name="--to-release",
-                    progress=upgrade_progress,
-                )
-                with upgrade_progress.phase(
-                    "installed-release",
-                    "Inspecting the installed Soperator release",
-                    success="Installed Soperator release inspected",
-                ):
-                    live_release = _live_soperator_release_for_reconcile(env=kube_env)
-                    if not live_release:
-                        raise RuntimeError(
-                            "soperator upgrade requires an existing live Soperator release"
-                        )
-                with upgrade_progress.phase(
-                    "release-freeze",
-                    f"Resolving and verifying Soperator release {release_selector}",
-                    success=f"Soperator release {release_selector} verified and frozen",
-                ) as release_phase:
-                    frozen_release = freeze_soperator_release(
-                        release_selector,
-                        current_release=live_release,
-                        emit=release_phase.update,
-                    )
-                os_selector = _non_empty_text(to_os)
-                if not os_selector:
-                    os_selector = _prompt_upgrade_choice(
-                        "soperator.upgrade.node_os",
-                        "auto",
-                        choices=[
-                            OptionChoice(
-                                value="auto",
-                                label=(
-                                    "auto  (latest provider-compatible OS per node group; "
-                                    "exact API values are shown in the plan)"
-                                ),
-                                recommended=True,
-                            ),
-                            OptionChoice(value="keep", label="keep  (current OS per group)"),
-                        ],
-                        missing="target node OS",
-                    )
-                gpu_selector = _non_empty_text(to_gpu_stack_preset)
-                if not gpu_selector:
-                    gpu_selector = _prompt_upgrade_choice(
-                        "soperator.upgrade.gpu_stack",
-                        "auto",
-                        choices=[
-                            OptionChoice(
-                                value="auto",
-                                label=(
-                                    "auto  (latest compatible Nebius drivers preset per node "
-                                    "group; exact API values are shown in the plan)"
-                                ),
-                                recommended=True,
-                            ),
-                            OptionChoice(
-                                value="keep",
-                                label="keep  (current provider GPU stack per group)",
-                            ),
-                        ],
-                        missing="target provider GPU stack",
-                    )
-                zero_size_policy = "skip-with-proof"
-                with upgrade_progress.phase(
-                    "provider-compatibility",
-                    f"Resolving provider compatibility for {len(raw_node_groups)} node groups",
-                    success=(
-                        f"Provider compatibility resolved for {len(raw_node_groups)} node groups"
-                    ),
-                ):
-                    if source_component is not None:
-                        live_groups = live_node_groups_from_sdk(
-                            source_component=source_component,
-                            live_node_groups=raw_node_groups,
-                        )
-                    else:
-                        live_groups = tuple(
-                            replace(
-                                live_node_group_from_sdk(raw),
-                                gpu=_non_empty_text(
-                                    getattr(
-                                        getattr(
-                                            getattr(
-                                                getattr(raw, "spec", None),
-                                                "template",
-                                                None,
-                                            ),
-                                            "resources",
-                                            None,
-                                        ),
-                                        "platform",
-                                        None,
-                                    )
-                                ).startswith("gpu-"),
-                            )
-                            for raw in raw_node_groups
-                        )
-                    node_groups, compatibility_rows = _soperator_full_stack_node_group_targets(
-                        live_groups=live_groups,
-                        source_kubernetes_version=current_kubernetes_version,
-                        target_kubernetes_version=target_kubernetes_version,
-                        kubernetes_hops=kubernetes_hops,
-                        to_os=os_selector,
-                        to_gpu_stack_preset=gpu_selector,
-                        os_overrides=_parse_soperator_node_group_overrides(
-                            tuple(node_group_os or ()),
-                            option_name="--node-group-os",
-                        ),
-                        gpu_overrides=_parse_soperator_node_group_overrides(
-                            tuple(node_group_gpu_stack_preset or ()),
-                            option_name="--node-group-gpu-stack-preset",
-                        ),
-                        compatibility_lookup=executor.compatibility_choices,
-                    )
-                infrastructure_authority = build_soperator_infrastructure_authority(
-                    target_ref=target.target_ref,
-                    source_target=target_row,
-                    generated_target=selected_target,
-                    managed_component_instance=(
-                        target.target_ref if managed_source_component is not None else ""
-                    ),
-                    terraform_modules=terraform_modules,
-                    cluster_id=cluster_id,
-                    kubernetes_uid=kubernetes_uid,
-                    node_group_ids=tuple(group.provider_id for group in node_groups),
-                    registration_sha256=(
-                        "sha256:"
-                        + soperator_registration_fingerprint(
-                            source_payload,
-                            target_ref=target.target_ref,
-                        )
-                        if is_onboarded
-                        else ""
-                    ),
-                    provider_api_authorized=bool(execute and approve and is_onboarded),
-                    require_mutation_authorization=execute,
-                )
-                checks_proposal = freeze_checks_proposal(
-                    _source_helm_chart_row(source_payload, target).get("values") or {}
-                )
-                intent = build_campaign_intent(
-                    target_ref=target.target_ref,
-                    ownership=infrastructure_authority.ownership,
-                    backend=infrastructure_authority.backend,
-                    backend_authority_sha256=infrastructure_authority.digest,
-                    provider_api_authorized=(infrastructure_authority.provider_api_authorized),
-                    source_config_sha256=(
-                        loaded_source_config_sha256 if execute else _sha256_file(config_path)
-                    ),
-                    source_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
-                    cluster_id=cluster_id,
-                    kubernetes_uid=kubernetes_uid,
-                    requested_release_selector=release_selector,
-                    source_release=live_release,
-                    target_release=frozen_release.snapshot.release,
-                    target_jail_cuda_version=frozen_release.snapshot.jail_cuda_version,
-                    requested_kubernetes_selector=requested_kubernetes_selector,
-                    source_kubernetes_version=current_kubernetes_version,
-                    supported_kubernetes_versions=supported_versions,
-                    target_os=os_selector,
-                    target_gpu_stack_preset=gpu_selector,
-                    node_group_strategy=policy,
-                    strategy_max_surge_count=resolved_max_surge,
-                    drain_timeout=requested_drain_timeout,
-                    zero_size_gpu_validation=zero_size_policy,
-                    job_policy=resolved_job_policy,
-                    cancel_job_ids=cancel_job_ids,
-                    requeue_job_ids=requeue_job_ids,
-                    job_wait_timeout=job_wait_timeout,
-                    job_refresh_interval=job_refresh_interval,
-                    node_groups=node_groups,
-                    checks_policy_proposal=checks_proposal,
-                    checks_release_snapshot_sha256=frozen_release.snapshot.snapshot_sha256,
-                    compatibility_rows=compatibility_rows,
-                )
-
-            if intent is None:
-                raise RuntimeError("Soperator upgrade campaign intent was not resolved")
-            assert_campaign_node_group_inventory(
-                intent,
-                tuple(
-                    _non_empty_text(getattr(getattr(group, "metadata", None), "id", None))
-                    for group in raw_node_groups
-                ),
-            )
-            _print_upgrade_plan_lines(
-                _format_soperator_full_stack_campaign_plan(
-                    intent,
-                    dry_run=dry_run,
-                    live_node_groups=raw_node_groups,
-                )
-            )
-            if dry_run or recovery_intent is None:
-                _run_common_soperator_release_upgrade(
-                    config_path=config_path,
-                    source_payload=copy.deepcopy(source_payload),
-                    target=target,
-                    ownership=intent.ownership,
-                    target_selector=intent.target_release,
-                    target_snapshot_sha256=intent.checks_release_snapshot_sha256,
-                    checks_policy_proposal=intent.checks_policy_proposal,
-                    external_scheduling_evidence={
-                        "mode": "parent-campaign",
-                        "requiresFreshChecks": intent.requires_fresh_checks,
-                    },
-                    dry_run=True,
-                    interactive=False,
-                    job_policy=intent.job_policy,
-                    cancel_job_ids=intent.cancel_job_ids,
-                    requeue_job_ids=intent.requeue_job_ids,
-                    job_wait_timeout=intent.job_wait_timeout,
-                    job_refresh_interval=intent.job_refresh_interval,
-                    upgrade_progress=upgrade_progress,
-                )
-                if dry_run:
-                    return
-            with ExitStack() as campaign_stack:
-                with upgrade_progress.phase(
-                    "operation-authority",
-                    "Acquiring exclusive campaign authority and proving prior writers quiescent",
-                    success="Exclusive campaign authority acquired",
-                ) as authority_progress:
-                    campaign_stack.enter_context(
-                        SoperatorOperationLocalLock(
-                            paths.project_dir / ".nebius-cxcli" / "config.lock"
-                        )
-                    )
-                    if _sha256_file(config_path) != loaded_source_config_sha256:
-                        raise RuntimeError(
-                            "soperator upgrade config changed before the operation lock was "
-                            "acquired; rerun to avoid overwriting newer configuration"
-                        )
-                    campaign_lease = campaign_stack.enter_context(
-                        SoperatorOperationLease(
-                            kube_context=kube_context,
-                            cluster_id=cluster_id,
-                            operation_fingerprint=intent.digest,
-                            extra_env=kube_env,
-                            emit=authority_progress.milestone,
-                        )
-                    )
-                namespace = _soperator_upgrade_live_slurmcluster_namespaces(extra_env=kube_env)[0]
-                wait_timeout_seconds = _soperator_upgrade_duration_seconds(
-                    intent.job_wait_timeout,
-                    option_name="--job-wait-timeout",
-                )
-                refresh_interval_seconds = _soperator_upgrade_duration_seconds(
-                    intent.job_refresh_interval,
-                    option_name="--job-refresh-interval",
-                )
-
-                def _campaign_job_control_record(job_id: str) -> SlurmJobControlRecord | None:
-                    selected = _non_empty_text(job_id)
-                    if not selected:
-                        raise RuntimeError("Slurm job identity is empty")
-                    result = _run_soperator_upgrade_login_command(
-                        namespace,
-                        "scontrol show job " + shlex.quote(selected) + " -o",
-                        kube_context=kube_context,
-                        extra_env=kube_env,
-                        timeout_seconds=120,
-                        check=False,
-                    )
-                    return slurm_job_control_record_from_query(
-                        requested_job_id=selected,
-                        returncode=result.returncode,
-                        stdout=result.stdout,
-                        stderr=result.stderr,
-                    )
-
-                campaign_config_store = CampaignConfigTransitionStore(
-                    path=receipt_path,
-                    intent=intent,
-                )
-                campaign_controller_spool_store = CampaignControllerSpoolMigrationStore(
-                    path=receipt_path,
-                    intent=intent,
-                )
-
-                def _assert_campaign_authority() -> SoperatorLeaseAuthority:
-                    lease_authority = campaign_lease.assert_held()
-                    assert_campaign_node_group_inventory(
-                        intent,
-                        tuple(
-                            _non_empty_text(getattr(getattr(group, "metadata", None), "id", None))
-                            for group in executor.list_node_groups(cluster_id)
-                        ),
-                    )
-                    receipt = load_campaign_receipt(receipt_path)
-                    if receipt is None or receipt.intent_sha256 != intent.digest:
-                        raise SoperatorSafetyPauseError(
-                            "the Soperator campaign receipt authority is unavailable"
-                        )
-                    assert_config_authority_current(
-                        receipt.config_generations,
-                        initial_config_sha256=intent.source_config_sha256,
-                        initial_project_snapshot_sha256=(intent.source_project_snapshot_sha256),
-                        current_config_sha256=_sha256_file(config_path),
-                        current_project_snapshot_sha256=project_generation_snapshot_sha256(paths),
-                        current_project_generation_sha256=ProjectBundleTransaction(
-                            paths.project_dir
-                        ).current_generation_sha256(),
-                    )
-                    current_payload = _load_source_payload(config_path)
-                    current_target = soperator_registration_target(
-                        current_payload,
-                        target_ref=intent.target_ref,
-                    )
-                    if intent.ownership == "onboarded":
-                        if (
-                            not isinstance(current_target, Mapping)
-                            or _non_empty_text(current_target.get("kind")).lower()
-                            != "external-mk8s"
-                            or _non_empty_text(current_target.get("ownership")).lower()
-                            != "external"
-                            or "sha256:"
-                            + soperator_registration_fingerprint(
-                                current_payload,
-                                target_ref=intent.target_ref,
-                            )
-                            != infrastructure_authority.registration_sha256
-                        ):
-                            raise SoperatorSafetyPauseError(
-                                "onboarded Soperator registration authority changed"
-                            )
-                    else:
-                        try:
-                            find_source_mk8s_component(current_payload, intent.target_ref)
-                        except ValueError as exc:
-                            raise SoperatorSafetyPauseError(
-                                "managed Soperator Terraform ownership changed"
-                            ) from exc
-                    return lease_authority
-
-                campaign_checks: SoperatorCampaignChecks | None = None
-
-                def _campaign_checks() -> SoperatorCampaignChecks:
-                    nonlocal campaign_checks
-                    if campaign_checks is not None:
-                        return campaign_checks
-                    frozen = freeze_soperator_release(
-                        intent.target_release,
-                        snapshot_sha256=intent.checks_release_snapshot_sha256,
-                    )
-                    if frozen.snapshot.snapshot_sha256 != intent.checks_release_snapshot_sha256:
-                        raise RuntimeError(
-                            "campaign checks release snapshot changed after planning"
-                        )
-                    target_paths = _paths_for_target_flux_dir(paths, selected_target)
-
-                    def _kubernetes(
-                        args: list[str], document: Mapping[str, Any] | None
-                    ) -> Mapping[str, Any]:
-                        result = _run_soperator_upgrade_process(
-                            ["kubectl", "--context", kube_context, *args],
-                            input_text=json.dumps(document) if document is not None else None,
-                            extra_env=kube_env,
-                            timeout_seconds=120,
-                            check=True,
-                        )
-                        payload = _soperator_checks_kubernetes_payload(args, result.stdout)
-                        if not isinstance(payload, Mapping):
-                            raise RuntimeError("invalid campaign checks Kubernetes evidence")
-                        return payload
-
-                    def _slurm(command: str) -> str:
-                        return _run_soperator_upgrade_login_command(
-                            namespace,
-                            command,
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                            timeout_seconds=120,
-                        ).stdout
-
-                    def _load_target() -> Any:
-                        snapshot = load_soperator_release_snapshot(
-                            soperator_release_snapshot_path(paths.reports_dir, intent.target_ref)
-                        )
-                        if snapshot.snapshot_sha256 != frozen.snapshot.snapshot_sha256:
-                            raise RuntimeError("campaign checks target release identity changed")
-                        source = ensure_soperator_release_source(snapshot)
-                        values = _rendered_soperator_upstream_values(target_paths.flux_dir)
-                        policy = compile_checks_policy(Path(source.source_dir), values)
-                        workers = _soperator_upgrade_expected_static_slurm_nodes(values)
-                        gpu_workers = _soperator_upgrade_expected_static_slurm_nodes(
-                            {
-                                "nodesets": {
-                                    "overrideValues": {
-                                        "nodesets": [
-                                            row
-                                            for row in values.get("nodesets", {})
-                                            .get("overrideValues", {})
-                                            .get("nodesets", [])
-                                            if row.get("gpu", {}).get("enabled") is True
-                                        ]
-                                    }
-                                }
-                            }
-                        )
-                        return policy, workers, gpu_workers
-
-                    main_workload_authority = CampaignMainWorkloadAuthority(
-                        path=receipt_path,
-                        intent=intent,
-                        assert_authority=_assert_campaign_authority,
-                    )
-
-                    def _apply_target(policy: Any, context: ChecksPhaseContext) -> None:
-                        _assert_campaign_authority()
-                        apply_staged_soperator_release(
-                            target_paths,
-                            extra_env=kube_env,
-                            checks_policy=policy,
-                            checks_context=context,
-                            freeze_main_workload_authority=main_workload_authority.freeze,
-                            on_stage_progress=lambda current, total, names: console.print(
-                                f"Check policy stage {current}/{total}: " + ", ".join(names),
-                                markup=False,
-                            ),
-                        )
-
-                    def _recover_target_checks(target: SoperatorChecksExecution) -> object:
-                        from .soperator_checks_catchup_flux import recover_staged_checks
-
-                        return recover_staged_checks(
-                            target,
-                            paths=target_paths,
-                            source_dir=Path(frozen.source.source_dir),
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                            freeze_main_workload_authority=main_workload_authority.freeze,
-                            on_stage_progress=lambda current, total, names: console.print(
-                                f"Recovering check policy stage {current}/{total}: "
-                                + ", ".join(names),
-                                markup=False,
-                            ),
-                        )
-
-                    def _check_partition_preimages() -> tuple[SlurmPartitionPauseRecord, ...]:
-                        receipt = load_campaign_receipt(receipt_path)
-                        if receipt is None or receipt.intent_sha256 != intent.digest:
-                            raise RuntimeError("campaign checks maintenance receipt disappeared")
-                        snapshots = [
-                            row["partitions"]
-                            for row in receipt.maintenance_evidence.get("events", ())
-                            if row.get("action") == "partition-preimage"
-                        ]
-                        if len(snapshots) != 1:
-                            raise RuntimeError("campaign requires one complete partition preimage")
-                        return diagnostic_partition_preimages(snapshots[0])
-
-                    reservation_name = _soperator_upgrade_maintenance_reservation_name(
-                        intent.digest.removeprefix("sha256:")[:16]
-                    )
-
-                    def _checks_release_events() -> tuple[Mapping[str, Any], ...]:
-                        receipt = load_campaign_receipt(receipt_path)
-                        if receipt is None or receipt.intent_sha256 != intent.digest:
-                            raise RuntimeError("campaign checks release receipt changed")
-                        summary = receipt.maintenance_evidence.get("summary", {})
-                        if (
-                            summary.get("namespace") != namespace
-                            or summary.get("reservationName") != reservation_name
-                        ):
-                            raise RuntimeError("campaign checks release reservation scope changed")
-                        return tuple(receipt.maintenance_evidence.get("events", ()))
-
-                    def _observe_checks_release() -> Mapping[str, Any]:
-                        policy, _workers, _gpu_workers = _load_target()
-                        return (
-                            _campaign_checks()
-                            ._execution(policy, "target")
-                            ._reservation(reservation_name)
-                        )
-
-                    checks_release = CampaignChecksRelease(
-                        owner=intent.digest,
-                        reservation=reservation_name,
-                        load_events=_checks_release_events,
-                        record_event=lambda event: record_campaign_maintenance_event(
-                            path=receipt_path, intent=intent, event=event
-                        ),
-                        present=lambda: (
-                            reservation_name
-                            in _soperator_upgrade_reservation_names(
-                                namespace=namespace, extra_env=kube_env
-                            )
-                        ),
-                        observe=_observe_checks_release,
-                        delete=lambda: _soperator_upgrade_delete_maintenance_reservation(
-                            namespace=namespace,
-                            reservation_name=reservation_name,
-                            extra_env=kube_env,
-                        ),
-                        read_job=_campaign_job_control_record,
-                        authority=_assert_campaign_authority,
-                    )
-                    campaign_checks = SoperatorCampaignChecks(
-                        operation_id=intent.digest,
-                        reports_dir=paths.reports_dir,
-                        cluster_name=str(
-                            _rendered_soperator_upstream_values(target_paths.flux_dir)[
-                                "slurmCluster"
-                            ]["overrideValues"]["clusterName"]
-                        ),
-                        source_dir=Path(
-                            freeze_soperator_release(intent.source_release).source.source_dir
-                        ),
-                        kubernetes=_kubernetes,
-                        slurm=_slurm,
-                        assert_authority=_assert_campaign_authority,
-                        load_target=_load_target,
-                        apply_target=_apply_target,
-                        partition_preimages=_check_partition_preimages,
-                        target_writers=lambda: _soperator_checks_target_writers(
-                            target_paths.flux_dir
-                        ),
-                        reservation=reservation_name,
-                        release_maintenance=checks_release.release,
-                        verify_maintenance_released=checks_release.verify,
-                        recover_target=_recover_target_checks,
-                        emit=lambda message: console.print(message, markup=False),
-                    )
-                    return campaign_checks
-
-                def _enter_maintenance_impl(
-                    record_event: Callable[[Mapping[str, Any]], None],
-                    existing_evidence: Mapping[str, Any],
-                    *,
-                    emit: Callable[[str], None],
-                ) -> Mapping[str, Any]:
-                    raw_existing_events = existing_evidence.get("events", ())
-                    events = (
-                        list(raw_existing_events)
-                        if isinstance(raw_existing_events, Sequence)
-                        and not isinstance(raw_existing_events, (str, bytes))
-                        else []
-                    )
-                    if not all(isinstance(event, Mapping) for event in events):
-                        raise RuntimeError(
-                            "recovery-required: campaign maintenance events are invalid"
-                        )
-
-                    def _record_entry(event: Mapping[str, Any]) -> None:
-                        record_event(event)
-                        events.append(dict(event))
-
-                    if intent.requires_fresh_checks:
-                        if not any(event.get("action") == "partition-preimage" for event in events):
-                            if events:
-                                raise RuntimeError(
-                                    "campaign admission has no original complete partition preimage"
-                                )
-                            _record_entry(
-                                {
-                                    "action": "partition-preimage",
-                                    "partitions": [
-                                        asdict(row)
-                                        for row in _soperator_upgrade_partition_state_snapshot(
-                                            namespace=namespace,
-                                            kube_context=kube_context,
-                                            extra_env=kube_env,
-                                        )
-                                    ],
-                                }
-                            )
-                        _campaign_checks().enter(_record_entry)
-
-                    existing_records = _soperator_maintenance_pause_records(
-                        tuple(event for event in events if isinstance(event, Mapping))
-                    )
-                    if existing_records:
-                        emit(
-                            "Revalidating the durable pause for "
-                            f"{len(existing_records)} Slurm partitions"
-                        )
-                    reservation_name = _soperator_upgrade_maintenance_reservation_name(
-                        intent.digest.removeprefix("sha256:")[:16]
-                    )
-                    for record in existing_records:
-                        live = _soperator_upgrade_partition_state(
-                            namespace=namespace,
-                            partition=record.partition,
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                        )
-                        if _soperator_upgrade_partition_observation_matches(
-                            live,
-                            record=record.previous_record,
-                            fingerprint=record.previous_record_fingerprint,
-                        ):
-                            continue
-                        if (
-                            record.applied_record
-                            and _soperator_upgrade_partition_observation_matches(
-                                live,
-                                record=record.applied_record,
-                                fingerprint=record.applied_record_fingerprint,
-                            )
-                        ):
-                            continue
-                        try:
-                            recovered_record = record.with_applied_observation(live)
-                        except ValueError as exc:
-                            raise RuntimeError(
-                                "recovery-required: campaign maintenance cannot prove the "
-                                f"partial Slurm pause for partition {record.partition!r}"
-                            ) from exc
-                        _record_entry(
-                            {
-                                "at": datetime.now(UTC)
-                                .isoformat(timespec="seconds")
-                                .replace("+00:00", "Z"),
-                                "action": "scheduling-pause-applied",
-                                "partitions": [recovered_record.as_payload()],
-                                "scope": "all-active",
-                                "recovered": True,
-                            }
-                        )
-
-                    applied_hold_identities: set[str] = set()
-                    for event in events:
-                        if _non_empty_text(event.get("action")) not in {
-                            "requeue-hold-applied",
-                            "requeue-hold-selected-applied",
-                            "requeue-hold-all-applied",
-                        }:
-                            continue
-                        payloads = event.get("job_control_postimages")
-                        if not isinstance(payloads, Sequence) or isinstance(payloads, (str, bytes)):
-                            continue
-                        for payload in payloads:
-                            if isinstance(payload, Mapping):
-                                applied_hold_identities.add(
-                                    _non_empty_text(payload.get("identity_sha256"))
-                                )
-                    recovered_intents: set[str] = set()
-                    for event in tuple(events):
-                        action = _non_empty_text(event.get("action"))
-                        if action not in {
-                            "requeue-hold",
-                            "requeue-hold-selected",
-                            "requeue-hold-all",
-                        }:
-                            continue
-                        payloads = event.get("job_control_preimages")
-                        if not isinstance(payloads, Sequence) or isinstance(payloads, (str, bytes)):
-                            continue
-                        for payload in payloads:
-                            if not isinstance(payload, Mapping):
-                                raise RuntimeError(
-                                    "recovery-required: unfinished Slurm hold intent is invalid"
-                                )
-                            try:
-                                preimage = slurm_job_control_record_from_payload(payload)
-                            except ValueError as exc:
-                                raise RuntimeError(
-                                    "recovery-required: unfinished Slurm hold identity is invalid"
-                                ) from exc
-                            identity = preimage.identity_sha256
-                            if identity in applied_hold_identities or identity in recovered_intents:
-                                continue
-                            recovered_intents.add(identity)
-                            live_job = _campaign_job_control_record(preimage.job_id)
-                            if live_job is None:
-                                _record_entry(
-                                    {
-                                        "at": datetime.now(UTC)
-                                        .isoformat(timespec="seconds")
-                                        .replace("+00:00", "Z"),
-                                        "action": f"{action}-tombstone",
-                                        "job_ids": [preimage.job_id],
-                                        "reason": "job-disappeared-after-write-ahead-intent",
-                                        "identity_sha256": identity,
-                                    }
-                                )
-                                continue
-                            if live_job.identity_sha256 != identity:
-                                raise RuntimeError(
-                                    "recovery-required: Slurm job identity changed after an "
-                                    f"unfinished hold intent: {preimage.job_id}"
-                                )
-                            if not slurm_job_control_is_held(live_job):
-                                eligible, reason = slurm_requeuehold_eligibility(live_job)
-                                if not eligible:
-                                    _record_entry(
-                                        {
-                                            "at": datetime.now(UTC)
-                                            .isoformat(timespec="seconds")
-                                            .replace("+00:00", "Z"),
-                                            "action": f"{action}-wait-only",
-                                            "job_ids": [preimage.job_id],
-                                            "job_control_preimages": [live_job.as_payload()],
-                                            "reason": reason,
-                                            "recovered": True,
-                                        }
-                                    )
-                                    continue
-                                campaign_lease.assert_held()
-                                _soperator_upgrade_requeue_jobs(
-                                    namespace,
-                                    (preimage.job_id,),
-                                    hold=True,
-                                    kube_context=kube_context,
-                                    extra_env=kube_env,
-                                )
-                                _soperator_upgrade_wait_for_requeued_jobs_to_leave_nodes(
-                                    namespace=namespace,
-                                    node_names=(),
-                                    job_ids=(preimage.job_id,),
-                                    timeout_seconds=wait_timeout_seconds,
-                                    refresh_interval_seconds=refresh_interval_seconds,
-                                    kube_context=kube_context,
-                                    extra_env=kube_env,
-                                    include_pending=False,
-                                    all_jobs=True,
-                                )
-                                live_job = _campaign_job_control_record(preimage.job_id)
-                            if (
-                                live_job is None
-                                or live_job.identity_sha256 != identity
-                                or not slurm_job_control_is_held(live_job)
-                            ):
-                                raise RuntimeError(
-                                    "recovery-required: unfinished Slurm hold intent did not "
-                                    f"converge for job {preimage.job_id}"
-                                )
-                            _record_entry(
-                                {
-                                    "at": datetime.now(UTC)
-                                    .isoformat(timespec="seconds")
-                                    .replace("+00:00", "Z"),
-                                    "action": f"{action}-applied",
-                                    "job_ids": [preimage.job_id],
-                                    "job_control_postimages": [live_job.as_payload()],
-                                    "recovered": True,
-                                }
-                            )
-                    emit("Pausing active Slurm partitions and securing active jobs")
-                    _handle_soperator_upgrade_running_jobs(
-                        namespace=namespace,
-                        policy=intent.job_policy,
-                        cancel_job_ids=intent.cancel_job_ids,
-                        requeue_job_ids=intent.requeue_job_ids,
-                        wait_timeout_seconds=wait_timeout_seconds,
-                        refresh_interval_seconds=refresh_interval_seconds,
-                        checkpoint_id=intent.digest.removeprefix("sha256:")[:16],
-                        kube_context=kube_context,
-                        extra_env=kube_env,
-                        drain_nodes=False,
-                        slurm_scheduling_pause=True,
-                        decision_recorder=_record_entry,
-                        mutation_guard=campaign_lease.assert_held,
-                        all_active_partitions=True,
-                        continue_until_clear=True,
-                        job_control_reader=_campaign_job_control_record,
-                    )
-                    emit("Creating and verifying the operation-owned maintenance reservation")
-                    live_reservations = _soperator_upgrade_reservation_names(
-                        namespace=namespace,
-                        extra_env=kube_env,
-                    )
-                    reservation_action = maintenance_reservation_recovery_action(
-                        events=tuple(event for event in events if isinstance(event, Mapping)),
-                        live_reservations=live_reservations,
-                        reservation_name=reservation_name,
-                        owner="Soperator full-stack campaign",
-                    )
-                    if reservation_action == "record-and-create":
-                        _record_entry(
-                            {
-                                "at": datetime.now(UTC)
-                                .isoformat(timespec="seconds")
-                                .replace("+00:00", "Z"),
-                                "action": "maintenance-reservation-intent",
-                                "reservation_name": reservation_name,
-                                "node_scope": "ALL",
-                            }
-                        )
-                    if reservation_action in {"record-and-create", "create"}:
-                        campaign_lease.assert_held()
-                        _soperator_upgrade_create_maintenance_reservation(
-                            namespace=namespace,
-                            reservation_name=reservation_name,
-                            extra_env=kube_env,
-                        )
-                    live_reservations_after = _soperator_upgrade_reservation_names(
-                        namespace=namespace,
-                        extra_env=kube_env,
-                    )
-                    if reservation_name not in live_reservations_after:
-                        raise RuntimeError(
-                            "recovery-required: Soperator maintenance reservation did not converge"
-                        )
-                    if not any(
-                        _non_empty_text(event.get("action")) == "maintenance-reservation-applied"
-                        and _non_empty_text(event.get("reservation_name")) == reservation_name
-                        for event in events
-                    ):
-                        _record_entry(
-                            {
-                                "at": datetime.now(UTC)
-                                .isoformat(timespec="seconds")
-                                .replace("+00:00", "Z"),
-                                "action": "maintenance-reservation-applied",
-                                "reservation_name": reservation_name,
-                                "node_scope": "ALL",
-                                "recovered": reservation_name in live_reservations,
-                            }
-                        )
-
-                    convergence_pass = 0
-                    while True:
-                        convergence_pass += 1
-                        emit(f"Verifying the Slurm maintenance barrier (pass {convergence_pass})")
-                        _handle_soperator_upgrade_running_jobs(
-                            namespace=namespace,
-                            policy=intent.job_policy,
-                            cancel_job_ids=intent.cancel_job_ids,
-                            requeue_job_ids=intent.requeue_job_ids,
-                            wait_timeout_seconds=wait_timeout_seconds,
-                            refresh_interval_seconds=refresh_interval_seconds,
-                            checkpoint_id=intent.digest.removeprefix("sha256:")[:16],
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                            drain_nodes=False,
-                            slurm_scheduling_pause=True,
-                            decision_recorder=_record_entry,
-                            mutation_guard=campaign_lease.assert_held,
-                            all_active_partitions=True,
-                            continue_until_clear=True,
-                            job_control_reader=_campaign_job_control_record,
-                        )
-                        remaining_up = tuple(
-                            state.name
-                            for state in _soperator_upgrade_partition_state_snapshot(
-                                namespace=namespace,
-                                kube_context=kube_context,
-                                extra_env=kube_env,
-                            )
-                            if slurm_partition_state_token(state.state) == "UP"
-                        )
-                        remaining_jobs = _soperator_upgrade_affected_jobs(
-                            namespace=namespace,
-                            node_names=(),
-                            kube_context=kube_context,
-                            extra_env=kube_env,
-                            include_pending=False,
-                            all_jobs=True,
-                        )
-                        reservation_present = reservation_name in (
-                            _soperator_upgrade_reservation_names(
-                                namespace=namespace,
-                                extra_env=kube_env,
-                            )
-                        )
-                        if not reservation_present:
-                            raise RuntimeError(
-                                "recovery-required: the operation-owned maintenance reservation "
-                                "disappeared during barrier convergence"
-                            )
-                        if not remaining_up and not remaining_jobs and reservation_present:
-                            _record_entry(
-                                {
-                                    "at": datetime.now(UTC)
-                                    .isoformat(timespec="seconds")
-                                    .replace("+00:00", "Z"),
-                                    "action": "maintenance-barrier-converged",
-                                    "pass": convergence_pass,
-                                    "reservation_name": reservation_name,
-                                }
-                            )
-                            break
-                        _record_entry(
-                            {
-                                "at": datetime.now(UTC)
-                                .isoformat(timespec="seconds")
-                                .replace("+00:00", "Z"),
-                                "action": "maintenance-barrier-retrying",
-                                "pass": convergence_pass,
-                                "remaining_up_partitions": list(remaining_up),
-                                "remaining_job_ids": [job.job_id for job in remaining_jobs],
-                                "reservation_present": reservation_present,
-                            }
-                        )
-                    if intent.requires_fresh_checks:
-                        _campaign_checks().pause_source_passive()
-                    return {
-                        "namespace": namespace,
-                        "reservationName": reservation_name,
-                        "nodeScope": "ALL",
+            if not isinstance(registration, dict):
+                raise RuntimeError("Onboarded upgrade has no registration target")
+            registration["soperator_desired_platform"] = {
+                "kubernetes_version": intent.target_kubernetes_version,
+                "node_groups": {
+                    group.key: {
+                        "os": group.target_os,
+                        "gpu_stack_preset": group.target_drivers_preset,
                     }
-
-                def _enter_maintenance(
-                    record_event: Callable[[Mapping[str, Any]], None],
-                    existing_evidence: Mapping[str, Any],
-                ) -> Mapping[str, Any]:
-                    with upgrade_progress.phase(
-                        "maintenance-entry",
-                        "Entering durable Slurm maintenance for the full-stack campaign",
-                        success="Durable Slurm maintenance barrier established",
-                    ) as maintenance_progress:
-
-                        def _maintenance_milestone(message: str) -> None:
-                            key = (
-                                "maintenance-barrier"
-                                if message.startswith("Verifying the Slurm maintenance barrier")
-                                else message
-                            )
-                            maintenance_progress.milestone(message, key=key)
-
-                        job_prompt_pause_token = _SOPERATOR_UPGRADE_JOB_PROMPT_PAUSE.set(
-                            maintenance_progress.paused
-                        )
-                        try:
-                            return _enter_maintenance_impl(
-                                record_event,
-                                existing_evidence,
-                                emit=_maintenance_milestone,
-                            )
-                        finally:
-                            _SOPERATOR_UPGRADE_JOB_PROMPT_PAUSE.reset(job_prompt_pause_token)
-
-                def _restore_maintenance(
-                    record_event: Callable[[Mapping[str, Any]], None],
-                    evidence: Mapping[str, Any],
-                ) -> Mapping[str, Any]:
-                    summary = evidence.get("summary")
-                    if not isinstance(summary, Mapping):
-                        raise RuntimeError(
-                            "recovery-required: campaign maintenance summary is invalid"
-                        )
-                    restore_namespace = _non_empty_text(summary.get("namespace"))
-                    if restore_namespace != namespace:
-                        raise RuntimeError(
-                            "recovery-required: campaign maintenance namespace changed"
-                        )
-                    raw_events = evidence.get("events", ())
-                    events = (
-                        list(raw_events)
-                        if isinstance(raw_events, Sequence)
-                        and not isinstance(raw_events, (str, bytes))
-                        else []
-                    )
-                    if not all(isinstance(event, Mapping) for event in events):
-                        raise RuntimeError(
-                            "recovery-required: campaign maintenance events are invalid"
-                        )
-
-                    def _record(action: str, **details: Any) -> None:
-                        event = {
-                            "at": datetime.now(UTC)
-                            .isoformat(timespec="seconds")
-                            .replace("+00:00", "Z"),
-                            "action": action,
-                            **details,
-                        }
-                        record_event(event)
-                        events.append(event)
-
-                    def _has_event(action: str, **matches: str) -> bool:
-                        return any(
-                            _non_empty_text(event.get("action")) == action
-                            and all(
-                                _non_empty_text(event.get(key)) == value
-                                for key, value in matches.items()
-                            )
-                            for event in events
-                            if isinstance(event, Mapping)
-                        )
-
-                    records = _soperator_maintenance_pause_records(
-                        tuple(event for event in events if isinstance(event, Mapping))
-                    )
-                    held_records = applied_slurm_held_job_records(
-                        tuple(event for event in events if isinstance(event, Mapping))
-                    )
-
-                    def _assert_partitions_still_paused() -> None:
-                        if intent.requires_fresh_checks:
-                            _campaign_checks().verify_barrier()
-                            return
-                        for record in records:
-                            live = _soperator_upgrade_partition_state(
-                                namespace=namespace,
-                                partition=record.partition,
-                                kube_context=kube_context,
-                                extra_env=kube_env,
-                            )
-                            if not record.applied_record or not (
-                                _soperator_upgrade_partition_migration_observation_matches(
-                                    live,
-                                    record=record.applied_record,
-                                    fingerprint=record.applied_record_fingerprint,
-                                )
-                            ):
-                                raise RuntimeError(
-                                    "recovery-required: Slurm partitions must remain paused "
-                                    "until every operation-owned job hold is restored"
-                                )
-
-                    reservation_name = _non_empty_text(summary.get("reservationName"))
-                    if (
-                        intent.requires_fresh_checks
-                        and _has_event(
-                            "maintenance-reservation-delete-intent",
-                            reservation_name=reservation_name,
-                        )
-                        and not _has_event(
-                            "maintenance-reservation-delete-applied",
-                            reservation_name=reservation_name,
-                        )
-                        and reservation_name
-                        not in _soperator_upgrade_reservation_names(
-                            namespace=namespace, extra_env=kube_env
-                        )
-                    ):
-                        # The delete may have succeeded before its receipt write. Never
-                        # recreate a released barrier or require that absent barrier to
-                        # prove the already-completed diagnostic/restoration evidence.
-                        _campaign_checks().finalize(already_released=True)
-                        _record(
-                            "maintenance-reservation-delete-applied",
-                            reservation_name=reservation_name,
-                        )
-                    if intent.requires_fresh_checks and not _has_event(
-                        "maintenance-reservation-delete-applied",
-                        reservation_name=reservation_name,
-                    ):
-                        _campaign_checks().verify_handoff()
-
-                    if intent.requires_fresh_checks:
-                        _campaign_checks().authorize_admission()
-                    released_job_count = 0
-                    tombstone_count = 0
-                    for held_record in held_records:
-                        identity = held_record.identity_sha256
-                        job_id = held_record.job_id
-                        release_applied = _has_event(
-                            "maintenance-held-job-release-applied",
-                            job_id=job_id,
-                            identity_sha256=identity,
-                        )
-                        live = _campaign_job_control_record(job_id)
-                        if live is not None and live.identity_sha256 != identity:
-                            raise RuntimeError(
-                                "recovery-required: a Slurm job ID was reused before "
-                                f"maintenance restoration: {job_id}"
-                            )
-                        if release_applied:
-                            if live is not None and slurm_job_control_is_held(live):
-                                raise RuntimeError(
-                                    "recovery-required: a restored Slurm job was held again "
-                                    f"outside the campaign: {job_id}"
-                                )
-                            released_job_count += 1
-                            if live is None:
-                                tombstone_count += 1
-                            continue
-
-                        _assert_partitions_still_paused()
-                        if not _has_event(
-                            "maintenance-held-job-release-intent",
-                            job_id=job_id,
-                            identity_sha256=identity,
-                        ):
-                            _record(
-                                "maintenance-held-job-release-intent",
-                                job_id=job_id,
-                                identity_sha256=identity,
-                                job_control_postimages=[held_record.as_payload()],
-                            )
-                        if live is None:
-                            _record(
-                                "maintenance-held-job-release-applied",
-                                job_id=job_id,
-                                identity_sha256=identity,
-                                disposition="satisfied-external-tombstone",
-                            )
-                            released_job_count += 1
-                            tombstone_count += 1
-                            continue
-                        if slurm_job_control_is_held(live):
-                            campaign_lease.assert_held()
-                            _soperator_upgrade_release_jobs(
-                                namespace,
-                                (job_id,),
-                                kube_context=kube_context,
-                                extra_env=kube_env,
-                            )
-                            after = _campaign_job_control_record(job_id)
-                            if after is not None and after.identity_sha256 != identity:
-                                raise RuntimeError(
-                                    "recovery-required: Slurm job identity changed during "
-                                    f"maintenance restoration: {job_id}"
-                                )
-                            if after is not None and slurm_job_control_is_held(after):
-                                raise RuntimeError(
-                                    "recovery-required: Slurm did not release the exact "
-                                    f"operation-owned job hold: {job_id}"
-                                )
-                            live = after
-                            disposition = "released"
-                        else:
-                            disposition = "satisfied-external"
-                        _record(
-                            "maintenance-held-job-release-applied",
-                            job_id=job_id,
-                            identity_sha256=identity,
-                            disposition=disposition,
-                            job_control_postimages=(
-                                [live.as_payload()] if live is not None else []
-                            ),
-                        )
-                        released_job_count += 1
-                        if live is None:
-                            tombstone_count += 1
-
-                    reservation_name = _non_empty_text(summary.get("reservationName"))
-                    if not reservation_name:
-                        raise RuntimeError(
-                            "recovery-required: campaign maintenance reservation is missing"
-                        )
-                    reservation_deleted = _has_event(
-                        "maintenance-reservation-delete-applied",
-                        reservation_name=reservation_name,
-                    )
-                    live_reservations = _soperator_upgrade_reservation_names(
-                        namespace=namespace,
-                        extra_env=kube_env,
-                    )
-                    if reservation_deleted and reservation_name in live_reservations:
-                        raise RuntimeError(
-                            "recovery-required: the operation-owned maintenance reservation "
-                            "was recreated after its durable deletion"
-                        )
-                    if not reservation_deleted:
-                        if not _has_event(
-                            "maintenance-reservation-delete-intent",
-                            reservation_name=reservation_name,
-                        ):
-                            _record(
-                                "maintenance-reservation-delete-intent",
-                                reservation_name=reservation_name,
-                            )
-                        campaign_lease.assert_held()
-                        if intent.requires_fresh_checks:
-                            _campaign_checks().verify_barrier()
-                        _soperator_upgrade_delete_maintenance_reservation(
-                            namespace=namespace,
-                            reservation_name=reservation_name,
-                            extra_env=kube_env,
-                        )
-                        _record(
-                            "maintenance-reservation-delete-applied",
-                            reservation_name=reservation_name,
-                        )
-
-                    if intent.requires_fresh_checks:
-                        _campaign_checks().finish_admission()
-                        restored_partition_count = len(records)
-                    else:
-                        restored_partition_count = 0
-                        for record in records:
-                            fingerprint = record.previous_record_fingerprint
-                            restored = _has_event(
-                                "maintenance-partition-restore-applied",
-                                partition=record.partition,
-                                previous_record_fingerprint=fingerprint,
-                            )
-                            if not restored:
-                                if not _has_event(
-                                    "maintenance-partition-restore-intent",
-                                    partition=record.partition,
-                                    previous_record_fingerprint=fingerprint,
-                                ):
-                                    _record(
-                                        "maintenance-partition-restore-intent",
-                                        partition=record.partition,
-                                        previous_record_fingerprint=fingerprint,
-                                    )
-                                campaign_lease.assert_held()
-                                _soperator_upgrade_restore_slurm_partitions(
-                                    namespace=namespace,
-                                    records=(record,),
-                                    kube_context=kube_context,
-                                    extra_env=kube_env,
-                                    allow_topology_migration=True,
-                                )
-                                _record(
-                                    "maintenance-partition-restore-applied",
-                                    partition=record.partition,
-                                    previous_record_fingerprint=fingerprint,
-                                )
-                            live_partition = _soperator_upgrade_partition_state(
-                                namespace=namespace,
-                                partition=record.partition,
-                                kube_context=kube_context,
-                                extra_env=kube_env,
-                            )
-                            if not _soperator_upgrade_partition_migration_observation_matches(
-                                live_partition,
-                                record=record.previous_record,
-                                fingerprint=record.previous_record_fingerprint,
-                            ):
-                                raise RuntimeError(
-                                    "recovery-required: Slurm partition restoration postcondition "
-                                    f"is not exact for {record.partition}"
-                                )
-                            restored_partition_count += 1
-
-                    if reservation_name in _soperator_upgrade_reservation_names(
-                        namespace=namespace,
-                        extra_env=kube_env,
-                    ):
-                        raise RuntimeError(
-                            "recovery-required: the operation-owned maintenance reservation "
-                            "remains after restoration"
-                        )
-                    return {
-                        "partitionCount": restored_partition_count,
-                        "releasedHeldJobCount": released_job_count,
-                        "heldJobTombstoneCount": tombstone_count,
-                        "reservationDeleted": reservation_name,
-                    }
-
-                print_release_plan_once = single_use_soperator_upgrade_plan_printer(
-                    _print_upgrade_plan_lines
-                )
-
-                def _release_segment() -> CampaignSegmentResult:
-                    _assert_campaign_authority()
-                    _run_common_soperator_release_upgrade(
-                        config_path=config_path,
-                        source_payload=source_payload,
-                        target=target,
-                        ownership=intent.ownership,
-                        target_selector=intent.target_release,
-                        target_snapshot_sha256=intent.checks_release_snapshot_sha256,
-                        checks_policy_proposal=intent.checks_policy_proposal,
-                        dry_run=False,
-                        interactive=False,
-                        job_policy=intent.job_policy,
-                        cancel_job_ids=intent.cancel_job_ids,
-                        requeue_job_ids=intent.requeue_job_ids,
-                        job_wait_timeout=intent.job_wait_timeout,
-                        job_refresh_interval=intent.job_refresh_interval,
-                        supervise=False,
-                        external_scheduling_evidence={
-                            "mode": "parent-campaign",
-                            "campaignIntentSha256": intent.digest,
-                            "maintenanceOwner": "soperator-upgrade",
-                            "requiresFreshChecks": intent.requires_fresh_checks,
-                            "reservationName": _soperator_upgrade_maintenance_reservation_name(
-                                intent.digest.removeprefix("sha256:")[:16]
-                            ),
-                        },
-                        external_controller_spool_migration_store=(campaign_controller_spool_store),
-                        config_transition_store=campaign_config_store,
-                        config_transition_owner="soperator-upgrade",
-                        config_transition_stage="release-admission",
-                        assert_parent_authority=_assert_campaign_authority,
-                        upgrade_progress=upgrade_progress,
-                        print_plan=print_release_plan_once,
-                    )
-                    return CampaignSegmentResult(
-                        evidence={
-                            "release": intent.target_release,
-                            "jailCudaVersion": intent.target_jail_cuda_version,
-                        },
-                        irreversible_frontier=f"soperator-release:{intent.target_release}",
-                    )
-
-                def _terraform_managed_stage(version: str) -> Mapping[str, object]:
-                    rows = {
-                        row.group_key: row
-                        for row in intent.compatibility_rows
-                        if row.kubernetes_version == version
-                    }
-
-                    def _apply_group(
-                        group: FrozenNodeGroupTarget,
-                        row: FrozenCompatibilityRow,
-                    ) -> None:
-                        _assert_campaign_authority()
-                        _run_node_template_upgrade_suboperation(
-                            config_path=config_path,
-                            target_selector=f"infra:mk8s@{intent.target_ref}",
-                            to_version=version,
-                            to_os=row.os,
-                            to_gpu_stack_preset=row.drivers_preset,
-                            node_group=group.key,
-                            disruption_policy=intent.node_group_strategy,
-                            drain_timeout=intent.drain_timeout,
-                            strategy_max_surge_count=resolved_max_surge,
-                            config_transition_store=campaign_config_store,
-                            config_transition_owner="soperator-upgrade",
-                            config_transition_prefix=f"node-group:{group.key}:template:{version}",
-                        )
-
-                    apply_frozen_node_group_rows(
-                        node_groups=intent.node_groups,
-                        rows=rows,
-                        compatibility_lookup=lambda group, _row: executor.compatibility_choices(
-                            target_version=version,
-                            platform=group.platform,
-                        ),
-                        apply_group=_apply_group,
-                    )
-                    return {"backend": "terraform", "kubernetesVersion": version}
-
-                def _onboarded_provider_api_stage(version: str) -> Mapping[str, object]:
-                    rows = {
-                        row.group_key: row
-                        for row in intent.compatibility_rows
-                        if row.kubernetes_version == version
-                    }
-                    _assert_campaign_authority()
-                    executor.update_control_plane_version(
-                        cluster_id=cluster_id,
-                        version=version,
-                    )
-                    executor.wait_cluster_version(cluster_id=cluster_id, version=version)
-
-                    def _apply_group(
-                        group: FrozenNodeGroupTarget,
-                        row: FrozenCompatibilityRow,
-                    ) -> None:
-                        _assert_campaign_authority()
-                        executor.update_node_group_template(
-                            cluster_id=cluster_id,
-                            node_group_id=group.provider_id,
-                            version=version,
-                            os=row.os,
-                            drivers_preset=(row.drivers_preset if group.gpu else None),
-                            strategy_policy=intent.node_group_strategy,
-                            strategy_max_surge_count=resolved_max_surge,
-                            drain_timeout=resolved_drain_timeout,
-                        )
-
-                    apply_frozen_node_group_rows(
-                        node_groups=intent.node_groups,
-                        rows=rows,
-                        compatibility_lookup=lambda group, _row: executor.compatibility_choices(
-                            target_version=version,
-                            platform=group.platform,
-                        ),
-                        apply_group=_apply_group,
-                    )
-                    return {"backend": "provider-api", "kubernetesVersion": version}
-
-                infrastructure_backend = (
-                    TerraformManagedUpgradeBackend(
-                        authority=infrastructure_authority,
-                        apply_stage=_terraform_managed_stage,
-                    )
-                    if intent.backend == "terraform"
-                    else OnboardedProviderApiUpgradeBackend(
-                        authority=infrastructure_authority,
-                        apply_stage=_onboarded_provider_api_stage,
-                    )
-                )
-
-                def _assert_frozen_provider_compatibility(version: str) -> None:
-                    rows = {
-                        row.group_key: row
-                        for row in intent.compatibility_rows
-                        if row.kubernetes_version == version
-                    }
-                    for group in intent.node_groups:
-                        row = rows[group.key]
-                        assert_frozen_compatibility_row_supported(
-                            group=group,
-                            row=row,
-                            choices=executor.compatibility_choices(
-                                target_version=version,
-                                platform=group.platform,
-                            ),
-                        )
-
-                def _provider_node_template_segment(version: str) -> CampaignSegmentResult:
-                    with upgrade_progress.phase(
-                        f"provider-upgrade-{version}",
-                        f"Applying Kubernetes {version} and frozen node-group templates",
-                        success=(f"Kubernetes {version} and frozen node-group templates applied"),
-                    ):
-                        _assert_campaign_authority()
-                        _assert_frozen_provider_compatibility(version)
-                        evidence = infrastructure_backend.apply_version(version)
-                    return CampaignSegmentResult(
-                        evidence=dict(evidence),
-                        irreversible_frontier=f"mk8s-requested:{version}",
-                    )
-
-                def _runtime_readiness(version: str) -> CampaignSegmentResult:
-                    with upgrade_progress.sequence() as readiness_progress:
-                        readiness_progress.start(
-                            f"runtime-readiness-{version}",
-                            f"Checking Kubernetes {version} control-plane readiness",
-                        )
-                        assert_campaign_node_group_inventory(
-                            intent,
-                            tuple(
-                                _non_empty_text(
-                                    getattr(getattr(group, "metadata", None), "id", None)
-                                )
-                                for group in executor.list_node_groups(cluster_id)
-                            ),
-                        )
-                        executor.wait_cluster_version(cluster_id=cluster_id, version=version)
-                        rows = {
-                            row.group_key: row
-                            for row in intent.compatibility_rows
-                            if row.kubernetes_version == version
-                        }
-                        node_group_evidence: list[dict[str, object]] = []
-                        total_groups = len(intent.node_groups)
-                        for index, group in enumerate(intent.node_groups, start=1):
-                            readiness_progress.update(
-                                f"Checking node group {group.key} at Kubernetes {version}",
-                                current=index,
-                                total=total_groups,
-                            )
-                            row = rows[group.key]
-                            observation = executor.wait_node_group_node_template_adaptive(
-                                cluster_id=cluster_id,
-                                node_group_id=group.provider_id,
-                                version=version,
-                                os=row.os,
-                                drivers_preset=(row.drivers_preset if group.gpu else None),
-                            )
-                            if (
-                                observation.capacity_mode == "zero-capacity"
-                                and group.gpu
-                                and intent.zero_size_gpu_validation == "require-capacity"
-                            ):
-                                raise RuntimeError(
-                                    f"GPU node group {group.key!r} is at zero desired capacity, "
-                                    "but this recovered campaign requires live capacity proof."
-                                )
-                            node_group_evidence.append(
-                                {
-                                    "group": group.key,
-                                    "providerId": group.provider_id,
-                                    "providerName": group.provider_name,
-                                    "gpu": group.gpu,
-                                    "capacityMode": observation.capacity_mode,
-                                    "targetNodeCount": observation.target_node_count,
-                                    "readyNodeCount": observation.ready_node_count,
-                                    "nodeCount": observation.node_count,
-                                    "outdatedNodeCount": observation.outdated_node_count,
-                                    "templateVerified": True,
-                                    "runtimeEvidence": (
-                                        "not-applicable-zero-capacity"
-                                        if group.gpu
-                                        and observation.capacity_mode == "zero-capacity"
-                                        else "required"
-                                        if group.gpu
-                                        else "not-applicable-cpu"
-                                    ),
-                                }
-                            )
-                        readiness_progress.success(
-                            f"Kubernetes {version} runtime ready — {total_groups} node groups"
-                        )
-                    zero_size_groups = [
-                        str(item["group"])
-                        for item in node_group_evidence
-                        if item["capacityMode"] == "zero-capacity"
-                    ]
-                    return CampaignSegmentResult(
-                        evidence={
-                            "kubernetesVersion": version,
-                            "readyNodeGroups": len(intent.node_groups) - len(zero_size_groups),
-                            "zeroSizeDesiredStateOnly": zero_size_groups,
-                            "nodeGroups": node_group_evidence,
-                        }
-                    )
-
-                def _final_readiness() -> CampaignSegmentResult:
-                    readiness = _runtime_readiness(intent.target_kubernetes_version)
-                    target_flux_paths = _paths_for_target_flux_dir(paths, selected_target)
-
-                    def _refresh_sources() -> Any:
-                        with upgrade_progress.phase(
-                            "final-source-refresh",
-                            "Refreshing immutable Soperator release sources",
-                            success="Immutable Soperator release sources refreshed",
-                        ):
-                            _assert_campaign_authority()
-                            return prepare_soperator_release_sources(
-                                target_flux_paths,
-                                extra_env=kube_env,
-                            )
-
-                    def _prove_release_graph() -> Any:
-                        with upgrade_progress.phase(
-                            "final-release-graph",
-                            "Proving the final Soperator release graph",
-                            success="Final Soperator release graph proved Ready",
-                        ) as graph_progress:
-                            _assert_campaign_authority()
-                            live_release = _live_soperator_release_for_reconcile(env=kube_env)
-                            if live_release != intent.target_release:
-                                raise RuntimeError(
-                                    "Soperator final readiness observed release "
-                                    f"{live_release or 'unknown'}, expected "
-                                    f"{intent.target_release}."
-                                )
-                            return wait_for_soperator_release_graph(
-                                target_flux_paths,
-                                extra_env=kube_env,
-                                emit=graph_progress.update,
-                                include_active_checks=not intent.requires_fresh_checks,
-                            )
-
-                    def _freeze_capacity() -> Mapping[str, Mapping[str, object]]:
-                        with upgrade_progress.phase(
-                            "final-capacity",
-                            "Freezing final node-group capacity evidence",
-                            success="Final node-group capacity evidence frozen",
-                        ):
-                            return final_node_group_capacity_snapshot(
-                                intent=intent,
-                                live_node_groups=tuple(executor.list_node_groups(cluster_id)),
-                            )
-
-                    def _validate_runtime(
-                        capacity: Mapping[str, Mapping[str, object]],
-                    ) -> tuple[object, ...]:
-                        active_gpu_group_keys = tuple(
-                            group.key
-                            for group in intent.node_groups
-                            if group.gpu and capacity[group.key]["capacityMode"] == "ready-capacity"
-                        )
-                        zero_gpu_groups = tuple(
-                            group.key
-                            for group in intent.node_groups
-                            if group.gpu and capacity[group.key]["capacityMode"] == "zero-capacity"
-                        )
-                        skipped_validation_kinds = (
-                            {"mk8s_gpu_visibility"}
-                            if any(group.gpu for group in intent.node_groups)
-                            and not active_gpu_group_keys
-                            else set()
-                        )
-                        active_gpu_groups = {
-                            group.key: group.provider_id
-                            for group in intent.node_groups
-                            if group.gpu and group.key in active_gpu_group_keys
-                        }
-                        validation_outcomes = _run_target_upgrade_validations(
-                            config_path=config_path,
-                            target_ref=intent.target_ref,
-                            kube_env=kube_env,
-                            skip_kinds=skipped_validation_kinds,
-                            gpu_node_groups=active_gpu_groups,
-                        )
-                        gpu_validation_reports = {
-                            group: {
-                                "reportFile": _non_empty_text(outcome.get("reportFile")),
-                                "reportSha256": _non_empty_text(outcome.get("reportSha256")),
-                                "selectedNodeCount": outcome.get("selectedNodeCount"),
-                                "passedNodeCount": outcome.get("passedNodeCount"),
-                            }
-                            for group in active_gpu_group_keys
-                            for outcome in validation_outcomes
-                            if outcome.get("group") == group
-                        }
-                        return (
-                            validation_outcomes,
-                            active_gpu_group_keys,
-                            zero_gpu_groups,
-                            skipped_validation_kinds,
-                            gpu_validation_reports,
-                        )
-
-                    (
-                        source_receipts,
-                        validation_result,
-                        post_validation_capacity,
-                    ) = run_final_runtime_validation_boundary(
-                        refresh_sources=_refresh_sources,
-                        prove_release_graph=_prove_release_graph,
-                        freeze_capacity=_freeze_capacity,
-                        validate_runtime=_validate_runtime,
-                    )
-                    checks_evidence: Mapping[str, Any] = {"status": "unchanged"}
-                    if intent.requires_fresh_checks:
-                        current = load_campaign_receipt(receipt_path)
-                        if current is None:
-                            raise RuntimeError("campaign checks receipt disappeared")
-                        checks_evidence = _campaign_checks().finalize(
-                            already_released=current.maintenance == "restored"
-                        )
-                        if _freeze_capacity() != post_validation_capacity:
-                            raise RuntimeError("campaign capacity changed during check acceptance")
-                        wait_for_soperator_release_graph(target_flux_paths, extra_env=kube_env)
-                    if not isinstance(validation_result, tuple) or len(validation_result) != 5:
-                        raise RuntimeError(
-                            "Soperator final runtime validation returned invalid evidence"
-                        )
-                    (
-                        validation_outcomes,
-                        active_gpu_group_keys,
-                        zero_gpu_groups,
-                        skipped_validation_kinds,
-                        gpu_validation_reports,
-                    ) = validation_result
-                    validation_kinds = tuple(
-                        _non_empty_text(outcome.get("kind"))
-                        for outcome in validation_outcomes
-                        if isinstance(outcome, Mapping) and _non_empty_text(outcome.get("kind"))
-                    )
-                    return CampaignSegmentResult(
-                        evidence={
-                            **dict(readiness.evidence),
-                            "soperatorRelease": intent.target_release,
-                            "jailCudaVersion": intent.target_jail_cuda_version,
-                            "validationKinds": validation_kinds,
-                            "validationOutcomes": validation_outcomes,
-                            "skippedValidationKinds": tuple(sorted(skipped_validation_kinds)),
-                            "gpuRuntimeEvidence": {
-                                **{group: "passed" for group in active_gpu_group_keys},
-                                **{
-                                    group: "not-applicable-zero-capacity"
-                                    for group in zero_gpu_groups
-                                },
-                            },
-                            "gpuRuntimeValidationReports": gpu_validation_reports,
-                            "finalCapacitySnapshot": post_validation_capacity,
-                            "releaseSourceCount": len(source_receipts),
-                            "releaseGraphReproved": True,
-                            "upstreamChecks": dict(checks_evidence),
-                            "cudaLayers": {
-                                "providerGpuStack": [
-                                    group.target_drivers_preset
-                                    for group in intent.node_groups
-                                    if group.target_drivers_preset
-                                ],
-                                "jailCuda": intent.target_jail_cuda_version,
-                            },
-                        }
-                    )
-
-                segment_executors: dict[str, Callable[[], CampaignSegmentResult]] = {
-                    "soperator-release": _release_segment,
-                    "final-readiness": _final_readiness,
-                }
-                for segment_name in intent.segments:
-                    kind, separator, version = segment_name.partition(":")
-                    if not separator:
-                        continue
-                    if kind in {"mk8s-hop", "node-templates"}:
-                        segment_executors[segment_name] = partial(
-                            _provider_node_template_segment, version
-                        )
-                    elif kind == "runtime-readiness":
-                        segment_executors[segment_name] = partial(_runtime_readiness, version)
-                parent_lease_token = _SOPERATOR_PARENT_OPERATION_LEASE.set(campaign_lease)
-                try:
-
-                    def _assert_campaign_fence() -> None:
-                        _assert_campaign_authority()
-
-                    def _run_parent_campaign_once() -> Any:
-                        try:
-                            return run_campaign(
-                                path=receipt_path,
-                                intent=intent,
-                                segment_executors=segment_executors,
-                                enter_maintenance=_enter_maintenance,
-                                restore_maintenance=_restore_maintenance,
-                                assert_fence=_assert_campaign_fence,
-                                verify_maintenance=(
-                                    (lambda segment: _campaign_checks().before_segment(segment))
-                                    if intent.requires_fresh_checks
-                                    else None
-                                ),
-                            )
-                        except Exception as exc:
-                            disposition = _soperator_upgrade_failure_disposition(
-                                "full-stack-campaign",
-                                exc,
-                            )
-                            if disposition is SoperatorFailureDisposition.TERMINAL:
-                                record_campaign_supervisor_state(
-                                    path=receipt_path,
-                                    intent=intent,
-                                    state="terminal-failed",
-                                    attempt=0,
-                                    disposition=disposition.value,
-                                    failure_type=type(exc).__name__,
-                                )
-                            raise
-
-                    def _report_parent_retry(
-                        disposition: SoperatorFailureDisposition,
-                        attempt: int,
-                        exc: BaseException,
-                    ) -> None:
-                        current = load_campaign_receipt(receipt_path)
-                        current_segment = ""
-                        maintenance_state = ""
-                        if current is not None:
-                            current_segment = _non_empty_text(
-                                current.supervisor.get("current_segment")
-                            )
-                            maintenance_state = current.maintenance
-                        record_campaign_supervisor_state(
-                            path=receipt_path,
-                            intent=intent,
-                            state="retrying",
-                            attempt=attempt,
-                            disposition=disposition.value,
-                            current_segment=current_segment,
-                            maintenance_state=maintenance_state,
-                            failure_type=type(exc).__name__,
-                        )
-
-                    def _parent_retry_wait(
-                        disposition: SoperatorFailureDisposition,
-                        attempt: int,
-                        exc: BaseException,
-                        delay: float,
-                    ) -> AbstractContextManager[None]:
-                        current = load_campaign_receipt(receipt_path)
-                        current_segment = ""
-                        if current is not None:
-                            current_segment = _non_empty_text(
-                                current.supervisor.get("current_segment")
-                            )
-                        description = (
-                            "Soperator full-stack campaign remains active "
-                            f"({disposition.value}, attempt {attempt}, "
-                            f"segment {current_segment or 'admission'}); gate: "
-                            f"{escape(_soperator_upgrade_supervisor_failure_detail(exc))}; "
-                            f"waiting {delay:.1f}s before retry."
-                        )
-                        return upgrade_progress.retry_wait(
-                            "full-stack-retry-wait",
-                            description,
-                            success=f"Retry delay complete; starting attempt {attempt + 1}",
-                        )
-
-                    completed = supervise_committed_soperator_upgrade(
-                        _run_parent_campaign_once,
-                        classify_failure=soperator_failure_disposition,
-                        on_retry=_report_parent_retry,
-                        retry_wait=_parent_retry_wait,
-                    )
-                    campaign_lease.assert_held()
-                    accept_ordinary_app_baseline(
-                        paths,
-                        identities={
-                            intent.target_ref: {
-                                "cluster_id": intent.cluster_id,
-                                "kubernetes_uid": intent.kubernetes_uid,
-                            }
-                        },
-                    )
-                finally:
-                    _SOPERATOR_PARENT_OPERATION_LEASE.reset(parent_lease_token)
-            console.print(
-                "[green]Soperator full-stack upgrade completed[/green]: "
-                f"{intent.target_ref} -> release {intent.target_release}, "
-                f"Kubernetes {intent.target_kubernetes_version}; "
-                f"maintenance {completed.maintenance}."
+                    for group in intent.node_groups
+                },
+            }
+        targets = source_payload.setdefault("deploy", {}).setdefault("targets", [])
+        target_settings = next(
+            (row for row in targets if row.get("instance_id") == intent.target_ref), None
+        )
+        if target_settings is None:
+            target_settings = {"instance_id": intent.target_ref}
+            targets.append(target_settings)
+        target_settings["soperator_rollout"] = {
+            "strategy": intent.node_group_strategy,
+            "max_surge_count": intent.strategy_max_surge_count,
+            "drain_timeout": intent.drain_timeout,
+        }
+        frozen = freeze_soperator_release(
+            intent.target_release,
+            target_ref=intent.target_ref,
+            snapshot_sha256=intent.checks_release_snapshot_sha256,
+        )
+        with SoperatorOperationLocalLock(config_path.parent / ".nebius-cxcli" / "config.lock"):
+            _write_runtime_payload_config(
+                config_path, source_payload, expected_bytes=source_preimage
             )
-    except typer.Exit:
-        raise
-    except Exception as exc:  # pragma: no cover - CLI surface
+        with use_frozen_soperator_release(frozen):
+            render_command(config_path=config_path, force=True)
+        deploy_command(
+            config_path=config_path,
+            job_policy=intent.job_policy,
+            cancel_job=list(intent.cancel_job_ids),
+            requeue_job=list(intent.requeue_job_ids),
+            job_wait_timeout=intent.job_wait_timeout,
+            job_refresh_interval=intent.job_refresh_interval,
+        )
+    except (RuntimeError, ValueError) as exc:
         _exit_with_error(exc)
-    finally:
-        if sdk is not None:
-            with suppress(Exception):
-                sdk.sync_close()
 
 
 def _soperator_upgrade_flux_bundle_sha256(paths: ProjectPaths) -> str:
@@ -17338,6 +13288,8 @@ class SoperatorRootfsAdmissionPreflight:
     target_storage_class_name: str
     target_provisioner: str
     target_capacity: str
+    storage_authority: Mapping[str, Any]
+    directory_identities: tuple[Mapping[str, str], ...]
 
     def _identity_payload(self) -> dict[str, object]:
         return {
@@ -17345,6 +13297,8 @@ class SoperatorRootfsAdmissionPreflight:
             "mode": "target-wins",
             "targetImage": self.target_image,
             "persistentPaths": list(self.persistent_paths),
+            "storageAuthority": copy.deepcopy(dict(self.storage_authority)),
+            "directoryIdentities": list(self.directory_identities),
             "decision": {
                 "targetWinsOutsidePersistentPaths": True,
                 "protectedPathCount": len(self.persistent_paths),
@@ -17372,12 +13326,17 @@ class SoperatorRootfsAdmissionPreflight:
         binding = payload.get("binding")
         persistent_paths = payload.get("persistentPaths")
         decision = payload.get("decision")
+        storage_authority = payload.get("storageAuthority")
+        directory_identities = payload.get("directoryIdentities")
         if (
-            payload.get("schema") != "nebius-cxcli.soperator-rootfs-admission.v1"
+            payload.get("schema") != "nebius-cxcli.soperator-rootfs-admission.v2"
             or payload.get("mode") != "target-wins"
             or not isinstance(binding, Mapping)
             or not isinstance(persistent_paths, list)
             or not isinstance(decision, Mapping)
+            or not isinstance(storage_authority, Mapping)
+            or not isinstance(directory_identities, list)
+            or not all(isinstance(row, Mapping) for row in directory_identities)
             or decision.get("targetWinsOutsidePersistentPaths") is not True
             or decision.get("protectedPathCount") != len(persistent_paths)
         ):
@@ -17392,6 +13351,8 @@ class SoperatorRootfsAdmissionPreflight:
             target_provisioner=str(binding.get("targetProvisioner") or ""),
             target_capacity=str(binding.get("targetCapacity") or ""),
             persistent_paths=tuple(str(item) for item in persistent_paths),
+            storage_authority=storage_authority,
+            directory_identities=directory_identities,
             assert_authority=None,
         )
         if preflight.as_payload() != dict(payload):
@@ -17458,6 +13419,8 @@ def _build_soperator_rootfs_admission(
     target_provisioner: str,
     target_capacity: str,
     persistent_paths: Sequence[str],
+    storage_authority: Mapping[str, Any],
+    directory_identities: Sequence[Mapping[str, str]],
     assert_authority: Callable[[], object] | None,
 ) -> SoperatorRootfsAdmissionPreflight:
     """Seal target-wins rootfs authority without a scratch PVC or customer write."""
@@ -17500,10 +13463,34 @@ def _build_soperator_rootfs_admission(
         or not target_capacity
     ):
         raise RuntimeError("rootfs admission passive PVC storage contract is unsupported")
+    from .soperator_jail_protection import validate_storage_authority
+
+    physical_authority = validate_storage_authority(storage_authority, target_pvc=target_pvc_name)
+    actual_paths = {row["mount_path"] for row in physical_authority["persistentMounts"]}
+    if actual_paths != set(normalized_paths):
+        raise RuntimeError("rootfs admission persistent bindings do not match selected paths")
+    optional_paths = set(normalized_paths) - set(JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS)
+    identities = tuple(copy.deepcopy(dict(row)) for row in directory_identities)
+    if {row.get("mountPath") for row in identities} != optional_paths or len(identities) != len(
+        optional_paths
+    ):
+        raise RuntimeError("rootfs admission protected directory identities are incomplete")
+    backing = {
+        row["mount_path"]: row["local_path"] for row in physical_authority["persistentMounts"]
+    }
+    for row in identities:
+        if (
+            set(row) != {"mountPath", "localPath", "inode"}
+            or not str(row["inode"]).isdecimal()
+            or row["localPath"] != backing[row["mountPath"]]
+        ):
+            raise RuntimeError("rootfs admission protected directory identity changed")
     return SoperatorRootfsAdmissionPreflight(
-        schema="nebius-cxcli.soperator-rootfs-admission.v1",
+        schema="nebius-cxcli.soperator-rootfs-admission.v2",
         target_image=target_image,
         persistent_paths=normalized_paths,
+        storage_authority=physical_authority,
+        directory_identities=identities,
         live_pvc_name=live_pvc_name,
         live_pvc_uid=live_pvc_uid,
         target_pvc_name=target_pvc_name,
@@ -17520,6 +13507,7 @@ def _render_soperator_upgrade_admission(
     config_path: Path,
     paths: ProjectPaths,
     require_soperator_flux: bool = True,
+    preserve_ordinary: bool = True,
 ) -> SoperatorUpgradeAdmissionStage:
     """Render the prospective in-cluster bundle transactionally before admission."""
 
@@ -17565,7 +13553,28 @@ def _render_soperator_upgrade_admission(
             output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
             manifest_paths=paths,
         )
-        preserve_ordinary_app_generation(paths, staged_paths)
+        if preserve_ordinary:
+            preserve_ordinary_app_generation(paths, staged_paths)
+        from .compatibility_matrix import digest as compatibility_digest
+
+        staged_manifest_path = manifest_path_for_generated_dir(staged_paths.generated_dir)
+        staged_manifest = json.loads(staged_manifest_path.read_text())
+        if manifest_path_for_generated_dir(paths.generated_dir).is_file():
+            from .compatibility_execution import preserve_compatibility_observation
+            from .deployment_state import _read_regular
+
+            previous_manifest = json.loads(
+                _read_regular(manifest_path_for_generated_dir(paths.generated_dir))
+            )
+            staged_manifest["render"]["compatibility"] = preserve_compatibility_observation(
+                staged_manifest["render"]["compatibility"],
+                previous_manifest["render"]["compatibility"],
+            )
+        staged_manifest["render"]["application_inputs"] = component_output_values
+        staged_manifest["render"]["source_config_sha256"] = compatibility_digest(
+            yaml.safe_load(proposed_config_text)
+        )
+        _write_text_atomic(staged_manifest_path, json.dumps(staged_manifest, indent=2) + "\n")
         generation = build_project_generation_plan(
             final_paths=paths,
             staged_paths=staged_paths,
@@ -17584,7 +13593,7 @@ def _render_soperator_upgrade_admission(
             )
         )
         return SoperatorUpgradeAdmissionStage(
-            admitted_config=admitted_config,
+            admitted_config=runtime_config_from_manifest(staged_manifest),
             staged_paths=staged_paths,
             rendered_flux_sha256=rendered_flux_sha256,
             project_generation_sha256=generation.sha256,
@@ -18066,6 +14075,8 @@ def _soperator_rootfs_admission_stage_evidence(
         "admissionReceiptSha256": preflight.receipt_sha256,
         "targetImage": preflight.target_image,
         "persistentPaths": list(preflight.persistent_paths),
+        "storageAuthority": dict(preflight.storage_authority),
+        "directoryIdentities": list(preflight.directory_identities),
         "livePvcName": preflight.live_pvc_name,
         "livePvcUid": preflight.live_pvc_uid,
         "targetPvcName": preflight.target_pvc_name,
@@ -18086,6 +14097,7 @@ def _soperator_upgrade_sealed_rootfs_materialization(
     expected_target_release: str,
     expected_infrastructure_sha256: str,
     preflight: SoperatorRootfsAdmissionPreflight,
+    profiling_settings_sha256: str = "",
 ) -> dict[str, object]:
     """Validate the sealed predecessor rootfs journal without launching a Job."""
 
@@ -18113,6 +14125,11 @@ def _soperator_upgrade_sealed_rootfs_materialization(
         "rootfs-passive-target-inventory",
     }
     allowed = required | {"rootfs-passive-target-recycle"}
+    if profiling_settings_sha256:
+        from .nsight_profiling import STAGES
+
+        required |= {*("rootfs-" + stage for stage in STAGES), "rootfs-nsight-customization"}
+        allowed |= required
     if (
         not isinstance(stages, Mapping)
         or not required <= set(stages)
@@ -18211,6 +14228,9 @@ def _soperator_upgrade_sealed_rootfs_materialization(
         or materialization.get("slot") != preflight.target_slot
         or materialization.get("pvcName") != preflight.target_pvc_name
         or materialization.get("pvcUid") != target_pvc_uid
+        or not identity_evidence.get("pvUid")
+        or materialization.get("pvUid") != identity_evidence.get("pvUid")
+        or materialization.get("admissionReceiptSha256") != preflight.receipt_sha256
         or inventory_evidence.get("manifestSha256") != materialization.get("manifestSha256")
         or populate_evidence.get("jobUid") != materialization.get("populateJobUid")
         or populate_evidence.get("admittedWorkloadSha256")
@@ -18223,13 +14243,25 @@ def _soperator_upgrade_sealed_rootfs_materialization(
         raise SoperatorSafetyPauseError(
             "The predecessor Soperator rootfs materialization receipt changed"
         )
+    from .nsight_profiling import sealed_customization
+
+    customization = sealed_customization(
+        stages,
+        settings_sha256=profiling_settings_sha256,
+        generation=expected_operation_spec_sha256,
+        pvc_uid=target_pvc_uid,
+        pv_uid=str(materialization["pvUid"]),
+    )
     return {
         "status": "verified-predecessor-materialization",
+        **({"profiling": customization} if customization is not None else {}),
         "targetManifestSha256": materialization["manifestSha256"],
         "admissionReceiptSha256": preflight.receipt_sha256,
         "materializationReceiptSha256": materialization["receiptSha256"],
         "targetSlot": preflight.target_slot,
+        "targetPvcName": preflight.target_pvc_name,
         "targetPvcUid": target_pvc_uid,
+        "targetPvUid": materialization["pvUid"],
     }
 
 
@@ -18246,11 +14278,17 @@ def _soperator_upgrade_sealed_rootfs_jobs_are_complete(
     if not isinstance(stages, Mapping):
         raise SoperatorSafetyPauseError("The predecessor rootfs Job evidence is unavailable")
     expected: dict[str, tuple[str, str, str]] = {}
-    for stage_name, purpose in (
+    job_stages = [
         ("rootfs-passive-target-preflight", "inventory"),
         ("rootfs-passive-target-populate", "populate-passive-target"),
         ("rootfs-passive-target-inventory", "inventory"),
-    ):
+    ]
+    job_stages.extend(
+        ("rootfs-nsight-" + action, "profiling-" + action)
+        for action in ("admit", "install", "verify")
+        if "rootfs-nsight-" + action in stages
+    )
+    for stage_name, purpose in job_stages:
         stage = stages.get(stage_name)
         intent = stage.get("intent") if isinstance(stage, Mapping) else None
         evidence = stage.get("evidence") if isinstance(stage, Mapping) else None
@@ -18263,6 +14301,13 @@ def _soperator_upgrade_sealed_rootfs_jobs_are_complete(
         requested = (
             str(intent.get("workloadSha256") or "").strip() if isinstance(intent, Mapping) else ""
         )
+        if stage_name.startswith("rootfs-nsight-"):
+            from .nsight_recovery import validate_chain
+
+            attempt = validate_chain(stage.get("nsight"), completed=True)
+            if uid != attempt["jobUid"] or admitted != attempt["workloadSha256"]:
+                raise SoperatorSafetyPauseError("Nsight final attempt identity changed")
+            requested = protected_workload_identity(attempt["manifest"]).workload_sha256
         if (
             not uid
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", admitted)
@@ -20899,7 +16944,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
             if isinstance(operation_spec, Mapping)
             else ""
         )
-        live_result = subprocess.run(
+        live_result = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -21133,7 +17178,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
         recovery_name_token = hashlib.sha256(
             expected_operation_spec_sha256.encode("utf-8")
         ).hexdigest()[:20]
-        cluster_journal_result = subprocess.run(
+        cluster_journal_result = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -21175,7 +17220,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
             raise SoperatorSafetyPauseError(
                 "The bound Soperator local and cluster recovery journals differ"
             )
-        workload_result = subprocess.run(
+        workload_result = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -21217,7 +17262,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
             expected_pvc_uid=pvc_uid,
             expected_workload_sha256=workload_sha256,
         )
-    target_inventory = subprocess.run(
+    target_inventory = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -21250,7 +17295,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
         raise SoperatorSafetyPauseError(
             "The bound Soperator repair cannot start after target graph creation"
         )
-    target_root = subprocess.run(
+    target_root = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -21280,6 +17325,7 @@ def _soperator_upgrade_bound_adapter_repair_readmission_is_safe(
     return ("mount-receipt-node-scope-v1", "establish-boot-storage-barrier")
 
 
+@prepared_deployment()
 def _run_common_soperator_release_upgrade(
     *,
     config_path: Path,
@@ -21293,7 +17339,12 @@ def _run_common_soperator_release_upgrade(
     requeue_job_ids: Sequence[str],
     job_wait_timeout: str,
     job_refresh_interval: str,
+    prepared: PreparedRelease | None = None,
+    admission_preview: bool = False,
+    generated_context: tuple[Any, ProjectPaths, Mapping[str, Any]] | None = None,
+    desired_state_changed: bool = False,
     checks_policy_proposal: str = "",
+    jail_protection: str = "",
     target_snapshot_sha256: str | None = None,
     interactive: bool = False,
     supervise: bool = True,
@@ -21301,17 +17352,20 @@ def _run_common_soperator_release_upgrade(
     external_controller_spool_migration_store: (
         CampaignControllerSpoolMigrationStore | None
     ) = None,
+    external_native_transition_store: Any | None = None,
     config_transition_store: ConfigTransitionStore | None = None,
     config_transition_owner: str = "",
     config_transition_stage: str = "release-admission",
     assert_parent_authority: Callable[[], SoperatorLeaseAuthority] | None = None,
     upgrade_progress: SoperatorUpgradeProgress | None = None,
     print_plan: Callable[[Sequence[str]], None] = _print_upgrade_plan_lines,
-) -> None:
+) -> PreparedRelease | None:
     """Run an admitted in-place release transition through the common reconciler."""
 
     source_payload = copy.deepcopy(source_payload)
-    generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+    generated_config, paths, manifest = generated_context or _load_deploy_context_readonly(
+        config_path
+    )
     selected_targets = _resolve_selected_deploy_targets(
         manifest,
         requested_target_ref=target.target_ref,
@@ -21349,7 +17403,7 @@ def _run_common_soperator_release_upgrade(
         if not live_release:
             raise RuntimeError(
                 "soperator upgrade requires an existing live Soperator release; "
-                "use soperator install for a fresh managed cluster"
+                "use soperator create, render, and deploy for a fresh managed cluster"
             )
         cluster_id = _non_empty_text(kube_env.get(GRAFANA_TARGET_CLUSTER_ID_ENV))
         kube_context = _non_empty_text(kube_env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV))
@@ -21363,6 +17417,24 @@ def _run_common_soperator_release_upgrade(
         )
         if not kubernetes_uid:
             raise RuntimeError("Soperator upgrade could not read the kube-system namespace UID")
+        from .soperator_release_preparation import assert_scheduling_inputs
+
+        assert_scheduling_inputs(
+            sys.modules[__name__],
+            target_ref=target.target_ref,
+            cluster_id=cluster_id,
+            kubernetes_uid=kubernetes_uid,
+            kube_context=kube_context,
+            extra_env=kube_env,
+            snapshot_sha256=target_snapshot_sha256,
+            policy={
+                "jobPolicy": resolved_policy,
+                "cancelJobIds": sorted(set(cancel_job_ids)),
+                "requeueJobIds": sorted(set(requeue_job_ids)),
+                "waitTimeoutSeconds": wait_timeout_seconds,
+                "refreshIntervalSeconds": refresh_interval_seconds,
+            },
+        )
         active_intent = (
             None
             if dry_run
@@ -21378,7 +17450,14 @@ def _run_common_soperator_release_upgrade(
         )
         recovery_admission_receipt: Mapping[str, object] | None = None
         if active_intent is not None:
-            release_intent, _frozen_snapshot = active_intent
+            release_intent, frozen_snapshot = active_intent
+            if (
+                target_snapshot_sha256 is not None
+                and frozen_snapshot.snapshot_sha256 != target_snapshot_sha256
+            ):
+                raise SoperatorSafetyPauseError(
+                    "parent and child release snapshot identities differ"
+                )
             if (
                 soperator_operation_anchor_status(
                     kube_context=kube_context,
@@ -21409,99 +17488,123 @@ def _run_common_soperator_release_upgrade(
                     "The active Soperator upgrade admission receipt is invalid"
                 )
             recovery_admission_receipt = loaded_admission
-        if active_intent is None:
-            if upgrade_progress is not None:
-                with upgrade_progress.phase(
-                    "release-authority",
-                    f"Re-verifying frozen Soperator release {target_selector}",
-                    success=f"Soperator release {target_selector} authority verified",
-                ) as release_phase:
-                    frozen_target = freeze_soperator_release(
-                        target_selector,
-                        current_release=live_release,
-                        snapshot_sha256=target_snapshot_sha256,
-                        emit=release_phase.update,
-                    )
-            else:
-                frozen_target = freeze_soperator_release(
-                    target_selector,
-                    current_release=live_release,
-                    snapshot_sha256=target_snapshot_sha256,
+        preparation_binding = hashlib.sha256(
+            json.dumps(
+                {
+                    "payload": source_payload,
+                    "manifest": manifest,
+                    "target": target.selector,
+                    "ownership": ownership,
+                    "selector": target_selector,
+                    "snapshot": target_snapshot_sha256,
+                    "changed": desired_state_changed,
+                    "checks": checks_policy_proposal,
+                    "jail": jail_protection,
+                    "cluster": cluster_id,
+                    "uid": kubernetes_uid,
+                    "source": live_release,
+                    "policy": resolved_policy,
+                    "cancel": list(cancel_job_ids),
+                    "requeue": list(requeue_job_ids),
+                    "wait": wait_timeout_seconds,
+                    "refresh": refresh_interval_seconds,
+                    "freshChecks": bool(
+                        external_scheduling_evidence
+                        and external_scheduling_evidence.get("requiresFreshChecks")
+                    ),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        from .soperator_release_preparation import prepare_release_candidate
+
+        if active_intent is None and prepared is not None:
+            if prepared.binding != preparation_binding:
+                raise SoperatorSafetyPauseError(
+                    "Soperator inputs or live identity changed after admission"
                 )
-            operation_source_release = live_release
-            _source_metadata, source_release_receipt, source_contract, source_capability_sha = (
-                inspect_soperator_release_contract(live_release)
-            )
+            prepared_candidate = prepared
         else:
-            release_intent, frozen_snapshot = active_intent
-            frozen_target = frozen_soperator_release_from_snapshot(frozen_snapshot)
-            operation_source_release = release_intent.source_release
-            _source_metadata, source_release_receipt, observed_contract, observed_capability_sha = (
-                inspect_soperator_release_contract(operation_source_release)
+            prepared_candidate = prepare_release_candidate(
+                sys.modules[__name__],
+                binding=preparation_binding,
+                source_payload=source_payload,
+                target=target,
+                active_intent=active_intent,
+                live_release=live_release,
+                target_selector=target_selector,
+                target_snapshot_sha256=target_snapshot_sha256,
+                jail_protection=jail_protection,
+                checks_policy_proposal=checks_policy_proposal,
+                desired_state_changed=desired_state_changed,
+                external_scheduling_evidence=external_scheduling_evidence,
+                upgrade_progress=upgrade_progress,
             )
-            if (
-                observed_contract != release_intent.source_contract
-                or observed_capability_sha != release_intent.source_capability_sha256
-            ):
-                raise RuntimeError(
-                    "recovery-required: the frozen Soperator source capability changed"
-                )
-            source_contract = release_intent.source_contract
-            source_capability_sha = release_intent.source_capability_sha256
-        if (
-            target_snapshot_sha256 is not None
-            and frozen_target.snapshot.snapshot_sha256 != target_snapshot_sha256
+        candidate = copy.deepcopy(prepared_candidate.values)
+        source_payload = candidate["source_payload"]
+        frozen_target = candidate["frozen_target"]
+        operation_source_release = candidate["operation_source_release"]
+        source_capability_sha = candidate["source_capability_sha"]
+        target_version = candidate["target_version"]
+        chart_row = candidate["chart_row"]
+        checks_policy_proposal = candidate["checks_policy_proposal"]
+        target_values = candidate["target_values"]
+        target_jail_authority = candidate["target_jail_authority"]
+        plan = candidate["plan"]
+        strategy = candidate["strategy"]
+        from .soperator_graph_transition import (
+            active_transition_checkpoint,
+            preflight_transition,
+            prepare_transition,
+        )
+
+        def _native_preview_run(args: list[str], *, input_text: str | None = None) -> Any:
+            return _run_soperator_upgrade_process(
+                args,
+                input_text=input_text,
+                extra_env=kube_env,
+                timeout_seconds=120,
+                check=True,
+            )
+
+        native_retirement_pending = preflight_transition(
+            frozen_target.snapshot, run=_native_preview_run
+        )
+        if native_retirement_pending and not (
+            isinstance(external_scheduling_evidence, Mapping)
+            and external_scheduling_evidence.get("mode") == "parent-campaign"
         ):
-            raise SoperatorSafetyPauseError("parent and child release snapshot identities differ")
-        target_version = frozen_target.snapshot.release
-        chart_row = _source_helm_chart_row(source_payload, target)
-        if EXPLICIT_VALUES_FIELD in chart_row:
-            validate_frozen_input(soperator_explicit_values(chart_row), frozen_target)
-        if not checks_policy_proposal:
-            if active_intent is not None:
-                raise RuntimeError("recovery-required: frozen checks policy proposal is missing")
-            checks_policy_proposal = freeze_checks_proposal(chart_row.get("values") or {})
-        chart_row["values"], check_changes = apply_checks_proposal(
-            chart_row.get("values") or {}, checks_policy_proposal
-        )
-        for change in check_changes:
-            console.print(f"Proposed upstream checks policy: {change}")
-        target_values = chart_row.get("values")
-        if not isinstance(target_values, Mapping):
-            raise RuntimeError("Soperator upgrade requires chart values for rootfs authority")
-        target_jail_authority = resolve_soperator_jail_image_authority(
-            target_values,
-            release=frozen_target.snapshot,
-        )
-        if active_intent is not None and (
-            release_intent.target_jail_image != target_jail_authority.image
-            or release_intent.target_jail_image_source != target_jail_authority.source
-        ):
-            raise RuntimeError(
-                "recovery-required: the effective target Jail image changed after planning"
-            )
-        plan = _plan_helm_chart_upgrade(
-            payload=source_payload,
-            target=target,
-            target_version=target_version,
-        )
-        strategy = resolve_soperator_reconcile_strategy(
-            current_release=operation_source_release,
-            target_release=frozen_target.snapshot.release,
-            source_contract=source_contract,
-            target_contract=frozen_target.snapshot.capability_contract,
-            desired_state_changed=(
-                checks_proposal_changed(checks_policy_proposal)
-                or bool(
-                    external_scheduling_evidence
-                    and external_scheduling_evidence.get("requiresFreshChecks")
+            if operation_source_release != target_version:
+                raise SoperatorSafetyPauseError(
+                    "Retire the native telemetry writer in its current release before a version upgrade"
                 )
-            ),
-        )
-        if active_intent is not None and strategy.strategy.value != release_intent.strategy:
-            raise RuntimeError(
-                "recovery-required: the frozen Soperator capability strategy changed"
+            observed_journal = _read_soperator_slurm_cluster_journal(
+                target_ref=target.target_ref,
+                cluster_id=cluster_id,
+                kube_context=kube_context,
+                extra_env=kube_env,
             )
+            stored_native = active_transition_checkpoint(
+                observed_journal[0] if observed_journal else None
+            )
+            preview_transition = prepare_transition(
+                target_paths,
+                target={
+                    "targetRef": target.target_ref,
+                    "clusterId": cluster_id,
+                    "kubernetesUid": kubernetes_uid,
+                },
+                run=_native_preview_run,
+                stored=stored_native,
+                persist=lambda _value: None,
+                authority=lambda: None,
+                snapshot=frozen_target.snapshot,
+                source_dir=Path(frozen_target.source.source_dir),
+            )
+            if preview_transition is None:
+                raise SoperatorSafetyPauseError(
+                    "Native retirement admission requires the exact frozen desired target graph"
+                )
         protected_paths: tuple[str, ...] = ()
         if strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
             frozen_persistent_paths: Sequence[str] | None = None
@@ -21527,6 +17630,22 @@ def _run_common_soperator_release_upgrade(
                 raise RuntimeError(
                     "protected Soperator upgrade lost its persistent-path chart values"
                 )
+        directory_identities: Sequence[Mapping[str, str]] = []
+        if strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
+            if recovery_admission_receipt is not None:
+                stored_preflight = recovery_admission_receipt.get("rootfsPreflight")
+                if not isinstance(stored_preflight, Mapping):
+                    raise SoperatorSafetyPauseError("The frozen rootfs admission is missing")
+                directory_identities = SoperatorRootfsAdmissionPreflight.from_payload(
+                    stored_preflight
+                ).directory_identities
+            else:
+                directory_identities = observe_protected_directories(
+                    sys.modules[__name__],
+                    target_values,
+                    kube_context=kube_context,
+                    extra_env=kube_env,
+                )
         if (
             strategy.strategy is SoperatorStrategy.NOOP
             and source_capability_sha != frozen_target.snapshot.capability_sha256
@@ -21537,19 +17656,11 @@ def _run_common_soperator_release_upgrade(
         plan_lines = list(
             _format_helm_chart_upgrade_plan(
                 replace(plan, current_version=live_release),
-                dry_run=dry_run,
-                repeat_dry_run_command=(
-                    _soperator_upgrade_dry_run_command(
-                        config_path=config_path,
-                        target_ref=target.target_ref,
-                        to_chart_version=target_version,
-                    )
-                    if dry_run
-                    else None
-                ),
+                dry_run=dry_run and not admission_preview,
             )
         )
-        plan_lines[0] = "Soperator direct-upstream upgrade plan"
+        action = "reconciliation" if operation_source_release == target_version else "upgrade"
+        plan_lines[0] = f"Soperator {action} assessment"
         plan_lines.insert(2, f"- capability strategy: {strategy.strategy.value}")
         plan_lines.insert(
             3,
@@ -21571,7 +17682,7 @@ def _run_common_soperator_release_upgrade(
                 "  - exact official upstream source and package identities",
                 "  - fresh source evidence before each ordered Flux stage",
                 "  - complete child graph, storage, Pod, and SlurmCluster readiness",
-                "  - one common reconcile receipt with a non-stopping forward supervisor",
+                "  - one common reconcile receipt with forward-only recovery",
                 "  - observability verification is separate and explicitly requested via "
                 "soperator status --verify-observability",
             ]
@@ -21579,7 +17690,7 @@ def _run_common_soperator_release_upgrade(
         _preflight_soperator_upgrade_checks(target_values, frozen_target)
         print_plan(plan_lines)
         if dry_run:
-            return
+            return prepared_candidate
 
         def _upgrade_observation_runner(
             args: Sequence[str],
@@ -21766,7 +17877,6 @@ def _run_common_soperator_release_upgrade(
                     raise RuntimeError(
                         "protected Soperator upgrade requires chart values for jail adoption"
                     )
-                current_active_source = jail_rootfs_active_source(current_values)
                 if recovery_admission_receipt is not None:
                     stored_transition = recovery_admission_receipt.get("rootfsTransition")
                     if not isinstance(stored_transition, Mapping):
@@ -21774,65 +17884,13 @@ def _run_common_soperator_release_upgrade(
                             "The active Soperator rootfs slot transition is missing"
                         )
                     rootfs_transition = dict(stored_transition)
-                    live_jail_pvc = str(rootfs_transition.get("livePvcName") or "").strip()
-                    desired_active_slot = str(
-                        rootfs_transition.get("desiredActiveSlot") or ""
-                    ).strip()
-                    target_pvc_name = str(rootfs_transition.get("targetPvcName") or "").strip()
-                    if not live_jail_pvc or not desired_active_slot or not target_pvc_name:
-                        raise SoperatorSafetyPauseError(
-                            "The active Soperator rootfs slot transition is incomplete"
-                        )
-                    current_slots = active_passive_jail_rootfs_slots(current_values)
-                    if (
-                        current_active_source == "slot"
-                        and current_slots.active_slot == desired_active_slot
-                    ):
-                        switched_values = copy.deepcopy(dict(current_values))
-                    else:
-                        expected_source = str(
-                            rootfs_transition.get("currentActiveSource") or ""
-                        ).strip()
-                        expected_slot = str(
-                            rootfs_transition.get("currentActiveSlot") or ""
-                        ).strip()
-                        if expected_source == "legacy-rootfs":
-                            if current_active_source != "legacy-rootfs":
-                                raise SoperatorSafetyPauseError(
-                                    "The active Soperator legacy rootfs transition changed"
-                                )
-                            adopted_values = copy.deepcopy(dict(current_values))
-                            adoption = adopted_values.setdefault("jailRootfs", {}).setdefault(  # type: ignore[union-attr]
-                                "adoption", {}
-                            )
-                            if not isinstance(adoption, dict):
-                                raise RuntimeError(
-                                    "protected Soperator jailRootfs adoption is invalid"
-                                )
-                            adoption["legacyPvcName"] = live_jail_pvc
-                            switched_values = switch_active_passive_jail_rootfs_values(
-                                adopted_values
-                            )
-                        elif (
-                            expected_source == "slot"
-                            and current_active_source == "slot"
-                            and current_slots.active_slot == expected_slot
-                        ):
-                            switched_values = switch_active_passive_jail_rootfs_values(
-                                current_values
-                            )
-                        else:
-                            raise SoperatorSafetyPauseError(
-                                "The active Soperator rootfs slot transition changed"
-                            )
-                    switched_slots = active_passive_jail_rootfs_slots(switched_values)
-                    if (
-                        switched_slots.active_slot != desired_active_slot
-                        or switched_slots.active_pvc != target_pvc_name
-                    ):
-                        raise SoperatorSafetyPauseError(
-                            "The active Soperator desired rootfs slot identity changed"
-                        )
+                    switched_values = recover_soperator_rootfs_transition(
+                        current_values,
+                        rootfs_transition,
+                        target_ref=target.target_ref,
+                        layout="external" if ownership == "onboarded" else "managed",
+                    )
+                    live_jail_pvc = str(rootfs_transition["livePvcName"])
                 else:
                     switched_values, rootfs_transition = plan_soperator_rootfs_transition(
                         current_values,
@@ -21927,7 +17985,7 @@ def _run_common_soperator_release_upgrade(
                 if not isinstance(secret_values, dict):
                     raise RuntimeError("protected Soperator secrets values are invalid")
                 secret_values["sshdKeysName"] = ssh_secret_candidates[0]
-                chart_row["values"] = prepare_soperator_upgrade_adapter_handoff(switched_values)
+                chart_row["values"] = switched_values
             if strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
                 _soperator_upgrade_materialize_slurm_preimage_partitions(
                     chart_row=chart_row,
@@ -21937,6 +17995,9 @@ def _run_common_soperator_release_upgrade(
                 source_payload,
                 target=target,
                 target_version=target_version,
+            )
+            _source_helm_chart_row(source_payload, target)["repo"] = (
+                frozen_target.snapshot.chart_oci_url("umbrella")
             )
             admission_stage = _render_soperator_upgrade_admission(
                 source_payload=source_payload,
@@ -21965,6 +18026,21 @@ def _run_common_soperator_release_upgrade(
             admitted_upstream_values = _rendered_soperator_upstream_values(
                 admission_target_paths.flux_dir
             )
+            if recovery_admission_receipt is not None:
+                from .soperator_values import assert_frozen_observability_replay
+
+                assert_frozen_observability_replay(
+                    receipt=recovery_admission_receipt,
+                    previous_bundle_sha256=_soperator_upgrade_flux_bundle_sha256(paths),
+                    desired_bundle_sha256=rendered_flux_sha256,
+                    previous_values=(
+                        _rendered_soperator_upstream_values(target_paths.flux_dir)
+                        if rendered_flux_sha256
+                        != recovery_admission_receipt.get("renderedFluxSha256")
+                        else {}
+                    ),
+                    desired_values=admitted_upstream_values,
+                )
             _preflight_soperator_checks(
                 admitted_upstream_values,
                 source_dir=Path(admission_source_receipt.source_dir),
@@ -21974,8 +18050,30 @@ def _run_common_soperator_release_upgrade(
                 frozen_target.snapshot,
                 admission_source_receipt,
                 values=admitted_upstream_values,
+                adapter_documents=load_soperator_adapter_documents(admission_target_paths.flux_dir),
             )
             infrastructure_plan_sha256 = infrastructure_receipt.receipt_sha256
+            admitted_project_generation_sha256 = admission_stage.project_generation_sha256
+            admitted_project_preimage_sha256 = (
+                admission_stage.project_generation_plan.preimage_sha256
+            )
+            completed_publication = False
+            if recovery_admission_receipt is not None and config_transition_store is None:
+                previous_generation = str(
+                    recovery_admission_receipt.get("projectGenerationSha256") or ""
+                )
+                previous_preimage = str(
+                    recovery_admission_receipt.get("projectPreimageSha256") or ""
+                )
+                completed_publication = completed_render_generation_matches(
+                    paths=paths,
+                    desired=admission_stage.project_generation_plan,
+                    admitted_sha256=previous_generation,
+                    admitted_preimage_sha256=previous_preimage,
+                )
+                if completed_publication:
+                    admitted_project_generation_sha256 = previous_generation
+                    admitted_project_preimage_sha256 = previous_preimage
             operation_fingerprint = soperator_sha256(
                 {
                     "schema": "nebius-cxcli.soperator-upgrade-operation-fingerprint.v1",
@@ -21986,7 +18084,7 @@ def _run_common_soperator_release_upgrade(
                     "targetRelease": target_version,
                     "releaseSnapshotSha256": frozen_target.snapshot.snapshot_sha256,
                     "renderedFluxSha256": rendered_flux_sha256,
-                    "projectGenerationSha256": admission_stage.project_generation_sha256,
+                    "projectGenerationSha256": admitted_project_generation_sha256,
                     "storage": asdict(infrastructure_receipt.storage),
                 }
             )
@@ -22033,6 +18131,8 @@ def _run_common_soperator_release_upgrade(
                     admission_target_paths,
                     pvc_name=admitted_slots.active_pvc,
                 )
+                from .soperator_jail_protection import rootfs_storage_authority
+
                 current_rootfs_preflight = _build_soperator_rootfs_admission(
                     target_image=target_jail_authority.image,
                     live_pvc_name=jail_volume.pvc.name,
@@ -22043,6 +18143,11 @@ def _run_common_soperator_release_upgrade(
                     target_provisioner=target_provisioner,
                     target_capacity=target_capacity,
                     persistent_paths=persistent_paths,
+                    storage_authority=rootfs_storage_authority(
+                        _rendered_soperator_adapter_state(admission_target_paths.flux_dir),
+                        admitted_slots.active_slot,
+                    ),
+                    directory_identities=directory_identities,
                     assert_authority=cluster_lease.assert_held,
                 )
                 if stored_admission_receipt is not None:
@@ -22072,8 +18177,8 @@ def _run_common_soperator_release_upgrade(
                 "artifactReceiptSha256": soperator_sha256(asdict(admission_artifacts)),
                 "desiredConfigSha256": soperator_sha256(to_plain_data(source_payload)),
                 "renderedFluxSha256": rendered_flux_sha256,
-                "projectGenerationSha256": admission_stage.project_generation_sha256,
-                "projectPreimageSha256": admission_stage.project_generation_plan.preimage_sha256,
+                "projectGenerationSha256": admitted_project_generation_sha256,
+                "projectPreimageSha256": admitted_project_preimage_sha256,
                 "targetJailImage": target_jail_authority.image,
                 "targetJailImageSource": target_jail_authority.source,
                 "persistentPaths": list(protected_paths),
@@ -22546,29 +18651,24 @@ def _run_common_soperator_release_upgrade(
                     )
             operation_started_at = time.time()
 
-        def _login_observer(phase: str) -> Mapping[str, object]:
-            return {
-                "phase": phase,
-                **observe_login_service_continuity(
-                    _upgrade_observation_runner,
-                    namespace="soperator",
-                    kube_context=kube_context,
-                    tcp_probe=_soperator_upgrade_login_tcp_probe,
-                ),
-            }
-
         execution_policy = SoperatorReconcileExecutionPolicy(
-            forward_until_complete=True,
-            classify_failure=_soperator_upgrade_failure_disposition,
-            observe_advisory=_login_observer,
+            forward_only=True,
         )
 
         def _bind_release_intent_operation(operation_spec_sha256: str) -> None:
-            if superseded_operation_spec_sha256:
+            from .soperator_graph_repair import sealed_binding
+
+            native_binding = sealed_binding(target_paths, target.target_ref, operation_spec_sha256)
+            predecessor_sha256 = (
+                native_binding[0]
+                if native_binding is not None
+                else superseded_operation_spec_sha256
+            )
+            if predecessor_sha256:
                 rebind_soperator_release_intent_operation(
                     paths=target_paths,
                     target_ref=target.target_ref,
-                    previous_operation_spec_sha256=superseded_operation_spec_sha256,
+                    previous_operation_spec_sha256=predecessor_sha256,
                     replacement_operation_spec_sha256=operation_spec_sha256,
                 )
                 return
@@ -22586,7 +18686,20 @@ def _run_common_soperator_release_upgrade(
             def _assert_generation_transition_authority() -> None:
                 mutation_authority()
 
-            committed_generation = transaction.current_generation_sha256()
+            if completed_publication:
+                mutation_authority()
+                if not completed_render_generation_matches(
+                    paths=paths,
+                    desired=admission_stage.project_generation_plan,
+                    admitted_sha256=admitted_project_generation_sha256,
+                    admitted_preimage_sha256=admitted_project_preimage_sha256,
+                ):
+                    raise SoperatorSafetyPauseError(
+                        "The completed Soperator render publication changed during recovery"
+                    )
+                committed_generation = admitted_project_generation_sha256
+            else:
+                committed_generation = transaction.current_generation_sha256()
             if config_transition_store is not None:
                 transition = apply_project_generation_transition(
                     project_dir=paths.project_dir,
@@ -22603,7 +18716,7 @@ def _run_common_soperator_release_upgrade(
                 generation_changed = committed_generation != transition.project_generation_sha256
             else:
                 try:
-                    if committed_generation != admission_stage.project_generation_sha256:
+                    if committed_generation != admitted_project_generation_sha256:
                         admitted_preimage = _non_empty_text(
                             admission_receipt.get("projectPreimageSha256")
                         )
@@ -22622,15 +18735,13 @@ def _run_common_soperator_release_upgrade(
                             expected_preimages=(
                                 admission_stage.project_generation_plan.expected_preimages
                             ),
-                            generation_sha256=admission_stage.project_generation_sha256,
+                            generation_sha256=admitted_project_generation_sha256,
                         )
                 except ProjectBundleSafetyError as exc:
                     raise SoperatorSafetyPauseError(
                         "The committed Soperator project generation cannot be recovered safely"
                     ) from exc
-                generation_changed = (
-                    committed_generation != admission_stage.project_generation_sha256
-                )
+                generation_changed = committed_generation != admitted_project_generation_sha256
             if generation_changed:
                 mutation_authority()
                 generated_config, paths, manifest = _load_deploy_context(config_path)
@@ -22678,6 +18789,16 @@ def _run_common_soperator_release_upgrade(
                     protected_preflight_receipt=protected_preflight,
                     rootfs_admission_preflight=rootfs_preflight,
                     scheduling_evidence=dict(external_scheduling_evidence),
+                    read_native_transition=(
+                        external_native_transition_store.read
+                        if external_native_transition_store
+                        else None
+                    ),
+                    write_native_transition=(
+                        external_native_transition_store.write
+                        if external_native_transition_store
+                        else None
+                    ),
                     read_controller_spool_migration=(
                         external_controller_spool_migration_store.read
                         if external_controller_spool_migration_store is not None
@@ -22759,6 +18880,10 @@ def _run_common_soperator_release_upgrade(
                     "the committed Soperator upgrade has no operation anchor"
                 )
             mutation_authority()
+            from .operation_completion import prepare_completion
+
+            prepare_completion(operation_anchor, paths, target.target_ref)
+            mutation_authority()
             operation_anchor.complete()
             if _SOPERATOR_PARENT_OPERATION_LEASE.get() is None:
                 accept_ordinary_app_baseline(
@@ -22775,21 +18900,15 @@ def _run_common_soperator_release_upgrade(
                 target_ref=target.target_ref,
             )
 
-        def _report_supervisor_retry(
-            disposition: SoperatorFailureDisposition,
-            attempt: int,
-            exc: BaseException,
+        def _report_invocation_stop(
+            disposition: SoperatorFailureDisposition, exc: BaseException
         ) -> None:
-            try:
-                advisory = _login_observer("committed-upgrade-supervisor")
-                advisory_status = str(advisory.get("status") or "unknown")
-            except Exception:
-                advisory_status = "observer-unavailable"
             message = (
-                "Soperator upgrade remains active under its forward supervisor "
-                f"({disposition.value}, attempt {attempt}, login {advisory_status}); "
-                f"gate: {escape(_soperator_upgrade_supervisor_failure_detail(exc))}; "
-                "retrying the same durable operation."
+                f"Soperator invocation stopped ({disposition.value}): "
+                f"{escape(_soperator_upgrade_supervisor_failure_detail(exc))}. "
+                "The durable operation remains available for recovery. Restore its exact "
+                "frozen generated bundle and execution controls, then rerun "
+                "nebius-cxcli deploy CONFIG_YAML. Cluster controllers may still be reconciling."
             )
             if upgrade_progress is not None:
                 upgrade_progress.message(message)
@@ -22799,16 +18918,9 @@ def _run_common_soperator_release_upgrade(
         lifecycle_token = _SOPERATOR_LIFECYCLE_INTERNAL.set(True)
         try:
             if supervise:
-                supervise_committed_soperator_upgrade(
+                execute_committed_soperator_upgrade(
                     _run_committed_upgrade_once,
-                    classify_failure=lambda exc: _soperator_upgrade_failure_disposition(
-                        "committed-upgrade-supervisor",
-                        exc if isinstance(exc, Exception) else RuntimeError(str(exc)),
-                    ),
-                    on_retry=_report_supervisor_retry,
-                    retry_initial_seconds=execution_policy.retry_initial_seconds,
-                    retry_max_seconds=execution_policy.retry_max_seconds,
-                    sleep=execution_policy.sleep,
+                    on_stop=_report_invocation_stop,
                 )
             else:
                 _run_committed_upgrade_once()
@@ -22842,14 +18954,12 @@ def _run_helm_chart_upgrade_command(
             + ". Pass explicit upgrade options or allow interactive prompting."
         )
 
-    _read_config_payload(config_path)
-    source_preimage = config_path.read_bytes()
-    source_payload = yaml.safe_load(source_preimage)
-    if _payload_has_soperator_lifecycle(source_payload):
-        validate_ordinary_app_scope(resolve_deploy_config_paths(config_path))
-    else:
-        source_payload = _load_source_payload(config_path)
-    generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+    from .deployment_recovery import deployment_preview
+
+    with deployment_preview(True):
+        source_preimage = config_path.read_bytes()
+        source_payload = yaml.safe_load(source_preimage)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
     target = _prompt_upgrade_helm_chart_target_selector_if_needed(
         source_payload=source_payload,
         target_selector=target_selector,
@@ -22888,59 +18998,17 @@ def _run_helm_chart_upgrade_command(
             repeat_dry_run_command=repeat_dry_run_command,
         )
     )
-    if dry_run:
-        return
-    if not plan.mutates:
-        _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
-        console.print(f"Helm chart target {target.selector} already uses version {target_version}.")
-        return
+    from .application_upgrade import run_chart_upgrade
 
-    if not _payload_has_soperator_lifecycle(generated_config):
-        _run_generated_bundle_validation(
-            generated_config,
-            paths,
-            title="Helm chart upgrade preflight",
-            quota_phase="upgrade",
-            flux_command_name="upgrade",
-            manifest=manifest,
-            prompt_mysterybox_payload_values=False,
-        )
-    if not _update_source_helm_chart_version(
+    run_chart_upgrade(
+        sys.modules[__name__],
         source_payload,
-        target=target,
-        target_version=target_version,
-    ):
-        raise RuntimeError(
-            f"Helm chart target {target.selector} did not accept version {target_version}."
-        )
-    if _payload_has_soperator_lifecycle(generated_config):
-        publish_ordinary_app_config(paths, source_payload, expected_bytes=source_preimage)
-    else:
-        _write_text_atomic(config_path, render_updated_source_payload(source_payload))
-    console.print(
-        f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
-        soft_wrap=True,
-    )
-    render_command(config_path, force=True)
-    staged_config, staged_paths, staged_manifest = _load_deploy_context_readonly(config_path)
-    if not _payload_has_soperator_lifecycle(staged_config):
-        _run_generated_bundle_validation(
-            staged_config,
-            staged_paths,
-            title=f"Validate rendered Helm chart upgrade to {target_version}",
-            quota_phase="upgrade",
-            flux_command_name="upgrade",
-            manifest=staged_manifest,
-            prompt_mysterybox_payload_values=False,
-        )
-    flux_apply_command(
-        staged_paths.generated_dir,
-        target_ref=target.target_ref,
-        all_targets=False,
-    )
-    _verify_helm_chart_upgrade_ready(staged_config, staged_paths, staged_manifest, plan)
-    console.print(
-        f"[green]Helm chart upgrade completed[/green]: {target.selector} -> {target_version}"
+        source_preimage,
+        generated_config,
+        paths,
+        manifest,
+        plan,
+        dry_run=dry_run,
     )
 
 
@@ -22984,32 +19052,44 @@ def _select_deployed_day2_component(
 
 
 def _load_manifest_backed_context(paths: ProjectPaths) -> tuple:
-    generic_command = _GENERIC_SOPERATOR_LIFECYCLE_COMMAND.get()
-    if generic_command and paths.config_path.exists():
-        _require_soperator_lifecycle_scope(
-            _read_config_payload(paths.config_path),
-            command=generic_command,
-        )
+    from .frozen_catalog import use_frozen_catalog
+
     manifest = load_generated_manifest(paths.generated_dir)
+    from .deployment_state import assert_admitted_application_generation
+
+    assert_admitted_application_generation(paths, manifest)
+    generic_command = _GENERIC_SOPERATOR_LIFECYCLE_COMMAND.get()
+    source = (
+        _read_config_payload(paths.config_path)
+        if generic_command and paths.config_path.exists()
+        else {}
+    )
     config = runtime_config_from_manifest(manifest)
     if generic_command:
+        _require_soperator_lifecycle_scope(source, command=generic_command)
         _require_soperator_lifecycle_scope(config, command=generic_command)
-    if generic_command in {"deploy", "flux apply", "upgrade helm-chart"} and (
-        _payload_has_soperator_lifecycle(config)
-        or (
-            paths.config_path.exists()
-            and _payload_has_soperator_lifecycle(_read_config_payload(paths.config_path))
-        )
+    if generic_command == "deploy":
+        from .soperator_values import soperator_rows, validate_feature_values
+
+        # Deploy executes the frozen render, so validate its saved defaults before
+        # authentication or backend setup, independently of the current source.
+        for row in soperator_rows(config):
+            validate_feature_values(row.get("values", {}))
+    if generic_command in {"flux apply", "upgrade helm-chart"} and (
+        _payload_has_soperator_lifecycle(config) or _payload_has_soperator_lifecycle(source)
     ):
         validate_ordinary_bundle(paths, manifest)
-    _apply_generated_tool_version_overrides(manifest)
-    _ensure_runtime_auth_material(config, need_terraform=False)
-    if not (
-        generic_command in {"deploy", "flux apply", "upgrade helm-chart"}
-        and _payload_has_soperator_lifecycle(config)
-    ):
-        _materialize_generated_terraform_tfvars(paths, manifest)
-    return config, paths, manifest
+    with use_frozen_catalog(manifest.get("render", {}).get("inputs", {})):
+        _apply_generated_tool_version_overrides(manifest)
+        if generic_command in {"flux apply", "upgrade helm-chart"}:
+            return config, paths, manifest
+        _ensure_runtime_auth_material(config, need_terraform=False)
+        if not (
+            generic_command in {"deploy", "flux apply", "upgrade helm-chart"}
+            and _payload_has_soperator_lifecycle(config)
+        ):
+            _materialize_generated_terraform_tfvars(paths, manifest)
+        return config, paths, manifest
 
 
 def _apply_generated_tool_version_overrides(manifest: Mapping[str, Any]) -> None:
@@ -23168,6 +19248,7 @@ def _run_runtime_validation(
         _ValidationPhase("active-sources", "Validate active component catalog/settings"),
         _ValidationPhase("dependencies", "Validate component dependencies"),
         _ValidationPhase("module-schema", "Validate Terraform module inputs"),
+        _ValidationPhase("compatibility", "Assess component compatibility"),
     ]
     if strict:
         phase_defs.extend(
@@ -23190,7 +19271,12 @@ def _run_runtime_validation(
     validated_scope_summary_lines: list[str] | None = None
     quota_report: QuotaReport | None = None
     with _ValidationProgress(title=title, phases=phase_defs) as progress:
-        config, paths = progress.run("load-config", lambda: _load_context(config_path))
+        config, paths = progress.run(
+            "load-config",
+            lambda: _load_generic_soperator_lifecycle_context(
+                _load_context, config_path, command="validate"
+            ),
+        )
         progress.run(
             "active-sources",
             lambda: _validate_active_component_sources(
@@ -23213,6 +19299,8 @@ def _run_runtime_validation(
             "module-schema",
             lambda: rendered_module_sources(config, source_profile=resolved_source_profile),
         )
+        progress.run("compatibility", lambda: assess_config(config))
+
         if not strict:
             progress.run("vpc-preflight", lambda: validate_vpc_networking_preflight(config))
             quota_report = progress.run(
@@ -23263,7 +19351,12 @@ def _run_runtime_validation(
 
 
 def _print_mk8s_gpu_validation_warnings(payload_or_config: Any) -> None:
-    warning_cache = _DEPLOY_VALIDATION_WARNING_CACHE.get()
+    from .deployment_preparation import current_preparation
+
+    prepared = current_preparation()
+    warning_cache = (
+        prepared.notices if prepared is not None else _DEPLOY_VALIDATION_WARNING_CACHE.get()
+    )
     for warning in mk8s_gpu_validation_warnings(payload_or_config):
         warning_key = f"mk8s-gpu:{warning}"
         if warning_cache is not None:
@@ -23357,7 +19450,7 @@ def _git_lookup_path(start: Path) -> Path:
 def _try_git_root(start: Path) -> Path | None:
     lookup = _git_lookup_path(start)
     try:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["git", "-C", str(lookup), "rev-parse", "--show-toplevel"],
             check=True,
             capture_output=True,
@@ -23689,7 +19782,6 @@ def _split_multi_value_tokens(raw_values: list[str] | None) -> list[str]:
 
 
 def _read_config_payload(config_path: Path) -> dict[str, Any]:
-    recover_project_bundle(config_path.absolute().parent)
     if not config_path.exists():
         raise ValueError(f"Config file not found: {config_path}")
     if config_path.is_dir():
@@ -23838,20 +19930,20 @@ def _validate_component_sources_or_raise(
             **registry_kwargs,
         )
         if validate_soperator:
-            snapshot = _SOPERATOR_RELEASE_SNAPSHOT_OVERRIDE.get()
+            snapshot = _SOPERATOR_SOURCE_OVERRIDE.get()
             release = _non_empty_text(getattr(snapshot, "release", ""))
             if not release:
                 source_issues.append(
                     "dedicated Soperator source validation requires a frozen official release"
                 )
             else:
-                entry = soperator_install_entry(release)
-                for issue in _resolve_helm_chart_validation_issues(
-                    chart_name=str(entry.chart_name or ""),
-                    chart_repo=str(entry.chart_repo or ""),
-                    chart_version=release,
-                ):
-                    source_issues.append(f"official Soperator {issue}")
+                entry = soperator_install_entry(
+                    release, chart_repo=snapshot.chart_oci_url("umbrella")
+                )
+                # Verified Git source is sufficient before the wizard. Package
+                # admission happens once the completed configuration is known.
+                if not entry.chart_repo:
+                    source_issues.append("verified Soperator source has no umbrella repository")
     for warning in source_warnings:
         console.print(f"{warning_markup('Source validation warning:')} {warning}")
     if source_issues:
@@ -23859,7 +19951,7 @@ def _validate_component_sources_or_raise(
             _component_source_validation_failure_message(
                 source_path,
                 source_issues,
-                include_skip_guidance=True,
+                include_skip_guidance=not _SOPERATOR_LIFECYCLE_INTERNAL.get(),
                 selected_app_ids=normalized_selected,
                 include_infra=include_infra,
             )
@@ -25476,7 +21568,7 @@ def _print_soperator_selection_adjustments(
         console.print(
             f"{warning_markup('Adjusted component selection:')} enabling "
             + ", ".join(f"'infra:{component_id}'" for component_id in added_required_infra)
-            + " because `soperator install` creates the complete "
+            + " because `soperator create` authors the complete "
             "MK8s+SFS+Soperator bundle."
         )
 
@@ -25681,11 +21773,21 @@ def _read_kube_system_namespace_uid(
 ) -> str:
     """Read the immutable Kubernetes cluster UID from one active context."""
 
-    result = _run_soperator_upgrade_kubectl_cluster(
-        ["get", "namespace", "kube-system", "-o", "json"],
-        kube_context=kube_context,
-        extra_env=extra_env,
+    from .deployment_retry import retry_transport_read
+
+    result = retry_transport_read(
+        lambda: _run_soperator_upgrade_kubectl_cluster(
+            ["get", "namespace", "kube-system", "-o", "json"],
+            kube_context=kube_context,
+            extra_env=extra_env,
+            check=False,
+        )
     )
+    if result.returncode:
+        raise RuntimeError(
+            "Could not read the immutable Kubernetes cluster UID: "
+            + _soperator_upgrade_supervisor_failure_detail(RuntimeError(result.stderr))
+        )
     try:
         namespace = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
@@ -26343,6 +22445,7 @@ def _soperator_protected_storage_discovery_inputs(
     chart_values: Mapping[str, Any],
     kube_context: str,
     extra_env: Mapping[str, str] | None,
+    snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     external_nfs = chart_values.get("externalNfs")
     external_nfs_map = external_nfs if isinstance(external_nfs, Mapping) else {}
@@ -26372,14 +22475,15 @@ def _soperator_protected_storage_discovery_inputs(
             if not isinstance(spec, Mapping):
                 continue
             configured[str(role)] = copy.deepcopy(to_plain_data(spec))
-    snapshot = collect_kubectl_soperator_snapshot(
-        kube_context=kube_context,
-        extra_env=extra_env,
-    )
+    if snapshot is None:
+        snapshot = collect_kubectl_soperator_snapshot(
+            kube_context=kube_context,
+            extra_env=extra_env,
+        )
     errors = snapshot.get("collection_errors")
     if not isinstance(errors, list) or errors:
         raise RuntimeError(
-            "Soperator protected SFS identity requires a complete live PVC/PV inventory"
+            "Soperator protected SFS identity requires a complete live Kubernetes inventory"
         )
     bindings = _soperator_local_sfs_kubernetes_bindings(snapshot)
     if bindings:
@@ -30096,6 +26200,20 @@ def _maybe_print_selected_gpu_preset_guidance(
     if guidance_key in emitted_guidance:
         return
 
+    if gpu_count == 1 and entry.id == "mk8s":
+        target_ref = _component_instance_id_for_prompt_field(
+            payload=payload, entry=entry, full_path_label=full_path_label
+        )
+        if target_ref in _soperator_app_target_refs(payload):
+            console.print(
+                warning_markup(
+                    "1-GPU Soperator requires fast deploy for Dev/Test. GPU health/performance validation "
+                    "is waived for all-one-GPU targets; Slurm readiness checks remain enabled."
+                )
+            )
+            emitted_guidance.add(guidance_key)
+            return
+
     if gpu_count == 1 and allow_gpu_clustering is False:
         console.print(
             "[dim]Selected GPU shape uses Ethernet only with no GPUDirect-RDMA. "
@@ -30237,8 +26355,9 @@ def _maybe_print_observability_prompt_guidance(
         return
     if "observability" not in emitted_guidance:
         console.print(
-            "[dim]Observability guidance: MK8s uses the Nebius observability agent "
-            "chart for logs, Prometheus-style metrics, and OTLP traces. Compute VMs "
+            "[dim]Observability guidance: Cluster observability defaults to local "
+            "VictoriaMetrics, VictoriaLogs and VictoriaTraces with Grafana. The wizard "
+            "can select remote or dual destinations independently for each signal. Compute VMs "
             "use the built-in Monitoring agent for service metrics. When VM "
             "journald collection is enabled, cxcli writes the supported Nebius "
             "Compute labels into the VM inputs during create/render/deploy. "
@@ -30361,10 +26480,9 @@ def _maybe_print_soperator_prompt_guidance(
     if "soperator_guided_defaults" not in emitted_guidance:
         console.print(
             "[dim]Soperator guided mode asks for layout and policy choices only. "
-            "Active diagnostics and reviewed passive diagnostics pause during isolated "
-            "maintenance; operational hooks and the selected job policy are preserved. "
-            "Passive checks resume for fresh acceptance, then recurring active schedules "
-            "resume before user admission. Unreviewed passive checks remain enabled. "
+            "Fast deploy is for Dev/Test and omits GPU health/performance qualification. "
+            "Standard deployment retains full diagnostics. Both preserve required setup, "
+            "operational hooks and the selected job policy. "
             "The required checks controller is enabled automatically. "
             "Supply advanced settings with --values-file before creating the install plan. "
             "Resume uses the saved configuration and cannot accept new values.[/dim]"
@@ -30385,10 +26503,9 @@ def _maybe_print_soperator_prompt_guidance(
             "Topology profile controls Slurm locality scheduling. Keep disabled "
             "unless worker nodes have accurate topology labels for the selected fabric."
         ),
-        "values.soperator-dcgm-exporter.enabled": (
-            "The standard cxcli GPU telemetry path uses the NVIDIA GPU Operator DCGM "
-            "exporter plus the Nebius Observability Agent. Enable the Soperator DCGM "
-            "exporter only when Slurm per-job GPU labels are required."
+        "values.observability.dcgmExporter.enabled": (
+            "Soperator GPU telemetry follows the selected upstream release and supports "
+            "Slurm per-job labels. The optional Nebius Observability Agent is independent."
         ),
         "values.soperator-notifier.enabled": (
             "Notifier sends Soperator alerts to Slack. It is disabled unless you "
@@ -33143,6 +29260,7 @@ def _run_component_field_wizard(
     prompt_app_version_before_app_config: bool = False,
     soperator_install: bool = False,
     skipped_components: set[tuple[ComponentScope, str, str]] | None = None,
+    existing_grafana_targets: frozenset[str] = frozenset(),
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
     if not isinstance(payload, dict):
@@ -33159,16 +29277,41 @@ def _run_component_field_wizard(
     wizard_auto_enabled_observability_apps: set[str] = set()
     wizard_auto_enabled_observability_app_rows: set[tuple[str, str]] = set()
     wizard_auto_enabled_app_rows: set[tuple[str, str]] = set()
+    wizard_configured_grafana_targets: set[str] = set()
+    wizard_created_routing_targets: set[str] = set()
 
     warned_provider_fallbacks: set[str] = set()
     provider_allowed_cache: dict[str, tuple[set[str], tuple[str, ...]]] = {}
 
-    def _wizard_payload_yaml() -> str:
+    def _wizard_payload_yaml(*, completed: bool = False) -> str:
         _prune_mk8s_node_group_defaults_without_soperator(
             payload,
             infra_entries=infra_entries,
         )
         _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(payload)
+        materialize_selection(payload)
+        if completed:
+            targets = {
+                component_instance_id(row)
+                for row in _dynamic_enabled_infra_component_rows(payload)
+                if component_type_id(row) == "mk8s" and component_instance_id(row) in selected_infra
+            }
+            targets.update(
+                app_chart_target_ref(row) or component_instance_id(row)
+                for row in soperator_rows(payload)
+                if _app_row_matches_active_selection(row)
+            )
+            for target, profile in reconcile_wizard_deployment(
+                payload,
+                target_refs=targets,
+                choose=_prompt_fast_deploy_profile,
+            ).items():
+                if profile == "fast-dev-test":
+                    console.print(
+                        warning_markup(f"Soperator '{escape(target)}': {FAST_DEPLOY_NOTICE}")
+                    )
+                else:
+                    console.print(f"Soperator '{escape(target)}': standard deployment profile.")
         return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:
@@ -35071,6 +31214,13 @@ def _run_component_field_wizard(
 
     def _remove_stale_wizard_observability_apps() -> None:
         nonlocal active_selected_apps
+        for target_ref in tuple(wizard_created_routing_targets):
+            if not _observability_enabled_for_target(target_ref):
+                for row in payload.get("deploy", {}).get("targets", []):
+                    if row.get("instance_id") == target_ref:
+                        row.get("observability", {}).pop("routing", None)
+                wizard_created_routing_targets.discard(target_ref)
+                wizard_configured_grafana_targets.discard(target_ref)
         candidate_rows = set(wizard_auto_enabled_observability_app_rows)
         candidate_rows.update(
             (app_id, instance_id)
@@ -35122,6 +31272,9 @@ def _run_component_field_wizard(
         _remove_stale_wizard_observability_apps()
         if not _observability_enabled_for_selected_mk8s_target():
             return
+        for target_ref in _selected_mk8s_target_refs():
+            if _observability_enabled_for_target(target_ref):
+                _configure_wizard_grafana(target_ref)
         observability_selection = resolve_observability_app_selection(
             payload,
             selected_app_ids=_active_selected_app_component_ids(),
@@ -35177,6 +31330,48 @@ def _run_component_field_wizard(
         )
         _print_wizard_component_selection_context()
 
+    def _configure_wizard_grafana(target_ref: str) -> None:
+        if not target_ref or target_ref in wizard_configured_grafana_targets:
+            return
+        from .grafana_install import configure as configure_grafana
+        from .observability_routing import target_settings
+
+        before_rows = _enabled_app_row_identities()
+        had_routing = bool(target_settings(payload, target_ref))
+        candidate = configure_grafana(
+            payload,
+            target_ref,
+            interactive=True,
+            preserve_existing_access=target_ref in existing_grafana_targets,
+        )
+        payload.clear()
+        payload.update(candidate)
+        wizard_configured_grafana_targets.add(target_ref)
+        if not had_routing:
+            wizard_created_routing_targets.add(target_ref)
+        added_rows = _enabled_app_row_identities() - before_rows
+        wizard_auto_enabled_app_rows.update(added_rows)
+        wizard_auto_enabled_observability_app_rows.update(added_rows)
+        wizard_auto_enabled_observability_apps.update(app_id for app_id, _ in added_rows)
+        active_selected_apps.update(
+            component_instance_label(component_type_id(row), component_instance_id(row))
+            for row in payload.get("apps", {}).get("charts", [])
+            if isinstance(row, Mapping)
+            and row.get("enabled")
+            and str(row.get("target_ref") or component_instance_id(row)) == target_ref
+        )
+        if added_rows:
+            labels = sorted(
+                component_instance_label(app_id, instance_id) for app_id, instance_id in added_rows
+            )
+            console.print(
+                f"{warning_markup('Adjusted component selection:')} enabling "
+                + ", ".join(f"'apps:{item}'" for item in labels)
+                + " for the selected observability routing. The later app field prompt "
+                "only controls chart value customization; answering 'n' keeps the selected app defaults."
+            )
+            _print_wizard_component_selection_context()
+
     def _run_component(entry: ComponentEntry, instance_id: str) -> str:
         component_label = _wizard_component_label(entry, instance_id)
         component_path = (
@@ -35185,6 +31380,9 @@ def _run_component_field_wizard(
             else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
         )
         pre_prompted_app_paths: set[PayloadPath] = set()
+        if entry.scope == "apps" and entry.id == "grafana":
+            target_ref = _app_target_ref_for_instance(entry.id, instance_id)
+            _configure_wizard_grafana(target_ref)
         _print_wizard_component_selection_context(
             current_label=component_label,
             current_scope=_wizard_display_group(entry),
@@ -35210,7 +31408,13 @@ def _run_component_field_wizard(
                 entry=entry,
                 include_chart_identity=not (soperator_install and entry.id == _SOPERATOR_APP_ID),
             )
-            if prompt_app_version_before_app_config and component_path is not None:
+            from .nsight import APP_TOOLS, run_viewer_wizard
+
+            if (
+                prompt_app_version_before_app_config
+                and component_path is not None
+                and entry.id not in APP_TOOLS
+            ):
                 version_path = component_path + ("version",)
                 current_version = (
                     _get_payload_value(payload, version_path)
@@ -35236,11 +31440,53 @@ def _run_component_field_wizard(
                     )
                 _print_wizard_selected_field(version_label, updated_version)
                 pre_prompted_app_paths.add(version_path)
+            if entry.id in APP_TOOLS and isinstance(component_node, dict):
+                updated, outcome = run_viewer_wizard(
+                    component_node,
+                    prompt_scalar=_prompt_scalar_override,
+                    is_back=_wizard_backtrack_requested,
+                )
+                if outcome == "continue":
+                    component_node.clear()
+                    component_node.update(updated)
+                    console.print(
+                        "Reports are mounted read-only. On Soperator, prefer "
+                        "`soperator profiling install CONFIG --target TARGET` to set up both profilers and viewers."
+                    )
+                return outcome
+            if soperator_install and entry.id == _SOPERATOR_APP_ID and component_path is not None:
+                if not isinstance(component_node, dict):
+                    raise ValueError("Soperator wizard component must be a mapping")
+                if explicit_root_keys(component_node) is None:
+                    console.print("[bold]Required root SSH key selection[/bold]")
+                    root_key_path = component_path + ("values",) + ROOT_KEY_PATH
+                    updated_keys, should_stop = _prompt_scalar_override(
+                        _format_payload_path(root_key_path),
+                        None,
+                        type_hint="list(string)",
+                        required=True,
+                    )
+                    if should_stop:
+                        return _WizardComponentOutcome.QUIT
+                    if _wizard_backtrack_requested(updated_keys):
+                        return _WizardComponentOutcome.BACK
+                    _set_payload_value_creating_containers(payload, root_key_path, updated_keys)
+                    mark_explicit_value(component_node, ROOT_KEY_PATH)
+                    pre_prompted_app_paths.add(root_key_path)
+        required_integration = (
+            soperator_install and entry.scope == "apps" and entry.id != _SOPERATOR_APP_ID
+        )
+        if required_integration:
+            console.print(
+                "Required component; the settings shown above will be kept unless customized."
+            )
         decision = _wizard_continue_phase(
-            "Configure upstream Soperator settings now?"
+            f"Customize '{component_label}' settings?"
+            if required_integration
+            else "Configure upstream Soperator settings now?"
             if soperator_install and entry.id == _SOPERATOR_APP_ID
             else f"Configure '{component_label}' component fields now?",
-            default=True if entry.scope == "infra" else None,
+            default=True if entry.scope == "infra" else False if soperator_install else None,
             allow_back=True,
         )
         if _wizard_phase_back_requested(decision):
@@ -35250,6 +31496,15 @@ def _run_component_field_wizard(
         if not decision:
             if skipped_components is not None:
                 skipped_components.add((entry.scope, entry.id, instance_id))
+            if soperator_install and entry.scope == "infra" and entry.id == "sfs":
+                if component_path is None:
+                    raise RuntimeError("Soperator filesystem component is missing")
+                component_node = _get_payload_value(payload, component_path)
+                if not isinstance(component_node, dict) or not isinstance(
+                    component_node.get("inputs"), dict
+                ):
+                    raise RuntimeError("Soperator filesystem inputs must be a mapping")
+                _print_soperator_sfs_summary(component_node["inputs"])
             return _WizardComponentOutcome.CONTINUE
 
         required_leaf_names = _required_leaf_names_for_entry(entry)
@@ -35270,6 +31525,66 @@ def _run_component_field_wizard(
                 include_shared=False,
             )
             _set_payload_value(payload, component_path, resolved_component_node)
+        if soperator_install and entry.scope == "infra" and entry.id == "sfs":
+            if component_path is None:
+                raise RuntimeError("Soperator filesystem component is missing")
+            sfs_component = _get_payload_value(payload, component_path)
+            if not isinstance(sfs_component, dict) or not isinstance(
+                sfs_component.get("inputs"), dict
+            ):
+                raise RuntimeError("Soperator filesystem inputs must be a mapping")
+            component_prefix = _format_payload_path(component_path)
+
+            def _prompt_sfs_field(field: SfsPrompt) -> tuple[object, bool]:
+                _print_wizard_component_selection_context(
+                    current_label=component_label,
+                    current_scope=_wizard_display_group(entry),
+                )
+                if field.choices:
+                    return _prompt_choice_override(
+                        path_label=field.label,
+                        current=field.current,
+                        choices=list(field.choices),
+                        type_hint=field.type_hint,
+                        required=True,
+                    )
+                return _prompt_scalar_override(
+                    field.label, field.current, type_hint=field.type_hint, required=True
+                )
+
+            def _sfs_choices() -> tuple[list[OptionChoice], str | None]:
+                if provider_lookup is None:
+                    return [], "Shared filesystem lookup is unavailable."
+                choices = provider_lookup.resolve(
+                    provider="project_filesystems",
+                    args={"project_id": sfs_component["inputs"].get("parent_id")},
+                    payload=payload,
+                    field_path=f"{component_prefix}.inputs.filesystems",
+                )
+                return choices, provider_lookup.last_error()
+
+            updated_inputs, stopped = prompt_sfs_filesystems(
+                sfs_component["inputs"],
+                prompt=_prompt_sfs_field,
+                filesystem_choices=_sfs_choices,
+                type_choices=lambda: _resolve_dynamic_field_choices(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=f"{component_prefix}.inputs.type",
+                    provider_lookup=provider_lookup,
+                ),
+                report_error=lambda message: console.print(error_markup(escape(message))),
+                backtrack=_WIZARD_BACKTRACK,
+            )
+            if stopped:
+                return _WizardComponentOutcome.QUIT
+            if _wizard_backtrack_requested(updated_inputs):
+                return _WizardComponentOutcome.BACK
+            if not isinstance(updated_inputs, dict):
+                raise RuntimeError("Soperator filesystem wizard returned invalid inputs")
+            sfs_component["inputs"] = updated_inputs
+            _print_soperator_sfs_summary(updated_inputs)
+            return _WizardComponentOutcome.CONTINUE
         bound_prompt_paths = (
             shared_default_payload_paths(component_path, entry)
             if component_path is not None
@@ -35277,6 +31592,7 @@ def _run_component_field_wizard(
         )
         if component_path is not None:
             bound_prompt_paths |= managed_input_binding_payload_paths(component_path, entry)
+        bound_prompt_paths |= pre_prompted_app_paths
 
         declared_prompt_paths: list[PayloadPath] = []
         declared_prompt_defaults: dict[PayloadPath, object] = {}
@@ -36725,7 +33041,7 @@ def _run_component_field_wizard(
             continue
 
         if not app_components:
-            return _wizard_payload_yaml(), True
+            return _wizard_payload_yaml(completed=True), True
         entry, instance_id = app_components[app_index]
         group = _wizard_display_group(entry)
         if active_section != group:
@@ -36753,9 +33069,9 @@ def _run_component_field_wizard(
             continue
         app_index += 1
         if app_index >= len(app_components):
-            return _wizard_payload_yaml(), True
+            return _wizard_payload_yaml(completed=True), True
 
-    return _wizard_payload_yaml(), True
+    return _wizard_payload_yaml(completed=True), True
 
 
 @dataclass(frozen=True)
@@ -37459,7 +33775,28 @@ def _validate_enabled_chart_sources(
         entry = app_entry_by_id.get(chart_id)
         if chart_id == _SOPERATOR_APP_ID:
             try:
-                entry = soperator_install_entry(chart_version)
+                snapshot = _SOPERATOR_SOURCE_OVERRIDE.get()
+                if snapshot is None or snapshot.release != chart_version:
+                    from .soperator_release_resolver import current_frozen_soperator_release
+
+                    frozen = current_frozen_soperator_release(chart_version, target_ref=instance_id)
+                    snapshot = (
+                        frozen
+                        or freeze_soperator_release(
+                            chart_version,
+                            request=SoperatorArtifactRequest.deployment(
+                                instance_id,
+                                chart_row.get("values") or {},
+                                payload=payload,
+                                post_render_patches=tuple(
+                                    chart_row.get("post_render_patches") or ()
+                                ),
+                            ),
+                        )
+                    ).snapshot
+                entry = soperator_install_entry(
+                    chart_version, chart_repo=snapshot.chart_oci_url("umbrella")
+                )
             except ValueError as exc:
                 issues.append(
                     f"{_component_instance_path_label('apps', chart_id, instance_id)} {exc}"
@@ -37477,6 +33814,8 @@ def _validate_enabled_chart_sources(
             chart_id=chart_id,
             entry=entry,
         )
+        if chart_id == _SOPERATOR_APP_ID:
+            continue
         if chart_meta_cache is None:
             issues_for_chart = _helm_chart_validation_issues(
                 chart_name=chart_name,
@@ -37645,10 +33984,10 @@ def _catalog_chart_validation_version(
     configured_version: str,
 ) -> tuple[str, str | None]:
     """Require generic catalog charts to use immutable versions."""
-    version = configured_version.strip()
-    if version.lower() == "latest":
-        return "", "version 'latest' is not allowed; configure an exact immutable chart version"
-    return version, None
+    try:
+        return exact_helm_chart_version(configured_version), None
+    except ValueError as exc:
+        return "", str(exc)
 
 
 @lru_cache(maxsize=64)
@@ -40478,6 +36817,8 @@ def _export_runtime_auth_material(material: RuntimeAuthCacheMaterial) -> None:
         "NEBIUS_S3_SECRET_ACCESS_KEY",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_SECURITY_TOKEN",
     ):
         os.environ.pop(name, None)
     os.environ["NEBIUS_SA_ID"] = material.service_account_id
@@ -40595,6 +36936,26 @@ def _ensure_runtime_auth_material(
     ):
         return
 
+    from .deployment_recovery import is_deployment_preview
+
+    if is_deployment_preview():
+        material = _runtime_auth_environment_material(
+            project_id=project_id, client_name=client_name
+        )
+        if material is None:
+            material = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
+        if material is None or (
+            need_terraform and not (material.s3_access_key_id and material.s3_secret_access_key)
+        ):
+            raise RuntimeError(
+                "Deployment preview requires existing project authentication and S3 credentials"
+            )
+        _wait_for_runtime_auth_token_ready(material)
+        _runtime_identity_verifier.verify(material)
+        _export_runtime_auth_material(material)
+        _RUNTIME_AUTH_READY_PROJECTS[project_id] = need_terraform or already_ready
+        return
+
     material, created = _create_or_recreate_runtime_auth_profile(
         project_id=project_id,
         client_name=client_name,
@@ -40602,6 +36963,7 @@ def _ensure_runtime_auth_material(
         profile=None,
         endpoint=None,
         sdk_config_file=None,
+        reconcile_permissions=True,
     )
     try:
         _wait_for_runtime_auth_token_ready(material)
@@ -40623,10 +36985,11 @@ def _ensure_runtime_auth_material(
             profile=None,
             endpoint=None,
             sdk_config_file=None,
+            reconcile_permissions=True,
         )
         _wait_for_runtime_auth_token_ready(material)
 
-    _runtime_identity_verifier.verify(material)
+    _runtime_identity_verifier.verify(material, allow_mutation=True)
     if need_terraform:
         material = _ensure_runtime_auth_s3_material(material)
     _export_runtime_auth_material(material)
@@ -41283,7 +37646,9 @@ def _dedupe_component_output_specs(specs: Sequence[dict[str, str]]) -> list[dict
     return deduped
 
 
-def _refresh_flux_after_terraform_outputs(config: Any, paths: ProjectPaths) -> bool:
+def _refresh_flux_after_terraform_outputs(
+    config: Any, paths: ProjectPaths, *, initialize_terraform: bool = True
+) -> bool:
     """Re-render Flux after Terraform creates outputs consumed by cluster apps."""
     ensure_nfs_csi_app_rows(config)
     required_specs = _dedupe_component_output_specs(
@@ -41299,6 +37664,7 @@ def _refresh_flux_after_terraform_outputs(config: Any, paths: ProjectPaths) -> b
         config,
         paths,
         required_specs=required_specs,
+        initialize_terraform=initialize_terraform,
     )
     materialize_mysterybox_eso_app_values(
         config,
@@ -41389,7 +37755,7 @@ def _kubectl_apply_manifest(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         ["kubectl", "apply", "-f", "-"],
         input=rendered,
         env=env,
@@ -41416,7 +37782,7 @@ def _kubectl_read_secret_key(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         ["kubectl", "-n", namespace, "get", "secret", name, "-o", "json"],
         env=env,
         capture_output=True,
@@ -41513,7 +37879,7 @@ printf "%s\n" "$out" | grep -Eq "HTTP/[0-9.]+ [0-9]"
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         [
             "kubectl",
             "-n",
@@ -41633,7 +37999,7 @@ def _mysterybox_eso_kubectl_json(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
+    result = kubernetes_process.run(
         ["kubectl", *args],
         capture_output=True,
         env=env,
@@ -41750,7 +38116,7 @@ def _mysterybox_eso_logs_check(
     since_arg = "--since=15m"
     if since_time is not None:
         since_arg = "--since-time=" + since_time.astimezone(UTC).isoformat().replace("+00:00", "Z")
-    result = subprocess.run(
+    result = kubernetes_process.run(
         ["kubectl", "-n", namespace, "logs", "deploy/external-secrets", since_arg],
         capture_output=True,
         env=env,
@@ -42078,7 +38444,7 @@ def _ensure_mysterybox_eso_credentials_secret(
                 env = os.environ.copy()
                 if extra_env:
                     env.update(extra_env)
-                completed = subprocess.run(
+                completed = kubernetes_process.run(
                     ["kubectl", "-n", namespace, "get", "secret", name, "-o", "json"],
                     env=env,
                     capture_output=True,
@@ -42153,20 +38519,14 @@ def _ensure_mysterybox_eso_runtime_before_flux(
 
 
 def _ensure_backend_s3_env_aliases() -> None:
-    access_key = (
-        os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-        or os.environ.get("NEBIUS_S3_ACCESS_KEY_ID", "").strip()
-    )
-    secret_key = (
-        os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
-        or os.environ.get("NEBIUS_S3_SECRET_ACCESS_KEY", "").strip()
-    )
-    if access_key:
-        os.environ["AWS_ACCESS_KEY_ID"] = access_key
-        os.environ["NEBIUS_S3_ACCESS_KEY_ID"] = access_key
-    if secret_key:
-        os.environ["AWS_SECRET_ACCESS_KEY"] = secret_key
-        os.environ["NEBIUS_S3_SECRET_ACCESS_KEY"] = secret_key
+    from .object_storage_transport import StorageCredentials
+
+    credentials = StorageCredentials.from_environment()
+    for name in ("AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"):
+        os.environ.pop(name, None)
+    for prefix in ("AWS", "NEBIUS_S3"):
+        os.environ[prefix + "_ACCESS_KEY_ID"] = credentials.access_key
+        os.environ[prefix + "_SECRET_ACCESS_KEY"] = credentials.secret_key
 
 
 @install_progress_step("state-backend", "Preparing Terraform remote state")
@@ -42178,7 +38538,13 @@ def _ensure_terraform_backend_ready(config: Any) -> None:
     )
     _ensure_backend_s3_env_aliases()
     settings = backend_settings_from_config(config)
-    created = ensure_state_bucket(settings)
+    from .deployment_recovery import is_deployment_preview
+
+    created = (
+        ensure_state_bucket(settings, create=False)
+        if is_deployment_preview()
+        else ensure_state_bucket(settings)
+    )
     if created:
         console.print(
             "[green]Created Terraform remote state bucket[/green] "
@@ -42320,6 +38686,12 @@ def _write_generated_runtime_manifest(
         raise RuntimeError(
             f"Rendered Terraform inputs file must contain a JSON object: {tfvars_path}"
         )
+    compatibility = freeze_compatibility(config, paths)
+    from .compatibility_artifacts import bind_flux_artifacts
+
+    bind_flux_artifacts(paths, compatibility["chart_inputs"])
+    from .application_compatibility import application_files
+
     write_kwargs = dict(
         config=config,
         paths=manifest_paths or paths,
@@ -42333,6 +38705,8 @@ def _write_generated_runtime_manifest(
         terraform_tfvars=terraform_tfvars,
         flux_version=sources.cli.flux.version,
         terraform_version=sources.cli.terraform.version,
+        compatibility=compatibility,
+        application_files=application_files(paths),
     )
     if output_path is None:
         return write_generated_manifest(**write_kwargs)
@@ -42387,16 +38761,30 @@ def _payload_has_soperator_lifecycle(config: Any) -> bool:
 def _require_soperator_lifecycle_scope(config: Any, *, command: str) -> None:
     """Keep protected mutations under the lifecycle and admit scoped app commands."""
 
+    from .destroy_target import require_non_mk8s_destroy
+
+    if command in {"destroy", "terraform destroy"}:
+        require_non_mk8s_destroy(config)
     if _SOPERATOR_LIFECYCLE_INTERNAL.get() or not _payload_has_soperator_lifecycle(config):
         return
-    if command in {"render", "deploy", "flux apply", "upgrade helm-chart"}:
+    if command in {
+        "validate",
+        "validate-generated",
+        "quota-check",
+        "quota-request",
+        "bootstrap-ci",
+        "render",
+        "deploy",
+        "upgrade helm-chart",
+        "flux apply",
+    }:
         return
     if "destroy" in command:
-        guidance = "Use `nebius-cxcli soperator destroy CONFIG --target TARGET`."
+        guidance = "Use `nebius-cxcli destroy CONFIG --target CLUSTER_ID`."
     else:
         guidance = (
-            "Use the matching `nebius-cxcli soperator install`, `soperator upgrade`, "
-            "or `soperator destroy` command."
+            "Use `nebius-cxcli deploy CONFIG_YAML` for complete Soperator execution, "
+            "`soperator upgrade` for guided transitions, or `destroy` for teardown."
         )
     raise RuntimeError(f"`nebius-cxcli {command}` does not manage Soperator clusters. " + guidance)
 
@@ -42431,9 +38819,9 @@ def _require_generic_selection_excludes_soperator(
     if _SOPERATOR_LIFECYCLE_INTERNAL.get() or not _tokens_select_soperator(raw_values):
         return
     guidance = (
-        "Retire it with `nebius-cxcli soperator destroy CONFIG --target TARGET`."
+        "Retire it with `nebius-cxcli destroy CONFIG --target CLUSTER_ID`."
         if command == "component remove"
-        else "Create it with `nebius-cxcli soperator install`."
+        else "Create it with `nebius-cxcli soperator create`."
     )
     raise RuntimeError(f"`nebius-cxcli {command}` cannot select apps:soperator. " + guidance)
 
@@ -42543,19 +38931,29 @@ def _runtime_component_output_values(
     paths: ProjectPaths,
     *,
     required_specs: list[dict[str, str]] | None = None,
+    initialize_terraform: bool = True,
 ) -> dict[str, Any]:
     required = (
         required_specs
         if required_specs is not None
-        else _required_runtime_component_output_specs(config)
+        else _dedupe_component_output_specs(
+            [
+                *_required_runtime_component_output_specs(config),
+                *mysterybox_eso_terraform_output_specs(config),
+                *nfs_csi_terraform_output_specs(config),
+            ]
+        )
     )
     if not required:
         return {}
 
     try:
+        from .deployment_recovery import is_deployment_preview
+
         terraform_outputs = terraform_output_json(
             paths.infra_dir,
             extra_env=_terraform_runtime_env(config),
+            initialize=initialize_terraform and not is_deployment_preview(),
         )
     except Exception as exc:
         raise RuntimeError(
@@ -42574,6 +38972,11 @@ def _runtime_component_output_values(
         if not isinstance(output_payload, Mapping) or "value" not in output_payload:
             missing.append(root_output_name)
             continue
+        if output_payload.get("sensitive") is True:
+            raise RuntimeError(
+                "Sensitive Terraform outputs cannot be persisted as application render inputs: "
+                + root_output_name
+            )
         resolved[spec["source_ref"]] = to_plain_data(output_payload["value"])
     if missing:
         raise RuntimeError(
@@ -45305,10 +41708,10 @@ def _persist_cluster_handoff_kubeconfig(
             encoding="utf-8",
         )
     except Exception as exc:
-        console.print(f"{warning_markup('WARNING:', bold=True)} {exc}")
+        progress_console.print(f"{warning_markup('WARNING:', bold=True)} {exc}")
         return None
 
-    console.print(f"Updated local kubeconfig at {local_kubeconfig}")
+    progress_console.print(f"Updated local kubeconfig at {local_kubeconfig}")
     return local_kubeconfig
 
 
@@ -45323,6 +41726,28 @@ def _prepare_cluster_handoff_kube_env(
     allow_terraform_output: bool = True,
     require_renewable_auth: bool = False,
 ) -> dict[str, str] | None:
+    def _verify_local_kubeconfig_target(config: Any, env: dict[str, str], *, access: str) -> None:
+        from .kubeconfig_target import verify_context_cluster
+
+        cluster_id = _non_empty_text(env.get(GRAFANA_TARGET_CLUSTER_ID_ENV))
+        context = _non_empty_text(env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV))
+        if not cluster_id or not context:
+            raise RuntimeError(
+                "Cluster handoff requires an immutable cluster ID and explicit context"
+            )
+        if not _runtime_auth_env_available():
+            _runtime_auth_cache_load(
+                project_id=str(config.client_info.nebius.project_id).strip(),
+                client_name=str(config.client_info.client_name).strip(),
+            )
+        authoritative = _mk8s_cluster_handoff_spec(config, cluster_id=cluster_id, access=access)
+        verify_context_cluster(
+            Path(env["KUBECONFIG"]),
+            context=context,
+            server=authoritative.server,
+            ca_pem=authoritative.ca_pem,
+        )
+
     resolved_target = target
     if resolved_target is None:
         handoffs = _enabled_cluster_handoffs(config)
@@ -45342,20 +41767,8 @@ def _prepare_cluster_handoff_kube_env(
     access = str(resolved_target.get("access") or "external").strip() or "external"
     kube_context = _non_empty_text(resolved_target.get("kube_context"))
     cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
-    if kube_context and not require_renewable_auth:
-        env = _kubeconfig_target_env(
-            target_ref,
-            stack=stack,
-            preferred_context=kube_context,
-            preferred_cluster_id=cluster_id,
-        )
-        if env:
-            env[CLUSTER_HANDOFF_ACCESS_ENV] = access
-            return env
-
     if (
-        require_renewable_auth
-        and not cluster_id
+        not cluster_id
         and allow_terraform_output
         and resolved_target.get("ownership") == "managed"
         and resolved_target.get("component_id") == MK8S_COMPONENT_ID
@@ -45368,6 +41781,19 @@ def _prepare_cluster_handoff_kube_env(
             extra_env=_terraform_runtime_env(config),
             initialize=False,
         )
+
+    if kube_context and not require_renewable_auth:
+        env = _kubeconfig_target_env(
+            target_ref,
+            stack=stack,
+            preferred_context=kube_context,
+            preferred_cluster_id=cluster_id,
+        )
+        if env:
+            _verify_local_kubeconfig_target(config, env, access=access)
+            env[CLUSTER_HANDOFF_ACCESS_ENV] = access
+            return env
+
     if require_renewable_auth and not cluster_id:
         raise RuntimeError(
             f"Long-running cluster handoff for target '{target_ref}' requires an immutable "
@@ -45419,6 +41845,7 @@ def _prepare_cluster_handoff_kube_env(
     if not cluster_id and not allow_terraform_output:
         env = _kubeconfig_target_env(target_ref, stack=stack)
         if env:
+            _verify_local_kubeconfig_target(config, env, access=access)
             env[CLUSTER_HANDOFF_ACCESS_ENV] = access
             return env
     if not cluster_id and not allow_terraform_output:
@@ -45461,7 +41888,7 @@ def _prepare_cluster_handoff_kube_env(
         require_renewable_auth=require_renewable_auth,
     )
     if access == "internal":
-        console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
+        progress_console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
     kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
     kubeconfig_path = kube_root / "config"
     _write_kubeconfig_file(kubeconfig_path, spec)
@@ -45493,7 +41920,7 @@ def _run_kubectl_with_transient_retries(
         if assert_authority is not None:
             assert_authority()
         assert_app_mutation_authority()
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             cmd,
             env=_post_flux_subprocess_env(env),
             timeout=timeout,
@@ -45590,7 +42017,7 @@ def _rendered_priority_class_value(doc: Mapping[str, Any]) -> int | None:
 
 
 def _current_priority_class_value(name: str, *, env: Mapping[str, str]) -> int | None:
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         ["kubectl", "get", "priorityclass", name, "-o", "jsonpath={.value}"],
         env=_post_flux_subprocess_env(env),
         timeout=60,
@@ -45840,7 +42267,7 @@ def _delete_stale_soperator_custom_resources(
         desired_by_scope.setdefault((namespace or "default", instance, kind), set()).add(name)
     for (namespace, instance, kind), desired_names in sorted(desired_by_scope.items()):
         resource_type = _POST_FLUX_STALE_CUSTOM_RESOURCE_TYPES[kind]
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             [
                 "kubectl",
                 "-n",
@@ -46162,7 +42589,7 @@ def _verify_post_flux_soperator_adapter_configmaps(
         name, namespace = name_namespace
         if not namespace:
             raise RuntimeError("post-Flux Soperator adapter ConfigMap namespace is required")
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             ["kubectl", "-n", namespace, "get", "configmap", name, "-o", "json"],
             env=_post_flux_subprocess_env(env),
             timeout=60,
@@ -46432,7 +42859,7 @@ def _delete_admission_webhooks_for_namespaces(
 ) -> None:
     if not namespaces:
         return
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         [
             "kubectl",
             "get",
@@ -46684,7 +43111,7 @@ def _mysterybox_eso_rendered_secret_keys(
 
 
 def _live_soperator_release_for_reconcile(*, env: Mapping[str, str]) -> str:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "-n",
@@ -46738,7 +43165,7 @@ def _live_soperator_release_for_reconcile(*, env: Mapping[str, str]) -> str:
 
 
 def _live_soperator_jail_pvc_for_reconcile(*, env: Mapping[str, str]) -> str:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "-n",
@@ -46823,6 +43250,10 @@ def _apply_rendered_flux(
     release_checks_reservation: Callable[[Mapping[str, Any]], None] | None = None,
     verify_checks_reservation_released: Callable[[Mapping[str, Any]], None] | None = None,
     before_reconcile_mutations: Callable[[], object] | None = None,
+    read_native_transition: Callable[[], Mapping[str, Any] | None] | None = None,
+    write_native_transition: Callable[[Mapping[str, Any]], None] | None = None,
+    bound_operation_spec_sha256: str = "",
+    verify_native_maintenance: Callable[[], None] | None = None,
     read_controller_spool_migration: (Callable[[], Mapping[str, object] | None] | None) = None,
     write_controller_spool_migration: (Callable[[Mapping[str, object]], None] | None) = None,
     intervention_generation: int = 0,
@@ -46843,6 +43274,7 @@ def _apply_rendered_flux(
     soperator_artifact_receipt = None
     target_jail_authority = None
     checks_policy = None
+    fast_deploy = False
     parent_owns_checks = (
         isinstance(scheduling_evidence, Mapping)
         and scheduling_evidence.get("mode") == "parent-campaign"
@@ -46851,7 +43283,10 @@ def _apply_rendered_flux(
     source_checks = None
     runtime_recovery = None
     docker_drain_recovery = None
+    docker_storage_recovery = None
     topology_recovery = None
+    native_transition = None
+    native_repair = None
     soperator_adapter_state: Mapping[str, Any] = {}
     soperator_cluster_values: Mapping[str, Any] = {}
     if (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").is_file():
@@ -46866,6 +43301,7 @@ def _apply_rendered_flux(
         )
         soperator_source_receipt = ensure_soperator_release_source(soperator_snapshot)
         soperator_values = _rendered_soperator_upstream_values(paths.flux_dir)
+        fast_deploy = soperator_values.get("cxcliDiagnostics", {}).get("profile") == FAST_DEV_TEST
         checks_policy = compile_checks_policy(
             Path(soperator_source_receipt.source_dir), soperator_values
         )
@@ -46879,7 +43315,15 @@ def _apply_rendered_flux(
             soperator_snapshot,
             soperator_source_receipt,
             values=soperator_values,
+            adapter_documents=load_soperator_adapter_documents(paths.flux_dir),
         )
+        for line in deployment_profile_summary(
+            soperator_values,
+            target=target_ref or paths.path_project_folder,
+            stage="deployment",
+            policy=checks_policy,
+        ):
+            console.print(escape(line))
     if not shutil.which("kubectl"):
         raise RuntimeError("kubectl is required for `deploy` but was not found in PATH")
     env = os.environ.copy()
@@ -46896,7 +43340,7 @@ def _apply_rendered_flux(
         flux_progress_sink,
     ):
         _set_phase("[cyan]Checking target Kubernetes cluster reachability...[/cyan]")
-        cluster_check = subprocess.run(
+        cluster_check = kubernetes_process.run(
             ["kubectl", "cluster-info"],
             env=env,
             capture_output=True,
@@ -47279,6 +43723,118 @@ def _apply_rendered_flux(
                             "ownership": source_release_ownership.as_payload(),
                         },
                     )
+            from .soperator_graph_repair import prepare_repair, seal_successor, transfer_checks
+            from .soperator_graph_transition import REPAIR_REASON, prepare_transition
+
+            def _native_run(args: list[str], *, input_text: str | None = None) -> Any:
+                return _run_soperator_upgrade_process(
+                    args,
+                    input_text=input_text,
+                    extra_env=extra_env,
+                    timeout_seconds=120,
+                    check=True,
+                )
+
+            def _persist_native(value: Mapping[str, Any]) -> None:
+                if write_native_transition is None:
+                    raise SoperatorSafetyPauseError(
+                        "Native graph retirement requires a durable scheduling owner"
+                    )
+                write_native_transition(value)
+                checkpoint_execution()
+
+            if soperator_source_receipt is None or soperator_snapshot is None:
+                raise SoperatorSafetyPauseError(
+                    "Native graph admission requires verified release source"
+                )
+            native_transition = prepare_transition(
+                paths,
+                target={
+                    "targetRef": target_ref or paths.path_project_folder,
+                    "clusterId": cluster_id,
+                    "kubernetesUid": kubernetes_uid,
+                },
+                run=_native_run,
+                stored=read_native_transition() if read_native_transition else None,
+                persist=_persist_native,
+                authority=assert_authority,
+                snapshot=soperator_snapshot,
+                source_dir=Path(soperator_source_receipt.source_dir),
+            )
+            if native_transition is not None:
+                if write_native_transition is None:
+                    raise SoperatorSafetyPauseError(
+                        "Native graph retirement requires a durable scheduling owner"
+                    )
+                if bound_operation_spec_sha256:
+                    if not isinstance(scheduling_evidence, Mapping):
+                        raise SoperatorSafetyPauseError(
+                            "Native graph recovery requires frozen scheduling evidence"
+                        )
+                    native_repair = prepare_repair(
+                        paths,
+                        native_transition,
+                        bound_sha256=bound_operation_spec_sha256,
+                        scheduling=scheduling_evidence,
+                    )
+                admission_evidence = {
+                    **(dict(admission_evidence) if isinstance(admission_evidence, Mapping) else {}),
+                    "nativeGraphTransition": native_transition.admission,
+                }
+                if native_repair is not None:
+                    if checks_policy is None:
+                        raise SoperatorSafetyPauseError(
+                            "Native graph recovery requires its frozen checks policy"
+                        )
+                    if native_transition.state["phase"] != "verified-absent":
+                        if verify_native_maintenance is None:
+                            raise SoperatorSafetyPauseError(
+                                "Native repair requires fresh scheduling evidence"
+                            )
+                        verify_native_maintenance()
+                        predecessor_sha = native_repair["previousOperationSpecSha256"]
+                        predecessor_checks = SoperatorChecksExecution(
+                            policy=checks_policy,
+                            operation_id=predecessor_sha,
+                            receipt_path=paths.reports_dir
+                            / ("soperator-checks-" + predecessor_sha.split(":")[-1][:24] + ".json"),
+                            kubernetes=lambda args, doc: json.loads(
+                                _native_run(["kubectl", *args]).stdout
+                            ),
+                            slurm=lambda command: (
+                                _run_soperator_upgrade_login_command(
+                                    "soperator",
+                                    command,
+                                    kube_context=kube_context,
+                                    extra_env=extra_env,
+                                    timeout_seconds=120,
+                                ).stdout
+                            ),
+                            assert_authority=assert_authority,
+                        )
+                        predecessor_source_checks = SourceChecksMaintenance(
+                            predecessor_checks,
+                            Path(soperator_source_receipt.source_dir),
+                            str(soperator_cluster_values["clusterName"]),
+                        ).checks
+                        observed_reservation = predecessor_source_checks._reservation(
+                            native_repair["checks"]["-source"]["reservation"]
+                        )
+                        if observed_reservation["users"] != ["root"]:
+                            raise SoperatorSafetyPauseError(
+                                "Native repair reservation no longer excludes ordinary users"
+                            )
+                    admission_evidence["nativeGraphRepair"] = native_repair
+                    intervention_generation = native_repair["interventionGeneration"]
+                    superseded_operation_spec_sha256 = native_repair["previousOperationSpecSha256"]
+                    admitted_repair_reason = REPAIR_REASON
+                    repair_lineage = SoperatorReconcileRepairLineage(
+                        predecessor_receipt=native_repair["predecessorReceipt"],
+                        previous_operation_spec_sha256=superseded_operation_spec_sha256,
+                        resume_phase="apply-declarative-release",
+                        reason=REPAIR_REASON,
+                    )
+                native_transition.save(native_transition.state["phase"])
             _set_phase("[cyan]Binding the immutable Soperator operation authority...[/cyan]")
             if admitted_repair_reason in {
                 INSTALL_DASHBOARD_REPAIR_REASON,
@@ -47291,8 +43847,10 @@ def _apply_rendered_flux(
                 STORAGE_REPAIR_REASON,
                 USERNS_REPAIR_REASON,
                 DOCKER_REPAIR_REASON,
+                DOCKER_STORAGE_REPAIR_REASON,
                 TOPOLOGY_REPAIR_REASON,
                 CPU_MASK_REPAIR_REASON,
+                OBSERVABILITY_REPAIR_REASON,
             }:
                 repair = (
                     admission_evidence.get(
@@ -47306,8 +43864,10 @@ def _apply_rendered_flux(
                             STORAGE_REPAIR_REASON: "installStorageRepair",
                             USERNS_REPAIR_REASON: "installUsernsRepair",
                             DOCKER_REPAIR_REASON: "installDockerRepair",
+                            DOCKER_STORAGE_REPAIR_REASON: "installDockerStorageRepair",
                             TOPOLOGY_REPAIR_REASON: "installTopologyRepair",
                             CPU_MASK_REPAIR_REASON: "installCpuMaskRepair",
+                            OBSERVABILITY_REPAIR_REASON: "installObservabilityRepair",
                             INSTALL_DASHBOARD_REPAIR_REASON: "installDashboardRepair",
                         }[admitted_repair_reason]
                     )
@@ -47371,6 +43931,22 @@ def _apply_rendered_flux(
                 raise RuntimeError(
                     "Soperator reconciliation authority is not bound to a fencing epoch"
                 )
+            if admitted_repair_reason == OBSERVABILITY_REPAIR_REASON:
+                from .soperator_install_observability_repair import seal_successor_intent
+
+                if not isinstance(admission_evidence, Mapping) or not isinstance(
+                    observability_evidence := admission_evidence.get("installObservabilityRepair"),
+                    Mapping,
+                ):
+                    raise RuntimeError("Observability successor admission is missing")
+                seal_successor_intent(
+                    paths, operation_spec, observability_evidence, assert_authority
+                )
+            if native_repair is not None:
+                seal_successor(paths, operation_spec, native_repair, assert_authority)
+            if native_transition is not None:
+                native_transition.state["boundOperationSpecSha256"] = operation_spec_sha256
+                native_transition.save(native_transition.state["phase"])
             if bind_operation_spec_sha256 is not None:
                 bind_operation_spec_sha256(operation_spec_sha256)
             if superseded_operation_spec_sha256:
@@ -47406,6 +43982,7 @@ def _apply_rendered_flux(
                     observed_stage_plan_sha256 = soperator_reconcile_stage_plan_sha256(
                         strategy=reconcile_strategy.strategy.value,
                         rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+                        deployment_profile=FAST_DEV_TEST if fast_deploy else "standard",
                     )
                     if observed_stage_plan_sha256 != operation_spec.stage_plan_sha256:
                         raise RuntimeError("Soperator rendered stage-plan authority was lost")
@@ -47423,9 +44000,12 @@ def _apply_rendered_flux(
                     ) from exc
 
             operation_authority = _assert_operation_authority
+            if native_transition is not None:
+                native_transition.authority = operation_authority
             if (
                 checks_policy is not None
                 and reconcile_strategy.strategy is not SoperatorStrategy.NOOP
+                and not (fast_deploy and reconcile_strategy.strategy is SoperatorStrategy.INSTALL)
             ):
 
                 def _checks_kubernetes(
@@ -47462,6 +44042,8 @@ def _apply_rendered_flux(
                     assert_authority=operation_authority,
                     emit=_update_progress_detail,
                 )
+                if native_repair is not None:
+                    transfer_checks(checks_execution, native_repair)
                 checks_execution.lifecycle = ChecksLifecycle(
                     checks_execution,
                     lambda context: apply_staged_soperator_release(
@@ -47469,7 +44051,12 @@ def _apply_rendered_flux(
                         extra_env=extra_env,
                         checks_policy=checks_policy,
                         checks_context=context,
+                        native_transition=native_transition,
                         freeze_main_workload_authority=operation_anchor.freeze_main_workload_authority,
+                        on_stage_progress=lambda current, total, names: _set_phase(
+                            f"Reconciling {context.phase.value} checks stage {current}/{total}: "
+                            + ", ".join(names)
+                        ),
                     ),
                     preimages=(
                         (lambda: ())
@@ -47487,6 +44074,18 @@ def _apply_rendered_flux(
                         raise RuntimeError("parent diagnostics require bound scheduling evidence")
                     checks_execution.state["reservation"] = str(
                         scheduling_evidence.get("reservationName") or ""
+                    )
+                if admitted_repair_reason == OBSERVABILITY_REPAIR_REASON:
+                    from .soperator_install_observability_repair import (
+                        observability_reservation_handoff,
+                    )
+
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("Observability repair evidence is missing")
+                    checks_execution.adopt_install_reservation(
+                        observability_reservation_handoff(
+                            admission_evidence["installObservabilityRepair"], checks_policy
+                        )
                     )
                 if admitted_repair_reason == TOPOLOGY_REPAIR_REASON:
                     from .soperator_install_topology_recovery import InstallTopologyRecovery
@@ -47521,6 +44120,44 @@ def _apply_rendered_flux(
                         cpu_mask_reservation_handoff(
                             cpu_mask_repair, paths=paths, policy=checks_policy
                         )
+                    )
+                if admitted_repair_reason == DOCKER_STORAGE_REPAIR_REASON:
+                    from .soperator_install_docker_storage_recovery import (
+                        InstallDockerStorageRecovery,
+                    )
+                    from .soperator_install_docker_storage_repair import docker_storage_handoff
+
+                    if not isinstance(admission_evidence, Mapping):
+                        raise RuntimeError("install Docker storage repair evidence is missing")
+                    storage_repair = admission_evidence["installDockerStorageRepair"]
+
+                    def _read_storage_worker(node: str, args: list[str]) -> str:
+                        return _run_soperator_upgrade_process(
+                            [
+                                "kubectl",
+                                "--context",
+                                kube_context,
+                                "-n",
+                                "soperator",
+                                "exec",
+                                node,
+                                "-c",
+                                "slurmd",
+                                "--",
+                                *args,
+                            ],
+                            extra_env=extra_env,
+                            timeout_seconds=120,
+                            check=True,
+                        ).stdout
+
+                    docker_storage_recovery = InstallDockerStorageRecovery(
+                        checks_execution, storage_repair, _read_storage_worker
+                    )
+                    _set_phase("Preserving native checks before private Docker storage repair...")
+                    docker_storage_recovery.close()
+                    checks_execution.adopt_install_reservation(
+                        docker_storage_handoff(storage_repair, paths=paths, policy=checks_policy)
                     )
                 if admitted_repair_reason == DOCKER_REPAIR_REASON:
                     if not isinstance(admission_evidence, Mapping):
@@ -47657,9 +44294,11 @@ def _apply_rendered_flux(
                             )
                     source_checks = SourceChecksMaintenance(
                         checks_execution,
-                        Path(freeze_soperator_release(current_release).source.source_dir),
+                        Path(resolve_soperator_source(current_release).source.source_dir),
                         str(soperator_cluster_values["clusterName"]),
                     )
+                    if native_repair is not None:
+                        transfer_checks(source_checks.checks, native_repair, source=True)
                     source_checks.quiesce()
             if before_reconcile_mutations is not None:
                 before_reconcile_mutations()
@@ -47865,6 +44504,7 @@ def _apply_rendered_flux(
                         expected_target_release=rootfs_predecessor_target_release,
                         expected_infrastructure_sha256=(rootfs_predecessor_infrastructure_sha256),
                         preflight=rootfs_admission_preflight,
+                        profiling_settings_sha256=profiling_fingerprint(config, target_ref),
                     )
                     rootfs_recovery_journal = predecessor_journal
                     repair_lineage = SoperatorReconcileRepairLineage(
@@ -47982,7 +44622,7 @@ def _apply_rendered_flux(
                 patches = retention_patch_contract(observed_protected_receipt)
                 for item in patches:
                     operation_authority()
-                    result = subprocess.run(
+                    result = kubernetes_process.run(
                         [
                             "kubectl",
                             "--context",
@@ -48081,6 +44721,82 @@ def _apply_rendered_flux(
                     ),
                 )
 
+            def _assert_rootfs_physical_authority() -> str:
+                from .soperator_jail_protection import (
+                    rootfs_storage_authority,
+                    verify_target_volume,
+                )
+
+                if (
+                    rootfs_admission_preflight is None
+                    or rootfs_recovery_journal is None
+                    or operation_authority is None
+                ):
+                    raise RuntimeError("rootfs physical authority is unavailable")
+                operation_authority()
+                preflight = rootfs_admission_preflight
+                authority = rootfs_storage_authority(soperator_adapter_state, preflight.target_slot)
+                if authority != preflight.storage_authority:
+                    raise SoperatorSafetyPauseError(
+                        "rootfs physical backing changed after admission"
+                    )
+
+                def read(kind: str, name: str) -> Mapping[str, Any]:
+                    result = _protected_command_runner(
+                        [
+                            "kubectl",
+                            "--context",
+                            kube_context,
+                            "-n",
+                            "soperator",
+                            "get",
+                            kind,
+                            name,
+                            "-o",
+                            "json",
+                        ],
+                        timeout_seconds=60,
+                        check=True,
+                    )
+                    payload = json.loads(result.stdout)
+                    if not isinstance(payload, Mapping):
+                        raise RuntimeError(
+                            "rootfs physical identity lookup returned an invalid object"
+                        )
+                    return payload
+
+                pvc = read("pvc", preflight.target_pvc_name)
+                pv = read("pv", authority["targetGeneration"]["pv_name"])
+                pv_uid = verify_target_volume(authority, pvc=pvc, pv=pv)
+                identity = rootfs_recovery_journal.stage("rootfs-passive-target-identity")
+                if isinstance(identity, Mapping) and identity.get("status") == "complete":
+                    evidence = identity.get("evidence", {})
+                    if (
+                        not isinstance(evidence, Mapping)
+                        or evidence.get("pvUid") != pv_uid
+                        or evidence.get("pvcUid") != pvc["metadata"]["uid"]
+                    ):
+                        raise SoperatorSafetyPauseError("rootfs physical PV/PVC identity changed")
+                directory_values = {
+                    "jailPersistentMounts": [
+                        {"mountPath": row["mount_path"], "localPath": row["local_path"]}
+                        for row in authority["persistentMounts"]
+                    ]
+                }
+                observed = observe_protected_directories(
+                    sys.modules[__name__],
+                    directory_values,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                )
+                if sorted(observed, key=lambda row: row["mountPath"]) != sorted(
+                    preflight.directory_identities, key=lambda row: row["mountPath"]
+                ):
+                    raise SoperatorSafetyPauseError(
+                        "protected directory identity changed after admission"
+                    )
+                return pv_uid
+
             def _prepare_passive_rootfs() -> object:
                 if (
                     protected_before_receipt is None
@@ -48090,6 +44806,7 @@ def _apply_rendered_flux(
                     or rootfs_admission_preflight is None
                 ):
                     raise RuntimeError("protected rootfs operation identity was not established")
+                target_pv_uid = _assert_rootfs_physical_authority()
                 target_image = operation_spec.target_jail_image
                 if "@sha256:" not in target_image:
                     raise RuntimeError(
@@ -48159,6 +44876,7 @@ def _apply_rendered_flux(
                     extra_intent: Mapping[str, object] | None = None,
                     allow_create: bool = True,
                 ) -> tuple[Mapping[str, object] | None, str, str]:
+                    _assert_rootfs_physical_authority()
                     identity = protected_workload_identity(manifest)
                     existing = rootfs_recovery_journal.stage(stage_name)
                     intent = {
@@ -48277,6 +44995,7 @@ def _apply_rendered_flux(
                     pvc_name: str,
                     pvc_uid: str,
                 ) -> tuple[RootfsManifest, str, str]:
+                    _assert_rootfs_physical_authority()
                     authority = operation_authority()
                     name = _job_name(f"{purpose}-e{authority.fencing_epoch}")
                     manifest = bind_protected_job_authority(
@@ -48311,20 +45030,9 @@ def _apply_rendered_flux(
                     return inventory, job_uid, workload_sha256
 
                 admission_stage = rootfs_recovery_journal.stage("rootfs-admission-decision")
-                admission_intent = {
-                    "admissionReceiptSha256": rootfs_admission_preflight.receipt_sha256,
-                    "targetImage": target_image,
-                    "persistentPaths": list(rootfs_admission_preflight.persistent_paths),
-                    "livePvcName": rootfs_admission_preflight.live_pvc_name,
-                    "livePvcUid": rootfs_admission_preflight.live_pvc_uid,
-                    "targetPvcName": rootfs_admission_preflight.target_pvc_name,
-                    "targetSlot": rootfs_admission_preflight.target_slot,
-                    "targetStorageClassName": (
-                        rootfs_admission_preflight.target_storage_class_name
-                    ),
-                    "targetProvisioner": rootfs_admission_preflight.target_provisioner,
-                    "targetCapacity": rootfs_admission_preflight.target_capacity,
-                }
+                admission_intent = _soperator_rootfs_admission_stage_evidence(
+                    rootfs_admission_preflight
+                )
                 rootfs_recovery_journal.begin_stage(
                     name="rootfs-admission-decision",
                     intent=admission_intent,
@@ -48429,7 +45137,7 @@ def _apply_rendered_flux(
                 if identity_stage is None or identity_stage.get("status") == "intent":
                     rootfs_recovery_journal.complete_stage(
                         name="rootfs-passive-target-identity",
-                        evidence={"pvcUid": target_pvc_uid},
+                        evidence={"pvcUid": target_pvc_uid, "pvUid": target_pv_uid},
                     )
                 else:
                     identity_evidence = identity_stage.get("evidence")
@@ -48437,6 +45145,7 @@ def _apply_rendered_flux(
                         identity_stage.get("status") != "complete"
                         or not isinstance(identity_evidence, Mapping)
                         or identity_evidence.get("pvcUid") != target_pvc_uid
+                        or identity_evidence.get("pvUid") != target_pv_uid
                     ):
                         raise RuntimeError(
                             "recovery-required: protected passive rootfs PVC identity changed"
@@ -48715,6 +45424,8 @@ def _apply_rendered_flux(
                     "slot": target_slot,
                     "pvcName": target_pvc,
                     "pvcUid": target_pvc_uid,
+                    "pvUid": target_pv_uid,
+                    "admissionReceiptSha256": rootfs_admission_preflight.receipt_sha256,
                     "manifestSha256": final_inventory.manifest_sha256,
                     "entryCount": len(final_inventory.entries),
                     "populateJobUid": populate_job_uid,
@@ -48735,6 +45446,66 @@ def _apply_rendered_flux(
                         "materialization": materialization_evidence,
                     },
                 )
+                from .nsight_profiling import customize_generation, profiling_settings
+
+                nsight_settings = profiling_settings(config, target_ref)
+                if nsight_settings is not None:
+
+                    def _run_nsight_job(stage_name, request):
+                        from .nsight_recovery import RootfsStages, run_attempt
+
+                        job = bind_protected_job_authority(
+                            request,
+                            operation_id=operation_anchor.operation_id,
+                            fence_epoch=lease_authority.fencing_epoch,
+                            pvc_uid=target_pvc_uid,
+                        )
+                        return run_attempt(
+                            sys.modules[__name__],
+                            RootfsStages(rootfs_recovery_journal),
+                            stage=stage_name,
+                            manifest=job,
+                            fence=_assert_rootfs_physical_authority,
+                            context=kube_context,
+                            env=extra_env,
+                        )
+
+                    _set_phase("[cyan]Soperator reconcile: install-pinned-nsight-tools[/cyan]")
+                    nsight_receipt = customize_generation(
+                        config=config,
+                        target_ref=target_ref,
+                        image=target_image,
+                        pvc=target_pvc,
+                        pvc_uid=target_pvc_uid,
+                        pv_uid=target_pv_uid,
+                        filesystem_id=str(soperator_adapter_state["filesystemId"]),
+                        generation=operation_anchor.operation_id,
+                        run_job=_run_nsight_job,
+                    )
+                    assert nsight_receipt is not None
+                    from .nsight_recovery import RootfsStages, bind_attempt_receipt
+
+                    nsight_receipt = bind_attempt_receipt(
+                        nsight_receipt, RootfsStages(rootfs_recovery_journal)
+                    )
+                    rootfs_recovery_journal.begin_stage(
+                        name="rootfs-nsight-customization",
+                        intent={
+                            "settingsSha256": soperator_sha256(nsight_settings),
+                            "pvcUid": target_pvc_uid,
+                        },
+                    )
+                    existing_nsight = rootfs_recovery_journal.stage("rootfs-nsight-customization")
+                    assert existing_nsight is not None
+                    if existing_nsight.get("status") == "complete":
+                        if existing_nsight.get("evidence") != nsight_receipt:
+                            raise RuntimeError("Sealed Nsight customization changed")
+                    else:
+                        rootfs_recovery_journal.complete_stage(
+                            name="rootfs-nsight-customization",
+                            evidence=nsight_receipt,
+                            disposition="applied",
+                        )
                 rootfs_recovery_journal.seal()
                 return {
                     "status": "prepared",
@@ -48747,6 +45518,7 @@ def _apply_rendered_flux(
                 }
 
             def _verify_repair_rootfs_materialization() -> object:
+                _assert_rootfs_physical_authority()
                 if (
                     predecessor_rootfs_journal_payload is None
                     or not superseded_operation_spec_sha256
@@ -48769,6 +45541,7 @@ def _apply_rendered_flux(
                     expected_target_release=rootfs_predecessor_target_release,
                     expected_infrastructure_sha256=(rootfs_predecessor_infrastructure_sha256),
                     preflight=rootfs_admission_preflight,
+                    profiling_settings_sha256=profiling_fingerprint(config, target_ref),
                 )
                 jobs = _soperator_upgrade_sealed_rootfs_jobs_are_complete(
                     journal=predecessor_rootfs_journal_payload,
@@ -48779,6 +45552,7 @@ def _apply_rendered_flux(
                 return {**materialization, "jobs": jobs}
 
             def _verify_current_rootfs_materialization() -> object:
+                _assert_rootfs_physical_authority()
                 if (
                     rootfs_recovery_journal is None
                     or rootfs_admission_preflight is None
@@ -48798,6 +45572,7 @@ def _apply_rendered_flux(
                     expected_target_release=operation_spec.target_release,
                     expected_infrastructure_sha256=(operation_spec.infrastructure_plan_sha256),
                     preflight=rootfs_admission_preflight,
+                    profiling_settings_sha256=profiling_fingerprint(config, target_ref),
                 )
                 jobs = _soperator_upgrade_sealed_rootfs_jobs_are_complete(
                     journal=journal_payload,
@@ -49200,6 +45975,52 @@ def _apply_rendered_flux(
                     expected_slot=expected_slot,
                     expected_pvc_name=expected_pvc,
                 )
+                if profiling_fingerprint(config, target_ref):
+                    from .nsight_profiling import (
+                        active_verify_arguments,
+                        parse_result,
+                        sealed_customization,
+                    )
+
+                    journal = rootfs_recovery_journal.establish()
+                    if not isinstance(materialization_stage, Mapping):
+                        raise RuntimeError("Nsight verification requires the materialization stage")
+                    materialization_evidence = materialization_stage.get("evidence")
+                    if not isinstance(materialization_evidence, Mapping):
+                        raise RuntimeError("Nsight verification requires materialization evidence")
+                    materialization = materialization_evidence.get("materialization")
+                    if not isinstance(materialization, Mapping):
+                        raise RuntimeError(
+                            "Nsight verification requires the materialized PVC identity"
+                        )
+                    customization = sealed_customization(
+                        journal["stages"],
+                        settings_sha256=profiling_fingerprint(config, target_ref),
+                        generation=str(journal["operationId"]),
+                        pvc_uid=str(materialization["pvcUid"]),
+                        pv_uid=str(materialization["pvUid"]),
+                    )
+                    assert customization is not None
+                    verified = _protected_command_runner(
+                        [
+                            "kubectl",
+                            "--context",
+                            kube_context,
+                            "-n",
+                            "soperator",
+                            "exec",
+                            "login-0",
+                            "--",
+                            *active_verify_arguments(customization["admission"]),
+                        ],
+                        timeout_seconds=900,
+                        check=True,
+                    )
+                    if parse_result(verified.stdout) != customization["verification"]:
+                        raise RuntimeError(
+                            "Activated jail Nsight tools differ from the sealed customization"
+                        )
+                    sealed_rootfs["profilingReceiptSha256"] = customization["receiptSha256"]
                 return {
                     "status": "verified",
                     "activeSlot": expected_slot,
@@ -49276,13 +46097,16 @@ def _apply_rendered_flux(
                         checks_execution._save()
                     return apply_staged_soperator_release(
                         paths,
+                        native_transition=native_transition,
                         retired_release=(
                             admission_evidence["installDashboardRepair"]["retiredRelease"]
                             if admitted_repair_reason == INSTALL_DASHBOARD_REPAIR_REASON
                             and isinstance(admission_evidence, Mapping)
                             else None
                         ),
-                        checks_policy=checks_policy if checks_execution is not None else None,
+                        checks_policy=checks_policy
+                        if checks_execution is not None or fast_deploy
+                        else None,
                         checks_context=checks_execution.require_lifecycle().context()
                         if checks_execution is not None
                         else None,
@@ -49307,8 +46131,10 @@ def _apply_rendered_flux(
                                 STORAGE_REPAIR_REASON,
                                 USERNS_REPAIR_REASON,
                                 DOCKER_REPAIR_REASON,
+                                DOCKER_STORAGE_REPAIR_REASON,
                                 TOPOLOGY_REPAIR_REASON,
                                 CPU_MASK_REPAIR_REASON,
+                                OBSERVABILITY_REPAIR_REASON,
                             }
                             and isinstance(admission_evidence, Mapping)
                             else None
@@ -49325,8 +46151,10 @@ def _apply_rendered_flux(
                                 STORAGE_REPAIR_REASON,
                                 USERNS_REPAIR_REASON,
                                 DOCKER_REPAIR_REASON,
+                                DOCKER_STORAGE_REPAIR_REASON,
                                 TOPOLOGY_REPAIR_REASON,
                                 CPU_MASK_REPAIR_REASON,
+                                OBSERVABILITY_REPAIR_REASON,
                             }
                             and isinstance(admission_evidence, Mapping)
                             else None
@@ -49359,6 +46187,7 @@ def _apply_rendered_flux(
                         "--cache-dir",
                         str(cache_path),
                         "apply",
+                        "--server-side",
                         "-k",
                         str(paths.flux_dir),
                     ],
@@ -49370,6 +46199,112 @@ def _apply_rendered_flux(
                     assert_authority=operation_authority,
                 )
                 return None
+
+            def _fast_run(command: str, timeout: int = 120) -> str:
+                return _run_soperator_upgrade_login_command(
+                    "soperator",
+                    command,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                    timeout_seconds=timeout,
+                ).stdout
+
+            def _fast_workers() -> dict[str, bool]:
+                from .soperator_fast_readiness import active_workers
+
+                result = _run_soperator_upgrade_process(
+                    [
+                        "kubectl",
+                        "--context",
+                        kube_context,
+                        "-n",
+                        "soperator",
+                        "get",
+                        "nodesets.slurm.nebius.ai,nodesetpowerstates.slurm.nebius.ai",
+                        "-o",
+                        "json",
+                    ],
+                    extra_env=extra_env,
+                    timeout_seconds=120,
+                    check=True,
+                )
+                payload = json.loads(result.stdout)
+                items = payload.get("items", [])
+                return active_workers(
+                    soperator_values,
+                    [item for item in items if item.get("kind") == "NodeSet"],
+                    [item for item in items if item.get("kind") == "NodeSetPowerState"],
+                )
+
+            def _fast_admission() -> dict[str, Any]:
+                from .soperator_fast_readiness import smoke_groups
+
+                if operation_authority is None:
+                    raise RuntimeError("Fast readiness requires operation authority")
+                operation_authority()
+                if parent_owns_checks:
+                    if not isinstance(scheduling_evidence, Mapping):
+                        raise RuntimeError(
+                            "Fast readiness requires bound parent scheduling evidence"
+                        )
+                    return {
+                        "status": "delegated",
+                        "owner": "parent-campaign",
+                        "generation": scheduling_evidence["campaignIntentSha256"],
+                    }
+                groups = smoke_groups(
+                    _fast_workers(),
+                    _fast_run("scontrol show nodes -o"),
+                    _fast_run("scontrol show partition -o"),
+                    values=soperator_values,
+                )
+                return {
+                    "status": "ordinary-user-admission-ready",
+                    "groups": groups,
+                    "deploymentProfile": FAST_DEV_TEST,
+                }
+
+            def _worker_registration() -> object:
+                if fast_deploy:
+                    # Registration is checked against active ordinals, never maximum capacity.
+                    from .soperator_fast_readiness import verify_registered_workers
+
+                    workers = _fast_workers()
+                    verify_registered_workers(workers, _fast_run("scontrol show nodes -o"))
+                    return {"status": "registered", "workers": sorted(workers)}
+                return _verify_soperator_upgrade_slurm_worker_registration(
+                    namespace="soperator",
+                    values=soperator_values,
+                    kube_context=kube_context,
+                    extra_env=extra_env,
+                )
+
+            def _fast_smoke(*, verify_only: bool = False) -> object:
+                from .soperator_fast_readiness import verify_fast_readiness
+
+                if operation_authority is None or checks_policy is None:
+                    raise RuntimeError("Fast smoke requires frozen operation and policy authority")
+                operation_authority()
+                if parent_owns_checks:
+                    if not isinstance(scheduling_evidence, Mapping):
+                        raise RuntimeError(
+                            "Fast readiness requires bound parent scheduling evidence"
+                        )
+                    return {
+                        "status": "delegated",
+                        "owner": "parent-campaign",
+                        "generation": scheduling_evidence["campaignIntentSha256"],
+                    }
+                return verify_fast_readiness(
+                    generation=operation_spec_sha256,
+                    reports_dir=paths.reports_dir,
+                    policy=checks_policy,
+                    groups=lambda: _fast_admission()["groups"],
+                    run=_fast_run,
+                    assert_authority=operation_authority,
+                    verify_only=verify_only,
+                    confirm_retirement=_confirm_explicit_action,
+                )
 
             noop_readiness_receipt: object | None = None
 
@@ -49383,10 +46318,16 @@ def _apply_rendered_flux(
             def _wait_noop_readiness() -> object:
                 nonlocal noop_readiness_receipt
                 if noop_readiness_receipt is None:
+                    if soperator_snapshot is None or checks_policy is None:
+                        raise RuntimeError(
+                            "Soperator readiness requires the frozen release and checks policy"
+                        )
                     noop_readiness_receipt = wait_for_soperator_noop_readiness(
                         paths,
                         expected_release=soperator_snapshot.release,
+                        readiness_policy=checks_policy.readiness_contract(),
                         extra_env=extra_env,
+                        timeout_seconds=120 if fast_deploy else 5400,
                         emit=_update_progress_detail,
                     )
                 return noop_readiness_receipt
@@ -49451,22 +46392,31 @@ def _apply_rendered_flux(
                         paths,
                         extra_env=extra_env,
                         emit=_update_progress_detail,
-                        include_active_checks=False,
+                        include_active_checks=fast_deploy,
+                        readiness_policy=checks_policy.readiness_contract()
+                        if fast_deploy and checks_policy
+                        else None,
                     )
                 else:
                     graph_receipt = wait_for_soperator_release_graph(
                         paths,
                         extra_env=extra_env,
                         emit=_update_progress_detail,
-                        include_active_checks=False,
+                        include_active_checks=fast_deploy,
+                        readiness_policy=checks_policy.readiness_contract()
+                        if fast_deploy and checks_policy
+                        else None,
                         main_workload_identity=main_identity,
                     )
-                slurm_receipt = _verify_soperator_upgrade_slurm_worker_registration(
-                    namespace="soperator",
-                    values=soperator_values,
-                    kube_context=kube_context,
-                    extra_env=extra_env,
-                )
+                slurm_receipt = _worker_registration()
+                if (
+                    checks_execution is not None
+                    and not parent_owns_checks
+                    and reconcile_strategy is not None
+                    and reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    and checks_execution.state.get("phase") == "planned"
+                ):
+                    checks_execution.wait_for_deferred_scheduling()
                 return {
                     "releaseGraph": graph_receipt,
                     "slurmWorkers": slurm_receipt,
@@ -49525,11 +46475,19 @@ def _apply_rendered_flux(
                 ):
                     return _wait_noop_readiness()
                 main_identity = _main_workload_authority()
+                acceptance_exemptions = (
+                    checks_execution.readiness_exemptions()
+                    if checks_execution is not None
+                    and not parent_owns_checks
+                    and checks_execution.state.get("phase") in {"accepted", "restored"}
+                    else None
+                )
                 if main_identity is None:
                     graph_receipt = wait_for_soperator_release_graph(
                         paths,
                         extra_env=extra_env,
                         include_active_checks=not parent_owns_checks,
+                        acceptance_exemptions=acceptance_exemptions,
                         emit=_update_progress_detail,
                     )
                 else:
@@ -49537,19 +46495,21 @@ def _apply_rendered_flux(
                         paths,
                         extra_env=extra_env,
                         include_active_checks=not parent_owns_checks,
+                        acceptance_exemptions=acceptance_exemptions,
                         emit=_update_progress_detail,
                         main_workload_identity=main_identity,
                     )
-                slurm_receipt = _verify_soperator_upgrade_slurm_worker_registration(
-                    namespace="soperator",
-                    values=soperator_values,
-                    kube_context=kube_context,
-                    extra_env=extra_env,
-                )
+                slurm_receipt = _worker_registration()
+                if checks_execution is not None and not parent_owns_checks:
+                    _verify_checks_restored()
                 return {
                     "releaseGraph": graph_receipt,
                     "slurmWorkers": slurm_receipt,
                 }
+
+            def _wait_final_product() -> object:
+                service = _wait_complete_product()
+                return {"service": service, "smoke": _fast_smoke()} if fast_deploy else service
 
             def _accept_checks() -> object:
                 if checks_policy is None:
@@ -49569,7 +46529,37 @@ def _apply_rendered_flux(
                     runtime_recovery.restore_drains()
                 if docker_drain_recovery is not None:
                     docker_drain_recovery.restore_drains()
+                if docker_storage_recovery is not None:
+                    docker_storage_recovery.restore_drains()
+                from .soperator_checks_image_pull_recovery import recover_initial_image_pull
+
+                recover_initial_image_pull(
+                    checks_execution,
+                    lambda worker, args: (
+                        _run_soperator_upgrade_process(
+                            [
+                                "kubectl",
+                                "--context",
+                                kube_context,
+                                "-n",
+                                "soperator",
+                                "exec",
+                                worker,
+                                "-c",
+                                "slurmd",
+                                "--",
+                                *args,
+                            ],
+                            extra_env=extra_env,
+                            timeout_seconds=120,
+                            check=True,
+                        ).stdout
+                    ),
+                )
                 checks_execution.require_lifecycle().before_acceptance()
+                _set_phase(
+                    "[cyan]Validating fresh upstream checks before customer handoff...[/cyan]"
+                )
                 return checks_execution.accept(
                     before_jobs=(
                         docker_drain_recovery.resume_probe if docker_drain_recovery else None
@@ -49601,18 +46591,21 @@ def _apply_rendered_flux(
             def _checks_handoff() -> ChecksScheduleHandoff:
                 if checks_execution is None or parent_owns_checks or reconcile_strategy is None:
                     raise RuntimeError("initial checks handoff ownership is unavailable")
+                install_owned = checks_execution.state.get("installReservationIntent") is True
+                if install_owned and reconcile_strategy.strategy is not SoperatorStrategy.INSTALL:
+                    raise RuntimeError("installation reservation ownership conflicts with strategy")
                 release = (
                     checks_execution.release_install_reservation
-                    if reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    if install_owned
                     else release_checks_reservation
                 )
                 verify_released = (
                     checks_execution.verify_install_reservation_released
-                    if reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                    if install_owned
                     else verify_checks_reservation_released
                 )
                 if release is None or verify_released is None:
-                    raise RuntimeError("upgrade checks reservation lacks its scheduling owner")
+                    raise RuntimeError("checks reservation lacks its scheduling owner")
                 return ChecksScheduleHandoff(
                     checks_execution,
                     owner=checks_execution.operation_id,
@@ -49637,6 +46630,22 @@ def _apply_rendered_flux(
                 }
 
             def _restore_checks() -> object:
+                if (
+                    fast_deploy
+                    and reconcile_strategy is not None
+                    and reconcile_strategy.strategy is SoperatorStrategy.INSTALL
+                ):
+                    from .flux_ops import restore_fast_soperator_admission
+
+                    if operation_authority is None or operation_anchor is None:
+                        raise RuntimeError("Fast admission requires immutable operation authority")
+                    restore_fast_soperator_admission(
+                        paths,
+                        extra_env=extra_env,
+                        assert_authority=operation_authority,
+                        freeze_main_workload_authority=operation_anchor.freeze_main_workload_authority,
+                    )
+                    return _fast_admission()
                 if checks_policy is None:
                     raise RuntimeError("Soperator checks policy authority is unavailable")
                 if parent_owns_checks:
@@ -49677,6 +46686,7 @@ def _apply_rendered_flux(
                     kube_context=kube_context,
                     extra_env=extra_env,
                     cache_dir=cache_path,
+                    native_transition=native_transition,
                     freeze_main_workload_authority=operation_anchor.freeze_main_workload_authority,
                     on_stage_progress=lambda current, total, names: _set_phase(
                         f"Recovering check policy stage {current}/{total}: " + ", ".join(names)
@@ -49697,6 +46707,7 @@ def _apply_rendered_flux(
                 if not SoperatorCampaignChecks._policy_restored(checks_execution):
                     raise RuntimeError("upstream checks policy restoration is not converged")
                 _checks_handoff().verify()
+                checks_execution.require_lifecycle().passive.verify_restored()
                 return {"status": "restored", "policy": checks_policy.sha256}
 
             def _release_requeued_jobs(*, recover: bool = False) -> object:
@@ -49804,6 +46815,9 @@ def _apply_rendered_flux(
                     else None
                 )
                 completed_postconditions: dict[str, Callable[[Mapping[str, object]], object]] = {
+                    "reconcile-sources-and-wait-flux-graph": lambda _evidence: (
+                        _wait_noop_readiness()
+                    ),
                     "validate-target-active-checks": lambda _evidence: (
                         _accept_checks() if parent_owns_checks else _verify_completed_checks()
                     ),
@@ -49840,6 +46854,16 @@ def _apply_rendered_flux(
                         ),
                     ),
                 }
+                if fast_deploy:
+                    completed_postconditions["open-ordinary-user-admission"] = lambda _evidence: (
+                        _fast_admission()
+                    )
+                    completed_postconditions["wait-final-service-and-slurm-smoke"] = (
+                        lambda _evidence: {
+                            "service": _wait_complete_product(),
+                            "smoke": _fast_smoke(verify_only=True),
+                        }
+                    )
                 interrupted_recovery: dict[str, Callable[[Mapping[str, object]], object]] = {
                     "restore-infrastructure-and-scheduling-preimages": lambda _transition: (
                         maintenance.recover()
@@ -49916,7 +46940,7 @@ def _apply_rendered_flux(
                         release_requeued_jobs=_release_requeued_jobs,
                         wait_requeued_product=_wait_complete_product,
                         release_held_jobs=_release_held_jobs,
-                        wait_final_product=_wait_complete_product,
+                        wait_final_product=_wait_final_product,
                         capture_protected_state=(
                             _capture_protected_state
                             if reconcile_strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE
@@ -49998,7 +47022,7 @@ def _apply_rendered_flux(
 def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
     env = os.environ.copy()
     env.update(extra_env)
-    result = subprocess.run(
+    result = kubernetes_process.run(
         ["kubectl", "get", "nodes", "-o", "json"],
         env=env,
         capture_output=True,
@@ -50141,7 +47165,8 @@ def _reconcile_observability_gpu_node_labels(
         return
     env = os.environ.copy()
     env.update(extra_env)
-    result = subprocess.run(
+    assert_app_mutation_authority()
+    result = kubernetes_process.run(
         ["kubectl", "label", "nodes", "-l", selector, *label_args, "--overwrite"],
         env=env,
         capture_output=True,
@@ -50163,9 +47188,17 @@ def _ensure_grafana_runtime_before_flux(
     extra_env: dict[str, str] | None,
     target_ref: str = "",
 ) -> None:
-    if not grafana_enabled_for_target(config, target_ref=target_ref):
-        return
-    ensure_grafana_runtime_secrets(
+    from .grafana_database_runtime import ensure_persistent_grafana
+    from .observability_runtime import admit_vmagent_transition, ensure_write_secrets
+
+    admit_vmagent_transition(config, target_ref=target_ref, extra_env=extra_env)
+    ensure_write_secrets(
+        config,
+        target_ref=target_ref,
+        extra_env=extra_env,
+        emit=lambda message: console.print(message),
+    )
+    ensure_persistent_grafana(
         config,
         extra_env=extra_env,
         target_ref=target_ref,
@@ -50200,6 +47233,9 @@ def _collect_grafana_status_after_flux(
     timeout_seconds: float = GRAFANA_STATUS_TIMEOUT_SECONDS,
     poll_interval_seconds: float = GRAFANA_STATUS_POLL_INTERVAL_SECONDS,
 ) -> tuple[dict[str, Any], ...]:
+    from .grafana_database_runtime import verify_database_runtime
+
+    verify_database_runtime(config, target_ref=target_ref, extra_env=extra_env)
     if not grafana_enabled_for_target(config, target_ref=target_ref):
         return ()
     target_label = target_ref or "current cluster"
@@ -50217,7 +47253,15 @@ def _collect_grafana_status_after_flux(
             if statuses:
                 last_statuses = statuses
                 last_error = None
-            if statuses and all(str(status.get("base_url") or "").strip() for status in statuses):
+            if statuses and all(
+                str(status.get("base_url") or "").strip()
+                or status.get("access") == "private-port-forward"
+                for status in statuses
+            ):
+                from .observability_runtime import verify_connections, verify_vmagent_routes
+
+                verify_vmagent_routes(config, target_ref=target_ref, extra_env=extra_env)
+                verify_connections(config, target_ref=target_ref, extra_env=extra_env)
                 return statuses
         except Exception as exc:
             last_error = exc
@@ -50225,6 +47269,12 @@ def _collect_grafana_status_after_flux(
         now = time.monotonic()
         remaining = deadline - now
         if remaining <= 0:
+            from .observability_routing import target_settings
+
+            if target_settings(config, target_ref):
+                raise RuntimeError(
+                    "Configured Grafana datasource verification failed"
+                ) from last_error
             if last_statuses:
                 console.print(
                     f"{warning_markup('WARNING:', bold=True)} Grafana URL for {target_label} "
@@ -50258,7 +47308,7 @@ def _deploy_kubectl_json(
     extra_env: Mapping[str, str] | None,
     timeout: int = 60,
 ) -> Mapping[str, Any] | None:
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         ["kubectl", *args],
         env=_post_flux_subprocess_env(extra_env or {}),
         capture_output=True,
@@ -50565,9 +47615,12 @@ def _soperator_flux_apply_slurm_job_gate(
         namespaces = _soperator_upgrade_live_slurmcluster_namespaces(extra_env=extra_env)
     else:
         release_refs = _soperator_release_refs_for_job_policy(config, target_ref=target_ref)
-        namespaces = tuple(release_ref.namespace for release_ref in release_refs)
-        if not namespaces:
+        if not release_refs:
             return ()
+        # Helm storage and the adapter's Slurm workload use different namespaces.
+        from .soperator_adapter import SOPERATOR_ADAPTER_NAMESPACE
+
+        namespaces = (SOPERATOR_ADAPTER_NAMESPACE,)
     for namespace in namespaces:
         if not _soperator_upgrade_live_slurmcluster_exists(
             namespace=namespace,
@@ -52038,6 +49091,8 @@ def _apply_rendered_flux_with_soperator_job_policy(
             config=config,
             extra_env=extra_env,
             upgrade_progress=upgrade_progress,
+            target_ref=target_ref,
+            assert_authority=assert_authority,
         )
     journal_path = _soperator_slurm_action_journal_path(paths, target_ref)
     if assert_authority is None:
@@ -52074,6 +49129,7 @@ def _apply_rendered_flux_with_soperator_job_policy(
         "slurmPreimageSha256": slurm_preimage_sha256,
     }
     resume_existing = False
+    repaired_action_identity = False
     journal: dict[str, Any]
     local_journal: dict[str, Any] | None = None
     if journal_path.is_file():
@@ -52112,8 +49168,25 @@ def _apply_rendered_flux_with_soperator_job_policy(
                     "recovery-required: unfinished Soperator scheduling state belongs "
                     "to a different exact operation"
                 )
-            journal = loaded_journal
-            validate_slurm_recovery_actions(journal["actions"])
+            from .soperator_slurm_journal_repair import admit_action_identity_repair
+
+            proven_install = False
+            if install_recovery and loaded_journal.get("operationSpecSha256"):
+                infrastructure_plan_sha256 = bound_install_infrastructure_identity(
+                    paths.reports_dir,
+                    target_ref=target_ref,
+                    cluster_id=cluster_id,
+                    operation_spec_sha256=str(loaded_journal["operationSpecSha256"]),
+                )
+                proven_install = True
+            journal = admit_action_identity_repair(
+                loaded_journal,
+                local=local_journal,
+                allow_repair=proven_install,
+            )
+            repaired_action_identity = (
+                "actionIdentityRepair" not in loaded_journal and "actionIdentityRepair" in journal
+            )
             resume_existing = True
         else:
             journal = {}
@@ -52150,8 +49223,10 @@ def _apply_rendered_flux_with_soperator_job_policy(
                     STORAGE_REPAIR_REASON: "installStorageRepair",
                     USERNS_REPAIR_REASON: "installUsernsRepair",
                     DOCKER_REPAIR_REASON: "installDockerRepair",
+                    DOCKER_STORAGE_REPAIR_REASON: "installDockerStorageRepair",
                     TOPOLOGY_REPAIR_REASON: "installTopologyRepair",
                     CPU_MASK_REPAIR_REASON: "installCpuMaskRepair",
+                    OBSERVABILITY_REPAIR_REASON: "installObservabilityRepair",
                     INSTALL_DASHBOARD_REPAIR_REASON: "installDashboardRepair",
                 }[repair["schema"]]: repair
             }
@@ -52185,6 +49260,18 @@ def _apply_rendered_flux_with_soperator_job_policy(
             ) from exc
         _write_owner_only_json(journal_path, payload)
 
+    def _read_native_transition() -> Mapping[str, Any] | None:
+        return journal.get("nativeGraphTransition")
+
+    def _write_native_transition(value: Mapping[str, Any]) -> None:
+        journal["nativeGraphTransition"] = dict(value)
+        _persist_journal(journal)
+
+    def _verify_native_maintenance() -> None:
+        from .soperator_graph_repair import verify_scheduling_maintenance
+
+        verify_scheduling_maintenance(sys.modules[__name__], journal, extra_env)
+
     def _read_controller_spool_migration() -> Mapping[str, object] | None:
         raw = journal.get("controllerSpoolMigration")
         if raw is None:
@@ -52206,6 +49293,11 @@ def _apply_rendered_flux_with_soperator_job_policy(
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Soperator Slurm action journal has an invalid start time") from exc
         _persist_journal(journal)
+        if repaired_action_identity:
+            console.print(
+                "Repaired the proven node-sequence action identity defect; "
+                "original scheduling events are retained."
+            )
     else:
         started_at = float(operation_started_at or time.time())
         journal = {
@@ -52265,6 +49357,12 @@ def _apply_rendered_flux_with_soperator_job_policy(
         return _soperator_slurm_operation_evidence(journal)
 
     def _bind_operation_spec(operation_spec_sha256: str) -> None:
+        nonlocal intervention_generation, superseded_operation_spec_sha256
+        from .soperator_graph_repair import sealed_binding
+
+        native_binding = sealed_binding(paths, target_ref, operation_spec_sha256)
+        if native_binding is not None:
+            superseded_operation_spec_sha256, intervention_generation = native_binding
         expected = _non_empty_text(journal.get("operationSpecSha256"))
         if (
             expected
@@ -52632,6 +49730,10 @@ def _apply_rendered_flux_with_soperator_job_policy(
             release_checks_reservation=_release_checks,
             verify_checks_reservation_released=_verify_checks_release,
             before_reconcile_mutations=_ensure_slurm_gated,
+            read_native_transition=_read_native_transition,
+            write_native_transition=_write_native_transition,
+            bound_operation_spec_sha256=str(journal.get("operationSpecSha256") or ""),
+            verify_native_maintenance=_verify_native_maintenance,
             read_controller_spool_migration=_read_controller_spool_migration,
             write_controller_spool_migration=_write_controller_spool_migration,
             intervention_generation=intervention_generation,
@@ -52647,13 +49749,12 @@ def _apply_rendered_flux_with_soperator_job_policy(
         return operation_anchor
     except Exception as exc:
         supervised = bool(
-            reconcile_execution_policy is not None
-            and reconcile_execution_policy.forward_until_complete
+            reconcile_execution_policy is not None and reconcile_execution_policy.forward_only
         )
         if supervised:
-            journal["status"] = _soperator_upgrade_failure_disposition(
-                "scheduling-gate",
-                exc,
+            journal["status"] = "recovery-required"
+            journal["failureDisposition"] = _soperator_upgrade_failure_disposition(
+                "scheduling-gate", exc
             ).value
         elif _stage_completed("other-held-released"):
             journal["status"] = "failed-after-restore"
@@ -52662,7 +49763,12 @@ def _apply_rendered_flux_with_soperator_job_policy(
         else:
             journal["status"] = "recovery-required"
         journal["failedAt"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-        _persist_journal(journal)
+        try:
+            _persist_journal(journal)
+        except Exception as report_error:
+            exc.add_note(
+                f"Scheduling failure checkpoint could not be saved: {type(report_error).__name__}"
+            )
         if not _stage_completed("requeued-running-released") and journal["actions"]:
             console.print(
                 "Soperator reconciliation did not pass complete product readiness; "
@@ -52689,11 +49795,19 @@ def _deploy_generated_artifacts(
     terraform_plan_file: Path | None = None,
     expected_terraform_plan_sha256: str = "",
     skip_terraform_apply: bool = False,
+    preflight_runtime_env: Mapping[str, str] | None = None,
     on_terraform_complete: Callable[[], None] | None = None,
-    soperator_install_lease: SoperatorInstallRemoteLease | None = None,
+    deployment_lease: LocalExecutionOwner | None = None,
+    soperator_plan: DeploymentPlan | None = None,
+    soperator_release_complete: bool = False,
     soperator_install_approval_fingerprint: str = "",
     soperator_runtime_input_env: Mapping[str, str] | None = None,
     soperator_runtime_prompt: bool = False,
+    expected_identities: Mapping[str, Mapping[str, str]] | None = None,
+    on_target_identity: Callable[[str, Mapping[str, str]], None] | None = None,
+    prepare_application_inputs: Callable[[], None] | None = None,
+    on_target_inputs: Callable[..., None] | None = None,
+    report_paths: ProjectPaths | None = None,
 ) -> DeployRunSummary:
     """Deploy an existing generated artifact bundle without rerendering it."""
     cluster_identities: dict[str, dict[str, str]] = {}
@@ -52733,15 +49847,17 @@ def _deploy_generated_artifacts(
         requested_target_ref=requested_target_ref,
         all_targets=all_targets,
     )
-    if soperator_install_lease is None and _payload_has_enabled_soperator(config):
+    if deployment_lease is None and _payload_has_enabled_soperator(config):
         raise RuntimeError(
             "Soperator in-cluster mutation is available only through "
-            "`nebius-cxcli soperator install` or `soperator upgrade`"
+            "`nebius-cxcli deploy` or `soperator upgrade`"
         )
-    mysterybox_payload_env = _run_deploy_preflight(
-        config,
-        paths,
-        manifest=manifest,
+    # The shared executor already admitted this private generation. Reuse its
+    # in-memory inputs without repeating validation or prompting for secrets.
+    mysterybox_payload_env = (
+        dict(preflight_runtime_env)
+        if preflight_runtime_env is not None
+        else _run_deploy_preflight(config, paths, manifest=manifest)
     )
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     has_enabled_app_charts = _active_chart_count(config) > 0
@@ -52768,6 +49884,8 @@ def _deploy_generated_artifacts(
     apply_kwargs["run_mk8s_preflight"] = False
     if mysterybox_payload_env:
         apply_kwargs["extra_env"] = mysterybox_payload_env
+    if deployment_lease is not None:
+        apply_kwargs["assert_authority"] = deployment_lease.assert_held
     terraform_required = _config_has_enabled_infra_components(config)
     if terraform_required and not skip_terraform_apply:
         try:
@@ -52792,16 +49910,21 @@ def _deploy_generated_artifacts(
         ):
             manifest = load_generated_manifest(paths.generated_dir)
             config = runtime_config_from_manifest(manifest)
-        _refresh_mysterybox_eso_flux_after_terraform(config, paths)
-        if on_terraform_complete is not None:
-            on_terraform_complete()
     elif terraform_required:
         console.print(
-            "Soperator install infrastructure stage is already checkpointed complete; "
-            "skipping Terraform plan replay."
+            "Terraform plan contains no infrastructure changes; skipping Terraform apply."
         )
     else:
         console.print("No cxcli-managed Terraform infra is enabled; skipping Terraform apply.")
+    if terraform_required:
+        # A retry can observe a no-op plan after losing the apply acknowledgement.
+        # Materialize app inputs from authoritative outputs before any target effect.
+        if prepare_application_inputs is not None:
+            prepare_application_inputs()
+        else:
+            _refresh_mysterybox_eso_flux_after_terraform(config, paths)
+        if on_terraform_complete is not None:
+            on_terraform_complete()
     write_inventory(config, paths, validations=report_validations)
     if skip_validations and deploy_declared_validations:
         if deploy_validations:
@@ -52828,334 +49951,43 @@ def _deploy_generated_artifacts(
     validation_error: Exception | None = None
     grafana_statuses: list[dict[str, Any]] = []
     if selected_targets:
-        persist_local_kubeconfig = True
-        set_current_context = len(selected_targets) == 1 and not all_targets
         for target in selected_targets:
-            target_ref = str(target["target_ref"])
-            target_paths = _paths_for_target_flux_dir(paths, target)
-            target_has_apps = _active_chart_count_for_target(config, target_ref=target_ref) > 0
-            target_validations = _filter_validations_for_target(
-                deploy_validations,
-                target_ref=target_ref,
-            )
-            pre_app_validations = (
-                _pre_app_cluster_smoke_validations(target_validations) if target_has_apps else []
-            )
-            pre_soperator_validations = _pre_soperator_gpu_validations(
-                config,
-                target=target,
-                validations=[
-                    item for item in target_validations if item not in pre_app_validations
-                ],
-            )
-            post_soperator_validations = [
-                item
-                for item in target_validations
-                if item not in pre_app_validations and item not in pre_soperator_validations
-            ]
-            post_soperator_validations = _ordered_post_soperator_validations(
-                config,
-                target_ref=target_ref,
-                validations=post_soperator_validations,
-            )
-            needs_cluster_ready = target_has_apps or bool(target_validations)
             if len(selected_targets) > 1:
-                console.print(f"[bold]Target {target_ref}[/bold]")
-            with ExitStack() as stack:
-                kube_env = _prepare_cluster_handoff_kube_env(
+                console.print(f"[bold]Target {target['target_ref']}[/bold]")
+            try:
+                result = deploy_application_target(
+                    sys.modules[__name__],
                     config,
                     paths,
-                    stack=stack,
-                    target=target,
-                    persist_local_kubeconfig=persist_local_kubeconfig,
-                    set_current_context=set_current_context,
+                    target,
+                    deploy_validations=deploy_validations,
+                    job_policy=job_policy,
+                    cancel_job_ids=cancel_job_ids,
+                    requeue_job_ids=requeue_job_ids,
+                    job_wait_timeout_seconds=job_wait_timeout_seconds,
+                    job_refresh_interval_seconds=job_refresh_interval_seconds,
+                    skip_terraform_apply=skip_terraform_apply,
+                    deployment_lease=deployment_lease,
+                    soperator_plan=soperator_plan,
+                    soperator_release_complete=soperator_release_complete,
+                    soperator_install_approval_fingerprint=soperator_install_approval_fingerprint,
+                    soperator_runtime_input_env=soperator_runtime_input_env,
+                    soperator_runtime_prompt=soperator_runtime_prompt,
+                    soperator_infrastructure_plan_sha256=soperator_infrastructure_plan_sha256,
+                    soperator_operation_started_at=soperator_operation_started_at,
+                    expected_identity=(expected_identities or {}).get(str(target["target_ref"])),
+                    on_identity=on_target_identity,
+                    on_inputs=on_target_inputs,
+                    report_paths=report_paths,
                 )
-                install_cluster_lease: SoperatorOperationLease | None = None
-                install_anchor_name = ""
-                install_kube_context = ""
-                if soperator_install_lease is not None:
-                    if kube_env is None:
-                        raise RuntimeError(
-                            "Soperator install could not establish target Kubernetes handoff"
-                        )
-                    cluster_id = _non_empty_text(kube_env.get(GRAFANA_TARGET_CLUSTER_ID_ENV))
-                    install_kube_context = _non_empty_text(
-                        kube_env.get(GRAFANA_TARGET_KUBE_CONTEXT_ENV)
-                    )
-                    if not cluster_id or not install_kube_context:
-                        raise RuntimeError(
-                            "Soperator install handoff omitted the immutable cluster id or context"
-                        )
-                    kubernetes_uid = _read_kube_system_namespace_uid(
-                        kube_context=install_kube_context,
-                        extra_env=kube_env,
-                    )
-                    if not kubernetes_uid:
-                        raise RuntimeError(
-                            "Soperator install could not read the kube-system namespace UID"
-                        )
-                    cluster_identities[target_ref] = {
-                        "cluster_id": cluster_id,
-                        "kubernetes_uid": kubernetes_uid,
-                    }
-                    soperator_install_lease.bind_cluster_identity(
-                        cluster_id=cluster_id,
-                        kubernetes_uid=kubernetes_uid,
-                    )
-                    soperator_install_lease.assert_held()
-                    install_cluster_lease = stack.enter_context(
-                        SoperatorOperationLease(
-                            kube_context=install_kube_context,
-                            cluster_id=cluster_id,
-                            operation_fingerprint=soperator_install_lease.operation_id,
-                            extra_env=kube_env,
-                        )
-                    )
-                    install_cluster_lease.assert_held()
-                    install_anchor_name = _apply_soperator_install_operation_anchor(
-                        extra_env=kube_env,
-                        kube_context=install_kube_context,
-                        cluster_id=cluster_id,
-                        kubernetes_uid=kubernetes_uid,
-                        operation_id=soperator_install_lease.operation_id,
-                        approval_fingerprint=soperator_install_approval_fingerprint,
-                    )
-
-                def _assert_soperator_authority(
-                    _cluster_lease: SoperatorOperationLease | None = (install_cluster_lease),
-                    _remote_lease: SoperatorInstallRemoteLease | None = (soperator_install_lease),
-                ) -> SoperatorLeaseAuthority:
-                    if _cluster_lease is None or _remote_lease is None:
-                        raise RuntimeError(
-                            "Soperator in-cluster mutation is available only through "
-                            "`nebius-cxcli soperator install` or `soperator upgrade`"
-                        )
-                    _remote_lease.assert_held()
-                    return _cluster_lease.assert_held()
-
-                if target_has_apps:
-                    _reconcile_observability_gpu_node_labels(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref,
-                    )
-                    _ensure_mysterybox_eso_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref,
-                    )
-                    with (
-                        runtime_app_mutations(
-                            config,
-                            target_ref=target_ref,
-                            env=kube_env or {},
-                            authority=_assert_soperator_authority,
-                        )
-                        if soperator_install_lease is not None
-                        else nullcontext()
-                    ):
-                        _ensure_grafana_runtime_before_flux(
-                            config,
-                            extra_env=kube_env,
-                            target_ref=target_ref,
-                        )
-                    _ensure_soperator_notifier_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref,
-                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
-                            target_paths
-                        ),
-                    )
-                    _ensure_soperator_runtime_before_flux(
-                        config,
-                        paths=target_paths,
-                        extra_env={**(kube_env or {}), **(soperator_runtime_input_env or {})},
-                        target_ref=target_ref,
-                        assert_authority=_assert_soperator_authority,
-                        prompt=soperator_runtime_prompt and _console_is_terminal(),
-                        emit=lambda message: console.print(message),
-                    )
-                if needs_cluster_ready:
-                    _report_cluster_nodes_status(
-                        extra_env=kube_env, emit=lambda message: console.print(message)
-                    )
-                if target_has_apps and pre_app_validations:
-                    try:
-                        _run_target_deploy_validations(
-                            pre_app_validations,
-                            target_ref=target_ref,
-                            reports_dir=paths.reports_dir,
-                            extra_env=kube_env,
-                        )
-                    except Exception as exc:
-                        validation_error = exc
-                        break
-                if target_has_apps:
-                    ordinary_dir = target_paths.flux_dir / "ordinary"
-                    if soperator_install_lease is not None and ordinary_dir.is_dir():
-                        _assert_soperator_authority()
-                        with tempfile.TemporaryDirectory(
-                            prefix="cxcli-install-apps-"
-                        ) as ordinary_temp:
-                            prerequisite_dir = Path(ordinary_temp)
-                            shutil.copytree(ordinary_dir, prerequisite_dir, dirs_exist_ok=True)
-                            protected_secrets = (
-                                target_paths.flux_dir / "post-flux-mysterybox-eso.yaml"
-                            )
-                            if protected_secrets.is_file():
-                                shutil.copyfile(
-                                    protected_secrets,
-                                    prerequisite_dir / "post-flux-00-mysterybox-eso.yaml",
-                                )
-                            _apply_rendered_flux(
-                                replace(target_paths, flux_dir=prerequisite_dir),
-                                extra_env=kube_env,
-                                assert_authority=_assert_soperator_authority,
-                            )
-                    if pre_soperator_validations:
-                        console.print(
-                            "Applying platform Flux resources before Soperator GPU validations "
-                            f"for target {target_ref}..."
-                        )
-                        if not ordinary_dir.is_dir():
-                            with _staged_flux_without_soperator(
-                                target_paths,
-                                config=config,
-                                target_ref=target_ref,
-                            ) as staged_target_paths:
-                                _apply_rendered_flux(staged_target_paths, extra_env=kube_env)
-                        try:
-                            _run_target_deploy_validations(
-                                pre_soperator_validations,
-                                target_ref=target_ref,
-                                reports_dir=paths.reports_dir,
-                                extra_env=kube_env,
-                            )
-                        except Exception as exc:
-                            validation_error = exc
-                            break
-                    _apply_rendered_flux_with_soperator_job_policy(
-                        config,
-                        target_paths,
-                        install_recovery=soperator_install_lease is not None
-                        and skip_terraform_apply,
-                        operation_source_release=""
-                        if soperator_install_lease is not None
-                        else None,
-                        command_name="deploy",
-                        target_ref=target_ref,
-                        extra_env=kube_env,
-                        job_policy=job_policy,
-                        cancel_job_ids=cancel_job_ids,
-                        requeue_job_ids=requeue_job_ids,
-                        job_wait_timeout_seconds=job_wait_timeout_seconds,
-                        job_refresh_interval_seconds=job_refresh_interval_seconds,
-                        infrastructure_plan_sha256=soperator_infrastructure_plan_sha256,
-                        assert_authority=_assert_soperator_authority,
-                        operation_started_at=soperator_operation_started_at,
-                    )
-                    _ensure_soperator_gpu_ephemeral_bootstrap_power_state(
-                        config,
-                        target_ref=target_ref,
-                        extra_env=kube_env,
-                    )
-                    grafana_statuses.extend(
-                        _collect_grafana_status_after_flux(
-                            config,
-                            extra_env=kube_env,
-                            target_ref=target_ref,
-                        )
-                    )
-                    bootstrap_command = _warn_if_flux_gitops_not_bootstrapped(
-                        config,
-                        target_paths,
-                        extra_env=kube_env,
-                        target_ref=target_ref,
-                        print_command=False,
-                    )
-                    if bootstrap_command:
-                        gitops_bootstrap_commands.append(bootstrap_command)
-                if post_soperator_validations:
-                    try:
-                        _run_target_deploy_validations(
-                            post_soperator_validations,
-                            target_ref=target_ref,
-                            reports_dir=paths.reports_dir,
-                            extra_env=kube_env,
-                        )
-                    except Exception as exc:
-                        validation_error = exc
-                        break
-                if install_cluster_lease is not None:
-                    install_cluster_lease.assert_held()
-                    soperator_install_lease.assert_held()
-                    _complete_soperator_install_operation_anchor(
-                        extra_env=kube_env or {},
-                        kube_context=install_kube_context,
-                        name=install_anchor_name,
-                        operation_id=soperator_install_lease.operation_id,
-                    )
-            if validation_error is not None:
+                cluster_identities[str(target["target_ref"])] = result["identity"]
+                grafana_statuses.extend(result["grafana_statuses"])
+                gitops_bootstrap_commands.extend(result["bootstrap_commands"])
+            except Exception as exc:
+                validation_error = exc
                 break
     elif has_enabled_app_charts or deploy_validations:
-        _report_cluster_nodes_status(extra_env=None, emit=lambda message: console.print(message))
-        if has_enabled_app_charts:
-            _ensure_mysterybox_eso_runtime_before_flux(
-                config,
-                extra_env=None,
-            )
-            _ensure_grafana_runtime_before_flux(config, extra_env=None)
-            _ensure_soperator_notifier_runtime_before_flux(
-                config,
-                extra_env=None,
-                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
-            )
-            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
-            _apply_rendered_flux_with_soperator_job_policy(
-                config,
-                paths,
-                command_name="deploy",
-                target_ref="",
-                extra_env=None,
-                job_policy=job_policy,
-                cancel_job_ids=cancel_job_ids,
-                requeue_job_ids=requeue_job_ids,
-                job_wait_timeout_seconds=job_wait_timeout_seconds,
-                job_refresh_interval_seconds=job_refresh_interval_seconds,
-            )
-            grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
-            bootstrap_command = _warn_if_flux_gitops_not_bootstrapped(
-                config,
-                paths,
-                extra_env=None,
-                print_command=False,
-            )
-            if bootstrap_command:
-                gitops_bootstrap_commands.append(bootstrap_command)
-        if deploy_validations:
-            with console.status(
-                "[cyan]Running deploy-time validations...[/cyan]",
-                spinner="dots",
-            ) as status:
-                last_validation_phase = ""
-
-                def _emit_validation_phase(message: str) -> None:
-                    nonlocal last_validation_phase
-                    status.update(message)
-                    if not _console_is_terminal() and message != last_validation_phase:
-                        console.print(message)
-                    last_validation_phase = message
-
-                try:
-                    _run_deploy_validations(
-                        deploy_validations,
-                        reports_dir=paths.reports_dir,
-                        extra_env=None,
-                        emit=_emit_validation_phase,
-                    )
-                except Exception as exc:
-                    validation_error = exc
+        raise RuntimeError("Application deployment requires a declared cluster target")
     if grafana_statuses:
         write_grafana_status(
             paths,
@@ -53177,10 +50009,28 @@ def _deploy_generated_artifacts(
             reports_dir=paths.reports_dir,
             markdown_path=artifacts.markdown,
         )
+    if report_paths is not None:
+        from .deployment_reports import publish_deployment_reports
+
+        try:
+            validation_report = publish_deployment_reports(
+                paths,
+                report_paths,
+                report_validations,
+                validation_report,
+                failure=validation_error,
+            )
+        except (OSError, RuntimeError, UnicodeError):
+            if validation_error is not None:
+                console.print(
+                    "[red]Deployment reports could not be published to the local reports directory.[/red]"
+                )
+                raise validation_error from None
+            raise
     if validation_error is not None:
         _print_deploy_command_footer(
             config,
-            paths,
+            report_paths or paths,
             DeployRunSummary(
                 validation_report=validation_report,
                 gitops_bootstrap_commands=tuple(gitops_bootstrap_commands),
@@ -53342,7 +50192,7 @@ def _validate_rendered_flux_manifests(
     )
     for target_path in target_paths:
         try:
-            subprocess.run(
+            kubernetes_process.run(
                 ["kubectl", "kustomize", str(target_path.flux_dir)],
                 check=True,
                 capture_output=True,
@@ -53371,6 +50221,7 @@ def _run_deploy_preflight(
     )
 
 
+@frozen_manifest_inputs
 def _run_generated_bundle_validation(
     config: Any,
     paths: ProjectPaths,
@@ -53395,6 +50246,7 @@ def _run_generated_bundle_validation(
         )
     phase_defs = [
         _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
+        _ValidationPhase("compatibility", "Enforce frozen component compatibility"),
     ]
     terraform_required = _config_has_enabled_infra_components(config) or bool(
         _required_runtime_component_output_specs(config)
@@ -53503,6 +50355,18 @@ def _run_generated_bundle_validation(
                 "portable",
                 lambda: _validate_generated_bundle_portability(paths, manifest or {}),
             )
+        compatibility = progress.run(
+            "compatibility",
+            lambda: admit_compatibility(
+                config,
+                paths,
+                (manifest or {}).get("render", {}).get("compatibility", {}),
+                terraform_validated=terraform_required,
+            ),
+        )
+        from .soperator_receipt_io import write_owner_only_json
+
+        write_owner_only_json(paths.reports_dir / "compatibility-admission.json", compatibility)
 
     _print_mk8s_gpu_validation_warnings(config)
     return mysterybox_payload_env
@@ -53580,7 +50444,10 @@ def _destroy_rendered_flux_bundle(
     *,
     requested_target_ref: str | None = None,
     all_targets: bool = False,
+    target_kube_env: Mapping[str, str] | None = None,
 ) -> None:
+    if target_kube_env is not None and (not requested_target_ref or all_targets):
+        raise RuntimeError("A bound teardown connection requires one explicit target")
     if _active_chart_count(config) == 0:
         raise RuntimeError("No enabled apps charts are configured for this project.")
     manifest_targets = _manifest_deploy_targets(manifest)
@@ -53598,13 +50465,15 @@ def _destroy_rendered_flux_bundle(
                 console.print(f"[bold]Target {target_ref}[/bold]")
             try:
                 with ExitStack() as stack:
-                    kube_env = _prepare_cluster_handoff_kube_env(
-                        config,
-                        paths,
-                        stack=stack,
-                        target=target,
-                        persist_local_kubeconfig=False,
-                    )
+                    kube_env = target_kube_env
+                    if kube_env is None:
+                        kube_env = _prepare_cluster_handoff_kube_env(
+                            config,
+                            paths,
+                            stack=stack,
+                            target=target,
+                            persist_local_kubeconfig=False,
+                        )
                     _delete_post_flux_manifests(target_paths, env=kube_env)
                     delete_rendered_flux(target_paths, extra_env=kube_env, emit=console.print)
                     _delete_rendered_flux_namespaces(target_paths, env=kube_env)
@@ -53625,29 +50494,7 @@ def _destroy_rendered_flux_bundle(
                 f"attempting all selected targets: {details}"
             )
         return
-    _delete_post_flux_manifests(paths, env=os.environ.copy())
-    delete_rendered_flux(paths, extra_env=None, emit=console.print)
-    _delete_rendered_flux_namespaces(paths, env=os.environ.copy())
-
-
-def _destroy_uses_cluster_teardown_for_apps(config: Any, manifest: Mapping[str, Any]) -> bool:
-    targets = _manifest_deploy_targets(manifest)
-    if _active_chart_count(config) == 0 or not targets:
-        return False
-    managed_targets = _manifest_managed_deploy_targets(manifest)
-    return bool(managed_targets) and len(managed_targets) == len(targets)
-
-
-def _manifest_has_external_deploy_targets(manifest: Mapping[str, Any]) -> bool:
-    return any(
-        str(target.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "")).strip() == EXTERNAL_TARGET_OWNERSHIP
-        for target in _manifest_deploy_targets(manifest)
-    )
-
-
-def _destroy_should_delete_rendered_flux_first(config: Any, manifest: Mapping[str, Any]) -> bool:
-    _ = manifest
-    return _active_chart_count(config) > 0
+    raise RuntimeError("Application teardown requires a declared cluster target")
 
 
 def _destroy_confirmation_text(
@@ -53661,23 +50508,6 @@ def _destroy_confirmation_text(
             "Destroy will remove all rendered infra resources for this project by running "
             "Terraform destroy against the rendered infra bundle under "
             f"{paths.infra_dir}.",
-        )
-    if _destroy_uses_cluster_teardown_for_apps(config, manifest):
-        return (
-            "Continue and destroy all rendered app and infra resources for this project?",
-            "Destroy will remove all rendered project resources represented by the generated "
-            "manifest by deleting rendered app resources from the handed-off MK8s target first "
-            "so Kubernetes finalizers and CSI cleanup can run, then running Terraform destroy "
-            f"against the rendered infra bundle under {paths.infra_dir}. This generated bundle "
-            "still destroys the handed-off MK8s cluster directly after app teardown.",
-        )
-    if _manifest_has_external_deploy_targets(manifest):
-        return (
-            "Continue and delete rendered app resources and destroy only cxcli-owned infra?",
-            "Destroy will delete the rendered app resources from the external MK8s target first. "
-            "The existing MK8s cluster and node groups are external to cxcli and will not be "
-            f"destroyed. Any cxcli-managed infra under {paths.infra_dir} is still destroyed "
-            "after app teardown.",
         )
     return (
         "Continue and destroy all rendered app and infra resources for this project?",
@@ -53695,10 +50525,13 @@ def _destroy_generated_artifacts(
     *,
     yes: bool = False,
 ) -> None:
+    from .destroy_target import require_non_mk8s_destroy
+
+    require_non_mk8s_destroy(config, manifest)
     terraform_required = _config_has_enabled_infra_components(config)
     if terraform_required:
         _ensure_terraform_backend_ready(config)
-    if _destroy_should_delete_rendered_flux_first(config, manifest):
+    if _active_chart_count(config) > 0:
         try:
             _destroy_rendered_flux_bundle(config, paths, manifest, all_targets=True)
         except Exception as exc:
@@ -53709,8 +50542,8 @@ def _destroy_generated_artifacts(
                     f"cleanup may still need the target cluster. Reason: {exc}"
                 ) from exc
             raise RuntimeError(
-                "Rendered app teardown failed for an external MK8s target and there is no "
-                "cxcli-managed Terraform cluster destroy fallback. App resources may still "
+                "Rendered app teardown failed and there is no "
+                "cxcli-managed Terraform teardown. App resources may still "
                 f"be installed. Reason: {exc}"
             ) from exc
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
@@ -53723,10 +50556,7 @@ def _destroy_generated_artifacts(
             status_watchers=status_watchers or None,
         )
     else:
-        console.print(
-            "No cxcli-managed Terraform infra is enabled; skipping Terraform destroy. "
-            "External MK8s cluster and node groups were not destroyed."
-        )
+        console.print("No cxcli-managed Terraform infra is enabled; skipping Terraform destroy.")
 
 
 def _run_terraform_apply_with_status(
@@ -53740,6 +50570,7 @@ def _run_terraform_apply_with_status(
     manifest: Mapping[str, Any] | None = None,
     plan_file: Path | None = None,
     expected_plan_sha256: str | None = None,
+    assert_authority: Callable[[], object] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
     if extra_env:
@@ -53765,18 +50596,31 @@ def _run_terraform_apply_with_status(
         reporting_kwargs["status_watchers"] = status_watchers
     with deployment_status_reporting(config, **reporting_kwargs) as reporter:
         try:
-            abort_check = reporter.abort_reason if hasattr(reporter, "abort_reason") else None
+            status_abort = reporter.abort_reason if hasattr(reporter, "abort_reason") else None
+
+            def abort_check() -> str | None:
+                if assert_authority is not None:
+                    try:
+                        assert_authority()
+                    except Exception:
+                        return "Deployment authority lost; rerun the matching deployment."
+                return status_abort() if status_abort is not None else None
+
             apply_kwargs: dict[str, Any] = {
                 "extra_env": runtime_env,
                 "initialize": initialize,
                 "event_callback": reporter.handle_terraform_event,
             }
-            if abort_check is not None:
+            if assert_authority is not None:
                 apply_kwargs["abort_check"] = abort_check
+            elif status_abort is not None:
+                apply_kwargs["abort_check"] = status_abort
             if plan_file is not None:
                 apply_kwargs["plan_file"] = plan_file
             if expected_plan_sha256 is not None:
                 apply_kwargs["expected_plan_sha256"] = expected_plan_sha256
+            if assert_authority is not None:
+                assert_authority()
             terraform_apply(
                 paths.infra_dir,
                 **apply_kwargs,
@@ -53864,26 +50708,6 @@ def _run_terraform_destroy_with_recovery(
             except RuntimeError as exc:
                 current_exc = exc
 
-    try:
-        recovered = _attempt_mk8s_node_group_destroy_recovery(
-            status_watchers=status_watchers,
-            yes=yes,
-        )
-    except Exception as recovery_exc:
-        raise RuntimeError(
-            f"{current_exc}\n\nBuilt-in destroy recovery could not remove the stuck MK8s node group: "
-            f"{recovery_exc}"
-        ) from current_exc
-    if recovered:
-        console.print("Retrying Terraform destroy after MK8s node-group cleanup.")
-        _run_terraform_destroy_with_status(
-            config,
-            paths,
-            initialize=initialize,
-            status_watchers=status_watchers,
-        )
-        return
-
     if current_exc is None:
         raise RuntimeError("Terraform destroy recovery failed without a captured destroy error.")
     raise current_exc
@@ -53941,7 +50765,7 @@ def _current_lock_owner_identity() -> str:
 
 def _active_local_terraform_processes() -> tuple[str, ...]:
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             ["ps", "-axo", "pid=,command="],
             check=True,
             capture_output=True,
@@ -54025,84 +50849,6 @@ def _is_terraform_state_lock_failure(exc: Exception) -> bool:
         "Terraform never acquired the remote state lock" in text
         or "Error acquiring the state lock" in text
     )
-
-
-def _mk8s_destroy_recovery_targets(
-    status_watchers: Sequence[Mapping[str, Any]] | None,
-) -> tuple[tuple[str, str], ...]:
-    if not status_watchers:
-        return ()
-    targets: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for watcher in status_watchers:
-        kind = str(watcher.get("kind", "")).strip().lower()
-        parent_id = str(watcher.get("parent_id", "")).strip()
-        resource_name = str(watcher.get("resource_name", "")).strip()
-        if kind != "nebius.mk8s.cluster" or not parent_id or not resource_name:
-            continue
-        target = (parent_id, resource_name)
-        if target in seen:
-            continue
-        seen.add(target)
-        targets.append(target)
-    return tuple(targets)
-
-
-def _confirm_mk8s_destroy_recovery_cleanup(
-    *,
-    yes: bool,
-    candidates: Sequence[Mk8sNodeGroupDestroyCandidate],
-) -> bool:
-    summary = ", ".join(
-        f"{candidate.cluster_name}/{candidate.node_group_name}" for candidate in candidates[:3]
-    )
-    if len(candidates) > 3:
-        summary += f", +{len(candidates) - 3} more"
-    console.print(
-        f"{warning_markup('WARNING:', bold=True)} "
-        "Terraform destroy still appears blocked by stuck MK8s node-group create operations: "
-        f"{summary}."
-    )
-    if yes:
-        return True
-    if not _can_prompt_for_render_overwrite():
-        raise RuntimeError(
-            "Destroy recovery wants to delete stuck MK8s node groups directly via the Nebius API "
-            "before retrying Terraform destroy. Re-run with `--yes` to confirm."
-        )
-    return _confirm_explicit_action(
-        "Delete the stuck MK8s node groups directly via the Nebius API and retry Terraform destroy?"
-    )
-
-
-def _attempt_mk8s_node_group_destroy_recovery(
-    *,
-    status_watchers: Sequence[Mapping[str, Any]] | None,
-    yes: bool,
-) -> bool:
-    candidates: list[Mk8sNodeGroupDestroyCandidate] = []
-    for project_id, cluster_name in _mk8s_destroy_recovery_targets(status_watchers):
-        candidates.extend(
-            find_stuck_mk8s_node_groups(project_id=project_id, cluster_name=cluster_name)
-        )
-    if not candidates:
-        return False
-    if not _confirm_mk8s_destroy_recovery_cleanup(yes=yes, candidates=candidates):
-        return False
-    for candidate in candidates:
-        console.print(
-            "Deleting stuck MK8s node group "
-            f"{candidate.node_group_name} ({candidate.node_group_id}) from cluster "
-            f"{candidate.cluster_name} because the live API still shows an unfinished create "
-            f"operation {candidate.create_operation_id}. Reason: {candidate.reason}"
-        )
-        operation_id = delete_stuck_mk8s_node_group(candidate)
-        console.print(
-            "Deleted stuck MK8s node group "
-            f"{candidate.node_group_name} ({candidate.node_group_id}); "
-            f"delete operation {operation_id} completed."
-        )
-    return True
 
 
 def _resolve_project_id_for_auth_bootstrap(
@@ -54745,14 +51491,22 @@ def _filter_runtime_payload_for_selected_components(
                 "enabled": True,
                 "inputs": {},
             }
-            _seed_infra_resource_name_from_instance_id(row, entry)
             matched_rows = [row]
         else:
             for row in matched_rows:
                 if not isinstance(row.get("inputs"), Mapping):
                     row["inputs"] = {}
                 row["enabled"] = True
-                _seed_infra_resource_name_from_instance_id(row, entry)
+        for row in matched_rows:
+            # Soperator normalization allocates IAM identities from the cluster
+            # name. A scaffold ID is not the operator's selected cluster name.
+            if (
+                entry.id == "mk8s"
+                and _SOPERATOR_APP_ID in selected_apps
+                and _component_instance_id_is_auto_allocated(entry.id, component_instance_id(row))
+            ):
+                continue
+            _seed_infra_resource_name_from_instance_id(row, entry)
         selected_infra_components.extend(matched_rows)
     infra["components"] = selected_infra_components
     target_refs = enabled_cluster_target_refs(runtime_payload)
@@ -55009,38 +51763,45 @@ def _write_runtime_payload_config(
     expected_bytes: bytes | None = None,
     expected_absent: bool = False,
     ordinary_apps_only: bool = False,
+    observability_target_refs: frozenset[str] = frozenset(),
 ) -> bool:
-    if expected_bytes is not None and expected_absent:
-        raise ValueError("config write cannot expect both existing bytes and an absent path")
-    normalize_runtime_config_payload(payload, base_dir=config_path.parent)
-    if ordinary_apps_only:
-        return publish_ordinary_app_config(
-            resolve_project_paths(config_path), payload, expected_bytes=expected_bytes
-        )
-    next_config_text = yaml.safe_dump(payload, sort_keys=False)
-    current_config_text = None
-    if config_path.exists():
-        if expected_absent:
-            raise FileExistsError(config_path)
-        current_bytes = config_path.read_bytes()
-        if expected_bytes is not None and current_bytes != expected_bytes:
-            raise RuntimeError(
-                "recovery-required: config.yaml changed after upgrade planning; the "
-                "compare-and-swap was refused and no operation was replaced."
+    from .destroy_state import existing_project_write_lease
+
+    with existing_project_write_lease(config_path):
+        if expected_bytes is not None and expected_absent:
+            raise ValueError("config write cannot expect both existing bytes and an absent path")
+        normalize_runtime_config_payload(payload, base_dir=config_path.parent)
+        if ordinary_apps_only:
+            return publish_ordinary_app_config(
+                resolve_project_paths(config_path),
+                payload,
+                expected_bytes=expected_bytes,
+                observability_target_refs=observability_target_refs,
             )
-        current_config_text = current_bytes.decode("utf-8")
-    elif expected_bytes is not None:
-        raise RuntimeError(
-            "recovery-required: config.yaml disappeared after upgrade planning; no "
-            "operation was written."
-        )
-    if current_config_text == next_config_text:
-        if not overwrite:
-            return False
+        next_config_text = yaml.safe_dump(payload, sort_keys=False)
+        current_config_text = None
+        if config_path.exists():
+            if expected_absent:
+                raise FileExistsError(config_path)
+            current_bytes = config_path.read_bytes()
+            if expected_bytes is not None and current_bytes != expected_bytes:
+                raise RuntimeError(
+                    "recovery-required: config.yaml changed after upgrade planning; the "
+                    "compare-and-swap was refused and no operation was replaced."
+                )
+            current_config_text = current_bytes.decode("utf-8")
+        elif expected_bytes is not None:
+            raise RuntimeError(
+                "recovery-required: config.yaml disappeared after upgrade planning; no "
+                "operation was written."
+            )
+        if current_config_text == next_config_text:
+            if not overwrite:
+                return False
+            _write_text_atomic(config_path, next_config_text, expected_absent=expected_absent)
+            return True
         _write_text_atomic(config_path, next_config_text, expected_absent=expected_absent)
         return True
-    _write_text_atomic(config_path, next_config_text, expected_absent=expected_absent)
-    return True
 
 
 def _seed_infra_project_scope_defaults(
@@ -55523,7 +52284,7 @@ def _resolve_soperator_onboard_config_target(
         "--app n8n,gateway-helm --app cert-manager "
         "--no-validate-sources --no-validate-config "
         "(guided create with multiple infra and app choices preselected); "
-        "Soperator is intentionally unavailable here; use `nebius-cxcli soperator install` "
+        "Soperator is intentionally unavailable here; use `nebius-cxcli soperator create` "
         "for a fresh cluster or `nebius-cxcli soperator onboard` for an existing product."
     ),
 )
@@ -55976,7 +52737,7 @@ def component_add_command(
                 "choose the resource name or create another named infra row. "
                 "Apps are Helm charts and require an enabled MK8s target in the "
                 "same project. Soperator is not a generic component mutation; use "
-                "`nebius-cxcli soperator install` or `soperator onboard`."
+                "`nebius-cxcli soperator create` or `soperator onboard`."
             ),
         ),
     ] = None,
@@ -56113,7 +52874,7 @@ def component_add_command(
 
       nebius-cxcli component add infra:vm --config <config.yaml>
 
-      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive --network-id infra:vm@worker-vm=vpcnetwork-... --subnet-id infra:vm@worker-vm=vpcsubnet-...
+      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive --network-id infra:vm@worker-vm=<vpcnetwork-id> --subnet-id infra:vm@worker-vm=<vpcsubnet-id>
 
       nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive --network-ref infra:vm@worker-vm=vpc@worker-vpc.network_id --subnet-ref infra:vm@worker-vm=vpc@worker-vpc.subnets.worker.id
 
@@ -56132,8 +52893,6 @@ def component_add_command(
         source_preimage = config_path.resolve().read_bytes()
         payload = _read_config_payload(config_path.resolve())
         ordinary_selection = _payload_has_soperator_lifecycle(payload)
-        if ordinary_selection:
-            validate_ordinary_app_scope(resolve_project_paths(config_path))
         _config, _paths = _load_context_readonly(config_path)
         if not ordinary_selection:
             payload = _load_config_payload(config_path.resolve())
@@ -56183,6 +52942,9 @@ def component_add_command(
         enabled_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
         initially_enabled_app_rows = _enabled_app_row_identities_after_single_target_bindings(
             payload
+        )
+        existing_grafana_targets = frozenset(
+            target for component, target in initially_enabled_app_rows if component == "grafana"
         )
         source_validated_app_ids: set[str] = set()
 
@@ -56486,6 +53248,7 @@ def component_add_command(
                 provider_lookup=provider_lookup,
                 skipped_components=skipped_components,
                 prompt_app_version_before_app_config=True,
+                existing_grafana_targets=existing_grafana_targets,
             )
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
@@ -56547,6 +53310,13 @@ def component_add_command(
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=next_payload,
                 entries=app_entries,
+            )
+
+        from .grafana_install import initialize_selected_grafana
+
+        if initialize_selected_grafana(next_payload, existing_targets=existing_grafana_targets):
+            selected_apps = _enabled_ids_from_runtime_payload(
+                payload=next_payload, entries=app_entries
             )
 
         selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
@@ -56849,6 +53619,9 @@ def component_add_command(
             config_path.resolve(),
             next_payload,
             ordinary_apps_only=_payload_has_soperator_lifecycle(payload),
+            observability_target_refs=frozenset(
+                target for app_id, target in newly_enabled_app_identities if app_id == "grafana"
+            ),
             expected_bytes=source_preimage if _payload_has_soperator_lifecycle(payload) else None,
         )
         if wrote_config:
@@ -56908,7 +53681,7 @@ def component_add_command(
         "After onboarding, inspect the separately resolved plan with "
         "soperator upgrade <config.yaml> --target <target> --dry-run, or run "
         "the upgrade directly with nebius-cxcli soperator upgrade <config.yaml> "
-        "--target <target> --execute --approve."
+        "--target <target>."
     ),
 )
 def soperator_onboard_command(
@@ -57213,11 +53986,9 @@ def component_remove_command(
         ):
             raise RuntimeError(
                 "`nebius-cxcli component remove` cannot remove a Soperator app or its "
-                "cluster target. Use `nebius-cxcli soperator destroy CONFIG --target TARGET`."
+                "cluster target. Use `nebius-cxcli destroy CONFIG --target CLUSTER_ID`."
             )
 
-        if _payload_has_soperator_lifecycle(payload):
-            validate_ordinary_app_scope(resolve_project_paths(config_path))
         _config, _paths = _load_context_readonly(config_path)
         payload = _load_config_payload(config_path.resolve())
 
@@ -57311,7 +54082,7 @@ def component_remove_command(
 
 @app.command(
     "bootstrap-ci",
-    short_help="Use CONFIG_YAML to reconcile the customer GitHub workflow, email settings, and optional CI auth.",
+    short_help="Use CONFIG_YAML to reconcile the customer GitHub workflow, email settings, and canonical CI auth.",
     epilog=(
         "Examples: "
         "nebius-cxcli bootstrap-ci ./deployments/tenant/project/config.yaml "
@@ -57337,7 +54108,7 @@ def bootstrap_ci_command(
             "--github-repo",
             help=(
                 "Optional override for the target GitHub repository slug '<owner>/<repo>' "
-                "used for workflow bootstrap reconciliation, email setting sync, and optional Nebius auth bootstrap. "
+                "used for workflow bootstrap reconciliation, email setting sync, and canonical Nebius auth synchronization. "
                 "Normally auto-detected from the target repository origin remote."
             ),
         ),
@@ -57348,7 +54119,7 @@ def bootstrap_ci_command(
             "--github-token-env",
             help=(
                 "Environment variable name holding the GitHub token used for GitHub workflow/environment reconciliation, "
-                "email setting sync, and optional auth bootstrap (falls back to GH_TOKEN/GITHUB_TOKEN)."
+                "email setting sync, and canonical auth synchronization (falls back to GH_TOKEN/GITHUB_TOKEN)."
             ),
         ),
     ] = "GH_TOKEN",
@@ -57526,7 +54297,9 @@ def quota_check_command(
     availability for the same shape across all discovered tenant/project regions.
     """
     try:
-        config, paths = _load_context(config_path)
+        config, paths = _load_generic_soperator_lifecycle_context(
+            _load_context, config_path, command="quota-check"
+        )
         report = _warn_on_config_live_quota_issues(
             config,
             paths,
@@ -57559,8 +54332,9 @@ def quota_check_command(
     epilog=(
         "Examples: "
         "nebius-cxcli quota-request ./deployments/tenant/project/config.yaml "
-        "(reads the latest quota-check result, prompts for each gap, and submits Nebius quota requests). "
-        "Run quota-check first; quota-request only acts on confirmed insufficient quotas."
+        "(assesses live quotas and submits requests for confirmed shortages without prompting). "
+        "No prior quota-check is required. If automatic submission is unavailable, "
+        "the command prints manual request targets."
     ),
 )
 def quota_request_command(
@@ -57675,7 +54449,8 @@ def quota_request_command(
         "nebius-cxcli ssh-jumphost --add-allowed-cidrs ./config.yaml --component ssh-jumphost@bastion --allowed-cidr 10.0.0.0/24,192.168.1.0/24 "
         "(adds two CIDRs and reapplies the module-owned UFW rules); "
         "nebius-cxcli ssh-jumphost --remove-allowed-cidrs ./config.yaml --component ssh-jumphost@bastion --allowed-cidr 10.0.0.0/24 --ssh-user ubuntu "
-        "(removes a CIDR; --ssh-user and --ssh-private-key override the defaults from the VM config)."
+        "(removes a CIDR; --ssh-user overrides the VM-config username; "
+        "--ssh-private-key selects a key instead of OpenSSH agent/default keys)."
     ),
 )
 def ssh_jumphost_command(
@@ -57860,7 +54635,7 @@ def ssh_jumphost_command(
         "nebius-cxcli wireguard --gen-client-conf ./config.yaml --component wireguard-gw@vpn --client-name alice --dns 10.0.0.10 --persistent-keepalive 25 --output-dir ./out "
         "(custom DNS, keepalive interval, and output location); "
         "nebius-cxcli wireguard --add-local-subnets ./config.yaml --component wireguard-gw@vpn --local-subnet 10.10.0.0/16 "
-        "(adds a routed subnet to the deployed gateway VM); "
+        "(updates route defaults for future client configs; existing clients are unchanged); "
         "nebius-cxcli wireguard --remove-local-subnets ./config.yaml --component wireguard-gw@vpn --local-subnet 10.10.0.0/16."
     ),
 )
@@ -58160,9 +54935,9 @@ def wireguard_command(
     short_help="Use GENERATED_PATH to validate rendered-bundle readiness, manifests, and portability without rerendering.",
     epilog=(
         "Examples: "
-        "nebius-cxcli validate-generated ./deployments/acme/generated "
+        "nebius-cxcli validate-generated ./deployments/tenant/project/generated "
         "(checks state-derived readiness on already-rendered artifacts; runs Soperator schema + chart-render checks); "
-        "nebius-cxcli validate-generated ./deployments/acme/generated --portable "
+        "nebius-cxcli validate-generated ./deployments/tenant/project/generated --portable "
         "(extra portability checks for shipping the bundle to a different host); "
         "Canonical project authentication is ensured before generated artifacts are readied."
     ),
@@ -58319,8 +55094,32 @@ def _kubeconfig_env_for_context(context_name: str, *, stack: ExitStack) -> dict[
         )
         target_path = target_root / "config"
         target_payload = copy.deepcopy(dict(payload))
+        # client-go resolves these file references relative to the source config.
+        # Preserve that meaning when moving the selected configuration to a private file.
+        for section, key, fields in (
+            ("clusters", "cluster", ("certificate-authority",)),
+            ("users", "user", ("client-certificate", "client-key", "tokenFile")),
+        ):
+            for row in target_payload.get(section, []):
+                data = row.get(key, {}) if isinstance(row, Mapping) else {}
+                if not isinstance(data, dict):
+                    continue
+                for path_field in fields:
+                    value = data.get(path_field)
+                    if isinstance(value, str) and value and not Path(value).is_absolute():
+                        data[path_field] = str((source_path.parent / value).resolve())
+                plugin = data.get("exec")
+                if isinstance(plugin, dict):
+                    command = plugin.get("command")
+                    if (
+                        isinstance(command, str)
+                        and "/" in command
+                        and not Path(command).is_absolute()
+                    ):
+                        plugin["command"] = str((source_path.parent / command).resolve())
         target_payload["current-context"] = normalized_context
         target_path.write_text(yaml.safe_dump(target_payload, sort_keys=False), encoding="utf-8")
+        target_path.chmod(0o600)
         return {
             "KUBECONFIG": str(target_path),
             GRAFANA_TARGET_KUBE_CONTEXT_ENV: normalized_context,
@@ -58363,24 +55162,6 @@ def _known_kube_context_names() -> tuple[str, ...]:
     return tuple(names)
 
 
-def _current_kube_context_name() -> str:
-    known_contexts = set(_known_kube_context_names())
-    for kubeconfig_path in _candidate_kubeconfig_paths():
-        source_path = Path(kubeconfig_path).expanduser()
-        if not source_path.exists():
-            continue
-        try:
-            payload = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            continue
-        if not isinstance(payload, Mapping):
-            continue
-        context_name = str(payload.get("current-context") or "").strip()
-        if context_name and context_name in known_contexts:
-            return context_name
-    return ""
-
-
 def _cluster_id_from_kube_context_name(context_name: str) -> str:
     parts = str(context_name or "").strip().split("-")
     for index, part in enumerate(parts[:-1]):
@@ -58404,16 +55185,16 @@ def _kube_context_name_for_target(target_ref: str) -> str:
     normalized_target_ref = normalize_component_token(target_ref)
     if not normalized_target_ref:
         return ""
-    current_context = _current_kube_context_name()
-    if _kube_context_matches_target(current_context, normalized_target_ref):
-        return current_context
     prefix = f"nebius-{normalized_target_ref}-mk8scluster-"
     candidates = [
         name
         for name in _known_kube_context_names()
         if name.startswith(prefix) and _cluster_id_from_kube_context_name(name)
     ]
-    if not candidates:
+    if (
+        not candidates
+        or len({_cluster_id_from_kube_context_name(name) for name in candidates}) != 1
+    ):
         return ""
     external = [name for name in candidates if name.endswith("-external")]
     preferred = external or candidates
@@ -58429,7 +55210,24 @@ def _kubeconfig_target_env(
     preferred_context: str = "",
     preferred_cluster_id: str = "",
 ) -> dict[str, str]:
-    context_name = str(preferred_context or "").strip() or _kube_context_name_for_target(target_ref)
+    context_name = str(preferred_context or "").strip()
+    cluster_id = str(preferred_cluster_id or "").strip()
+    if context_name and cluster_id:
+        context_cluster_id = _cluster_id_from_kube_context_name(context_name)
+        if context_cluster_id and context_cluster_id != cluster_id:
+            raise RuntimeError("Selected kube context belongs to a different cluster ID")
+    if not context_name and cluster_id:
+        candidates = [
+            name
+            for name in _known_kube_context_names()
+            if _cluster_id_from_kube_context_name(name) == cluster_id
+        ]
+        external = [name for name in candidates if name.endswith("-external")]
+        preferred = external or candidates
+        if len(preferred) == 1:
+            context_name = preferred[0]
+    elif not context_name:
+        context_name = _kube_context_name_for_target(target_ref)
     if not context_name:
         return {}
     env = _kubeconfig_env_for_context(context_name, stack=stack)
@@ -58522,797 +55320,17 @@ def _grafana_status_target_envs(
     return target_envs
 
 
-def _grafana_dashboard_validation_required_target_refs(
-    config: Any,
-    *,
-    target_ref: str,
-) -> set[str]:
-    normalized_target_ref = normalize_component_token(target_ref)
-    if normalized_target_ref:
-        return (
-            {normalized_target_ref}
-            if grafana_enabled_for_target(config, target_ref=normalized_target_ref)
-            else set()
-        )
-    return {
-        ref
-        for ref in enabled_cluster_target_refs(config)
-        if ref and grafana_enabled_for_target(config, target_ref=ref)
-    }
-
-
-def _raise_missing_grafana_target_contexts(
-    missing_target_refs: set[str],
-    *,
-    config_path: Path | None = None,
-    generated_path: Path | None = None,
-    details_by_target: Mapping[str, str] | None = None,
-) -> None:
-    if not missing_target_refs:
-        return
-    missing = ", ".join(sorted(missing_target_refs))
-    config_arg = _config_cli_arg(config_path) if config_path is not None else "<config.yaml>"
-    generated_arg = (
-        shlex.quote(str(generated_path.resolve())) if generated_path is not None else "<generated/>"
-    )
-    message = (
-        "validate-dashboards could not resolve an explicit kube context for Grafana "
-        f"target(s): {missing}. Run `nebius-cxcli deploy {config_arg}` or "
-        f"`nebius-cxcli flux apply {generated_arg}` for those targets first, or make sure "
-        "the matching `nebius-<target>-mk8scluster-...` context is current or "
-        "unambiguous in KUBECONFIG."
-    )
-    detail_rows = []
-    for target in sorted(missing_target_refs):
-        detail = _first_non_empty_line(str((details_by_target or {}).get(target) or ""))
-        if detail:
-            detail_rows.append(f"{target}: {detail}")
-    if detail_rows:
-        message += "\nContext resolution details:\n  - " + "\n  - ".join(detail_rows)
-    raise RuntimeError(message)
-
-
-def _grafana_dashboard_validation_target_envs(
-    config: Any,
-    paths: ProjectPaths,
-    *,
-    target_ref: str,
-    stack: ExitStack,
-) -> dict[str, Mapping[str, str]]:
-    normalized_target_ref = normalize_component_token(target_ref)
-    selected_target_refs = {normalized_target_ref} if normalized_target_ref else set()
-    required_target_refs = _grafana_dashboard_validation_required_target_refs(
-        config,
-        target_ref=normalized_target_ref,
-    )
-    target_envs = _grafana_status_target_envs(
-        paths,
-        selected_target_refs=selected_target_refs,
-        stack=stack,
-    )
-    if normalized_target_ref and normalized_target_ref in target_envs:
-        return target_envs
-    report_target_contexts = _deploy_report_target_contexts(paths)
-    for required_target_ref in sorted(required_target_refs):
-        if required_target_ref in target_envs:
-            continue
-        report_context = report_target_contexts.get(required_target_ref, {})
-        target_env = _kubeconfig_target_env(
-            required_target_ref,
-            stack=stack,
-            preferred_context=report_context.get("kube_context", ""),
-            preferred_cluster_id=report_context.get("cluster_id", ""),
-        )
-        if target_env:
-            target_envs[required_target_ref] = target_env
-    manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
-    if not manifest_path.exists():
-        _raise_missing_grafana_target_contexts(
-            required_target_refs - set(target_envs),
-            config_path=getattr(paths, "config_path", None),
-            generated_path=getattr(paths, "generated_dir", None),
-        )
-        return target_envs
-    manifest = load_generated_manifest(paths.generated_dir)
-    targets = _manifest_deploy_targets(manifest)
-    if not targets:
-        _raise_missing_grafana_target_contexts(
-            required_target_refs - set(target_envs),
-            config_path=getattr(paths, "config_path", None),
-            generated_path=getattr(paths, "generated_dir", None),
-        )
-        return {}
-    selected_targets = (
-        _resolve_selected_deploy_targets(
-            manifest,
-            requested_target_ref=normalized_target_ref,
-            all_targets=False,
-        )
-        if normalized_target_ref
-        else targets
-    )
-    handoff_errors: dict[str, str] = {}
-    for target in selected_targets:
-        resolved_target_ref = str(target.get("target_ref", "")).strip().lower()
-        if resolved_target_ref in target_envs:
-            continue
-        if not resolved_target_ref or not grafana_enabled_for_target(
-            config,
-            target_ref=resolved_target_ref,
-        ):
-            continue
-        report_context = report_target_contexts.get(resolved_target_ref, {})
-        target_env = _kubeconfig_target_env(
-            resolved_target_ref,
-            stack=stack,
-            preferred_context=report_context.get("kube_context", ""),
-            preferred_cluster_id=report_context.get("cluster_id", ""),
-        )
-        if target_env:
-            target_envs[resolved_target_ref] = target_env
-            continue
-        try:
-            target_env = _prepare_cluster_handoff_kube_env(
-                config,
-                paths,
-                stack=stack,
-                target=target,
-                persist_local_kubeconfig=False,
-                set_current_context=True,
-            )
-        except RuntimeError as exc:
-            handoff_errors[resolved_target_ref] = str(exc)
-            target_env = None
-        if target_env:
-            target_envs[resolved_target_ref] = target_env
-    _raise_missing_grafana_target_contexts(
-        required_target_refs - set(target_envs),
-        config_path=getattr(paths, "config_path", None),
-        generated_path=getattr(paths, "generated_dir", None),
-        details_by_target=handoff_errors,
-    )
-    return target_envs
-
-
-def _grafana_export_url_parts(
-    raw_url: str,
-    *,
-    folder_uid: str,
-    dashboard_uids: Sequence[str],
-) -> tuple[str, str, tuple[str, ...]]:
-    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
-    if not parsed.scheme or not parsed.netloc:
-        raise RuntimeError(
-            "--export-dashboard must be a Grafana URL such as https://grafana.example/"
-        )
-    base_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
-    path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
-    inferred_folder_uid = ""
-    inferred_dashboard_uid = ""
-    for index, part in enumerate(path_parts[:-1]):
-        if part == "f" and index + 1 < len(path_parts):
-            inferred_folder_uid = path_parts[index + 1]
-        if part == "d" and index + 1 < len(path_parts):
-            inferred_dashboard_uid = path_parts[index + 1]
-    resolved_dashboard_uids = tuple(dashboard_uids)
-    if inferred_dashboard_uid and not resolved_dashboard_uids:
-        resolved_dashboard_uids = (inferred_dashboard_uid,)
-    return base_url, str(folder_uid or inferred_folder_uid).strip(), resolved_dashboard_uids
-
-
-def _grafana_export_auth_candidates(
-    *,
-    token_env: str,
-    username: str,
-    password_env: str,
-) -> tuple[GrafanaAuth, ...]:
-    username = str(username or "").strip()
-    candidates = bearer_auth_candidates(
-        token_env=str(token_env or "").strip(),
-        on_warning=(
-            None
-            if username
-            else lambda message: console.print(
-                f"{warning_markup('WARNING:', bold=True)} {escape(message)}"
-            )
-        ),
-    )
-    if username:
-        password_env = str(password_env or "GRAFANA_PASSWORD").strip()
-        password = str(os.environ.get(password_env) or "") if password_env else ""
-        if not password:
-            if not _is_tty_session():
-                raise RuntimeError(
-                    f"Grafana Basic auth password is missing. Set {password_env} or run "
-                    "interactively so cxcli can prompt securely."
-                )
-            password = getpass.getpass(f"Grafana password for {username}: ")
-        candidates.append(
-            basic_auth_candidate(username, password, source=f"Basic auth user {username}")
-        )
-    return tuple(candidates)
-
-
-def _grafana_prompt_sort_key(item: GrafanaFolder | GrafanaDashboard) -> tuple[str, str]:
-    return (item.title.casefold(), item.uid.casefold())
-
-
-def _prompt_grafana_folder(folders: Sequence[GrafanaFolder]) -> GrafanaFolder:
-    ordered_folders = tuple(sorted(folders, key=_grafana_prompt_sort_key))
-    if not ordered_folders:
-        raise RuntimeError("No Grafana dashboard folders were returned by the API.")
-    if not _is_tty_session():
-        raise RuntimeError("Pass --folder-uid when exporting dashboards non-interactively.")
-    try:
-        import questionary
-
-        question = questionary.select(
-            "Grafana folder",
-            choices=[
-                questionary.Choice(title=f"{folder.title} ({folder.uid})", value=folder)
-                for folder in ordered_folders
-            ],
-            instruction="Select the folder to export from. Type a letter to jump.",
-            qmark="",
-            use_jk_keys=False,
-        )
-        selected = _ask_questionary_with_prefix_jumps(question)
-        if isinstance(selected, GrafanaFolder):
-            return selected
-    except Exception:
-        pass
-    for index, folder in enumerate(ordered_folders, start=1):
-        console.print(f"{index}. {folder.title} ({folder.uid})")
-    while True:
-        raw = typer.prompt("Grafana folder number", default="1").strip()
-        try:
-            selected_index = int(raw)
-        except ValueError:
-            selected_index = 0
-        if 1 <= selected_index <= len(ordered_folders):
-            return ordered_folders[selected_index - 1]
-        console.print(error_markup("Invalid folder selection"))
-
-
-def _prompt_grafana_dashboards(
-    dashboards: Sequence[GrafanaDashboard],
-) -> tuple[GrafanaDashboard, ...]:
-    ordered_dashboards = tuple(sorted(dashboards, key=_grafana_prompt_sort_key))
-    if not ordered_dashboards:
-        raise RuntimeError("No dashboards were returned for the selected Grafana folder.")
-    if not _is_tty_session():
-        raise RuntimeError(
-            "Pass at least one --dashboard-uid when exporting dashboards non-interactively."
-        )
-    try:
-        import questionary
-
-        _configure_questionary_checkbox_symbols()
-        question = questionary.checkbox(
-            "Grafana dashboards",
-            choices=[
-                questionary.Choice(title=f"{dashboard.title} ({dashboard.uid})", value=dashboard)
-                for dashboard in ordered_dashboards
-            ],
-            instruction=(
-                "Select one or more dashboards to export. Type a letter to jump; "
-                "space selects; Ctrl-A toggles all; enter confirms."
-            ),
-            qmark="",
-            use_search_filter=True,
-            use_jk_keys=False,
-        )
-        selected = _ask_questionary_with_prefix_jumps(question)
-        if selected:
-            return tuple(item for item in selected if isinstance(item, GrafanaDashboard))
-    except Exception:
-        pass
-    for index, dashboard in enumerate(ordered_dashboards, start=1):
-        console.print(f"{index}. {dashboard.title} ({dashboard.uid})")
-    while True:
-        raw = typer.prompt("Dashboard numbers, comma-separated or all", default="all").strip()
-        if raw.lower() == "all":
-            return tuple(ordered_dashboards)
-        selected: list[GrafanaDashboard] = []
-        valid = True
-        for token in [item.strip() for item in raw.split(",") if item.strip()]:
-            try:
-                selected_index = int(token)
-            except ValueError:
-                valid = False
-                break
-            if not 1 <= selected_index <= len(ordered_dashboards):
-                valid = False
-                break
-            selected.append(ordered_dashboards[selected_index - 1])
-        if valid and selected:
-            return tuple(selected)
-        console.print(error_markup("Invalid dashboard selection"))
-
-
-def _prompt_grafana_catalog_datasource(
-    datasources: Sequence[CatalogDatasource],
-) -> CatalogDatasource:
-    if not datasources:
-        raise RuntimeError(
-            "The Grafana app has no configured datasources in component_cli_settings."
-        )
-    if not _is_tty_session():
-        raise RuntimeError("Pass --datasource when datasource mapping is ambiguous.")
-    try:
-        import questionary
-
-        selected = questionary.select(
-            "cxcli Grafana datasource",
-            choices=[
-                questionary.Choice(
-                    title=f"{datasource.name} ({datasource.datasource_type}/{datasource.uid})",
-                    value=datasource,
-                )
-                for datasource in datasources
-            ],
-            instruction="Select the datasource that this dashboard should use after deploy.",
-            qmark="",
-        ).ask()
-        if isinstance(selected, CatalogDatasource):
-            return selected
-    except Exception:
-        pass
-    for index, datasource in enumerate(datasources, start=1):
-        console.print(f"{index}. {datasource.name} ({datasource.datasource_type}/{datasource.uid})")
-    while True:
-        raw = typer.prompt("Datasource number", default="1").strip()
-        try:
-            selected_index = int(raw)
-        except ValueError:
-            selected_index = 0
-        if 1 <= selected_index <= len(datasources):
-            return datasources[selected_index - 1]
-        console.print(error_markup("Invalid datasource selection"))
-
-
-def _grafana_export_datasource(
-    dashboard: Mapping[str, object],
-    datasources: Sequence[CatalogDatasource],
-    *,
-    datasource: str,
-) -> CatalogDatasource:
-    try:
-        return select_catalog_datasource(dashboard, datasources, requested=datasource)
-    except RuntimeError:
-        if datasource or not _is_tty_session():
-            raise
-    selected = _prompt_grafana_catalog_datasource(datasources)
-    return select_catalog_datasource(dashboard, datasources, requested=selected.name)
-
-
-def _grafana_dashboard_key(
-    dashboard: GrafanaDashboard,
-    *,
-    used_keys: set[str],
-) -> str:
-    base = safe_slug(dashboard.title, fallback=safe_slug(dashboard.uid, fallback="dashboard"))
-    key = base
-    if key in used_keys:
-        key = f"{base}-{safe_slug(dashboard.uid, fallback='dashboard')}"
-    counter = 2
-    while key in used_keys:
-        key = f"{base}-{counter}"
-        counter += 1
-    used_keys.add(key)
-    return key
-
-
-@app.command(
-    "grafana",
-    short_help="Export or attach Grafana dashboard JSON.",
-    epilog=(
-        "Examples: "
-        "nebius-cxcli grafana --export-dashboard https://grafana.example.com --dashboard-uid abc123,def456 --output-dir ./dashboards "
-        "(exports two dashboards by UID; auth uses --token-env or interactive login); "
-        "nebius-cxcli grafana --export-dashboard https://grafana.example.com --folder-uid soperator "
-        "(exports every dashboard in a folder); "
-        "nebius-cxcli grafana --dashboard-json ./my-dashboard.json --attach --dashboard-folder soperator --datasource user-metrics "
-        "(normalizes a local dashboard JSON and attaches it to component_sources.yaml under the chosen folder/datasource binding). "
-        "Use `--attach` to write to component_sources.yaml; without it, this command is read-only."
-    ),
-)
-def grafana_command(
-    export_dashboard: Annotated[
-        str | None,
-        typer.Option(
-            "--export-dashboard",
-            metavar="GRAFANA_URL",
-            help=(
-                "Grafana base URL or folder URL to export from. "
-                "The command uses Grafana API endpoints under this host."
-            ),
-        ),
-    ] = None,
-    dashboard_json_path: Annotated[
-        list[Path] | None,
-        typer.Option(
-            "--dashboard-json",
-            help=(
-                "Local Grafana dashboard JSON file to normalize and optionally attach. "
-                "Repeat to process multiple files."
-            ),
-        ),
-    ] = None,
-    output_dir: Annotated[
-        Path,
-        typer.Option(
-            "--output-dir",
-            help="Directory for exported dashboard JSON files. Defaults to ./dashboards.",
-        ),
-    ] = Path("dashboards"),
-    folder_uid: Annotated[
-        str,
-        typer.Option(
-            "--folder-uid",
-            help="Grafana folder UID to export from. Omit in a TTY to select interactively.",
-        ),
-    ] = "",
-    dashboard_uid: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--dashboard-uid",
-            help=(
-                "Grafana dashboard UID to export. Repeat the flag or use comma-separated "
-                "values. Omit in a TTY to select interactively."
-            ),
-        ),
-    ] = None,
-    overwrite: Annotated[
-        bool,
-        typer.Option("--overwrite", help="Overwrite existing exported JSON/catalog entries."),
-    ] = False,
-    attach: Annotated[
-        bool,
-        typer.Option(
-            "--attach/--no-attach",
-            help=(
-                "Also add exported dashboard JSON entries to component_sources.yaml. "
-                "Export-only is the default and does not mutate the catalog."
-            ),
-        ),
-    ] = False,
-    component_sources_path: Annotated[
-        Path | None,
-        typer.Option(
-            "--component-sources",
-            help=(
-                "component_sources.yaml to update with --attach. Defaults to the active "
-                "catalog resolution order."
-            ),
-        ),
-    ] = None,
-    dashboard_folder: Annotated[
-        str,
-        typer.Option(
-            "--dashboard-folder",
-            help=(
-                "Dashboard folder/provider key to use for exported JSON and --attach. "
-                "Defaults to the source folder slug."
-            ),
-        ),
-    ] = "",
-    datasource: Annotated[
-        str,
-        typer.Option(
-            "--datasource",
-            help=(
-                "cxcli Grafana datasource name, UID, or unique type to use with --attach "
-                "when automatic mapping is ambiguous."
-            ),
-        ),
-    ] = "",
-    token_env: Annotated[
-        str,
-        typer.Option(
-            "--token-env",
-            help="Environment variable containing a Grafana service-account or bearer token.",
-        ),
-    ] = "",
-    username: Annotated[
-        str,
-        typer.Option("--username", help="Grafana Basic auth username."),
-    ] = "",
-    password_env: Annotated[
-        str,
-        typer.Option(
-            "--password-env",
-            help="Environment variable containing the Grafana Basic auth password.",
-        ),
-    ] = "GRAFANA_PASSWORD",
-) -> None:
-    """Export Grafana dashboards through the API or local JSON, with optional attachment.
-
-    Use exactly one source mode per invocation:
-
-    - --export-dashboard reads a Grafana API.
-    - --dashboard-json reads one or more local dashboard JSON files.
-
-    Export-only writes normalized JSON files and does not change component_sources.yaml.
-    Add --attach to update the active component_sources.yaml with json_file entries.
-
-    Examples:
-
-    Interactive API export:
-    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/
-
-    Non-interactive API export:
-    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --output-dir ./dashboards
-
-    API export with catalog attach:
-    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
-
-    Local JSON attach without Grafana API credentials:
-    nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
-
-    Multiple local JSON files with an explicit catalog:
-    nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/cluster.json --dashboard-json ./dashboards/mk8s/nodes.json --component-sources ./component_sources.yaml --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
-    """
-    try:
-        local_dashboard_paths = tuple(
-            path.expanduser().resolve() for path in dashboard_json_path or []
-        )
-        if bool(export_dashboard) == bool(local_dashboard_paths):
-            raise RuntimeError("Pass exactly one of --export-dashboard or --dashboard-json.")
-        requested_dashboard_uids = _split_multi_value_tokens(dashboard_uid or [])
-        dashboard_payloads: list[tuple[GrafanaDashboard, dict[str, object]]] = []
-
-        if export_dashboard:
-            base_url, resolved_folder_uid, requested_dashboard_uids = _grafana_export_url_parts(
-                export_dashboard,
-                folder_uid=folder_uid,
-                dashboard_uids=requested_dashboard_uids,
-            )
-            auth_candidates = _grafana_export_auth_candidates(
-                token_env=token_env,
-                username=username,
-                password_env=password_env,
-            )
-            folders = list_folders(base_url, auth_candidates)
-            if resolved_folder_uid:
-                selected_folder = next(
-                    (folder for folder in folders if folder.uid == resolved_folder_uid),
-                    GrafanaFolder(uid=resolved_folder_uid, title=resolved_folder_uid),
-                )
-            else:
-                selected_folder = _prompt_grafana_folder(folders)
-
-            dashboards = list_dashboards(
-                base_url,
-                auth_candidates,
-                folder_uid=selected_folder.uid,
-                folder_title=selected_folder.title,
-            )
-            dashboards_by_uid = {dashboard.uid: dashboard for dashboard in dashboards}
-            if requested_dashboard_uids:
-                selected_dashboards = tuple(
-                    dashboards_by_uid.get(uid)
-                    or GrafanaDashboard(
-                        uid=uid,
-                        title=uid,
-                        folder_uid=selected_folder.uid,
-                        folder_title=selected_folder.title,
-                    )
-                    for uid in requested_dashboard_uids
-                )
-            else:
-                selected_dashboards = _prompt_grafana_dashboards(dashboards)
-            for selected_dashboard in selected_dashboards:
-                dashboard_payloads.append(
-                    (
-                        selected_dashboard,
-                        dashboard_json(
-                            base_url,
-                            auth_candidates,
-                            dashboard_uid=selected_dashboard.uid,
-                        ),
-                    )
-                )
-        else:
-            if folder_uid or requested_dashboard_uids:
-                raise RuntimeError(
-                    "--folder-uid and --dashboard-uid are only valid with --export-dashboard."
-                )
-            default_folder_title = (
-                dashboard_folder
-                or (local_dashboard_paths[0].parent.name if local_dashboard_paths else "")
-                or "dashboards"
-            )
-            selected_folder = GrafanaFolder(
-                uid=safe_slug(default_folder_title, fallback="dashboards"),
-                title=default_folder_title,
-            )
-            for dashboard_path in local_dashboard_paths:
-                local_dashboard = dashboard_json_from_file(dashboard_path)
-                uid = str(local_dashboard.get("uid") or "").strip()
-                title = str(local_dashboard.get("title") or "").strip() or dashboard_path.stem
-                dashboard_payloads.append(
-                    (
-                        GrafanaDashboard(
-                            uid=uid,
-                            title=title,
-                            folder_uid=selected_folder.uid,
-                            folder_title=selected_folder.title,
-                        ),
-                        local_dashboard,
-                    )
-                )
-
-        resolved_catalog_path: Path | None = None
-        grafana_component_id = ""
-        catalog_datasource_specs: tuple[CatalogDatasource, ...] = ()
-        if attach:
-            resolved_catalog_path = resolve_component_sources_file(explicit=component_sources_path)
-            grafana_component_id, catalog_datasource_specs = catalog_datasources(
-                resolved_catalog_path
-            )
-
-        output_root = output_dir.expanduser().resolve()
-        catalog_folder_key = safe_slug(
-            dashboard_folder or selected_folder.title,
-            fallback=safe_slug(selected_folder.uid, fallback="grafana"),
-        )
-        used_keys: set[str] = set()
-        exports: list[ExportedDashboard] = []
-        for selected_dashboard, exported_dashboard in dashboard_payloads:
-            datasource_name = ""
-            if attach:
-                catalog_datasource = _grafana_export_datasource(
-                    exported_dashboard,
-                    catalog_datasource_specs,
-                    datasource=datasource,
-                )
-                exported_dashboard = cast(
-                    dict[str, object],
-                    rewrite_dashboard_datasources(exported_dashboard, catalog_datasource),
-                )
-                datasource_name = catalog_datasource.name
-            dashboard_key = _grafana_dashboard_key(selected_dashboard, used_keys=used_keys)
-            output_path = output_root / catalog_folder_key / f"{dashboard_key}.json"
-            write_dashboard_file(output_path, exported_dashboard, overwrite=overwrite)
-            exports.append(
-                ExportedDashboard(
-                    uid=selected_dashboard.uid,
-                    title=selected_dashboard.title,
-                    folder_uid=selected_dashboard.folder_uid,
-                    folder_title=selected_dashboard.folder_title,
-                    catalog_folder=catalog_folder_key,
-                    dashboard_key=dashboard_key,
-                    datasource_name=datasource_name,
-                    path=output_path,
-                )
-            )
-            console.print(f"[green]Exported[/green] {selected_dashboard.title} -> {output_path}")
-
-        if attach and resolved_catalog_path is not None:
-            attach_dashboards_to_catalog(
-                resolved_catalog_path,
-                grafana_component_id=grafana_component_id,
-                exports=exports,
-                overwrite=overwrite,
-            )
-            console.print(
-                f"[green]Attached[/green] {len(exports)} dashboard(s) to {resolved_catalog_path}"
-            )
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-
-
-@app.command(
-    "validate-dashboards",
-    short_help="Use CONFIG_YAML to validate Grafana dashboard datasource/read-endpoint fit.",
-    epilog=(
-        "Examples: "
-        "nebius-cxcli validate-dashboards ./deployments/tenant/project/config.yaml "
-        "(checks every dashboard's datasource refs against live Nebius observability endpoints for all enabled targets); "
-        "nebius-cxcli validate-dashboards ./deployments/tenant/project/config.yaml --target mk8s-prod "
-        "(restricts the check to one deploy.targets[] row)."
-    ),
-)
-def validate_dashboards_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_CONFIG_YAML_ARGUMENT_HELP,
-        ),
-    ],
-    target: Annotated[
-        str,
-        typer.Option(
-            "--target",
-            "-t",
-            help=(
-                f"Optional {_MK8S_TARGET_ID_HELP} to validate when the config has "
-                "target-scoped Grafana rows. When omitted, every enabled Grafana row "
-                "is checked and each target must resolve an explicit kube context."
-            ),
-        ),
-    ] = "",
-) -> None:
-    """Validate Grafana dashboard datasource/read-endpoint fit against live Grafana."""
-    try:
-        if _console_is_terminal():
-            with console.status(
-                "[cyan]Grafana dashboard validation: Load config and component catalog[/cyan]"
-            ):
-                config, paths = _load_context_readonly(config_path)
-        else:
-            console.print(
-                "[cyan]Grafana dashboard validation:[/cyan] Load config and component catalog"
-            )
-            config, paths = _load_context_readonly(config_path)
-        with ExitStack() as stack:
-            target_extra_envs = _grafana_dashboard_validation_target_envs(
-                config,
-                paths,
-                target_ref=target,
-                stack=stack,
-            )
-            results = _validate_grafana_dashboard_fits_with_progress(
-                config,
-                target_ref=target,
-                target_extra_envs=target_extra_envs,
-            )
-        if not results:
-            raise RuntimeError("No enabled Grafana dashboard bindings were found to validate.")
-        has_errors = any(not result.ok for result in results)
-        for result in results:
-            target_suffix = f"@{result.target_ref}" if result.target_ref else ""
-            prefix = (
-                f"{result.signal}{target_suffix}: {result.dashboard_ref} -> "
-                f"{result.datasource} ({result.datasource_type}, {result.read_endpoint})"
-            )
-            if result.ok:
-                console.print(f"[green]OK:[/green] {prefix}")
-            else:
-                console.print(f"[red]ERROR:[/red] {prefix}")
-            source = str(getattr(result, "source", "") or "").strip()
-            if source:
-                console.print(f"  Source: {source}")
-            checks = tuple(getattr(result, "checks", ()) or ())
-            if checks:
-                console.print("  Checks:")
-                for check in checks:
-                    console.print(f"    - {check}")
-            warnings = tuple(getattr(result, "warnings", ()) or ())
-            if warnings:
-                console.print(f"  {warning_markup('Warnings:')}")
-                for warning in warnings:
-                    console.print(f"    - {warning}")
-            errors = tuple(getattr(result, "errors", ()) or ())
-            if errors:
-                console.print(f"  {error_markup('Errors:')}")
-                for error in errors:
-                    console.print(f"    - {error}")
-        if has_errors:
-            raise RuntimeError(
-                "Grafana dashboard validation found dashboards that do not fit their "
-                "bound datasource/read endpoint."
-            )
-        console.print(
-            f"[green]Grafana dashboards fit live datasources:[/green] {paths.config_path}"
-        )
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-
-
 @app.command(
     "validate-sources",
     short_help="Validate component_sources.yaml, paired CLI settings, and resolved Terraform/Helm source contracts.",
     epilog=(
         "Examples: "
         "nebius-cxcli validate-sources "
-        "(uses the bundled component_sources.yaml + component_cli_settings.yaml); "
+        "(uses the active catalog resolution order and its matching settings); "
         "nebius-cxcli validate-sources ./component_sources.yaml "
         "(validates an alternate sources file plus its sibling settings); "
         "nebius-cxcli --source-profile local validate-sources "
-        "(checks that every source.local path resolves on the local filesystem)."
+        "(validates selected local sources, falling back to portable sources when local is unset)."
     ),
 )
 def validate_sources_command(
@@ -59693,9 +55711,8 @@ def auth_command(
         "(replaces render-owned artifacts without prompting); "
         "nebius-cxcli --source-profile local render ./deployments/tenant/project/config.yaml "
         "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
-        "For completed Soperator projects, render updates ordinary app resources only and "
-        "preserves the accepted infrastructure and upstream graph. Protected changes use the "
-        "corresponding `soperator` lifecycle command."
+        "Soperator projects render the complete infrastructure, pinned upstream release graph, "
+        "and ordinary applications for the shared deploy workflow."
     ),
 )
 def render_command(
@@ -59714,47 +55731,41 @@ def render_command(
         ),
     ] = False,
 ) -> None:
-    """Render and transactionally replace generated artifacts from one project config.yaml, prompting only before replacing existing render-owned artifacts unless --force is provided."""
+    """Render and transactionally replace generated artifacts from one project config.yaml, prompting only before replacing existing render-owned artifacts unless --force is provided.
+
+    Render preserves config.yaml and publishes local artifacts independently of
+    destroy receipts and remote deployment lifecycle state. Local command checkpoints
+    are preserved. Source validation and required discovery
+    reads still apply.
+    """
+    progress_context = ExitStack()
     try:
         _read_config_payload(config_path)
-        source_preimage = config_path.read_bytes()
-        ordinary_mode = (
-            not _SOPERATOR_LIFECYCLE_INTERNAL.get()
-            and _payload_has_soperator_lifecycle(_read_config_payload(config_path.resolve()))
-        )
-        if ordinary_mode:
-            validate_ordinary_app_scope(resolve_project_paths(config_path))
         config, paths = _load_generic_soperator_lifecycle_context(
-            _load_context_readonly if ordinary_mode else _load_runtime_context,
+            _load_runtime_context,
             config_path,
             command="render",
         )
-        _require_soperator_lifecycle_scope(config, command="render")
-        if ordinary_mode:
-            app_source_issues = _validate_enabled_chart_sources(ordinary_config(config))
-            if app_source_issues:
-                raise RuntimeError(
-                    "Ordinary app source validation failed: " + "; ".join(app_source_issues)
-                )
-            if not _confirm_render_overwrite(paths, force=force):
-                return
-            ordinary_written = render_ordinary_apps(config, paths, source_preimage=source_preimage)
-            console.print(
-                f"Rendered {len(ordinary_written)} ordinary app files under {paths.flux_dir}"
+        from .soperator_generation import require_current_active_soperator_snapshots
+
+        require_current_active_soperator_snapshots(config, paths)
+        if not install_progress_active():
+            progress_context.enter_context(
+                install_progress_scope(SoperatorUpgradeProgress(progress_console, prefix="Render"))
             )
-            _print_render_deploy_hint(config_path)
-            return
-        if isinstance(config, dict):
-            _materialize_soperator_component_defaults(config)
-            _materialize_soperator_render_only_values(config)
-            materialize_compute_boot_disk_defaults(config)
-        prune_inactive_mk8s_gpu_app_rows(config)
-        materialize_mk8s_gpu_app_values(config)
-        materialize_soperator_child_chart_values(config)
-        materialize_observability_infra_values(config)
-        materialize_observability_app_values(config)
-        materialize_mysterybox_eso_app_values(config)
-        _raise_on_render_gpu_fabric_drift(config, paths)
+        with install_phase("render-inputs", "Preparing render inputs"):
+            _require_soperator_lifecycle_scope(config, command="render")
+            if isinstance(config, dict):
+                _materialize_soperator_component_defaults(config)
+                _materialize_soperator_render_only_values(config)
+                materialize_compute_boot_disk_defaults(config)
+            prune_inactive_mk8s_gpu_app_rows(config)
+            materialize_mk8s_gpu_app_values(config)
+            materialize_soperator_child_chart_values(config)
+            materialize_observability_infra_values(config)
+            materialize_observability_app_values(config)
+            materialize_mysterybox_eso_app_values(config)
+            _raise_on_render_gpu_fabric_drift(config, paths)
         resolved_source_profile = resolve_component_sources_profile()
         _assert_not_nested_deployments_root(paths.deployments_dir)
         if not _confirm_render_overwrite(paths, force=force):
@@ -59768,13 +55779,14 @@ def render_command(
         # Managed cluster identity is unavailable before the initial Terraform
         # render/apply. Flux uses its stable target reference until the strict
         # post-Terraform refresh resolves the immutable provider cluster ID.
-        component_output_values = _runtime_component_output_values(
-            config,
-            paths,
-            required_specs=_required_runtime_component_output_specs(
-                config, include_soperator_handoffs=False
-            ),
-        )
+        with install_phase("render-outputs", "Resolving component outputs"):
+            component_output_values = _runtime_component_output_values(
+                config,
+                paths,
+                required_specs=_required_runtime_component_output_specs(
+                    config, include_soperator_handoffs=False
+                ),
+            )
         staged_paths = staged_generated_paths(paths)
         try:
             staged_paths.infra_dir.mkdir(parents=True, exist_ok=True)
@@ -59797,23 +55809,44 @@ def render_command(
                     )
                 )
             _print_mk8s_gpu_validation_warnings(config)
-            quota_report = _warn_on_config_live_quota_issues(config, paths, phase="render")
-            _write_generated_runtime_manifest(
-                config,
-                staged_paths,
-                source_profile=resolved_source_profile,
-                quota_report=quota_report,
-                output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
-                manifest_paths=paths,
-            )
-            preserve_ordinary_app_generation(paths, staged_paths)
-            promote_staged_generated_paths(staged_paths, paths)
-        except Exception:
+            with install_phase("render-quota", "Checking resource quotas"):
+                quota_report = _warn_on_config_live_quota_issues(config, paths, phase="render")
+            with install_phase("render-manifest", "Preparing deployment manifest"):
+                _write_generated_runtime_manifest(
+                    config,
+                    staged_paths,
+                    source_profile=resolved_source_profile,
+                    quota_report=quota_report,
+                    output_path=manifest_path_for_generated_dir(staged_paths.generated_dir),
+                    manifest_paths=paths,
+                )
+            with install_phase("render-providers", "Resolving Terraform providers") as phase:
+                lock_generated = _try_generate_terraform_lock_file(config, staged_paths)
+                if not lock_generated and phase is not None:
+                    phase.skipped("Terraform provider lock not generated")
+            from .deployment_cli import render_publication_lock
+
+            with (
+                install_phase("render-publish", "Publishing generated artifacts"),
+                render_publication_lock(config=config, paths=paths),
+            ):
+                promote_staged_generated_paths(staged_paths, paths)
+        except BaseException:
             reset_generated_bundle(staged_paths)
             raise
         manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
-        lock_generated = _try_generate_terraform_lock_file(config, paths)
         console.print(f"Rendered {len(sorted(written))} file(s) under {paths.generated_dir}")
+        for row in soperator_rows(to_plain_data(config)):
+            profile_target = app_chart_target_ref(row) or component_instance_id(row)
+            profile_flux_dir = flux_target_dir(paths, profile_target)
+            for line in deployment_profile_summary(
+                _rendered_soperator_upstream_values(profile_flux_dir),
+                target=profile_target,
+                stage="rendered",
+                explicit=soperator_explicit_values(row),
+                values_path=str(profile_flux_dir / "configmap-terraform-fluxcd-values.yaml"),
+            ):
+                console.print(escape(line))
         console.print(f"Source profile: {resolved_source_profile.value}")
         if resolved_source_profile == SourceProfile.LOCAL:
             console.print(
@@ -59843,6 +55876,8 @@ def render_command(
         raise
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
+    finally:
+        progress_context.close()
 
 
 @app.command("mk8s-token", hidden=True)
@@ -60093,7 +56128,8 @@ def acceptance_test_benchmark_command(
             min=1,
             help=(
                 "Maximum GPU nodes to include for benchmark suites that support node caps. "
-                "Default: all schedulable GPU nodes."
+                "K8s defaults to the active catalog cap (bundled: all schedulable GPU nodes); "
+                "Slurm defaults to all schedulable GPU nodes."
             ),
         ),
     ] = None,
@@ -60102,8 +56138,8 @@ def acceptance_test_benchmark_command(
         typer.Option(
             "--timeout",
             help=(
-                "Benchmark timeout as a duration such as 20m. Default: no timeout; the run "
-                "continues until completion or user cancellation."
+                "Benchmark timeout such as 20m. K8s defaults to the active catalog timeout "
+                "(bundled: none); Slurm defaults to none, until completion or cancellation."
             ),
         ),
     ] = None,
@@ -60113,9 +56149,9 @@ def acceptance_test_benchmark_command(
             "--average-bus-bandwidth-threshold-gbps",
             min=0.0,
             help=(
-                "Required average NCCL bus bandwidth in Gbps for RDMA benchmark runs. "
-                "Default: 300. On 1-GPU runs, below-threshold bandwidth is reported "
-                "as a comment when NCCL completes and reports average bandwidth."
+                "Required average NCCL bus bandwidth in Gbps for K8s RDMA and Slurm benchmarks. "
+                "Default: 300. On one-GPU-per-node shapes, below-threshold bandwidth is "
+                "a comment when NCCL completes and reports average bandwidth."
             ),
         ),
     ] = 300.0,
@@ -60149,18 +56185,19 @@ def acceptance_test_benchmark_command(
     epilog=(
         "Examples: "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml "
-        "(runs terraform apply for infra then Flux bootstrap+apply for apps on every deploy target); "
+        "(plans and executes the complete workflow selected by the rendered configuration); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --target mk8s-prod "
-        "(restricts the run to a single deploy.targets[] row by id); "
+        "(limits app work and validations to that target; pending Soperator changes require "
+        "selecting the Soperator target or deploying all targets); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
         "(skips a single optional MK8s GPU deployment-testing check; repeatable; "
         "--skip-validations skips optional deployment-testing checks only); "
         "Canonical project authentication is ensured before deployment preflight. "
-        "For completed Soperator projects, deploy applies the rendered ordinary app bundle "
-        "without Terraform or Slurm maintenance. Protected changes use the corresponding "
-        "`soperator` lifecycle command."
+        "Soperator configuration selects installation, settings reconciliation, or coordinated "
+        "platform changes automatically. Use --dry-run for an optional preview."
     ),
 )
+@acceptance_command
 def deploy_command(
     config_path: Annotated[
         Path,
@@ -60169,6 +56206,20 @@ def deploy_command(
             help=_DEPLOY_CONFIG_ARGUMENT_HELP,
         ),
     ],
+    acceptance: Annotated[
+        AcceptanceProfile | None,
+        typer.Option(
+            "--acceptance",
+            help="Soperator acceptance: readiness or full. Terminal omission prompts after readiness; unattended omission runs full. Ctrl+G finishes extended tests safely.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Preview infrastructure and application changes without executing them.",
+        ),
+    ] = False,
     skip_validations: Annotated[
         bool,
         typer.Option(
@@ -60196,7 +56247,8 @@ def deploy_command(
             "--target",
             help=(
                 f"Limit Flux/app work and deploy-time validations to one {_MK8S_TARGET_ID_HELP}. "
-                "When omitted, deploy reconciles every built-in cluster target in the bundle."
+                "When omitted, deploy reconciles every built-in cluster target in the bundle. "
+                "Mutually exclusive with --all-targets; infrastructure remains project-wide."
             ),
         ),
     ] = None,
@@ -60220,7 +56272,8 @@ def deploy_command(
     cancel_job: Annotated[
         list[str] | None,
         typer.Option(
-            "--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."
+            "--cancel-job",
+            help="Slurm job id to cancel; repeatable. Required with --job-policy cancel-selected.",
         ),
     ] = None,
     requeue_job: Annotated[
@@ -60228,8 +56281,8 @@ def deploy_command(
         typer.Option(
             "--requeue-job",
             help=(
-                "Slurm job id to requeue with --job-policy requeue-selected "
-                "or requeue-hold-selected."
+                "Slurm job id to requeue; repeatable. Required with --job-policy "
+                "requeue-selected or requeue-hold-selected."
             ),
         ),
     ] = None,
@@ -60250,171 +56303,163 @@ def deploy_command(
         ),
     ] = _SOPERATOR_UPGRADE_DEFAULT_JOB_REFRESH_INTERVAL,
 ) -> None:
-    """Deploy an existing generated artifact bundle locally from config.yaml.
+    """Plan and execute the workflow selected by the rendered configuration.
 
-    This command is a reconcile/apply path against the rendered bundle.
-    Deploy resolves the sibling `generated/` directory and still uses
-    `generated/nebius-cxcli-manifest.json` as the authoritative deploy
-    contract so source-config changes after render do not silently alter
-    the deployed bundle. On a completed Soperator project, deploy requires an
-    accepted protected baseline and applies only the rendered ordinary apps,
-    without Terraform or Slurm lifecycle work. Protected drift, unfinished
-    lifecycle operations, and foreign resource ownership are rejected. Use `soperator
-    install` for a new cluster, `soperator onboard` to register an existing
-    installation, and `soperator upgrade` for a release change. If an approved
-    upgrade is interrupted, rerun the same approved `soperator upgrade
-    --execute --approve` command to recover its frozen operation. For ordinary
-    projects, before Terraform apply, deploy runs a generated-bundle preflight covering strict
-    readiness checks, VPC networking preflight, live Nebius quota/capacity
-    validation, Terraform validation, and rendered Flux manifest validation
-    when apps are enabled. For bundled MK8s reruns,
-    that quota/capacity phase initializes the backend and discounts MK8s quota
-    already managed in the current Terraform state, so unchanged existing
-    clusters do not fail like fresh creates while real added capacity still
-    fails fast. Terraform apply runs next, refresh the deploy report runs after
-    that, and when app charts are enabled Flux then converges the existing
-    generated bundle onto live infrastructure and workloads. When a built-in
-    cluster handoff such as MK8s is enabled, deploy also refreshes local
-    kubeconfig access for that cluster even if no app charts are configured.
-    When more than one built-in cluster target is present, deploy reconciles
-    every target by default. Use `--target <target-id>` to narrow Flux/app work
-    and deploy-time validations to one target, or `--all-targets` to spell out
-    the default all-target behavior. The target id is the normalized cluster
-    resource name stored as that MK8s row's `instance_id`. For a single-target
-    run, the refreshed validation summary and deploy report include only
-    validations for that selected target; the default multi-target run and
-    `--all-targets` report every selected target.
-    Existing managed resources may be updated when the bundle differs from live
-    state. Use `nebius-cxcli terraform plan
-    <generated>` first when you need a non-mutating preview. It does not run
-    `flux bootstrap` or configure GitOps sync, and it does not create or
-    update GitHub workflows, environments, or CI secrets; use `nebius-cxcli
-    bootstrap-ci <config.yaml>` explicitly for that. Use
-    `--skip-validations` or repeatable `--skip-validation <kind>` only when
-    you want a one-run override for optional checks without changing the
-    persisted project config. Required platform validations, including native
-    ESO MysteryBox connectivity when that sync path is configured, still run.
-    Deploy-time validations include configured MK8s GPU deployment-testing
-    checks, the generated Observability Agent ingestion guardrail for
-    observability-enabled MK8s targets, and required ESO MysteryBox connectivity
-    checks for native MysteryBox sync targets. When deploy-time validations are configured, deploy
-    keeps the machine-readable JSON detail files under `generated/reports/`
-    and refreshes the combined `generated/reports/deploy-report.md`. The final
-    terminal footer groups validation PASS/FAIL by target, copy-paste commands,
-    and important generated paths limited to the generated bundle plus deploy report.
+    CONFIG_YAML locates the sibling generated bundle. Run render explicitly after
+    changing configuration; deploy executes that frozen snapshot. An unchanged
+    Soperator release and settings avoid Slurm maintenance. Settings, capacity,
+    and version/platform changes use the coordinated workflow. Rerun deploy to
+    recover an interrupted matching generation. Expired unresolved fast smoke
+    attempts may be retired with explicit interactive confirmation; their history
+    remains and a fresh smoke must pass. The exact native observability correction
+    can preserve an unfinished initial install through guarded forward
+    recovery. --dry-run is an optional preview;
+    execution does not require a prior preview or an approval fingerprint.
     """
     try:
-        config, paths, manifest = _load_generic_soperator_lifecycle_context(
-            _load_deploy_context,
-            config_path,
-            command="deploy",
-        )
+        from .deployment_recovery import deployment_preview
+
+        with deployment_preview(dry_run):
+            config, paths, manifest = _load_generic_soperator_lifecycle_context(
+                _load_deploy_context,
+                config_path,
+                command="deploy",
+            )
         _require_soperator_lifecycle_scope(config, command="deploy")
-        if _payload_has_soperator_lifecycle(config) and not _SOPERATOR_LIFECYCLE_INTERNAL.get():
-            app_validations = _filter_deploy_validations(
-                list(manifest.get("render", {}).get("ordinary_validations", [])),
-                skip_validations=skip_validations,
-                skip_kinds=_resolve_deploy_validation_skip_kinds(tuple(skip_validation or ())),
-            )
-            _apply_ordinary_app_command(
-                config,
-                paths,
-                manifest,
-                target_ref=target_ref,
-                all_targets=all_targets or target_ref is None,
-                validations=app_validations,
-            )
-            return
-        skip_validation_kinds = _resolve_deploy_validation_skip_kinds(tuple(skip_validation or ()))
-        summary = _deploy_generated_artifacts(
-            config,
-            paths,
-            manifest,
+        options = DeployOptions(
+            dry_run=dry_run,
             skip_validations=skip_validations,
-            skip_validation_kinds=skip_validation_kinds,
-            requested_target_ref=target_ref,
+            skip_validation_kinds=frozenset(
+                _resolve_deploy_validation_skip_kinds(tuple(skip_validation or ()))
+            ),
+            target_ref=target_ref,
             all_targets=all_targets,
             job_policy=_soperator_runtime_job_policy(job_policy),
             cancel_job_ids=tuple(cancel_job or ()),
             requeue_job_ids=tuple(requeue_job or ()),
-            job_wait_timeout_seconds=_soperator_upgrade_duration_seconds(
-                job_wait_timeout,
-                option_name="--job-wait-timeout",
-            ),
-            job_refresh_interval_seconds=_soperator_upgrade_duration_seconds(
-                job_refresh_interval,
-                option_name="--job-refresh-interval",
-            ),
+            job_wait_timeout=job_wait_timeout,
+            job_refresh_interval=job_refresh_interval,
         )
-        _print_deploy_command_footer(config, paths, summary, succeeded=True)
+        from .frozen_catalog import use_frozen_catalog
+
+        with use_frozen_catalog(manifest.get("render", {}).get("inputs", {})):
+            summary = deploy_rendered_bundle(config, paths, manifest, options=options)
+        if summary is not None:
+            _print_deploy_command_footer(config, paths, summary, succeeded=True)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @app.command(
     "destroy",
-    short_help="Use CONFIG_YAML to destroy all rendered project resources.",
+    short_help="Delete one explicitly selected MK8s cluster through the Nebius SDK.",
     epilog=(
         "Examples: "
-        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml "
-        "(prompts for confirmation, then removes rendered app resources followed by Terraform destroy across all deploy targets); "
-        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --yes "
-        "(skips the confirmation prompt; use only in scripted teardowns). Configs containing "
-        "Soperator are rejected because protected teardown requires a Soperator-owned command."
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --target CLUSTER_ID --dry-run "
+        "(previews one cluster and its exact DESTROY/PRESERVE inventory); "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --target CLUSTER_ID "
+        "(requires exact interactive confirmation); "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --target CLUSTER_ID --yes "
+        "(approves the same validated inventory without a prompt); "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --target CLUSTER_ID --delete-sfs "
+        "(also deletes approved dedicated attached SFS); "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --target CLUSTER_ID --preserve-pvc-disks "
+        "(preserves owned PVC disks). "
+        "--target is the immutable Nebius cluster ID and is required even for one MK8s cluster. "
+        "Managed and onboarded clusters use the same SDK workflow without Kubernetes access. "
+        "Dedicated GPU clusters and owned PVC disks are deleted by default; SFS, VM-NFS and "
+        "unrelated infrastructure are preserved. Projects without MK8s retain rendered-resource "
+        "teardown with `destroy CONFIG_YAML [--yes]`."
     ),
 )
 def destroy_command(
     config_path: Annotated[
         Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP,
-        ),
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
     ],
+    cluster_id: Annotated[
+        str | None,
+        typer.Option(
+            "--target", help="Exact immutable Nebius cluster ID; required for every MK8s deletion."
+        ),
+    ] = None,
     yes: Annotated[
         bool,
         typer.Option(
             "--yes",
             "-y",
-            help="Skip the destructive confirmation prompt.",
+            help="Approve the validated deletion inventory without an interactive prompt.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Preview selected MK8s deletion; write only a local receipt and never execute.",
+        ),
+    ] = False,
+    delete_sfs: Annotated[
+        bool,
+        typer.Option(
+            "--delete-sfs",
+            help="Delete confirmed dedicated attached SFS; reject shared, unknown or deletion-protected storage.",
+        ),
+    ] = False,
+    preserve_pvc_disks: Annotated[
+        bool,
+        typer.Option(
+            "--preserve-pvc-disks",
+            help="Preserve cluster-owned PVC disks; default MK8s destroy permanently deletes their data.",
         ),
     ] = False,
 ) -> None:
-    """Destroy all rendered project resources locally from config.yaml.
+    """Retire one project-bound MK8s cluster, or tear down a project without MK8s."""
+    if cluster_id is not None:
+        from .destroy_cli import execute_destroy
 
-    This command is the destructive inverse of `deploy`: it resolves the
-    sibling `generated/` directory from the project `config.yaml`, then uses
-    `generated/nebius-cxcli-manifest.json` as the authoritative teardown
-    contract for the whole rendered project. When app charts are enabled,
-    destroy deletes rendered Flux and locally applied post-Flux app resources
-    first so Kubernetes finalizers and CSI cleanup can run before Terraform
-    removes any managed MK8s cluster. It then runs Terraform destroy against
-    the rendered infra bundle. It does not rerender from `config.yaml`, and it
-    does not uninstall Flux controllers or bootstrap GitHub/CI state.
-    """
+        with SoperatorUpgradeProgress(progress_console, prefix="Destroy").sequence() as progress:
+            try:
+                execute_destroy(
+                    config_path,
+                    cluster_id=cluster_id,
+                    dry_run=dry_run,
+                    delete_sfs=delete_sfs,
+                    preserve_pvc_disks=preserve_pvc_disks,
+                    yes=yes,
+                    progress=progress,
+                )
+            except typer.Exit:
+                progress.failure()
+                raise
+            except (KeyboardInterrupt, EOFError, typer.Abort):
+                progress.failure("Destroy cancelled")
+                console.print("[yellow]Cancelled by user[/yellow].")
+                raise typer.Exit(code=130) from None
+            except Exception as exc:
+                progress.failure()
+                _exit_with_error(exc)
+        return
     try:
+        if dry_run or delete_sfs or preserve_pvc_disks:
+            raise ValueError("MK8s destroy options require --target CLUSTER_ID")
         config, paths, manifest = _load_generic_soperator_lifecycle_context(
-            _load_destroy_context,
-            config_path,
-            command="destroy",
+            _load_destroy_context, config_path, command="destroy"
         )
         _require_soperator_lifecycle_scope(config, command="destroy")
-        prompt_text, warning_text = _destroy_confirmation_text(config, paths, manifest)
-        if not _confirm_generated_destroy(
-            yes=yes,
-            action_label="Destroy",
-            prompt_text=prompt_text,
-            warning_text=warning_text,
+        from .destroy_target import require_non_mk8s_destroy
+
+        require_non_mk8s_destroy(config, manifest)
+        with _deployment_execution(
+            config=config, paths=paths, target_ref="project", operation_id="destroy"
         ):
-            console.print("No changes applied.")
-            return
-        _destroy_generated_artifacts(
-            config,
-            paths,
-            manifest,
-            yes=yes,
-        )
-        console.print(f"Local destroy completed from {paths.generated_dir}")
+            prompt_text, warning_text = _destroy_confirmation_text(config, paths, manifest)
+            if not _confirm_generated_destroy(
+                yes=yes, action_label="Destroy", prompt_text=prompt_text, warning_text=warning_text
+            ):
+                console.print("No changes applied.")
+                return
+            _destroy_generated_artifacts(config, paths, manifest, yes=yes)
+            console.print(f"Local destroy completed from {paths.generated_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60424,7 +56469,7 @@ def destroy_command(
     short_help="Use GENERATED_PATH to run Terraform plan from generated/infra.",
     epilog=(
         "Examples: "
-        "nebius-cxcli terraform plan ./deployments/acme/generated "
+        "nebius-cxcli terraform plan ./deployments/tenant/project/generated "
         "(equivalent to `terraform -chdir=generated/infra plan` with cxcli's runtime env wiring). "
         "Run after `nebius-cxcli render` to preview infra diffs (MK8s, SFS, VMs) before `deploy`."
     ),
@@ -60446,29 +56491,32 @@ def terraform_plan_command(
             command="terraform plan",
         )
         _require_soperator_lifecycle_scope(config, command="terraform plan")
-        _ensure_terraform_backend_ready(config)
-        runtime_env = _terraform_runtime_env(config)
-        runtime_env.update(
-            _collect_mysterybox_runtime_payload_values(
-                config,
-                prompt=_console_is_terminal(),
+        with _deployment_execution(
+            config=config, paths=paths, target_ref="project", operation_id="terraform plan"
+        ):
+            _ensure_terraform_backend_ready(config)
+            runtime_env = _terraform_runtime_env(config)
+            runtime_env.update(
+                _collect_mysterybox_runtime_payload_values(
+                    config,
+                    prompt=_console_is_terminal(),
+                )
             )
-        )
-        terraform_init(paths.infra_dir, extra_env=runtime_env)
-        _validate_generated_mk8s_resource_name_preflight(
-            config,
-            paths,
-            runtime_env=runtime_env,
-        )
-        _warn_on_terraform_gpu_fabric_drift(
-            config,
-            paths,
-            manifest,
-            runtime_env=runtime_env,
-            initialize=False,
-        )
-        terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
-        terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
+            terraform_init(paths.infra_dir, extra_env=runtime_env)
+            _validate_generated_mk8s_resource_name_preflight(
+                config,
+                paths,
+                runtime_env=runtime_env,
+            )
+            _warn_on_terraform_gpu_fabric_drift(
+                config,
+                paths,
+                manifest,
+                runtime_env=runtime_env,
+                initialize=False,
+            )
+            terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
+            terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60478,7 +56526,7 @@ def terraform_plan_command(
     short_help="Use GENERATED_PATH to run Terraform apply from generated/infra.",
     epilog=(
         "Examples: "
-        "nebius-cxcli terraform apply ./deployments/acme/generated "
+        "nebius-cxcli terraform apply ./deployments/tenant/project/generated "
         "(provisions only the infra layer; does not touch Flux/apps); "
         "useful for staged rollouts when you want to bring infra up first and apply Flux later via `flux apply`."
     ),
@@ -60500,34 +56548,37 @@ def terraform_apply_command(
             command="terraform apply",
         )
         _require_soperator_lifecycle_scope(config, command="terraform apply")
-        _ensure_terraform_backend_ready(config)
-        paths.reports_dir.mkdir(parents=True, exist_ok=True)
-        write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
-        runtime_env = _terraform_runtime_env(config)
-        mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(
-            config,
-            prompt=_console_is_terminal(),
-        )
-        runtime_env.update(mysterybox_payload_env)
-        terraform_init(paths.infra_dir, extra_env=runtime_env)
-        _validate_generated_mk8s_resource_name_preflight(
-            config,
-            paths,
-            runtime_env=runtime_env,
-        )
-        terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
-        status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
-            config
-        )
-        apply_kwargs: dict[str, Any] = {"initialize": False}
-        apply_kwargs["manifest"] = manifest
-        if status_watchers:
-            apply_kwargs["status_watchers"] = status_watchers
-        if mysterybox_payload_env:
-            apply_kwargs["extra_env"] = mysterybox_payload_env
-        _run_terraform_apply_with_status(config, paths, **apply_kwargs)
-        _sync_mysterybox_primary_version_ids_to_config(config, paths, initialize=False)
-        write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
+        with _deployment_execution(
+            config=config, paths=paths, target_ref="project", operation_id="terraform apply"
+        ):
+            _ensure_terraform_backend_ready(config)
+            paths.reports_dir.mkdir(parents=True, exist_ok=True)
+            write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
+            runtime_env = _terraform_runtime_env(config)
+            mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(
+                config,
+                prompt=_console_is_terminal(),
+            )
+            runtime_env.update(mysterybox_payload_env)
+            terraform_init(paths.infra_dir, extra_env=runtime_env)
+            _validate_generated_mk8s_resource_name_preflight(
+                config,
+                paths,
+                runtime_env=runtime_env,
+            )
+            terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
+            status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
+                config
+            )
+            apply_kwargs: dict[str, Any] = {"initialize": False}
+            apply_kwargs["manifest"] = manifest
+            if status_watchers:
+                apply_kwargs["status_watchers"] = status_watchers
+            if mysterybox_payload_env:
+                apply_kwargs["extra_env"] = mysterybox_payload_env
+            _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+            _sync_mysterybox_primary_version_ids_to_config(config, paths, initialize=False)
+            write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60537,10 +56588,11 @@ def terraform_apply_command(
     short_help="Use GENERATED_PATH to run Terraform destroy from generated/infra.",
     epilog=(
         "Examples: "
-        "nebius-cxcli terraform destroy ./deployments/acme/generated "
+        "nebius-cxcli terraform destroy ./deployments/tenant/project/generated "
         "(infra-only destroy; useful when Flux already cleaned up apps); "
-        "nebius-cxcli terraform destroy ./deployments/acme/generated --yes "
-        "(skips the confirmation prompt). For a full teardown including Flux, prefer top-level `nebius-cxcli destroy`."
+        "nebius-cxcli terraform destroy ./deployments/tenant/project/generated --yes "
+        "(skips the confirmation prompt). Only projects and Terraform state without MK8s "
+        "are accepted; delete MK8s with `nebius-cxcli destroy CONFIG --target CLUSTER_ID`."
     ),
 )
 def terraform_destroy_command(
@@ -60568,42 +56620,48 @@ def terraform_destroy_command(
             command="terraform destroy",
         )
         _require_soperator_lifecycle_scope(config, command="terraform destroy")
-        if not _confirm_generated_destroy(
-            yes=yes,
-            action_label="Terraform destroy",
-            prompt_text="Continue and destroy the rendered infra resources?",
-            warning_text=(
-                "Terraform destroy will destroy the rendered infra resources under "
-                f"{paths.infra_dir}."
-            ),
+        from .destroy_target import require_non_mk8s_destroy
+
+        require_non_mk8s_destroy(config, manifest)
+        with _deployment_execution(
+            config=config, paths=paths, target_ref="project", operation_id="terraform destroy"
         ):
-            console.print("No changes applied.")
-            return
-        status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
-            config
-        )
-        _ensure_terraform_backend_ready(config)
-        _run_terraform_destroy_with_recovery(
-            config,
-            paths,
-            yes=yes,
-            initialize=True,
-            status_watchers=status_watchers or None,
-        )
-        console.print(f"Terraform destroy completed from {paths.infra_dir}")
+            if not _confirm_generated_destroy(
+                yes=yes,
+                action_label="Terraform destroy",
+                prompt_text="Continue and destroy the rendered infra resources?",
+                warning_text=(
+                    "Terraform destroy will destroy the rendered infra resources under "
+                    f"{paths.infra_dir}."
+                ),
+            ):
+                console.print("No changes applied.")
+                return
+            status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(
+                config
+            )
+            _ensure_terraform_backend_ready(config)
+            _run_terraform_destroy_with_recovery(
+                config,
+                paths,
+                yes=yes,
+                initialize=True,
+                status_watchers=status_watchers or None,
+            )
+            console.print(f"Terraform destroy completed from {paths.infra_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
 
 @terraform_app.command(
     "unlock",
-    short_help="Use GENERATED_PATH to inspect or clear a Terraform lock in generated/infra.",
+    short_help="Use GENERATED_PATH to clear a stale Terraform lock in generated/infra.",
     epilog=(
         "Examples: "
-        "nebius-cxcli terraform unlock ./deployments/acme/generated "
-        "(shows current lock metadata and prompts for confirmation before clearing); "
-        "nebius-cxcli terraform unlock ./deployments/acme/generated --force "
-        "(non-interactive force-unlock for CI recovery; use only when no other apply is running)."
+        "nebius-cxcli terraform unlock ./deployments/tenant/project/generated "
+        "(checks local processes and lock ownership, then clears a stale lock without prompting); "
+        "nebius-cxcli terraform unlock ./deployments/tenant/project/generated --force "
+        "(bypasses local process and owner safety checks; use only after proving no active writer)."
     ),
 )
 def terraform_unlock_command(
@@ -60633,25 +56691,28 @@ def terraform_unlock_command(
             command="terraform unlock",
         )
         _require_soperator_lifecycle_scope(config, command="terraform unlock")
-        lock_info = _unlock_terraform_state_lock(
-            config,
-            paths,
-            force=force,
-        )
-        if lock_info is None:
-            settings = backend_settings_from_config(config)
-            console.print(
-                "No remote Terraform state lock is present for "
-                f"{settings.bucket}/{settings.key}.tflock."
+        with _deployment_execution(
+            config=config, paths=paths, target_ref="project", operation_id="terraform unlock"
+        ):
+            lock_info = _unlock_terraform_state_lock(
+                config,
+                paths,
+                force=force,
             )
-            return
-        console.print(
-            "Terraform state lock cleared: "
-            f"id={lock_info.lock_id} "
-            f"owner={lock_info.who or '(unknown)'} "
-            f"created={lock_info.created or '(unknown)'} "
-            f"object={lock_info.bucket}/{lock_info.object_key}"
-        )
+            if lock_info is None:
+                settings = backend_settings_from_config(config)
+                console.print(
+                    "No remote Terraform state lock is present for "
+                    f"{settings.bucket}/{settings.key}.tflock."
+                )
+                return
+            console.print(
+                "Terraform state lock cleared: "
+                f"id={lock_info.lock_id} "
+                f"owner={lock_info.who or '(unknown)'} "
+                f"created={lock_info.created or '(unknown)'} "
+                f"object={lock_info.bucket}/{lock_info.object_key}"
+            )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60661,13 +56722,14 @@ def terraform_unlock_command(
     short_help="Use GENERATED_PATH to delete rendered Flux resources from generated/flux.",
     epilog=(
         "Examples: "
-        "nebius-cxcli flux destroy ./deployments/acme/generated "
-        "(deletes all Flux resources rendered for every deploy target; prompts per target); "
-        "nebius-cxcli flux destroy ./deployments/acme/generated --target mk8s-prod "
+        "nebius-cxcli flux destroy ./deployments/tenant/project/generated "
+        "(deletes rendered Flux resources in a single-target bundle after one confirmation; "
+        "multiple targets require --target or --all-targets); "
+        "nebius-cxcli flux destroy ./deployments/tenant/project/generated --target mk8s-prod "
         "(restricts to one target); "
-        "nebius-cxcli flux destroy ./deployments/acme/generated --yes --all-targets "
+        "nebius-cxcli flux destroy ./deployments/tenant/project/generated --yes --all-targets "
         "(non-interactive teardown across every target). Bundles containing Soperator are rejected; "
-        "use `soperator destroy CONFIG --target TARGET`."
+        "use `destroy CONFIG --target CLUSTER_ID`."
     ),
 )
 def flux_destroy_command(
@@ -60712,29 +56774,36 @@ def flux_destroy_command(
             command="flux destroy",
         )
         _require_soperator_lifecycle_scope(config, command="flux destroy")
-        if _active_chart_count(config) == 0:
-            raise RuntimeError("No enabled apps charts are configured for this project.")
-        if not _confirm_generated_destroy(
-            yes=yes,
-            action_label="Flux destroy",
-            prompt_text="Continue and delete the rendered app resources from the target cluster?",
-            warning_text=(
-                "Flux destroy will delete the rendered app resources declared under "
-                f"{paths.flux_dir}."
-            ),
+        with _deployment_execution(
+            config=config,
+            paths=paths,
+            target_ref="project",
+            operation_id="flux destroy",
+            bootstrap_backend=False,
         ):
-            console.print("No changes applied.")
-            return
-        if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config)
-        _destroy_rendered_flux_bundle(
-            config,
-            paths,
-            manifest,
-            requested_target_ref=target_ref,
-            all_targets=all_targets,
-        )
-        console.print(f"Flux resources deleted from {paths.flux_dir}")
+            if _active_chart_count(config) == 0:
+                raise RuntimeError("No enabled apps charts are configured for this project.")
+            if not _confirm_generated_destroy(
+                yes=yes,
+                action_label="Flux destroy",
+                prompt_text="Continue and delete the rendered app resources from the target cluster?",
+                warning_text=(
+                    "Flux destroy will delete the rendered app resources declared under "
+                    f"{paths.flux_dir}."
+                ),
+            ):
+                console.print("No changes applied.")
+                return
+            if _manifest_requires_flux_terraform_state(manifest):
+                _ensure_terraform_backend_ready(config)
+            _destroy_rendered_flux_bundle(
+                config,
+                paths,
+                manifest,
+                requested_target_ref=target_ref,
+                all_targets=all_targets,
+            )
+            console.print(f"Flux resources deleted from {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60744,12 +56813,13 @@ def flux_destroy_command(
     short_help="Use GENERATED_PATH to bootstrap or reconcile Flux from generated/flux.",
     epilog=(
         "Examples: "
-        "nebius-cxcli flux bootstrap ./deployments/acme/generated "
-        "(installs Flux on each deploy target and stages runtime secrets such as Soperator notifier webhook and backup-config keys); "
-        "nebius-cxcli flux bootstrap ./deployments/acme/generated --target mk8s-prod "
+        "nebius-cxcli flux bootstrap ./deployments/tenant/project/generated "
+        "(installs Flux and stages configured ordinary-app runtime secrets for a single-target bundle); "
+        "nebius-cxcli flux bootstrap ./deployments/tenant/project/generated --target mk8s-prod "
         "(single target); "
-        "nebius-cxcli flux bootstrap ./deployments/acme/generated --all-targets "
-        "(reconciles every target after canonical project authentication)."
+        "nebius-cxcli flux bootstrap ./deployments/tenant/project/generated --all-targets "
+        "(reconciles every target after canonical project authentication). "
+        "Multiple targets require --target or --all-targets. Soperator bundles require deploy CONFIG_YAML."
     ),
 )
 def flux_bootstrap_command(
@@ -60786,100 +56856,90 @@ def flux_bootstrap_command(
             command="flux bootstrap",
         )
         _require_soperator_lifecycle_scope(config, command="flux bootstrap")
-        if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config)
-        else:
-            _ensure_runtime_auth_material(
-                config,
-                need_terraform=False,
-            )
-        paths.reports_dir.mkdir(parents=True, exist_ok=True)
-        write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
-        manifest_targets = _manifest_deploy_targets(manifest)
-        if manifest_targets:
-            selected_targets = _resolve_selected_deploy_targets(
-                manifest,
-                requested_target_ref=target_ref,
-                all_targets=all_targets,
-            )
-            persist_local_kubeconfig = True
-            set_current_context = len(selected_targets) == 1 and not all_targets
-            for target in selected_targets:
-                target_ref_value = str(target["target_ref"])
-                target_paths = _paths_for_target_flux_dir(paths, target)
-                if len(selected_targets) > 1:
-                    console.print(f"[bold]Target {target_ref_value}[/bold]")
-                with ExitStack() as stack:
-                    kube_env = _prepare_cluster_handoff_kube_env(
-                        config,
-                        paths,
-                        stack=stack,
-                        target=target,
-                        persist_local_kubeconfig=persist_local_kubeconfig,
-                        set_current_context=set_current_context,
-                    )
-                    _report_cluster_nodes_status(
-                        extra_env=kube_env, emit=lambda message: console.print(message)
-                    )
-                    _ensure_mysterybox_eso_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                    _ensure_grafana_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                    _ensure_soperator_notifier_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
-                            target_paths
-                        ),
-                    )
-                    _ensure_soperator_runtime_before_flux(
-                        config,
-                        paths=target_paths,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                    action = ensure_flux(target_paths, extra_env=kube_env)
-                    if _post_flux_manifest_paths(target_paths):
-                        wait_for_rendered_flux_resources(
-                            target_paths,
-                            extra_env=kube_env,
-                            emit=lambda message: console.print(message),
-                        )
-                        post_flux_env = os.environ.copy()
-                        post_flux_env.update(kube_env)
-                        _apply_post_flux_manifests(target_paths, env=post_flux_env)
-                console.print(f"Flux {action} for {target_paths.flux_dir}")
-        else:
-            _report_cluster_nodes_status(
-                extra_env=None, emit=lambda message: console.print(message)
-            )
-            _ensure_mysterybox_eso_runtime_before_flux(
-                config,
-                extra_env=None,
-            )
-            _ensure_grafana_runtime_before_flux(config, extra_env=None)
-            _ensure_soperator_notifier_runtime_before_flux(
-                config,
-                extra_env=None,
-                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
-            )
-            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
-            action = ensure_flux(paths, extra_env=None)
-            if _post_flux_manifest_paths(paths):
-                wait_for_rendered_flux_resources(
-                    paths,
-                    extra_env=None,
-                    emit=lambda message: console.print(message),
+        with _deployment_execution(
+            config=config,
+            paths=paths,
+            target_ref="project",
+            operation_id="flux bootstrap",
+            bootstrap_backend=False,
+        ):
+            if _manifest_requires_flux_terraform_state(manifest):
+                _ensure_terraform_backend_ready(config)
+            else:
+                _ensure_runtime_auth_material(
+                    config,
+                    need_terraform=False,
                 )
-                _apply_post_flux_manifests(paths, env=os.environ.copy())
-            console.print(f"Flux {action} for {paths.flux_dir}")
+            paths.reports_dir.mkdir(parents=True, exist_ok=True)
+            write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
+            manifest_targets = _manifest_deploy_targets(manifest)
+            if manifest_targets:
+                selected_targets = _resolve_selected_deploy_targets(
+                    manifest,
+                    requested_target_ref=target_ref,
+                    all_targets=all_targets,
+                )
+                persist_local_kubeconfig = True
+                set_current_context = len(selected_targets) == 1 and not all_targets
+                for target in selected_targets:
+                    target_ref_value = str(target["target_ref"])
+                    target_paths = _paths_for_target_flux_dir(paths, target)
+                    if len(selected_targets) > 1:
+                        console.print(f"[bold]Target {target_ref_value}[/bold]")
+                    with ExitStack() as stack:
+                        kube_env = _prepare_cluster_handoff_kube_env(
+                            config,
+                            paths,
+                            stack=stack,
+                            target=target,
+                            persist_local_kubeconfig=persist_local_kubeconfig,
+                            set_current_context=set_current_context,
+                        )
+                        _report_cluster_nodes_status(
+                            extra_env=kube_env, emit=lambda message: console.print(message)
+                        )
+                        from .grafana_database_runtime import preflight_grafana_database
+
+                        preflight_grafana_database(
+                            config, target_ref=target_ref_value, extra_env=kube_env
+                        )
+                        _ensure_mysterybox_eso_runtime_before_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref_value,
+                        )
+                        _ensure_grafana_runtime_before_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref_value,
+                        )
+                        _ensure_soperator_notifier_runtime_before_flux(
+                            config,
+                            extra_env=kube_env,
+                            target_ref=target_ref_value,
+                            externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
+                                target_paths
+                            ),
+                        )
+                        _ensure_soperator_runtime_before_flux(
+                            config,
+                            paths=target_paths,
+                            extra_env=kube_env,
+                            target_ref=target_ref_value,
+                        )
+                        action = ensure_flux(target_paths, extra_env=kube_env)
+                        if _post_flux_manifest_paths(target_paths):
+                            wait_for_rendered_flux_resources(
+                                target_paths,
+                                extra_env=kube_env,
+                                emit=lambda message: console.print(message),
+                            )
+                            post_flux_env = os.environ.copy()
+                            post_flux_env.update(kube_env)
+                            _apply_post_flux_manifests(target_paths, env=post_flux_env)
+                    console.print(f"Flux {action} for {target_paths.flux_dir}")
+            else:
+                raise RuntimeError("Flux bootstrap requires a declared cluster target")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -60889,13 +56949,13 @@ def flux_bootstrap_command(
     short_help="Use GENERATED_PATH to apply Flux directly from generated/flux.",
     epilog=(
         "Examples: "
-        "nebius-cxcli flux apply ./deployments/acme/generated --all-targets "
+        "nebius-cxcli flux apply ./deployments/tenant/project/generated --all-targets "
         "(reconciles HelmReleases and child charts on every target); "
-        "nebius-cxcli flux apply ./deployments/acme/generated --target mk8s-prod "
+        "nebius-cxcli flux apply ./deployments/tenant/project/generated --target mk8s-prod "
         "(reconciles one target only). "
-        "Use after `nebius-cxcli render` to apply app changes. On completed Soperator "
-        "projects this applies ordinary apps only; protected topology and partition changes "
-        "use the Soperator lifecycle. Omitted apps are not uninstalled."
+        "Use after `nebius-cxcli render` to apply app changes. Accepted Soperator projects "
+        "apply ordinary apps only; protected changes use `nebius-cxcli deploy CONFIG_YAML`. "
+        "Omitted apps are not uninstalled."
     ),
 )
 def flux_apply_command(
@@ -60933,7 +56993,8 @@ def flux_apply_command(
     cancel_job: Annotated[
         list[str] | None,
         typer.Option(
-            "--cancel-job", help="Slurm job id to cancel with --job-policy cancel-selected."
+            "--cancel-job",
+            help="Slurm job id to cancel; repeatable. Required with --job-policy cancel-selected.",
         ),
     ] = None,
     requeue_job: Annotated[
@@ -60941,8 +57002,8 @@ def flux_apply_command(
         typer.Option(
             "--requeue-job",
             help=(
-                "Slurm job id to requeue with --job-policy requeue-selected "
-                "or requeue-hold-selected."
+                "Slurm job id to requeue; repeatable. Required with --job-policy "
+                "requeue-selected or requeue-hold-selected."
             ),
         ),
     ] = None,
@@ -60965,156 +57026,148 @@ def flux_apply_command(
 ) -> None:
     """Refresh the deploy report and apply an existing generated/flux bundle directly."""
     try:
-        config, paths, manifest = _load_generic_soperator_lifecycle_context(
-            _load_generated_flux_context,
-            generated_path,
-            command="flux apply",
-        )
-        _require_soperator_lifecycle_scope(config, command="flux apply")
+        from .deployment_recovery import deployment_preview
+
+        with deployment_preview(True):
+            config, paths, manifest = _load_generic_soperator_lifecycle_context(
+                _load_generated_flux_context,
+                generated_path,
+                command="flux apply",
+            )
         if _payload_has_soperator_lifecycle(config) and not _SOPERATOR_LIFECYCLE_INTERNAL.get():
-            _apply_ordinary_app_command(
-                config, paths, manifest, target_ref=target_ref, all_targets=all_targets
+            from .application_compatibility import captured_application_execution
+
+            if job_policy is not None or cancel_job or requeue_job:
+                raise RuntimeError("Ordinary app apply does not accept Slurm maintenance controls")
+            selected = _resolve_selected_deploy_targets(
+                manifest, requested_target_ref=target_ref, all_targets=all_targets
             )
-            return
-        if _active_chart_count(config) == 0:
-            raise RuntimeError("No enabled apps charts are configured for this project.")
-        if _manifest_requires_flux_terraform_state(manifest):
-            _ensure_terraform_backend_ready(config)
-        paths.reports_dir.mkdir(parents=True, exist_ok=True)
-        write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
-        manifest_targets = _manifest_deploy_targets(manifest)
-        grafana_statuses: list[dict[str, Any]] = []
-        resolved_job_policy = _soperator_runtime_job_policy(job_policy)
-        selected_cancel_job_ids = tuple(cancel_job or ())
-        selected_requeue_job_ids = tuple(requeue_job or ())
-        job_wait_timeout_seconds = _soperator_upgrade_duration_seconds(
-            job_wait_timeout,
-            option_name="--job-wait-timeout",
-        )
-        job_refresh_interval_seconds = _soperator_upgrade_duration_seconds(
-            job_refresh_interval,
-            option_name="--job-refresh-interval",
-        )
-        if manifest_targets:
-            selected_targets = _resolve_selected_deploy_targets(
-                manifest,
-                requested_target_ref=target_ref,
-                all_targets=all_targets,
-            )
-            persist_local_kubeconfig = True
-            set_current_context = len(selected_targets) == 1 and not all_targets
-            for target in selected_targets:
-                target_ref_value = str(target["target_ref"])
-                target_paths = _paths_for_target_flux_dir(paths, target)
-                if len(selected_targets) > 1:
-                    console.print(f"[bold]Target {target_ref_value}[/bold]")
-                with ExitStack() as stack:
-                    kube_env = _prepare_cluster_handoff_kube_env(
+            refs = [str(target["target_ref"]) for target in selected]
+            with _deployment_execution(
+                config=config,
+                paths=paths,
+                target_ref="project",
+                operation_id="flux apply ordinary",
+                bootstrap_backend=False,
+            ) as lease:
+                from .application_execution import (
+                    observe_application_targets,
+                    validate_observed_applications,
+                )
+                from .ordinary_apps import assert_accepted_deployment, validate_ordinary_bundle
+
+                baseline = validate_ordinary_bundle(paths, manifest)
+                assert_accepted_deployment(
+                    config, paths, manifest, baseline, refs, assert_held=lease.assert_held
+                )
+                with (
+                    captured_application_execution(
+                        config, paths, manifest, target_refs=refs, ordinary=True
+                    ) as (_, captured, report),
+                    ExitStack() as observation_stack,
+                ):
+                    observations = observe_application_targets(
+                        sys.modules[__name__],
                         config,
                         paths,
-                        stack=stack,
-                        target=target,
-                        persist_local_kubeconfig=persist_local_kubeconfig,
-                        set_current_context=set_current_context,
+                        captured,
+                        selected,
+                        stack=observation_stack,
                     )
-                    _report_cluster_nodes_status(
-                        extra_env=kube_env, emit=lambda message: console.print(message)
+                    report["observations"] = observations
+                    report["observed_compatibility"] = validate_observed_applications(
+                        captured,
+                        observations,
+                        ordinary=True,
                     )
-                    _ensure_mysterybox_eso_runtime_before_flux(
+                    _apply_ordinary_app_command(
                         config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
+                        paths,
+                        manifest,
+                        target_ref=target_ref,
+                        all_targets=all_targets,
+                        validations=manifest.get("render", {}).get("ordinary_validations", ()),
+                        assert_project_authority=lease.assert_held,
                     )
-                    _ensure_grafana_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                    _ensure_soperator_notifier_runtime_before_flux(
-                        config,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
-                            target_paths
-                        ),
-                    )
-                    _ensure_soperator_runtime_before_flux(
-                        config,
-                        paths=target_paths,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                    _apply_rendered_flux_with_soperator_job_policy(
-                        config,
-                        target_paths,
-                        command_name="flux apply",
-                        target_ref=target_ref_value,
-                        extra_env=kube_env,
-                        job_policy=resolved_job_policy,
-                        cancel_job_ids=selected_cancel_job_ids,
-                        requeue_job_ids=selected_requeue_job_ids,
-                        job_wait_timeout_seconds=job_wait_timeout_seconds,
-                        job_refresh_interval_seconds=job_refresh_interval_seconds,
-                    )
-                    grafana_statuses.extend(
-                        _collect_grafana_status_after_flux(
-                            config,
-                            extra_env=kube_env,
-                            target_ref=target_ref_value,
-                        )
-                    )
-                    _warn_if_flux_gitops_not_bootstrapped(
-                        config,
-                        target_paths,
-                        extra_env=kube_env,
-                        target_ref=target_ref_value,
-                    )
-                console.print(f"Flux applied from {target_paths.flux_dir}")
-        else:
-            _report_cluster_nodes_status(
-                extra_env=None, emit=lambda message: console.print(message)
+            return
+        _require_soperator_lifecycle_scope(config, command="flux apply")
+        if _active_chart_count(config) == 0:
+            raise RuntimeError("No enabled apps charts are configured for this project.")
+        from .application_compatibility import captured_application_execution
+        from .application_execution import (
+            observe_application_targets,
+            validate_observed_applications,
+        )
+
+        selected = (
+            _resolve_selected_deploy_targets(
+                manifest, requested_target_ref=target_ref, all_targets=all_targets
             )
-            _ensure_mysterybox_eso_runtime_before_flux(
-                config,
-                extra_env=None,
+            if _manifest_deploy_targets(manifest)
+            else []
+        )
+        refs = [str(target["target_ref"]) for target in selected]
+        if not refs:
+            refs = list(
+                dict.fromkeys(
+                    component_instance_id(row)
+                    for row in to_plain_data(config).get("apps", {}).get("charts", [])
+                )
             )
-            _ensure_grafana_runtime_before_flux(config, extra_env=None)
-            _ensure_soperator_notifier_runtime_before_flux(
-                config,
-                extra_env=None,
-                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
-            )
-            _ensure_soperator_runtime_before_flux(config, paths=paths, extra_env=None)
-            _apply_rendered_flux_with_soperator_job_policy(
+        with (
+            captured_application_execution(config, paths, manifest, target_refs=refs) as (
+                stage,
+                captured,
+                report,
+            ),
+            ExitStack() as observation_stack,
+        ):
+            kube_envs: dict[str, dict[str, str] | None] = {}
+            observations = observe_application_targets(
+                sys.modules[__name__],
                 config,
                 paths,
-                command_name="flux apply",
-                target_ref="",
-                extra_env=None,
-                job_policy=resolved_job_policy,
-                cancel_job_ids=selected_cancel_job_ids,
-                requeue_job_ids=selected_requeue_job_ids,
-                job_wait_timeout_seconds=job_wait_timeout_seconds,
-                job_refresh_interval_seconds=job_refresh_interval_seconds,
+                captured,
+                selected,
+                stack=observation_stack,
+                kube_envs=kube_envs,
             )
-            grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
-            _warn_if_flux_gitops_not_bootstrapped(
-                config,
-                paths,
-                extra_env=None,
+            from .deployment_state import assert_admitted_application_targets
+
+            assert_admitted_application_targets(paths, observations)
+            report["observations"] = observations
+            report["observed_compatibility"] = validate_observed_applications(
+                captured, observations
             )
-            console.print(f"Flux applied from {paths.flux_dir}")
-        if grafana_statuses:
-            write_grafana_status(
-                paths,
-                grafana_statuses,
-                preserve_existing=bool(
-                    manifest_targets
-                    and selected_targets
-                    and len(selected_targets) < len(manifest_targets)
-                ),
-            )
-            write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
+            with _deployment_execution(
+                config=config,
+                paths=paths,
+                target_ref="project",
+                operation_id="flux apply",
+                bootstrap_backend=False,
+            ):
+                _ensure_runtime_auth_material(config, need_terraform=False)
+                paths.reports_dir.mkdir(parents=True, exist_ok=True)
+                _write_text_atomic(
+                    paths.reports_dir / "application-admission.json",
+                    json.dumps(report, indent=2) + "\n",
+                )
+                from .application_execution import execute_admitted_flux_apply
+
+                execute_admitted_flux_apply(
+                    sys.modules[__name__],
+                    config,
+                    replace(stage, reports_dir=paths.reports_dir),
+                    captured,
+                    target_ref=target_ref,
+                    all_targets=all_targets,
+                    job_policy=job_policy,
+                    cancel_job=cancel_job,
+                    requeue_job=requeue_job,
+                    job_wait_timeout=job_wait_timeout,
+                    job_refresh_interval=job_refresh_interval,
+                    kube_envs=kube_envs,
+                )
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
@@ -61125,7 +57178,8 @@ def flux_apply_command(
     epilog=(
         "Examples: "
         "nebius-cxcli discover ./deployments "
-        "(emits JSON listing only projects with changes since the last git commit, for CI matrix builds); "
+        "(emits JSON for projects with committed changes in the CI event comparison range; "
+        "locally uses HEAD~1..HEAD, with an initial-commit fallback); "
         "nebius-cxcli discover ./deployments --all "
         "(emits every project under the scope regardless of git diff, for full sweeps)."
     ),
@@ -61229,7 +57283,7 @@ def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[Emai
     epilog=(
         "Examples: "
         "nebius-cxcli email ./deployments/tenant/project/config.yaml "
-        "(sends the post-deploy report email to the notifications address declared in config.yaml); "
+        "(sends the existing post-deploy report using recipient/runtime settings from the generated manifest); "
         "nebius-cxcli email --setup "
         "(interactive setup of SMTP credentials in the user-global cxcli profile; runs before the first email send)."
     ),

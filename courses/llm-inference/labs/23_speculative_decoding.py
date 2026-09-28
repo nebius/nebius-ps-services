@@ -11,11 +11,12 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -36,10 +37,10 @@ def main() -> None:
             "bonus token."
         )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
-    vocab_size, hidden = (2_048, 512) if args.profile == "smoke" else (8_192, 2_048)
+    vocab_size, hidden = (2_048, 512) if args.profile == "small" else (8_192, 2_048)
 
     class TargetTransition(torch.nn.Module):
         def __init__(self) -> None:
@@ -72,6 +73,8 @@ def main() -> None:
             current = token
             calls += 1
         return generated, calls
+
+    target_only = annotated_operation(target_only, "target_only")
 
     @torch.inference_mode()
     def speculative(
@@ -252,4 +255,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

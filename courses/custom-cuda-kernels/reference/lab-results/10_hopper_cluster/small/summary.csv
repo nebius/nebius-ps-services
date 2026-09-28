@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,kernel_median_seconds,value,4.976e-06,s
+baseline-trial1,cluster_blocks,value,2,none
+baseline-trial1,elements,value,4,none
+repeat-trial1,kernel_median_seconds,value,5.04e-06,s
+repeat-trial1,cluster_blocks,value,2,none
+repeat-trial1,elements,value,4,none

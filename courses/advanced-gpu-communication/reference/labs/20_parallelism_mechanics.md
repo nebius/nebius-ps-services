@@ -1,0 +1,82 @@
+# Lab 20: Follow pipeline and context partitions through backward
+
+Pipeline parallelism divides layers, while context parallelism divides sequence positions. This lab demonstrates their ownership and gradient mechanics on two ranks with deliberately small computations. You will trace forward activations, returning gradients, and global normalization without mistaking a one-microbatch pipeline or a partitioned statistic for a production transformer-parallel runtime.
+
+## Before you start
+
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/20_parallelism_mechanics.json).
+
+**Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
+
+Pass the two-node preflight and review matrix gradients and all-gather/all-reduce semantics. Tensor and expert parallelism have separate training labs; this one focuses on pipeline and context partitions.
+
+## Concepts and code path
+
+The pipeline example sends the first linear layer's activation to rank one, computes the second layer and loss, then returns the activation gradient to rank zero for backward. A full local reference validates gradients. The context example partitions sequence positions, reduces a square-sum statistic, gathers shards for reconstruction, and compares gradients under global normalization. It does not implement distributed attention.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+
+Run the paired mechanics through the two-node launcher. The output is primarily correctness and communication accounting; there is no multi-microbatch pipeline efficiency benchmark to tune here.
+
+```bash
+umask 077
+"$COURSE_PYTHON" labs/20_parallelism_mechanics.py --help
+python3 tools/submit_lab.py --lab 20_parallelism_mechanics slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
+## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 20_parallelism_mechanics --job "$LAB_JOB_ID"
+```
+
+Require pipeline forward/backward reference agreement and context partition/gradient agreement at FP32 `rtol=1e-5, atol=1e-6`. Inspect activation-send/gradient-return bytes, global/local shapes, one microbatch, and listed collectives.
+
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Pipeline parallel / stages | `pipeline_parallel.stages` | `none` |
+| Pipeline parallel / microbatches | `pipeline_parallel.microbatches` | `none` |
+| Pipeline parallel / activation send bytes | `pipeline_parallel.activation_send_bytes` | `bytes` |
+| Context parallel / sequence fraction per rank | `context_parallel.sequence_fraction_per_rank` | `none` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 20_parallelism_mechanics \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
+## Investigate the behavior
+
+Draw the forward and backward arrows between pipeline stages. Why must the second stage treat the received activation as differentiable? For context partitioning, explain why normalizing each local sum by local size would change the intended global gradient.
+
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 20_parallelism_mechanics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small
+```
+
+**Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Open both rank reports. Expand lab_workload, CUDA streams and NCCL send/receive/all-gather rows. Identify pipeline bubbles and context exchange, then check the numerical-equivalence panels before proposing an overlap change. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
+## If something goes wrong
+
+A send/receive shape or ordering mismatch can block both stages. Correct reconstruction with wrong gradients points toward normalization or partition indexing. Diagnose those independently rather than treating a successful gather as complete correctness.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
+
+## Takeaways and next step
+
+Parallelism begins with explicit state and tensor ownership. Production pipeline schedules and context-parallel attention are extensions requiring new communication, masking, and reference tests; this lab does not establish their throughput.

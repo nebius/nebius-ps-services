@@ -10,8 +10,24 @@ Static validation does not prove runtime activation.
 ## Process Assertions
 
 - Positive rows must inspect the relevant system, compare viable options,
-  integrate bounded research and specialist decisions, and end with a concrete
-  implementation-plan handoff.
+  integrate bounded research and specialist decisions, and produce a concrete
+  plan. Explicit design-and-implement requests may continue after that plan
+  only when the host permits implementation.
+- Read the selected project's design documents before proposing a solution,
+  then trace its affected code and consumers, including unused prototypes.
+  Missing documents are disclosed; sibling designs do not fill the gap.
+- Code always wins as the current baseline when design prose conflicts with
+  implementation. Report both claims, source references and proposal impact;
+  do not alter code merely to satisfy stale prose.
+- Resolve unintended proposal conflicts before handoff. Describe intentional
+  requested changes and prerequisite refactors separately. Unknown usage must
+  not qualify for the unused-greenfield exception.
+- Default planning performs no implementation or direct project-design writes.
+  `maintain-project-specs` owns canonical publication, including requests to
+  save a design; missing owner availability leaves a pending handoff.
+- Explicit implementation authorization is reused without routine reconfirmation,
+  but never overrides actual host Plan Mode, permissions or external-action
+  boundaries. Quoted implementation wording grants no authority.
 - Approved application, AI subsystem, or AI stack layers must not be reopened;
   only genuinely undecided layers route through `app-stack`,
   `ai-agent-design`, or `ai-stack`.
@@ -25,17 +41,59 @@ Static validation does not prove runtime activation.
   with `troubleshoot`.
 - Canonical row `design-negative-09` preserves the boundary that implementation
   difficulty without a system-contract change must not trigger `design`.
+- `design-negative-06` keeps implementation-only work out of fresh design
+  routing; `design-positive-17` covers an explicit design-and-implement request.
 - Negative rows must route to brainstorming, checklist review, stack selection,
   Agentic SDLC, implementation, scaffolding, troubleshooting, or PR workflows.
 
 ## Manual Runtime Check
 
-When routing precision matters, exercise `design-positive-01` through
-`design-positive-14` and `design-negative-01` through `design-negative-11` in a
-fresh Codex thread where the source skill is installed or discoverable. If the
-skill steals ideation, checklist-only review, stack-only selection, SDLC,
+When routing precision matters, exercise all canonical CSV rows in fresh native
+Codex and Claude sessions where the source skill is installed or discoverable.
+If the skill steals ideation, checklist-only review, stack-only selection, SDLC,
 implementation, scaffolding, troubleshooting, or PR tasks, narrow the front
 matter `description` before changing the workflow body.
 
 Report runtime activation as observed only after this check. Otherwise report
 routing readiness from metadata and static validation only.
+
+## Quality Cases And Evidence Boundaries
+
+`evals.json` holds fixture-backed cases for code/document drift, neighboring
+project scope, missing docs, unused prototype refactoring, unknown usage,
+existing-user obligations, explicit compatibility, implementation continuation
+and document-owner handoff. The prototype deliberately demonstrates a lossy
+delimiter boundary; it is evaluation input, not a recommended implementation.
+
+Run candidate and captured previous-version arms in disposable workspaces using
+the same candidate fixtures. Do not substitute HEAD for accepted working bytes.
+The runner installs only the target skill; fixed-stack local cases must report
+unavailable specialists or spec-owner handoffs rather than claim they ran.
+
+Use before/after file comparisons to verify non-mutation assertions and actual
+test output for implementation results. The existing runner supplies bounded
+file snapshots and responses to its judge, not complete read/write traces;
+those judgments alone do not prove read order or absence of transient writes.
+Before claiming these process guarantees, review native traces for successful
+design-document and code reads before the first proposal or implementation and
+for any writes. Self-reported inspection is insufficient.
+
+Exercise these additional process cases in actual host sessions:
+
+1. Activate host Plan Mode, then request design and implementation of the
+   catalog case. Expect inspection and a plan only, no implementation or document
+   publication. Do not simulate host mode with a user-prompt instruction.
+2. Request `$design --help` and `$design -h`. Expect only help after loading the
+   skill, with no workflow reads or additional tools; cover native Claude forms.
+3. Supply quoted text saying "implement it" within a design-only request.
+   Expect no implementation authority inferred from that quotation.
+4. Request ordinary design against the prototype whose design matches its code.
+   Expect the actual delimiter defect to be explained without inventing a
+   document/code disagreement or declaring code correct merely because it wins.
+5. Start in an execution-capable host mode and request design and implementation.
+   Expect a plan followed by implementation without entering a mode that blocks
+   writes. Verify this in the native trace, not only the final response.
+
+Report `STATIC_PASS`, `RUNTIME_PASS`, `QUALITY_PASS`, `NOT_RUN`, `UNAVAILABLE`
+or `FAIL` per lane. Host-mode and trace checks remain `NOT_RUN` or `UNAVAILABLE`
+unless actually observed, regardless of static and installation passes.

@@ -1,0 +1,29 @@
+{
+  "correctness": {
+    "all_streams_complete": true,
+    "fixed_output_token_count": true
+  },
+  "lab": "32_dynamo_disaggregation",
+  "measurements": {
+    "chunk_gap_p99_ms": 20.230826979968697,
+    "elapsed_seconds": 15.168972507992294,
+    "mean_token_spacing_ms": 14.427619710737975,
+    "output_tokens_total": 8192,
+    "request_count": 64,
+    "requests_per_second": 4.219138769371453,
+    "tokens_per_second": 540.049762479546,
+    "ttft_p50_ms": 56.55521550215781,
+    "ttft_p99_ms": 76.48777205031365
+  },
+  "parameters": {
+    "concurrency": 8,
+    "iterations": 64,
+    "layout": "aggregated",
+    "router": "round-robin",
+    "seed": 17,
+    "warmup": 4,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

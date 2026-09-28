@@ -12,12 +12,13 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -25,11 +26,16 @@ def main() -> None:
     add_common_args(parser)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
+    parser.add_argument(
+        "--zero-grad-fill",
+        action="store_true",
+        help="Zero existing gradient buffers instead of releasing them; keep all work fixed.",
+    )
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     try:
         from peft import LoraConfig, get_peft_model
@@ -83,6 +89,10 @@ def main() -> None:
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=2e-4,
     )
+    forward = annotated_operation(model, "forward")
+    backward = annotated_operation(lambda loss: loss.backward(), "backward")
+    update = annotated_operation(optimizer.step, "optimizer")
+    clear_gradients = annotated_operation(optimizer.zero_grad, "zero_grad")
     input_ids = encoded["input_ids"].to("cuda")
     attention_mask = encoded["attention_mask"].to("cuda")
     labels = input_ids.masked_fill(attention_mask == 0, -100)
@@ -113,11 +123,11 @@ def main() -> None:
     held_out_before = held_out_evidence()
 
     def train_step() -> tuple[object, float]:
-        optimizer.zero_grad(set_to_none=True)
-        output = model(
+        clear_gradients(set_to_none=not args.zero_grad_fill)
+        output = forward(
             input_ids=input_ids, attention_mask=attention_mask, labels=labels
         )
-        output.loss.backward()
+        backward(output.loss)
         gradient_norm = math.sqrt(
             sum(
                 float(parameter.grad.float().square().sum().item())
@@ -125,7 +135,7 @@ def main() -> None:
                 if parameter.requires_grad and parameter.grad is not None
             )
         )
-        optimizer.step()
+        update()
         return output.loss.detach(), gradient_norm
 
     for _ in range(args.warmup):
@@ -186,4 +196,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

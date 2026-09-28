@@ -34,6 +34,7 @@ from .deploy_targets import (
     app_chart_target_ref,
     enabled_cluster_target_refs,
     is_auto_target_scoped_app_instance_id,
+    materialize_app_chart_target_refs,
     target_scoped_app_instance_id,
 )
 from .mk8s_node_groups import first_gpu_node_group
@@ -136,9 +137,9 @@ def _deploy_target_row_for_ref(
             return row
     if not create:
         return None
-    row: dict[str, Any] = {INSTANCE_ID_FIELD: normalized_target_ref}
-    targets.append(row)
-    return row
+    new_row: dict[str, Any] = {INSTANCE_ID_FIELD: normalized_target_ref}
+    targets.append(new_row)
+    return new_row
 
 
 def _deploy_target_row_has_settings(row: Mapping[str, Any]) -> bool:
@@ -186,6 +187,10 @@ def _grafana_gateway_app_id() -> str:
     return _grafana_settings().gateway_chart_component_id
 
 
+def _grafana_database_app_id() -> str:
+    return _grafana_settings().database_chart_component_id
+
+
 def _grafana_cli_settings() -> GrafanaCliSettings:
     grafana_app_id = _grafana_app_id()
     if not grafana_app_id:
@@ -197,7 +202,12 @@ def _grafana_cli_settings() -> GrafanaCliSettings:
 def _observability_target_scoped_app_ids() -> set[str]:
     return {
         app_id
-        for app_id in (_collector_app_id(), _grafana_app_id(), _grafana_gateway_app_id())
+        for app_id in (
+            _collector_app_id(),
+            _grafana_app_id(),
+            _grafana_gateway_app_id(),
+            _grafana_database_app_id(),
+        )
         if app_id
     }
 
@@ -362,7 +372,7 @@ def required_observability_app_target_refs(payload: dict[str, Any], app_id: str)
             for target_ref in enabled_cluster_target_refs(payload)
             if _grafana_required(payload, target_ref=target_ref)
         )
-    if app_id == grafana_gateway_app_id:
+    if app_id in {grafana_gateway_app_id, _grafana_database_app_id()}:
         return tuple(
             target_ref
             for target_ref in enabled_cluster_target_refs(payload)
@@ -588,7 +598,7 @@ def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
     if deploy_raw is None:
         if not component_ids:
             return False
-        deploy = {}
+        deploy: dict[str, Any] = {}
         payload_map["deploy"] = deploy
     elif isinstance(deploy_raw, dict):
         deploy = deploy_raw
@@ -645,6 +655,8 @@ def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
             if target_existing is not None and not isinstance(target_existing, Mapping):
                 continue
             merged_target = copy.deepcopy(kubernetes_defaults)
+            if target_ref in soperator_target_refs(payload_map):
+                merged_target["kubernetes"]["metrics"]["collect_k8s_cluster_metrics"] = False
             if isinstance(target_existing, Mapping):
                 merged_target = _deep_merge_mapping(merged_target, target_existing)
             if target_row.get("observability") != merged_target:
@@ -653,7 +665,7 @@ def normalize_observability_project_settings(payload: dict[str, Any]) -> bool:
 
     targets = deploy.get("targets")
     if isinstance(targets, list):
-        next_targets: list[Any] = []
+        next_targets = []
         for row in targets:
             if not isinstance(row, dict):
                 next_targets.append(row)
@@ -712,6 +724,8 @@ def _effective_kubernetes_observability_config(
     traces = _mapping(kubernetes.get("traces"))
     default_logs = _mapping(_mapping(defaults).get("logs"))
     default_metrics = _mapping(_mapping(defaults).get("metrics"))
+    if target_ref in soperator_target_refs(payload):
+        default_metrics["collect_k8s_cluster_metrics"] = False
     default_traces = _mapping(_mapping(defaults).get("traces"))
 
     def _resolve_bool(
@@ -859,6 +873,13 @@ def _kubernetes_agent_required(
             _kubernetes_agent_required(payload, target_ref=item)
             for item in enabled_cluster_target_refs(payload)
         )
+    from .observability_routing import collector_owners, target_settings
+
+    if target_settings(payload, normalized_target_ref):
+        return (
+            "nebius-observability-agent"
+            in collector_owners(payload, normalized_target_ref).values()
+        )
     if normalized_target_ref in soperator_target_refs(payload):
         enabled = kubernetes_observability_agent_selected(payload, normalized_target_ref)
     else:
@@ -892,6 +913,10 @@ def _grafana_required(
             _grafana_required(payload, target_ref=item)
             for item in enabled_cluster_target_refs(payload)
         )
+    from .observability_routing import target_settings
+
+    if target_settings(payload, normalized_target_ref):
+        return _selected_app_on_target(payload, _grafana_app_id(), normalized_target_ref)
     if normalized_target_ref in soperator_target_refs(payload):
         return _selected_app_on_target(payload, _grafana_app_id(), normalized_target_ref)
     return _grafana_settings().enabled_by_default and _kubernetes_agent_required(
@@ -920,17 +945,27 @@ def _vm_journald_logs_enabled(
 
 def _selected_app_metric_targets(
     payload: dict[str, Any],
+    *,
+    target_ref: str = "",
 ) -> tuple[tuple[dict[str, Any], ObservabilityMetricTarget], ...]:
     policies = _app_observability_settings()
     resolved: list[tuple[dict[str, Any], ObservabilityMetricTarget]] = []
     for row in _app_chart_rows(payload):
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
+        row_target_ref = app_chart_target_ref(row)
+        if target_ref and row_target_ref != target_ref:
+            continue
         app_id = component_type_id(row)
         settings = policies.get(app_id)
         if settings is None:
             continue
         for target in settings.metric_targets:
+            if target.service_name == "nvidia-dcgm-exporter" and (
+                row_target_ref in soperator_target_refs(payload)
+                or _nested_path_value(row, "values.dcgmExporter.enabled") is False
+            ):
+                continue
             resolved.append((row, target))
     return tuple(resolved)
 
@@ -1025,6 +1060,8 @@ def _observability_gpu_node_label_targets(
     *,
     target_ref: str = "",
 ) -> tuple[ObservabilityMetricTarget, ...]:
+    if target_ref in soperator_target_refs(payload):
+        return ()
     if not _observability_enabled(payload, target_ref=target_ref):
         return ()
     if "mk8s" not in _enabled_component_ids(payload, scope="infra"):
@@ -1035,7 +1072,7 @@ def _observability_gpu_node_label_targets(
         return ()
     return tuple(
         target
-        for _row, target in _selected_app_metric_targets(payload)
+        for _row, target in _selected_app_metric_targets(payload, target_ref=target_ref)
         if target.required_gpu_node_labels
     )
 
@@ -1224,7 +1261,11 @@ def resolve_observability_app_selection(
     issues: list[str] = []
     auto_enabled: list[str] = []
 
+    from .observability_routing import target_settings
+
     for target_ref in sorted(soperator_target_refs(payload)):
+        if target_settings(payload, target_ref):
+            continue
         if _observability_enabled(payload, target_ref=target_ref) and not (
             kubernetes_observability_agent_selected(payload, target_ref)
         ):
@@ -1360,6 +1401,14 @@ def resolve_observability_app_selection(
             selected.add(grafana_gateway_app_id)
             auto_enabled.append(grafana_gateway_app_id)
 
+    database_id = _grafana_database_app_id()
+    if database_id and (grafana_required or grafana_app_id in selected):
+        if database_id not in available_ids:
+            issues.append(f"Grafana requires unavailable database component '{database_id}'")
+        elif database_id not in selected:
+            selected.add(database_id)
+            auto_enabled.append(database_id)
+
     return ObservabilityAppSelection(
         selected_app_ids=tuple(sorted(selected)),
         auto_enabled_app_ids=tuple(sorted(auto_enabled)),
@@ -1413,12 +1462,19 @@ def ensure_observability_app_rows(
     *,
     app_entries: tuple[ComponentEntry, ...] | None = None,
     cli_settings: Any | None = None,
+    observability_target_refs: frozenset[str] | None = None,
 ) -> bool:
     payload = (
         payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
     )
     if not payload:
         return False
+    from .observability_routing import ensure_routing_apps
+
+    targets_changed = materialize_app_chart_target_refs(payload)
+    routing_changed = ensure_routing_apps(
+        payload, observability_target_refs=observability_target_refs
+    )
     entries = app_entries if app_entries is not None else component_entries("apps")
     selected = _enabled_component_ids(payload, scope="apps")
     resolution = resolve_observability_app_selection(
@@ -1432,7 +1488,7 @@ def ensure_observability_app_rows(
 
     entry_by_id = {entry.id: entry for entry in entries}
     charts = _app_chart_rows(payload)
-    changed = False
+    changed = targets_changed or routing_changed
     collector_app_id = _collector_app_id()
     grafana_app_id = _grafana_app_id()
     grafana_gateway_app_id = _grafana_gateway_app_id()
@@ -1444,14 +1500,22 @@ def ensure_observability_app_rows(
         app_ids_to_ensure.add(grafana_app_id)
     if grafana_gateway_app_id and _grafana_required(payload):
         app_ids_to_ensure.add(grafana_gateway_app_id)
+    if _grafana_database_app_id() and _grafana_required(payload):
+        app_ids_to_ensure.add(_grafana_database_app_id())
     if not app_ids_to_ensure:
-        return False
+        return changed
     for app_id in sorted(app_ids_to_ensure):
         entry = entry_by_id.get(app_id)
         if entry is None:
             continue
+        required_target_refs = required_observability_app_target_refs(payload, app_id)
+        if observability_target_refs is not None:
+            required_target_refs = tuple(
+                target for target in required_target_refs if target in observability_target_refs
+            )
+            if not required_target_refs:
+                continue
         if len(target_refs) > 1 and app_id in _observability_target_scoped_app_ids():
-            required_target_refs = required_observability_app_target_refs(payload, app_id)
             remaining_rows = _app_chart_rows_for_id(payload, app_id)
             rows_by_target = {
                 app_chart_target_ref(row): row
@@ -1612,6 +1676,8 @@ _GRAFANA_MANAGED_VALUE_PATHS = (
     "values.datasources",
     "values.envValueFrom",
     "values.grafana\\.ini.auth",
+    "values.grafana\\.ini.database",
+    "values.grafana\\.ini.unified_alerting",
     "values.service.type",
     "values.route.main",
     "values.extraObjects",
@@ -1696,16 +1762,17 @@ def _collector_managed_values(
     }
 
 
-def _grafana_authorized_datasource(
+def _grafana_datasource(
     *,
     name: str,
     uid: str,
     datasource_type: str,
     url: str,
     token_env: str,
+    auth: str,
     is_default: bool = False,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "name": name,
         "uid": uid,
         "type": datasource_type,
@@ -1713,17 +1780,21 @@ def _grafana_authorized_datasource(
         "url": url,
         "isDefault": is_default,
         "editable": True,
-        "jsonData": {
-            "httpHeaderName1": "Authorization",
-        },
-        "secureJsonData": {
-            "httpHeaderValue1": f"Bearer ${{{token_env}}}",
-        },
     }
+    if auth == "nebius_bearer":
+        if not token_env:
+            raise ValueError("Nebius Grafana datasource requires read_token.env")
+        result["jsonData"] = {"httpHeaderName1": "Authorization"}
+        result["secureJsonData"] = {"httpHeaderValue1": f"Bearer ${{{token_env}}}"}
+    elif auth != "none":
+        raise ValueError("Unsupported Grafana datasource authentication")
+    return result
 
 
 def _grafana_managed_values(
     payload: dict[str, Any],
+    *,
+    chart_row: dict[str, Any],
 ) -> dict[str, Any]:
     managed = _grafana_catalog_managed_values()
     grafana_settings = _grafana_cli_settings()
@@ -1733,15 +1804,6 @@ def _grafana_managed_values(
             "userKey": grafana_settings.admin_secret.user_key,
             "passwordKey": grafana_settings.admin_secret.password_key,
         }
-    if grafana_settings.read_token != GrafanaCliSettings().read_token:
-        managed["values.envValueFrom"] = {
-            grafana_settings.read_token.env: {
-                "secretKeyRef": {
-                    "name": grafana_settings.read_token.secret_name,
-                    "key": grafana_settings.read_token.key,
-                }
-            }
-        }
     endpoints = observability_endpoint_summary(payload)
     read_endpoints = _mapping(endpoints.get("read"))
     datasources: list[dict[str, Any]] = []
@@ -1750,15 +1812,84 @@ def _grafana_managed_values(
         if not url:
             continue
         datasources.append(
-            _grafana_authorized_datasource(
+            _grafana_datasource(
                 name=datasource.name,
                 uid=datasource.uid,
                 datasource_type=datasource.datasource_type,
                 url=url,
                 token_env=grafana_settings.read_token.env,
+                auth=datasource.auth,
                 is_default=datasource.is_default,
             )
         )
+    from .observability_routing import connections, target_settings
+
+    routed = target_settings(payload, app_chart_target_ref(chart_row))
+    routed_connections = connections(payload, app_chart_target_ref(chart_row)) if routed else []
+    if routed:
+        if routed.get("grafana_access") == "private":
+            managed["values.route.main.enabled"] = False
+            managed["values.extraObjects"] = [
+                item
+                for item in managed.get("values.extraObjects", [])
+                if item.get("kind") not in {"Gateway", "GatewayClass", "EnvoyProxy"}
+            ]
+        else:
+            existing = chart_row.get("values", {})
+            if "route" in existing:
+                for key in list(managed):
+                    if key.startswith("values.route."):
+                        managed.pop(key)
+                managed["values.route"] = copy.deepcopy(existing["route"])
+            if "extraObjects" in existing:
+                managed["values.extraObjects"] = copy.deepcopy(existing["extraObjects"])
+        datasources = [
+            _grafana_datasource(
+                name=item["name"],
+                uid=item["uid"],
+                datasource_type=item["type"],
+                url=item["url"],
+                token_env=grafana_settings.read_token.env,
+                auth="nebius_bearer" if item.get("auth") == "nebius" else "none",
+                is_default=item["isDefault"],
+            )
+            for item in routed_connections
+        ]
+        if any(item["type"] == "victoriametrics-logs-datasource" for item in routed_connections):
+            managed["values.plugins"] = list(
+                dict.fromkeys(
+                    [
+                        *chart_row.get("values", {}).get("plugins", []),
+                        "victoriametrics-logs-datasource",
+                    ]
+                )
+            )
+    token = grafana_settings.read_token
+    env_values = dict(_mapping(managed.get("values.envValueFrom")))
+    needs_token = any(
+        item.auth == "nebius_bearer" and _as_text(read_endpoints.get(item.read_endpoint))
+        for item in grafana_settings.datasources
+    )
+    if routed:
+        needs_token = any(item.get("auth") == "nebius" for item in routed_connections)
+        for source, rendered in zip(routed_connections, datasources, strict=True):
+            if source.get("auth_secret"):
+                env = "CXCLI_DS_" + source["uid"].replace("-", "_").upper()
+                env_values[env] = {"secretKeyRef": source["auth_secret"]}
+                rendered["jsonData"] = {"httpHeaderName1": "Authorization"}
+                rendered["secureJsonData"] = {"httpHeaderValue1": "Bearer ${" + env + "}"}
+    if needs_token:
+        if not token.env or not token.secret_name or not token.key:
+            raise ValueError("Nebius Grafana datasource requires a complete read_token")
+        env_values[token.env] = {"secretKeyRef": {"name": token.secret_name, "key": token.key}}
+    else:
+        env_values.pop(token.env, None)
+    from .grafana_database import grafana_database_values
+
+    database_values = grafana_database_values(payload, chart_row)
+    env_values.update(database_values.pop("values.envValueFrom", {}))
+    managed.update(database_values)
+    managed["values.envValueFrom"] = env_values
     managed["values.datasources"] = {
         "datasources.yaml": {
             "apiVersion": 1,
@@ -2038,6 +2169,8 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
             continue
         component_id = component_type_id(row)
         if component_id == "mk8s":
+            if component_instance_id(row) in soperator_target_refs(payload):
+                continue
             row_enabled = bool(row.get("enabled", False))
             active_labels = _observability_gpu_node_labels_for_row(payload, row)
             should_apply = bool(active_labels and row_enabled and _mk8s_gpu_nodes_enabled(row))
@@ -2103,10 +2236,15 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
     payload = (
         payload_or_config if isinstance(payload_or_config, dict) else _as_payload(payload_or_config)
     )
+    from .grafana_database import materialize_database_values
+    from .observability_backends import materialize_backend_values
+
+    changed = materialize_database_values(payload)
+    changed = materialize_backend_values(payload) or changed
     collector_app_id = _collector_app_id()
     grafana_app_id = _grafana_app_id()
     if not collector_app_id and not grafana_app_id:
-        return False
+        return changed
     collector_rows = (
         [
             row
@@ -2126,13 +2264,16 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
         else []
     )
     if not collector_rows and not grafana_rows:
-        return False
+        return changed
 
-    changed = False
     catalog_metric_target_job_names = _catalog_metric_target_job_names()
     for chart_row in collector_rows:
         before = copy.deepcopy(chart_row)
         target_ref = app_chart_target_ref(chart_row)
+        from .observability_routing import target_settings
+
+        if target_settings(payload, target_ref):
+            continue
         if _kubernetes_agent_required(payload, target_ref=target_ref) or (
             target_ref in soperator_target_refs(payload)
             and kubernetes_observability_agent_selected(payload, target_ref)
@@ -2178,7 +2319,9 @@ def materialize_observability_app_values(payload_or_config: Any) -> bool:
         before = copy.deepcopy(chart_row)
         target_ref = app_chart_target_ref(chart_row)
         if _grafana_required(payload, target_ref=target_ref):
-            for target_path, target_value in _grafana_managed_values(payload).items():
+            for target_path, target_value in _grafana_managed_values(
+                payload, chart_row=chart_row
+            ).items():
                 _set_path_value(chart_row, target_path, copy.deepcopy(target_value))
             _strip_grafana_source_dashboard_values(chart_row)
             if chart_row != before:
@@ -2207,7 +2350,7 @@ def _strip_observability_collector_generated_values(
     values = chart_row.get("values")
     metrics = _nested_path_value(values, "config.metrics") if isinstance(values, dict) else None
     additional_targets = metrics.get("additionalTargets") if isinstance(metrics, dict) else None
-    if isinstance(additional_targets, list):
+    if isinstance(metrics, dict) and isinstance(additional_targets, list):
         preserved = [
             item
             for item in additional_targets
@@ -2277,7 +2420,10 @@ def observability_endpoint_summary(
     kubernetes_traces_enabled = bool(
         kubernetes_enabled and any(item.traces_enabled for item in kubernetes_settings_by_target)
     )
-    upstream_telemetry = bool(soperator_target_refs(payload))
+    upstream_telemetry = any(
+        item["configuration"] != "disabled"
+        for item in _soperator_observability_configuration(payload)
+    )
     vm_service_metrics_enabled = _vm_monitoring_agent_enabled(payload)
     vm_logs_enabled = _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
     service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
@@ -2359,6 +2505,38 @@ def observability_endpoint_summary(
     }
 
 
+def _soperator_observability_configuration(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Describe desired ownership only; live readiness and ingestion need separate evidence."""
+    configurations = []
+    for row in _app_chart_rows(payload):
+        if (
+            not isinstance(row, Mapping)
+            or not row.get("enabled")
+            or component_type_id(row) != "soperator"
+        ):
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        native = _mapping(_mapping(row.get("values")).get("observability"))
+        configurations.append(
+            {
+                "target_ref": target_ref,
+                "release": _as_text(row.get("version")),
+                "configuration": "disabled"
+                if native.get("enabled") is False
+                else "frozen_upstream_defaults_and_overrides",
+                "gpu_exporter_owner": "upstream_soperator",
+                "additional_agent_selected": kubernetes_observability_agent_selected(
+                    payload, target_ref
+                ),
+                "bundled_grafana": False,
+                "default_grafana_url": "https://grafana.nebius.dev/",
+                "live_readiness": "not_verified",
+                "ingestion": "not_verified",
+            }
+        )
+    return configurations
+
+
 def observability_status_summary(
     payload_or_config: Any,
 ) -> dict[str, Any]:
@@ -2411,6 +2589,7 @@ def observability_status_summary(
     service_log_buckets = _observability_service_buckets(payload, signal="logs")
     return {
         "enabled": selection.observability_enabled,
+        "soperator_upstream": _soperator_observability_configuration(payload),
         "kubernetes_agent": collector_enabled,
         "grafana": grafana_enabled,
         "vm_monitoring_agent": selection.vm_monitoring_agent_enabled,
@@ -2447,6 +2626,8 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
         return []
     target_refs = enabled_cluster_target_refs(payload)
     if not target_refs:
+        return []
+    if not any(_kubernetes_agent_required(payload, target_ref=ref) for ref in target_refs):
         return []
     collector_source = helm_chart_source_by_id(collector_app_id, sources=_catalog_sources())
     if collector_source is None:
@@ -2491,6 +2672,21 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
                 "for observability validation"
             )
         settings = _effective_kubernetes_observability_config(payload, target_ref=target_ref)
+        from .observability_routing import collector_owners, target_settings
+
+        signals = {
+            "logs": settings.logs_enabled,
+            "metrics": settings.metrics_enabled,
+            "traces": settings.traces_enabled,
+            "collect_k8s_cluster_metrics": settings.metrics_collect_k8s_cluster_metrics,
+        }
+        if target_settings(payload, target_ref):
+            owners = collector_owners(payload, target_ref)
+            for signal in ("metrics", "logs", "traces"):
+                signals[signal] = owners.get(signal) == collector_app_id
+            signals["collect_k8s_cluster_metrics"] = (
+                signals["metrics"] and settings.metrics_collect_k8s_cluster_metrics
+            )
         validations.append(
             {
                 "kind": OBSERVABILITY_INGESTION_VALIDATION_KIND,
@@ -2515,12 +2711,7 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
                         validation.trace_otlp_service.endpoint_slice_check_limit
                     ),
                 },
-                "signals": {
-                    "logs": settings.logs_enabled,
-                    "metrics": settings.metrics_enabled,
-                    "traces": settings.traces_enabled,
-                    "collect_k8s_cluster_metrics": settings.metrics_collect_k8s_cluster_metrics,
-                },
+                "signals": signals,
                 "report_file": _target_scoped_report_file(
                     "observability-ingestion-report.json",
                     target_ref=target_ref,

@@ -678,8 +678,10 @@ def test_local_sfs_bindings_exclude_dynamic_compute_disks() -> None:
     }
 
 
+@pytest.mark.parametrize("supplied_snapshot", [False, True])
 def test_registered_storage_discovery_uses_node_group_sfs_attachments(
     monkeypatch: pytest.MonkeyPatch,
+    supplied_snapshot: bool,
 ) -> None:
     snapshot = {
         "collection_errors": [],
@@ -700,11 +702,14 @@ def test_registered_storage_discovery_uses_node_group_sfs_attachments(
             }
         ],
     }
-    monkeypatch.setattr(
-        cli,
-        "collect_kubectl_soperator_snapshot",
-        lambda **_kwargs: copy.deepcopy(snapshot),
-    )
+    collections = []
+
+    def collect(**_kwargs):
+        assert not supplied_snapshot, "storage discovery must not recollect a supplied snapshot"
+        collections.append(True)
+        return copy.deepcopy(snapshot)
+
+    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", collect)
 
     result = cli._soperator_protected_storage_discovery_inputs(
         payload=_registered_payload(),
@@ -712,6 +717,7 @@ def test_registered_storage_discovery_uses_node_group_sfs_attachments(
         chart_values={},
         kube_context="ctx",
         extra_env={},
+        **({"snapshot": snapshot} if supplied_snapshot else {}),
     )
 
     assert result == {
@@ -719,6 +725,24 @@ def test_registered_storage_discovery_uses_node_group_sfs_attachments(
         "sfs_node_group_ids": ("mk8snodegroup-a", "mk8snodegroup-b"),
         "sfs_kubernetes_bindings": {"jail": {"pv_names": ("jail-pv",), "pvc_names": ("jail-pvc",)}},
     }
+    assert len(collections) == (0 if supplied_snapshot else 1)
+
+
+@pytest.mark.parametrize("errors", [None, "invalid", [{"collector": "slurm-health"}]])
+def test_storage_discovery_rejects_incomplete_supplied_inventory(monkeypatch, errors):
+    def forbidden(**_kwargs):
+        pytest.fail("incomplete supplied inventory must fail without another collection")
+
+    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", forbidden)
+    with pytest.raises(RuntimeError, match="complete live Kubernetes inventory"):
+        cli._soperator_protected_storage_discovery_inputs(
+            payload=_registered_payload(),
+            target_ref="existing-a",
+            chart_values={},
+            kube_context="ctx",
+            extra_env={},
+            snapshot={"collection_errors": errors},
+        )
 
 
 @pytest.mark.parametrize("configured", [False, True])
@@ -983,7 +1007,10 @@ def test_registration_rejects_ambiguous_live_slurmclusters() -> None:
 def test_onboard_persists_registration_before_rendering_upgrade_handoff() -> None:
     source = inspect.getsource(cli._register_existing_soperator_target)
 
-    assert "with SoperatorOperationLocalLock(config_lock_path):" in source
+    assert "SoperatorOperationLocalLock(config_lock_path)" in source
+    assert source.index("_deployment_execution(") < source.index(
+        "SoperatorOperationLocalLock(config_lock_path)"
+    )
     assert source.index("ensure_mk8s_gpu_app_rows(") < source.index(
         "_selection_change_issues(next_payload)"
     )

@@ -72,8 +72,9 @@ comparison.
   printing credential material.
 - Distinguish missing identity, invalid authentication, denied authorization,
   propagation delay, stale cache, and wrong target.
-- Do not rotate credentials or change IAM/RBAC as an experiment without
-  action-specific approval.
+- Reuse task authorization for necessary new credentials; do not print values.
+  Credential replacement, revocation or IAM/RBAC access expansion needs approval
+  when its consequences are not already covered by the user's authorization.
 
 ## Storage, Database, Queue, And Filesystem
 
@@ -124,10 +125,17 @@ Data and credential impact:
 Observed result:
 ```
 
-Stop for explicit approval before destructive, irreversible, credential, IAM,
-data, public-exposure, deletion, material-cost, or material-availability
-actions. Keep production and unconfirmed environments read-only until the user
-authorizes the exact action.
+An authorized task includes creating new credentials and secrets necessary
+for its identified target and intended access scope; do not request separate
+approval solely for that creation. Store values only in the intended secret
+store or protected runtime file, never in chat, logs, Git, documentation, task
+state, or other artifacts. Reuse authorization already given. Destructive or
+irreversible actions, replacement or revocation of existing credentials, IAM
+access expansion, unrelated data changes, public exposure, deletion, or material
+availability or cost impact require action-specific approval only when not
+already covered by the user's authorization.
+Keep production and unconfirmed environments read-only without exact
+authorization.
 
 When a live infrastructure change occurs while verifying product behavior,
 also follow `live-product-validation.md`. Mutation authority permits recovery;

@@ -1,5 +1,29 @@
 # Agentic SDLC Design
 
+The initial design adapter stages newly published canonical files only after a
+repository-wide canonical-pair scope check; strict validation and prompt-impact
+settlement then admit planning without moving the preparation-owned commit.
+
+The live harness resolves the active feature through the isolated host's validated
+prompt workspace and canonical execution status. Before promotion, Compose and
+execution-phase Git evidence use the exact registered integration worktree, with
+matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
+active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
+run validation on uncommitted integration work before coordinator sealing.
+Shipping and UAT always require a clean promoted checkout. After completed promotion,
+Compose uses the exact promoted primary checkout and requires integration
+resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Pre-commit runtime testing may select a worker only through the private helper's
+`run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
+Both identifiers are required. The resolver admits only the sole task in the
+active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+unchanged assignment base, and an `ACTIVE` result from the execution owner's
+live scope guard. Uncommitted changes must stay inside its write claims. This
+selection never changes phase evidence or UAT targeting; after integration, rerun
+the original oracle using the normal integration target. The shared runtime must
+not serve concurrent worker tests.
+
 ## Table Of Contents
 
 - [Purpose](#purpose)
@@ -169,7 +193,15 @@ not. Queue-head drift requires an explicit rerun before post-completion
 activation; activation compares both accepted raw bytes and normalized intent
 and recovers a committed run after an interrupted dequeue. Requirements cannot
 advance to design until a private refinement gate binds the latest accepted
-prompt identity and intent to the exact current `docs/requirements.md`. Exact
+prompt identity and intent to the exact current `docs/requirements.md`. The
+read-only `refinement-ready` helper provides that admission without requiring
+ready design or publishing impact state. Missing canonical documents first
+receive an owner-managed draft-pair bootstrap: preserve existing counterparts,
+record stable mapped IDs, and defer substantive design decisions and readiness
+to the design adapter. After ready design and before planning,
+`refinement-verify` rechecks requirements and publishes complete prompt-impact
+settlement against the current canonical pair. Requirements readiness alone
+never unlocks steering resolution, execution, integration or promotion. Exact
 manual renames preserve identity and update the run mirror when normalized
 intent is unchanged, while rename plus intent edits and stale/duplicate prompt
 copies fail closed.
@@ -193,7 +225,13 @@ Execution state lives under:
 The project-level SDLC state also has `workspace.json`, `activity.json`, a
 private prompt queue and accepted snapshots, a private prompt lock, managed
 prompt files, an `active-run.json` pointer, and an
-`active.lock` lock file under `~/.codex/sdlc-runs/<project-id>/`. The active
+`active.lock` JSON ownership record under `~/.codex/sdlc-runs/<project-id>/`.
+The coordinator must publish its exact project/run identity and native owner
+hash before phase dispatch, then verify hook discovery resolves that run. An
+empty file or OS lock alone is insufficient. The live verifier observes this
+registration before phase dispatch and binds a startup receipt to its lifecycle.
+Later phase and final PASS require that receipt; late registration recovery
+requires a new trial and cannot prove prior workflow execution. The active
 run directory stores the active feature, run metadata, checkpoints, feature
 queue, fingerprints, steering, context packs, locked plans, evidence,
 requirements refinement, screenshots, transcripts, failure logs, history, and short-lived authorization
@@ -271,6 +309,11 @@ when their dependencies are satisfied and their write claims and conflict
 domains are pairwise disjoint. Unknown ownership, shared interfaces or schemas,
 migrations, dependency manifests, infrastructure identities, exclusive test
 resources, and external mutations serialize.
+
+Worktree's shared directory bootstrap tolerates concurrent creation before
+lifecycle locking. A concurrent winner must still be a canonical directory;
+files and symlinks are rejected, and lifecycle selection and activation remain
+serialized under the existing lock.
 
 For each task in the active capacity batch, the coordinator creates one branch,
 one locked private worktree, one immutable assignment, and one digest-bound
@@ -352,6 +395,11 @@ or action checks.
 
 Ordinary outbound network commands remain allowed unless another guarded
 content or action rule applies.
+
+The execution owner's staged-content and evidence scanner distinguishes literal
+credential assignments from bounded unquoted lookup/call expressions, including
+CSRF cookie access. Quoted literals, malformed expressions and provider-specific
+credential patterns remain fail-closed. This does not change hook policy.
 
 The hook bundle is source code in the skills repository. Installed copies under
 `$CODEX_HOME/hooks` are runtime artifacts and can drift. Hook fixes should be
@@ -516,8 +564,8 @@ not an SDLC phase despite its requested `sdlc-` prefix. Use it to verify the
 workflow against this design, inspect required phase-skill discovery, check
 hook configuration, run disposable PreToolUse and Stop hook fixture tests, and
 write a verification report to `~/.codex/sdlc-verification/report.md`. Its
-no-flag behavior remains the lightweight verifier. Explicit `--create`,
-`--create --keep`, `--resume`, and `--destroy` select a separately owned real
+no-flag behavior remains the lightweight verifier. Explicit `--create-live-test`,
+`--create-live-test --keep`, `--resume`, and `--destroy` select a separately owned real
 three-tier profile; they do not change the public `$sdlc-start` workflow
 interface.
 
@@ -551,7 +599,8 @@ That root must be a dedicated non-symlinked directory outside the source
 repository. The canonical root may be adopted in place; a custom root must be
 new or already carry the verifier's private ownership marker. The verifier
 must reject broad or unowned roots before chmod or writes. Its disposable Git
-repository must have no remote and must carry the exact public fixture marker;
+repository must carry the exact public fixture marker and exactly one
+verifier-owned local bare `origin`, bound by a private ownership receipt;
 only an exact clean legacy flat fixture with the expected tracked tree may be
 migrated once.
 
@@ -612,8 +661,8 @@ The preflight must verify and record:
   project and optional `agentic-sdlc/verification-live-results-v3` ingestion;
   the preserved context owns the baseline identity, and committed changes must
   remain inside the selected project without private SDLC state
-- private `0700` verification-root permissions and ownership, a remote-free
-  marked disposable Git root, exact clean one-time migration from the canonical
+- private `0700` verification-root permissions and ownership, a marked
+  disposable Git root with one owned local bare origin, exact clean one-time migration from the canonical
   flat fixture, fail-closed preservation of unknown content, and timeout-to-FAIL
   reporting
 - report generation at `~/.codex/sdlc-verification/report.md`
@@ -634,6 +683,13 @@ invalid UTF-8, an unchanged synthetic golden path, transient private or
 out-of-scope commits that disappear from the final tree, and report paths
 outside the private verification root. It never reads evidence bodies into the
 report and never turns missing live execution into synthetic PASS.
+`--live-evidence` is the sole public evidence input. A three-tier profile uses
+its source identity to resolve the owned active lifecycle and canonical result
+under the verification root. That source must byte-match collected evidence
+and pass the existing phase, layer, Git, GUI, correlation and restart checks.
+Aggregate and lifecycle identities and Git histories are independent. Validate
+before cleanup; a sanitized report cannot replace removed canonical evidence.
+The retired `--create` and `--three-tier-results` flags have no aliases.
 
 ### Full workflow test
 
@@ -657,10 +713,11 @@ new workflow CLI and do not let hooks orchestrate phases.
 
 Required happy-path evidence:
 
+- `sdlc-start` creates or resumes private local run state and recommends one
+  next skill. Initialize the workspace and accept the managed prompt before
+  invoking coordinator-only phases.
 - `sdlc-create-requirements`, routed as the shared owner's requirements
   authoring adapter, creates committed requirements with stable `REQ-*` IDs.
-- `sdlc-start` creates or resumes private local run state and recommends one
-  next skill.
 - `sdlc-gather-context` records a compact context pack, including layer and
   boundary facts when the feature may span a vertical slice.
 - `sdlc-create-design`, routed as the shared owner's design authoring adapter,
@@ -731,13 +788,13 @@ The real-life profile is opt-in and separate from the preceding lightweight
 fixture:
 
 ```text
-$sdlc-workflow-test --create
-$sdlc-workflow-test --create --keep
+$sdlc-workflow-test --create-live-test
+$sdlc-workflow-test --create-live-test --keep
 $sdlc-workflow-test --resume
 $sdlc-workflow-test --destroy
 ```
 
-`--keep` is valid only with `--create`; create, resume, and destroy are mutually
+`--keep` is valid only with `--create-live-test`; create, resume, and destroy are mutually
 exclusive. `--resume` revalidates and continues the one exactly owned retained
 failed or partial run; it does not create or replace a lifecycle. There is one
 active three-tier application per verification root.
@@ -760,14 +817,20 @@ application through the normal phase skills. The logical tiers are a browser
 GUI, Django/Gunicorn web/API server, and PostgreSQL database. Exactly two Docker
 Compose containers run the web and database services. Docker assigns the web
 host port and binds it to loopback only; PostgreSQL is never host-published.
-Before lifecycle creation, computer-use preflight must successfully capture a
-real selected-browser state; tool discovery or process presence is insufficient.
-That capture proves capability discovery only. Immediately before the first GUI
-navigation in evaluation and again before UAT, the verifier repeats a fresh
-capture for the exact selected browser while the host is unlocked and a normal
-browser window is visible, unminimized, foreground, and on the current macOS
-Space. A locked host is allowed only when the current Codex surface explicitly
-confirms locked Computer Use is enabled for that session.
+Build-time downloads are limited to the fixed public base images and pinned
+public Python packages from PyPI and the pinned verifier Playwright packages
+from npm, including transitive dependencies. Application
+behavior depends only on the local runtime after the build.
+The lifecycle freezes a pinned independent Playwright Test oracle at preparation.
+Four owned headless Chrome stages prove capability discovery, evaluation, UAT
+before restart and UAT after restart. Each starts a fresh process/context and
+records assertions, screenshot/trace hashes, actual browser version, exact
+Git target, timestamps and cleanup. Native desktop capture, foreground windows,
+monitor selection and screen unlock are not web acceptance prerequisites.
+Optional headless isolated Playwright MCP exploration remains separate.
+Owned clean Compose builds bind the checkout SHA to the immutable web image.
+Browser stages recheck that the running container uses that image without web
+mounts and that recorded endpoints resolve to its owned loopback binding.
 After workspace initialization, a deterministic renderer preserves the starter
 identity and replaces its body before prompt intake. Fixed public base-image
 pulls use an owned empty Docker CLI config only for those bounded pulls, never
@@ -776,34 +839,34 @@ and verifies their canonical Compose service labels.
 
 PASS requires semantic evidence for every phase, the clean promoted Git SHA,
 unit/API/database/migration/vertical/GUI tests, all three layers, local
-deployment, and computer-use GUI UAT. A just-in-time visibility failure is an
-`ENVIRONMENT_DEFECT` at `pre-navigation-window-capture`, with no navigation or
-GUI action claimed. A hung/timed-out call or response loss across browsers
-stops all further Computer Use calls; fresh-session or service recovery is a
-separate explicitly authorized action. The UAT must refresh accessibility state
-after every successful action; reject blank input; create, refresh, complete,
-and filter a unique task; correlate the same record through GUI, API, and
-PostgreSQL; restart services
-without deleting the volume; and prove persistence. The verifier launches one
-fresh Google Chrome process group with an isolated verifier-owned profile and
-verification-ID marker; existing Chrome instances are never selected or
-closed. Computer Use must expose that marker before every action. Browser or
-Playwright evidence cannot substitute for a
-required computer-use harness, and screenshots alone cannot establish PASS.
+deployment, and headless Playwright Test GUI UAT. The frozen DOM/API/database
+contract rejects blank input, creates a unique task, refreshes, completes and
+filters it. The outer lifecycle owner independently correlates API and database
+records at checkpoints; it alone restarts Compose, retains the original volume,
+rediscovers the loopback port, and records the restart before a fresh browser
+proves persistence of the same completed task. Fixture resets before evaluation
+and UAT are separate from the product journey; no reset is allowed between UAT
+stages. Product TDD tests never import or pre-satisfy the independent verifier.
+The restart owner refreshes endpoints before checking deployment identity,
+then publishes them with the restart receipt only after ownership, image and
+port-isolation validation. Another attempt clears prior restart proof first.
+Switching checkout or dependency configuration recreates the owned containers
+with the same volume so Compose file and dependency labels match current source.
 
-Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v3`; semantic evidence
-uses `agentic-sdlc/three-tier-results-v2`. Reports include structured Computer
-Use readiness attempts, an explicit 20-skill evidence matrix, logical/container
-layer inventory, tool/browser versions, project/report paths, resolved web/API/
-health endpoints, internal database endpoint, baseline/promoted SHAs, phase and
-test outcomes, exact resource IDs, UAT, and cleanup/retention status. Reports
-omit prompts, raw logs, credentials, database contents, and screenshot content.
+Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v4`; semantic evidence
+uses `agentic-sdlc/three-tier-results-v3`. Ordered digest-bound stage receipts
+replace native readiness booleans. A failed attempt remains failed even after
+recovery; earlier native failures are never migrated into passing evidence.
+Every stage closes its owned browser, including `--keep`. Keep retains the
+application, database and evidence; resume starts a fresh browser. Default
+cleanup removes only the exactly owned runtime and retains sanitized history.
+PID/profile ambiguity fails closed before Docker deletion.
 
-Default create closes only its exact verifier-owned Chrome process group and, after success or
-failure, removes its exact project, private state/raw evidence, containers,
-network, database volume, and built web image. Chrome identity ambiguity fails
-closed before Docker deletion and retains resumable `CLEANUP_FAILED` state.
-Create plus keep retains those resources and the dedicated Chrome instance.
+Laptops must remain awake with the agent and Docker running. Locked-screen
+certification requires an independently observed lock interval and actual agent
+launch of a new stage plus evidence collection before unlock. Headless browser
+success alone does not establish agent continuation or MCP session behavior.
+
 Standalone destroy validates the root, lifecycle, exact browser process/profile
 identity, paths, verification ID, Compose project, and both labels on every
 present Docker alias. It canonicalizes and deduplicates resource identities,
@@ -823,7 +886,7 @@ The report status means:
 - `FAIL`: any required deterministic check, configured hook safety/parity
   check, supplied live lane, or live-evidence integrity check failed.
 
-For the opt-in three-tier profile, missing Docker/browser/computer-use capacity
+For the opt-in three-tier profile, missing Docker/headless browser capacity
 before a live attempt is PARTIAL, while any attempted required assertion
 failure is FAIL. Three-tier PASS additionally requires semantic results and a
 final lifecycle of `KEPT` by explicit request or fully `DESTROYED`.
@@ -977,7 +1040,9 @@ does not edit committed project-truth docs.
 ### `sdlc-create-plan`
 
 Creates a private, locked execution plan for exactly one ready feature. Plans
-live under the local run directory, not in the repository. Existing locked
+live under the local run directory, not in the repository. The lock marker
+appends `.lock` to the complete filename: `FEAT-001.plan.v1.md.lock` beside
+`FEAT-001.plan.v1.md`. Existing locked
 plans are never edited in place; changed design or context creates a new plan
 version. For serial multi-layer features, the plan preserves the end-to-end
 slice and expresses implementation as stable `TASK-*` records. Dependencies,
@@ -987,6 +1052,17 @@ immutable corrective plan vN+1. It preserves every existing task definition
 and completed-task digest, binds the exact diagnosis and original regression
 oracle, and appends contiguous corrective tasks and dependency waves. If that
 history cannot be preserved, the workflow stops for human direction.
+
+The same corrective route covers an integrated wave whose combined checks
+failed before completion. Classifier lifecycle `integrated_wave` binds that
+exact commit. After proven diagnosis and counted dispatch, `wave-fail` retires
+clean reachable worker resources and retains permanent failed-wave evidence.
+Only matching corrective tasks may cross an unresolved failed predecessor.
+Successful combined revalidation records a separate resolution bound to the
+original failure, immutable dispatch, task oracle proofs and integration
+ancestry. Failure history remains visible; sealing rejects unresolved or
+tampered resolution evidence. Complete the dispatch after wave completion,
+then run the deterministic invalidated-gate sequence.
 
 ### `sdlc-prepare-execution`
 
@@ -1014,6 +1090,10 @@ persisting coordinator `promoted` state. Resume reconciles the durable lease,
 local interop, clean outer Git head, and coordinator through promotion, cleanup,
 and done. Release leaves a terminal receipt until the outer worktree lifecycle
 is removed.
+An integrated coordinator may prepare a newly appended planned wave after all
+prior waves are done, retaining its existing TDD and integration lineage.
+Completed waves and sealed or promoted execution cannot be reopened.
+
 `replan-future` serializes the transition, compares full canonical definitions
 and definition digests for every resource-owning wave, and replaces only
 resource-free planned future waves.
@@ -1132,7 +1212,8 @@ evidence routes back to the responsible phase.
 
 Controls and observes browser UI behavior when the evaluation plan requires
 GUI evidence. It uses Computer Use when desktop/browser state is part of the
-acceptance contract, otherwise Browser or Playwright when suitable, captures
+acceptance contract, otherwise headless Playwright Test for required web acceptance with optional
+headless isolated Playwright MCP exploration, captures
 screenshots or accessibility snapshots, and records pass/fail results against
 acceptance criteria.
 
@@ -1316,6 +1397,24 @@ presence on the recorded base branch plus absence of the integration worktree
 and branch. The Stop hook rejects UAT, PR, and
 publication routing until the cursor has cleared every invalidation, including
 fresh commit evidence.
+
+The alignment gate is owned by `align`. After a source repair changes gate
+owner routes, the private `refresh-revalidation-routes` action requires the
+exact pending cursor and an evidence reference. It verifies the original repair
+authority and unchanged invalidated surfaces, archives the old cursor and
+progress, and resets all gates to pending under the current policy. Immutable
+evidence and repair budgets remain unchanged. A retry preserves any new gate
+progress; this is not a general reset or an alias for retired skill names.
+
+An externally recovered environment block after completed waves has a separate
+private `record-environment-recovery` transition. It accepts only the active
+environment event and classification, unchanged clean integrated Git identity
+and fingerprints, and digest-bound passing evidence for the original gate.
+It archives the sole resolved invalidation in immutable recovery evidence and
+clears its pending projection; other pending invalidations reject recovery.
+It resolves the environment projection without dispatching code repair or
+changing budgets or failure history. A failed verifier trial
+stays failed; recovery evidence never certifies its earlier failed attempt.
 
 One stable blocker tranche permits at most two localized remediations, one
 design-scale remediation, three total remediation attempts, and 60 active

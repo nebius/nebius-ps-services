@@ -21,6 +21,10 @@ from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
 from .soperator_install_progress import install_phase, install_progress_step
 
 
+class ManagedIdentityDriftError(RuntimeError):
+    """Managed IAM state needs reconciliation after strict ownership checks."""
+
+
 class CredentialProviderError(RuntimeError):
     """A stable, secret-free IAM credential provider failure."""
 
@@ -321,7 +325,7 @@ def _ensure_project_role_permits(
     if reconcile_managed_roles and not (reject_unexpected_role_ids and create_missing):
         raise ValueError("Managed role reconciliation requires strict identity mutation authority")
     if reject_unexpected_role_ids and unexpected_roles and not reconcile_managed_roles:
-        raise RuntimeError(
+        raise ManagedIdentityDriftError(
             f"{principal_label} has unexpected project role permits: " + ", ".join(unexpected_roles)
         )
     obsolete_ids = [
@@ -335,7 +339,7 @@ def _ensure_project_role_permits(
 
     missing_roles = sorted(expected_roles - existing_roles)
     if missing_roles and not create_missing:
-        raise RuntimeError(
+        raise ManagedIdentityDriftError(
             f"{principal_label} is missing required project role permits: "
             + ", ".join(missing_roles)
         )
@@ -409,12 +413,13 @@ def _ensure_group(
         existing_id = getattr(getattr(existing, "metadata", None), "id", "")
         if existing_id:
             return existing_id, False
+        raise RuntimeError("IAM group lookup returned no resource identity")
     except Exception as exc:
         if not _is_not_found_error(exc):
             raise RuntimeError(f"Failed to fetch IAM group '{group_name}': {exc}") from exc
 
     if not create_missing:
-        raise RuntimeError(
+        raise ManagedIdentityDriftError(
             f"IAM group '{group_name}' is missing; read-only identity validation cannot create it."
         )
 
@@ -1392,7 +1397,7 @@ def ensure_ci_service_account_identity(
                 "refusing to reuse it for the canonical cxcli identity."
             )
         if service_account_id not in existing_members and not allow_mutation:
-            raise RuntimeError(
+            raise ManagedIdentityDriftError(
                 f"IAM group '{permit_group_name}' is missing the canonical service-account "
                 "member; read-only identity validation cannot add it."
             )

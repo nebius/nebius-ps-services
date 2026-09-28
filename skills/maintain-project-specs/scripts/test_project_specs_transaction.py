@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -186,6 +187,48 @@ class ProjectSpecTransactionTestCase(unittest.TestCase):
         first = self.publish("op-replay")
         second = self.publish("op-replay")
         self.assertEqual(second, first)
+
+    def test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart(self) -> None:
+        draft_design = DESIGN.replace("status=ready", "status=draft")
+        for heading in (
+            "Context Evidence", "Design Details", "Selected Option",
+            "Alternatives Considered", "Implementation Boundaries",
+            "Test-First Success Criteria", "Validation Plan", "Test Plan",
+            "Evaluation Plan", "Rollout And Rollback", "Done Definition",
+        ):
+            draft_design = re.sub(
+                rf"(#### {re.escape(heading)}\n\n).*?(?=\n#### )",
+                r"\1Pending context gathering and substantive design authoring.\n",
+                draft_design, flags=re.DOTALL,
+            )
+        for existing in (None, "requirements", "design"):
+            with self.subTest(existing=existing):
+                for kind in ("requirements", "design"):
+                    (self.docs / f"{kind}.md").unlink(missing_ok=True)
+                originals = {"requirements": None, "design": None}
+                if existing is not None:
+                    originals[existing] = getattr(self, f"old_{existing}")
+                    (self.docs / f"{existing}.md").write_bytes(originals[existing])
+                candidates = {
+                    "requirements": originals["requirements"] or canonical_document(
+                        "requirements", REQUIREMENTS.replace("status=active", "status=draft")
+                    ),
+                    "design": originals["design"] or canonical_document("design", draft_design),
+                }
+                receipt = transaction.publish_spec_pair(
+                    self.project,
+                    requirements_candidate=candidates["requirements"],
+                    design_candidate=candidates["design"],
+                    expected_git_head=git(self.project, "rev-parse", "HEAD"),
+                    expected_requirements_sha256=digest(originals["requirements"]) if originals["requirements"] else "absent",
+                    expected_design_sha256=digest(originals["design"]) if originals["design"] else "absent",
+                    operation_id=f"bootstrap-{existing or 'pair'}",
+                )
+                self.assertEqual(receipt["contract_status"], "pending")
+                for kind, candidate in candidates.items():
+                    self.assertEqual((self.docs / f"{kind}.md").read_bytes(), candidate)
+                if existing is not None:
+                    self.assertEqual((self.docs / f"{existing}.md").read_bytes(), originals[existing])
 
     def test_cli_publish_uses_the_same_paired_transaction(self) -> None:
         requirements_candidate = self.root / "requirements.candidate.md"

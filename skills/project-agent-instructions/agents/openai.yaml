@@ -1,6 +1,6 @@
 interface:
   display_name: "Project Agent Instructions"
-  short_description: "Create project-specific agent instructions"
-  default_prompt: "Use $project-agent-instructions only after a coordinator issues a validation receipt for current requirements and design; conditionally maintain the selected-project AGENTS.md with deterministic rules and explicit ownership."
+  short_description: "Repair or generate project instructions"
+  default_prompt: "Use $project-agent-instructions for an explicit instruction repair; patch only authorized human-owned clauses, and require a current spec receipt for managed generation with deterministic rules and explicit ownership."
 policy:
   allow_implicit_invocation: false

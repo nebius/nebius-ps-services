@@ -1,0 +1,161 @@
+{
+  "skill_name": "design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use $design to plan adding total_count to list_items in evals/fixtures/catalog. The design document suggests replacing the result with a plain list; assess that approach against the implementation and keep the existing consumer working. Do not implement.",
+      "expected_output": "A code-grounded plan retaining the response envelope, reporting stale design prose and resolving the incompatible list proposal.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Identifies docs/design.md as claiming a plain list and service.list_items as returning a dictionary containing items and next_cursor, with source references.",
+        "Uses implemented code as the current baseline and explains that a plain list would break consumer.export_ids.",
+        "Plans total_count within the envelope and regression coverage for the existing consumer and empty input, rather than modifying code to match stale prose.",
+        "Leaves all supplied files unchanged and returns a maintain-project-specs correction handoff instead of directly editing project documents."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use $design to plan total_count for the selected project evals/fixtures/catalog. A nearby project has its own design under evals/fixtures/neighbor. Keep the approved Python stack. Return only the plan.",
+      "expected_output": "A plan scoped to the catalog implementation rather than the neighboring XML design.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py",
+        "evals/fixtures/neighbor/docs/design.md"
+      ],
+      "assertions": [
+        "Uses the catalog project design and service/consumer implementation as the relevant evidence; does not adopt the neighbor XML contract.",
+        "Reports the catalog document/code discrepancy and follows the implemented envelope.",
+        "Keeps technology choices fixed and leaves fixture files unchanged."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use $design to plan total_count in evals/fixtures/catalog. Only implementation files are available in this checkout. Preserve the existing consumer. Do not implement.",
+      "expected_output": "Bounded planning from available code with an explicit missing-design gap.",
+      "files": [
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Discloses that project design documentation is missing rather than claiming it was read.",
+        "Uses list_items and export_ids to plan an envelope-compatible addition and does not infer no users or greenfield status from missing docs.",
+        "Does not create design documents or modify implementation files."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use $design to plan reliable identifier processing in evals/fixtures/prototype. This is an unused greenfield application: no users, no dependent consumers outside this prototype, and no persisted data. Identifiers can contain commas. Keep the fixed stack and do not implement.",
+      "expected_output": "A prerequisite refactor replacing a demonstrated lossy representation with a single canonical typed path, without shims.",
+      "files": [
+        "evals/fixtures/prototype/README.md",
+        "evals/fixtures/prototype/consumer.py",
+        "evals/fixtures/prototype/docs/design.md",
+        "evals/fixtures/prototype/service.py"
+      ],
+      "assertions": [
+        "Inspects and cites encode_ids and export_ids despite the greenfield label and identifies comma-containing identifiers as a concrete round-trip failure.",
+        "Proposes replacing the comma-string boundary with a lossless structured representation and updates all affected internal callers before dependent feature work.",
+        "Uses the explicit no-user context, adds no legacy aliases, wrappers or dual paths, and includes comma-containing and empty-identifier-list regression cases.",
+        "Leaves fixtures unchanged and supplies resulting design decisions to maintain-project-specs without writing documents."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use $design to plan reliable identifier processing in evals/fixtures/prototype. Usage and downstream dependence are unknown. Can we discard the comma-string boundary? Do not implement.",
+      "expected_output": "A code-grounded finding with a usage question before assuming unused-greenfield refactor eligibility.",
+      "files": [
+        "evals/fixtures/prototype/README.md",
+        "evals/fixtures/prototype/consumer.py",
+        "evals/fixtures/prototype/docs/design.md",
+        "evals/fixtures/prototype/service.py"
+      ],
+      "assertions": [
+        "Explains the concrete delimiter bug with source references.",
+        "Does not infer unused status from the folder name, asks about users or dependent consumers, and marks the replacement decision unresolved while allowing independent analysis.",
+        "Does not silently introduce compatibility wrappers or claim the refactor is implementation-ready; all files remain unchanged."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $design to plan reliable identifier processing in evals/fixtures/prototype. Existing users import encode_ids and require its current public string contract to remain supported. Keep that commitment explicit and do not implement.",
+      "expected_output": "A plan honoring an explicit existing-user contract without invoking the unused-greenfield exception.",
+      "files": [
+        "evals/fixtures/prototype/README.md",
+        "evals/fixtures/prototype/consumer.py",
+        "evals/fixtures/prototype/docs/design.md",
+        "evals/fixtures/prototype/service.py"
+      ],
+      "assertions": [
+        "Recognizes existing consumers and the explicit string-contract commitment, and does not remove or change that supported interface without a decision.",
+        "Reports the delimiter defect, explains the contract-versus-correctness tradeoff and distinguishes an intentional future transition from current implemented behavior.",
+        "Does not treat code precedence as evidence that the defect is correct and does not modify fixtures."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use $design to plan a lossless replacement for evals/fixtures/prototype. It has no users or outside consumers. For this exercise I explicitly request keeping encode_ids as a legacy compatibility wrapper for simple comma-free identifiers while new internal callers use a structured list. Do not implement.",
+      "expected_output": "A plan recognizing the explicit compatibility exception and keeping it limited to the requested boundary.",
+      "files": [
+        "evals/fixtures/prototype/README.md",
+        "evals/fixtures/prototype/consumer.py",
+        "evals/fixtures/prototype/docs/design.md",
+        "evals/fixtures/prototype/service.py"
+      ],
+      "assertions": [
+        "Acknowledges explicit authorization for the limited compatibility wrapper instead of treating the no-shim default as an absolute ban.",
+        "Plans one canonical lossless internal representation, explains the legacy wrapper limit, and covers comma-containing identifiers in the new path.",
+        "Does not infer implementation authority from the request for a plan; all supplied files remain unchanged."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use $design to design and implement total_count in service.list_items in evals/fixtures/catalog. It must equal len(identifiers), including zero; preserve items, next_cursor and consumer.export_ids. Use only the existing Python standard-library stack, add focused tests and run them. This is a disposable local fixture; do not publish, commit or contact services.",
+      "expected_output": "Grounding and a scoped design followed by implementation and focused verification, with canonical documents retained for their owner.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Reports the document/code discrepancy and preserves the implemented envelope and existing consumer.",
+        "Actually implements total_count and tests nonempty and empty input rather than stopping with a plan or asking for another routine implementation confirmation.",
+        "Runs focused local tests and reports their result without inventing unavailable specialist or spec-owner execution.",
+        "Leaves the supplied project design and requirements documents unchanged; routes their correction to maintain-project-specs or reports the pending handoff if unavailable.",
+        "Produces the plan without entering a write-prohibiting host mode that would prevent the already-authorized implementation; does not override a host-imposed restriction."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use $design to plan total_count for evals/fixtures/catalog and save the corrected design document. I am requesting design only, not implementation.",
+      "expected_output": "Design output and a publication handoff to the canonical owner, without direct document edits.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Reports code/document drift and produces an envelope-compatible plan.",
+        "Identifies maintain-project-specs as the canonical publication owner and does not directly edit the supplied project design document or requirements.",
+        "Makes no code, test or configuration changes and does not misread the request to save a design as implementation authority."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "correctness": {
+    "captured_cuda_events_or_external_capture": true,
+    "finite_loss": true
+  },
+  "lab": "08_operator_to_kernels",
+  "measurements": {
+    "cuda_events_with_device_time": 12,
+    "shape": [
+      64,
+      1024
+    ],
+    "top_cuda_events": [
+      {
+        "calls": 20,
+        "self_cuda_time_us": 108.353
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 108.353
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 75.874
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 75.874
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 56.318
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 56.318
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 47.522
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 47.522
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 25.888
+      },
+      {
+        "calls": 20,
+        "self_cuda_time_us": 25.888
+      }
+    ],
+    "unique_profile_events": 24
+  },
+  "parameters": {
+    "external_only": false,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,demand_worksheet_required_blocks,value,16,none
+baseline-trial1,demand_worksheet_free_blocks,value,0,none
+baseline-trial1,demand_worksheet_shortfall_blocks,value,12,none
+baseline-trial1,demand_worksheet_internal_waste_tokens,value,24,none
+repeat-trial1,demand_worksheet_required_blocks,value,16,none
+repeat-trial1,demand_worksheet_free_blocks,value,0,none
+repeat-trial1,demand_worksheet_shortfall_blocks,value,12,none
+repeat-trial1,demand_worksheet_internal_waste_tokens,value,24,none

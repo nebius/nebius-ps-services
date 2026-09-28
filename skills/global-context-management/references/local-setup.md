@@ -80,9 +80,15 @@ global file.
   valid proof.
 - Confirmed non-production may receive bounded reversible changes within
   existing authority. Production and unconfirmed targets remain read-only
-  without exact action authorization. Destructive, irreversible, credential,
-  IAM, data, public-exposure, deletion, material-cost, or material-availability
-  actions require action-specific approval in every environment.
+  without exact action authorization. An authorized task includes creating new credentials and secrets necessary
+  for its identified target and intended access scope; do not request separate
+  approval solely for that creation. Store values only in the intended secret
+  store or protected runtime file, never in chat, logs, Git, documentation, task
+  state, or other artifacts. Reuse authorization already given. Destructive or
+  irreversible actions, replacement or revocation of existing credentials, IAM
+  access expansion, unrelated data changes, public exposure, deletion, or material
+  availability or cost impact require action-specific approval only when not
+  already covered by the user's authorization.
 - Fix the proven causal owner at its authoritative boundary. A product-fixed
   claim requires an implemented source or configuration repair; environment,
   test, harness, or evaluator defects are repaired at their owner and rerun

@@ -1,0 +1,28 @@
+{
+  "correctness": {
+    "exact_next_update": true,
+    "omitted_rng_restore_diverges": true,
+    "rng_generated_next_batch_exact": true
+  },
+  "lab": "24_checkpoint_resume",
+  "measurements": {
+    "checkpoint_state": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "first_loss": 5.7311296463012695,
+    "max_parameter_error": 0.0,
+    "negative_control_omitted_rng_restore_diverged": true,
+    "post_checkpoint_batch_digest_inputs_equal": true,
+    "reference_next_loss": 5.705605983734131,
+    "resumed_next_loss": 5.705605983734131
+  },
+  "parameters": {
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

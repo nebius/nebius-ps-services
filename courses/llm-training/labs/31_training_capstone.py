@@ -9,13 +9,14 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     sgd_updates_match,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def linear_step_flops(tokens: int, width: int, input_requires_grad: bool) -> int:
@@ -49,10 +50,10 @@ def main() -> None:
     ):
         raise SystemExit("--peak-tflops must be finite and positive")
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 256 if args.profile == "smoke" else 2_048
-    tokens = 512 if args.profile == "smoke" else 4_096
+    width = 256 if args.profile == "small" else 2_048
+    tokens = 512 if args.profile == "small" else 4_096
     inputs = torch.randn((tokens, width), device="cuda", dtype=torch.bfloat16)
     targets = torch.randn_like(inputs)
     base_weight = (
@@ -166,7 +167,7 @@ def main() -> None:
             "minimum_step_flops": minimum_step_flops,
             "input_requires_grad": inputs.requires_grad,
             "communication_scope": (
-                "single GPU; use Labs 28 and 30 for communication evidence"
+                "single GPU; use Advanced Labs 19 and 21 for communication evidence"
             ),
             "provisional_observation": provisional_observation,
             "publication_decision": "pending three independent run records",
@@ -177,4 +178,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

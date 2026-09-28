@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .paths import ProjectPaths
 from .soperator_checks import SoperatorChecksExecution
 from .soperator_checks_policy import SoperatorChecksPolicy, checks_digest, compile_checks_policy
@@ -177,7 +177,7 @@ def prepare_install_runtime_repair(
     def read_kube(args: list[str], document: Mapping[str, Any] | None) -> Mapping[str, Any]:
         if args[0] != "get" or document is not None:
             raise RuntimeError("runtime repair admission is read-only")
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["kubectl", "--context", kube_context, *args],
             env=dict(env),
             capture_output=True,
@@ -271,7 +271,7 @@ def prepare_install_runtime_repair(
     cluster_owner = values["slurmCluster"].get(
         "releaseName", defaults["slurmCluster"]["releaseName"]
     )
-    rendered = subprocess.run(
+    rendered = kubernetes_process.run(
         [
             "helm",
             "template",

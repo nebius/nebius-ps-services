@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
-import inspect
 import json
 import re
 from collections.abc import Mapping
@@ -18,25 +18,28 @@ import yaml
 from rich.markdown import Markdown
 from typer.testing import CliRunner
 
-from nebius_cxcli import cli, soperator_adapter, soperator_public_discovery
+from nebius_cxcli import (
+    cli,
+    soperator_adapter,
+    soperator_public_discovery,
+    soperator_status_collect,
+)
 from nebius_cxcli.paths import ProjectPaths
 from nebius_cxcli.slurm_jobs import (
     applied_slurm_held_job_records,
     parse_scontrol_show_job_record,
 )
-from nebius_cxcli.soperator_destroy import (
-    build_soperator_destroy_receipt,
-    load_soperator_destroy_receipt,
-    write_soperator_destroy_receipt,
-)
 from nebius_cxcli.soperator_failures import SoperatorFailureDisposition
+from nebius_cxcli.soperator_jail_mounts import apply_jail_persistent_mount_values
 from nebius_cxcli.soperator_release_artifacts import SoperatorArtifactReceipt
 from nebius_cxcli.soperator_status import SoperatorOperationStatus
 from nebius_cxcli.soperator_telemetry import (
     SoperatorObservabilityReceipt,
     SoperatorObservabilityScope,
 )
-from soperator_fixtures import sample_infrastructure_receipt
+from soperator_fixtures import sample_infrastructure_receipt, sample_snapshot
+from source_inspection import function_source
+from status_health_fakes import healthy_snapshot
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -126,8 +129,8 @@ def test_public_discovery_provider_observation_preserves_capacity(
 
 
 def test_long_running_upgrade_handoffs_require_renewable_exec_auth() -> None:
-    full_stack_source = inspect.getsource(cli.soperator_upgrade_command)
-    release_source = inspect.getsource(cli._run_common_soperator_release_upgrade)
+    full_stack_source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
+    release_source = function_source(cli._run_common_soperator_release_upgrade)
 
     assert re.search(
         r"_prepare_cluster_handoff_kube_env\(.*?require_renewable_auth=True",
@@ -139,8 +142,8 @@ def test_long_running_upgrade_handoffs_require_renewable_exec_auth() -> None:
         release_source,
         re.DOTALL,
     )
-    assert "upgrade_progress.retry_wait(" in full_stack_source
-    assert "retry_wait=_parent_retry_wait" in full_stack_source
+    assert "execute_committed_soperator_upgrade(" in full_stack_source
+    assert "on_stop=_record_parent_stop" in full_stack_source
     assert "print_plan=print_release_plan_once" in full_stack_source
     assert "single_use_soperator_upgrade_plan_printer(" in full_stack_source
     assert "upgrade_progress.message(message)" in release_source
@@ -320,7 +323,9 @@ def test_upgrade_wizard_freezes_defaults_and_preserves_existing_mount_backing(
 
     def _prompt(path: str, default: object, **_kwargs: object) -> object:
         prompts.append((path, default))
-        return ["/opt/customer-data", "/etc/customer-data/"]
+        if path == "Keep any additional folders during the Jail upgrade?":
+            return True
+        return ["/etc/customer-data/"]
 
     monkeypatch.setattr(cli, "_prompt_upgrade_scalar", _prompt)
 
@@ -332,10 +337,8 @@ def test_upgrade_wizard_freezes_defaults_and_preserves_existing_mount_backing(
     )
 
     assert prompts == [
-        (
-            "soperator.upgrade.additional_persistent_data_paths",
-            ["/opt/customer-data"],
-        )
+        ("Keep any additional folders during the Jail upgrade?", False),
+        ("soperator.upgrade.additional_persistent_data_paths", []),
     ]
     assert protected == (
         "/data",
@@ -391,32 +394,101 @@ def test_upgrade_recovery_reuses_frozen_persistent_paths_without_prompt(
     assert mounts["/srv/customer"] == "/mnt/jail/srv/customer"
 
 
-def test_upgrade_rejects_new_zero_copy_path_after_slot_adoption(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    payload = _upgrade_payload_with_values(
-        {
-            "jailRootfs": {
-                "strategy": "activePassive",
-                "activeSlot": "slot-a",
-                "passiveSlot": "slot-b",
-                "adoption": {"activeSource": "slot", "rollbackSource": "slot"},
-            }
-        }
+def test_upgrade_adds_new_zero_copy_path_after_slot_adoption(monkeypatch):
+    values = apply_jail_persistent_mount_values({}, target_ref="cluster-a", layout="managed")
+    payload = _upgrade_payload_with_values(values)
+    answers = iter([True, ["/srv/new-data"]])
+    monkeypatch.setattr(cli, "_prompt_upgrade_scalar", lambda *args, **kwargs: next(answers))
+    cli._configure_soperator_upgrade_persistent_paths(
+        source_payload=payload,
+        target=cli._parse_soperator_upgrade_target("cluster-a"),
+        ownership="managed",
+        interactive=True,
     )
-    monkeypatch.setattr(
-        cli,
-        "_prompt_upgrade_scalar",
-        lambda *_args, **_kwargs: ["/srv/new-data"],
+    configured = payload["apps"]["charts"][0]["values"]
+    mount = next(
+        row for row in configured["jailPersistentMounts"] if row["mountPath"] == "/srv/new-data"
+    )
+    assert mount["localPath"] == "/mnt/jail-store/rootfs/slot-a/srv/new-data"
+    assert (
+        configured["jailRootfs"]["retainedGenerations"][0]["localPath"]
+        == "/mnt/jail-store/rootfs/slot-a"
     )
 
-    with pytest.raises(ValueError, match="only during first rootfs adoption"):
-        cli._configure_soperator_upgrade_persistent_paths(
-            source_payload=payload,
-            target=cli._parse_soperator_upgrade_target("cluster-a"),
-            ownership="managed",
-            interactive=True,
-        )
+
+def test_upgrade_invalid_live_directory_reprompts_without_saving_candidate(monkeypatch):
+    payload = _upgrade_payload_with_values({})
+    original = copy.deepcopy(payload)
+    answers = iter([True, ["/missing"], ["/workspace"]])
+    monkeypatch.setattr(cli, "_prompt_upgrade_scalar", lambda *a, **kw: next(answers))
+    observed = []
+
+    def validate(values):
+        assert payload == original
+        paths = [row["mountPath"] for row in values["jailPersistentMounts"]]
+        observed.append(paths)
+        if "/missing" in paths:
+            raise ValueError("directory does not exist")
+
+    cli._configure_soperator_upgrade_persistent_paths(
+        source_payload=payload,
+        target=cli._parse_soperator_upgrade_target("cluster-a"),
+        ownership="managed",
+        interactive=True,
+        validate_values=validate,
+    )
+    assert len(observed) == 2
+    assert "/workspace" in observed[-1] and "/missing" not in observed[-1]
+
+
+@pytest.mark.parametrize("answers", [[False], [True, []]])
+def test_upgrade_decline_or_empty_preserves_existing_protection(monkeypatch, answers):
+    from nebius_cxcli.soperator_jail_protection import protect_jail_directories
+
+    values = protect_jail_directories(
+        {}, paths=["/workspace"], layout="managed", target_ref="cluster-a"
+    )
+    payload = _upgrade_payload_with_values(values)
+    choices = iter(answers)
+    monkeypatch.setattr(cli, "_prompt_upgrade_scalar", lambda *a, **kw: next(choices))
+    cli._configure_soperator_upgrade_persistent_paths(
+        source_payload=payload,
+        target=cli._parse_soperator_upgrade_target("cluster-a"),
+        ownership="managed",
+        interactive=True,
+    )
+    assert payload["apps"]["charts"][0]["values"] == values
+
+
+@pytest.mark.parametrize("add_paths", [[], ["/workspace"]])
+def test_upgrade_keeps_external_nfs_home_in_frozen_protected_paths(monkeypatch, add_paths):
+    values = apply_jail_persistent_mount_values(
+        {
+            "externalNfs": {
+                "enabled": True,
+                "mountPath": "/home",
+                "server": "nfs.example.invalid",
+                "path": "/exports/home",
+            }
+        },
+        target_ref="cluster-a",
+        layout="managed",
+    )
+    payload = _upgrade_payload_with_values(values)
+    answers = iter([bool(add_paths), add_paths])
+    monkeypatch.setattr(cli, "_prompt_upgrade_scalar", lambda *a, **kw: next(answers))
+    selected = cli._configure_soperator_upgrade_persistent_paths(
+        source_payload=payload,
+        target=cli._parse_soperator_upgrade_target("cluster-a"),
+        ownership="managed",
+        interactive=True,
+    )
+    assert "/home" in selected
+    assert set(add_paths).issubset(selected)
+    assert not any(
+        row["mountPath"] == "/home"
+        for row in payload["apps"]["charts"][0]["values"]["jailPersistentMounts"]
+    )
 
 
 def test_upgrade_materializes_default_slot_source_during_admission() -> None:
@@ -591,7 +663,7 @@ def _soperator_cli_contract_payload() -> dict[str, Any]:
     assert isinstance(payload, dict)
     assert payload["schema"] == "nebius-cxcli.cli-contract.v1"
     contract = payload["soperator"]
-    assert contract["schema"] == "nebius-cxcli.soperator-cli-contract.v4"
+    assert contract["schema"] == "nebius-cxcli.soperator-cli-contract.v6"
     return contract
 
 
@@ -600,6 +672,7 @@ def _soperator_cli_contract() -> dict[str, set[str]]:
     return {
         str(name): {str(option) for option in definition["options"]}
         for name, definition in payload["commands"].items()
+        if definition.get("argument") is not None
     }
 
 
@@ -644,10 +717,10 @@ def _soperator_command_metadata(command: Any) -> dict[str, Any]:
         if parameter.default is not None:
             defaults[primary] = parameter.default
 
-    assert len(arguments) == 1
+    assert len(arguments) == (0 if hasattr(command, "commands") else 1)
     return {
         "short_help": _normalized(str(command.short_help or "")),
-        "argument": arguments[0],
+        "argument": arguments[0] if arguments else None,
         "option_help": dict(sorted(option_help.items())),
         "options": sorted(options),
         "option_order": options,
@@ -733,6 +806,33 @@ def test_rendered_rootfs_slot_contract_uses_selected_target_flux_dir(tmp_path: P
     )
 
 
+def _rootfs_storage_authority():
+    from nebius_cxcli.soperator_jail_protection import rootfs_storage_authority
+
+    values = apply_jail_persistent_mount_values({}, target_ref="cluster-a", layout="managed")
+    return rootfs_storage_authority(
+        {
+            "filesystemId": "filesystem-test",
+            "deviceTag": "jail",
+            "mountPath": "/mnt/jail-store",
+            "slots": {
+                "slot-b": {
+                    "volume_name": "jail-rootfs-slot-b",
+                    "pv_name": "jail-rootfs-slot-b-pv",
+                    "pvc_name": "jail-rootfs-slot-b-pvc",
+                    "local_path": "/mnt/jail-store/rootfs/slot-b",
+                }
+            },
+            "persistentMounts": [
+                {"mount_path": row["mountPath"], "local_path": row["localPath"]}
+                for row in values["jailPersistentMounts"]
+            ],
+            "retainedGenerations": [],
+        },
+        "slot-b",
+    )
+
+
 def _rootfs_admission(
     *,
     assert_authority=lambda: cli.SoperatorLeaseAuthority(
@@ -753,6 +853,8 @@ def _rootfs_admission(
         target_provisioner="kubernetes.io/no-provisioner",
         target_capacity="128Gi",
         persistent_paths=("/scripts", "/home", "/models", "/data", "/opt/soperator-home"),
+        storage_authority=_rootfs_storage_authority(),
+        directory_identities=[],
         assert_authority=assert_authority,
     )
 
@@ -827,6 +929,8 @@ def test_rootfs_admission_rejects_incomplete_or_mutable_authority(
         "target_provisioner": "kubernetes.io/no-provisioner",
         "target_capacity": "128Gi",
         "persistent_paths": ("/data", "/home", "/models", "/opt/soperator-home", "/scripts"),
+        "storage_authority": _rootfs_storage_authority(),
+        "directory_identities": [],
         "assert_authority": None,
     }
     kwargs.update(overrides)
@@ -890,7 +994,7 @@ def test_rootfs_admission_receipt_round_trips_sealed_target_wins_identity() -> N
 
 
 def test_passive_rootfs_prewrite_does_not_reinventory_disposable_live_content() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert 'purpose="live-prewrite"' not in source
     assert '"sourceManifestSha256"' not in source
@@ -906,7 +1010,7 @@ def test_passive_rootfs_prewrite_does_not_reinventory_disposable_live_content() 
 
 
 def test_passive_rootfs_preparation_reports_copy_and_inventory_subphases() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert "on_progress=_emit_population_progress" in source
     assert "progress.files_restored" in source
@@ -915,7 +1019,7 @@ def test_passive_rootfs_preparation_reports_copy_and_inventory_subphases() -> No
 
 
 def test_bound_adapter_repair_requires_drift_unless_source_repair_is_authenticated() -> None:
-    source = inspect.getsource(cli._soperator_upgrade_bound_adapter_repair_readmission_is_safe)
+    source = function_source(cli._soperator_upgrade_bound_adapter_repair_readmission_is_safe)
 
     assert "source_repair = registration_topology_repair or scheduling_runtime_repair" in source
     assert "not baseline_mismatches" in source
@@ -966,7 +1070,7 @@ def test_recovery_admission_rejects_a_missing_slurm_preimage() -> None:
 
 
 def test_completed_retention_recovery_uses_the_declared_home_transport_gate() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert re.search(
         r"def _verify_completed_protected_retention\(\).*?"
@@ -988,7 +1092,7 @@ def test_completed_retention_recovery_uses_the_declared_home_transport_gate() ->
 
 
 def test_completed_rootfs_population_uses_sealed_evidence_after_target_apply() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert re.search(
         r"recovery_has_applied_target_release = \(.*?"
@@ -1018,7 +1122,7 @@ def test_completed_rootfs_population_uses_sealed_evidence_after_target_apply() -
 
 
 def test_completed_declarative_release_rechecks_spool_and_refreshes_sources() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert re.search(
         r"def _wait_flux\(\).*?"
@@ -1046,8 +1150,8 @@ def test_completed_declarative_release_rechecks_spool_and_refreshes_sources() ->
 
 
 def test_soperator_upgrade_has_no_observability_auth_query_or_secret_lifecycle() -> None:
-    apply_source = inspect.getsource(cli._apply_rendered_flux)
-    upgrade_source = inspect.getsource(cli._run_common_soperator_release_upgrade)
+    apply_source = function_source(cli._apply_rendered_flux)
+    upgrade_source = function_source(cli._run_common_soperator_release_upgrade)
     forbidden = (
         "acquire_operator_access_token",
         "verify_soperator_observability",
@@ -1060,11 +1164,11 @@ def test_soperator_upgrade_has_no_observability_auth_query_or_secret_lifecycle()
     )
     assert all(symbol not in apply_source for symbol in forbidden)
     assert all(symbol not in upgrade_source for symbol in forbidden)
-    assert "wait_final_product=_wait_complete_product" in apply_source
+    assert "wait_final_product=_wait_final_product" in apply_source
 
 
 def test_post_rootfs_handoff_allows_home_transport_change_only_for_legacy_adoption() -> None:
-    source = inspect.getsource(cli._apply_rendered_flux)
+    source = function_source(cli._apply_rendered_flux)
 
     assert re.search(
         r"declared_home_mount_transport_transition = \(.*?"
@@ -1081,7 +1185,7 @@ def test_post_rootfs_handoff_allows_home_transport_change_only_for_legacy_adopti
         re.DOTALL,
     )
 
-    upgrade_source = inspect.getsource(cli._run_common_soperator_release_upgrade)
+    upgrade_source = function_source(cli._run_common_soperator_release_upgrade)
     assert re.search(
         r"recovery_has_applied_declared_home_transition = \(.*?"
         r"active_intent is not None.*?"
@@ -2962,6 +3066,7 @@ def test_upgrade_chart_freeze_failure_closes_initialized_sdk_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     paths = _paths(tmp_path)
+    paths.config_path.write_text("{}\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     generated_config = SimpleNamespace(
         client_info=SimpleNamespace(nebius=SimpleNamespace(project_id="project-a"))
@@ -3010,6 +3115,10 @@ def test_upgrade_chart_freeze_failure_closes_initialized_sdk_once(
         def control_plane_versions(self) -> tuple[str, str]:
             return ("1.34", "1.35")
 
+    monkeypatch.setattr(
+        "nebius_cxcli.deployment_cli.hydrate_upgrade_jail_config",
+        lambda path, desired, ref: desired,
+    )
     monkeypatch.setattr(cli, "_load_source_payload", lambda _path: {})
     monkeypatch.setattr(
         cli,
@@ -3058,14 +3167,14 @@ def test_upgrade_chart_freeze_failure_closes_initialized_sdk_once(
     )
     monkeypatch.setattr(
         cli,
-        "freeze_soperator_release",
+        "resolve_soperator_source",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("official chart download timed out")
+            RuntimeError("official source download timed out")
         ),
     )
 
-    with pytest.raises(typer.Exit) as exc_info:
-        cli.soperator_upgrade_command(
+    with pytest.raises(RuntimeError, match="official source download timed out"):
+        cli._run_soperator_upgrade_campaign(
             paths.config_path,
             target_ref="cluster-a",
             to_chart_version="4.1.7",
@@ -3073,11 +3182,9 @@ def test_upgrade_chart_freeze_failure_closes_initialized_sdk_once(
             to_os="auto",
             to_gpu_stack_preset="auto",
             dry_run=True,
-            execute=False,
             interactive=False,
         )
 
-    assert exc_info.value.exit_code == 1
     assert len(initialized_sdks) == 1
     assert close_calls == ["close"]
     assert initialized_sdks[0]._runtime.owned
@@ -3086,17 +3193,16 @@ def test_upgrade_chart_freeze_failure_closes_initialized_sdk_once(
         "The SDK runtime could not shut down" in record.getMessage() for record in caplog.records
     )
     output = capsys.readouterr().out
-    assert "ERROR: official chart download timed out" in output
     assert "SDK runtime could not shut down" not in output
 
 
-def test_upgrade_raw_recovery_prefix_remains_retryable() -> None:
+def test_upgrade_raw_recovery_prefix_stops_without_replay() -> None:
     disposition = cli._soperator_upgrade_failure_disposition(
         "scheduling-gate",
         RuntimeError("recovery-required: partition postimage is ambiguous"),
     )
 
-    assert disposition is SoperatorFailureDisposition.RETRY
+    assert disposition is SoperatorFailureDisposition.STOP
 
 
 def test_upgrade_supervisor_retry_detail_is_actionable_bounded_and_secret_safe() -> None:
@@ -3121,6 +3227,20 @@ def test_upgrade_supervisor_retry_detail_redacts_pem_material() -> None:
     )
 
     assert detail == "RuntimeError: sensitive detail redacted"
+
+
+def test_upgrade_supervisor_keeps_failure_after_long_patch_command() -> None:
+    detail = cli._soperator_upgrade_supervisor_failure_detail(
+        RuntimeError(
+            "Command failed during Soperator upgrade: kubectl patch "
+            + "long-patch-argument " * 40
+            + "\nError from server (Conflict): object was modified; token=private-value"
+        )
+    )
+    assert "Error from server (Conflict): object was modified" in detail
+    assert "long-patch-argument" not in detail
+    assert "private-value" not in detail
+    assert len(detail) <= 337
 
 
 def test_upgrade_project_generation_postimage_requires_exact_safe_files(
@@ -3149,32 +3269,21 @@ def test_upgrade_project_generation_postimage_requires_exact_safe_files(
     )
 
 
-def test_upgrade_lease_acquisition_retries_same_authority_object() -> None:
-    class _Lease:
-        def __init__(self) -> None:
-            self.enter_count = 0
+def test_upgrade_lease_acquisition_does_not_blindly_repeat_ambiguous_write() -> None:
+    class Lease:
+        enter_count = 0
 
         def __enter__(self):
             self.enter_count += 1
-            if self.enter_count < 3:
-                raise RuntimeError("Unable to acquire the Soperator operation Lease")
-            return self
+            raise RuntimeError("Unable to acquire the Soperator operation Lease")
 
-        def __exit__(self, *_args: object) -> None:
-            return None
+        def __exit__(self, *args):
+            pass
 
-    lease = _Lease()
-    sleeps: list[float] = []
-    with cli.ExitStack() as stack:
-        acquired = cli._acquire_soperator_upgrade_lease(
-            stack=stack,
-            lease=lease,
-            sleep=sleeps.append,
-        )
-
-    assert acquired is lease
-    assert lease.enter_count == 3
-    assert sleeps == [5.0, 10.0]
+    lease = Lease()
+    with cli.ExitStack() as stack, pytest.raises(RuntimeError, match="Unable to acquire"):
+        cli._acquire_soperator_upgrade_lease(stack=stack, lease=lease)
+    assert lease.enter_count == 1
 
 
 def test_nested_upgrade_reuses_parent_cross_command_lease() -> None:
@@ -3202,7 +3311,6 @@ def test_nested_upgrade_reuses_parent_cross_command_lease() -> None:
             acquired = cli._acquire_soperator_upgrade_lease(
                 stack=stack,
                 lease=_ChildLease(),
-                sleep=lambda _seconds: None,
             )
     finally:
         cli._SOPERATOR_PARENT_OPERATION_LEASE.reset(token)
@@ -3819,154 +3927,25 @@ def test_retired_soperator_root_command_is_not_invocable(suffix: tuple[str, ...]
 
 
 def test_soperator_help_exposes_unified_commands_and_release_flag() -> None:
-    registered_commands = [
-        command.name for command in cli.soperator_app.registered_commands if command.name
-    ]
-    assert registered_commands == [
-        "install",
-        "discover",
-        "onboard",
-        "upgrade",
-        "status",
-        "destroy",
-    ]
-
-    group = runner.invoke(cli.app, ["soperator", "--help"])
-    install = runner.invoke(cli.app, ["soperator", "install", "--help"])
-    onboard = runner.invoke(cli.app, ["soperator", "onboard", "--help"])
-    destroy = runner.invoke(cli.app, ["soperator", "destroy", "--help"])
-    discover = runner.invoke(cli.app, ["soperator", "discover", "--help"])
-    status = runner.invoke(cli.app, ["soperator", "status", "--help"])
-    upgrade = runner.invoke(cli.app, ["soperator", "upgrade", "--help"])
-    render = runner.invoke(cli.app, ["render", "--help"])
-    flux_destroy = runner.invoke(cli.app, ["flux", "destroy", "--help"])
-    deploy = runner.invoke(cli.app, ["deploy", "--help"])
-
-    assert group.exit_code == 0
-    assert install.exit_code == 0
-    assert onboard.exit_code == 0
-    assert destroy.exit_code == 0
-    assert discover.exit_code == 0
-    assert status.exit_code == 0
-    assert upgrade.exit_code == 0
-    assert render.exit_code == 0
-    assert flux_destroy.exit_code == 0
-    assert deploy.exit_code == 0
-    group_output = _normalized(group.output)
-    for command in (
-        "install",
-        "onboard",
-        "discover",
-        "destroy",
-        "status",
-        "upgrade",
-    ):
-        assert command in group_output
-    install_output = _normalized_cli_help(install.output)
-    assert "--profile" in install_output
-    assert "--profile mixed --release latest --no-interactive --dry-run" in group_output
-    assert "--profile gpu --release latest --no-interactive --dry-run" in install_output
-    assert "a fresh --no-interactive install requires this option" in install_output
-    assert "--resume rejects it and reuses the frozen release" in install_output
-    destroy_output = _normalized(destroy.output)
-    assert "--target" in destroy_output
-    assert "--dry-run" in destroy_output
-    assert "--yes" not in destroy_output
-    assert "--approve" not in destroy_output
-    discover_output = _normalized(discover.output)
-    assert "OUTPUT_ROOT" in discover_output
-    assert "CONFIG_YAML" not in discover_output
-    for required_option in ("--tenant-id", "--project-id", "--cluster-id"):
-        assert required_option in discover_output
-    for removed_option in (
-        "--target",
-        "--output-dir",
-        "--namespace",
-        "--release-name",
-        "--redaction",
-        "--interactive",
-    ):
-        assert removed_option not in discover_output
-    for removed_option in (
-        "--to-release",
-        "--to-k8s-version",
-        "--to-os",
-        "--to-gpu-stack-preset",
-    ):
-        assert removed_option not in discover_output
-    onboard_output = _normalized(onboard.output)
-    assert "or registration" not in onboard_output
-    for removed_option in (
-        "--no-validate-sources",
-        "--source-version",
-        "--storage-mode",
-        "--compute-mode",
-        "--compute-migration-mode",
-        "--to-k8s-version",
-    ):
-        assert removed_option not in onboard_output
-
-    status_output = _normalized(status.output)
-    assert "--target" in status_output
-    assert "--live" in status_output
-    assert "--no-live" in status_output
-
-    render_output = _normalized(render.output)
-    assert "render updates ordinary app resources only" in render_output
-    assert "preserves the accepted infrastructure and upstream graph" in render_output
-    assert "`soperator` lifecycle command" in render_output
-
-    flux_destroy_output = _normalized(flux_destroy.output)
-    assert "Bundles containing Soperator are rejected" in flux_destroy_output
-    assert "soperator destroy CONFIG --target TARGET" in flux_destroy_output
-    assert "Removes Soperator CRs first" not in flux_destroy_output
-
-    upgrade_output = _normalized_cli_help(upgrade.output)
-    assert "--to-release" in upgrade_output
-    assert "A fresh --no-interactive upgrade requires this option" in upgrade_output
-    assert "Recovery may omit it" in upgrade_output
-    assert "must match the frozen campaign" in upgrade_output
-    assert "Explicit read-only" in upgrade_output
-    assert "planning mode" in upgrade_output
-    assert "Required read-only mode" not in upgrade_output
-    assert "--to-chart-version" not in upgrade_output
-    assert _retired_soperator_root_command() not in upgrade_output
-    for full_stack_option in (
-        "--to-k8s-version",
-        "--to-os",
-        "--to-gpu-stack-preset",
-        "--node-group-os",
-        "--node-group-gpu-sta",
-        "--node-group-strategy",
-        "--strategy-max-surge",
-        "--drain-timeout",
-    ):
-        assert full_stack_option in upgrade_output
-    for removed_option in (
-        "--zero-size-gpu-validation",
-        "--allow-provider-api-upgrade",
-    ):
-        assert removed_option not in upgrade_output
-    for removed_option in (
-        "--populate-jail-refresh",
-        "--jail-persistent-mount",
-        "--jail-sfs-resize-policy",
-        "--stop-for-remediation-approval",
-    ):
-        assert removed_option not in upgrade_output
-
-    deploy_output = _normalized(deploy.output)
-    assert "deploy applies the rendered ordinary app bundle" in deploy_output
-    assert "without Terraform or Slurm maintenance" in deploy_output
-    assert "rerun the same approved `soperator upgrade --execute --approve` command" in (
-        deploy_output
+    commands = [command.name for command in cli.soperator_app.registered_commands if command.name]
+    assert commands == ["create", "discover", "onboard", "upgrade", "status"]
+    for command in commands:
+        assert runner.invoke(cli.app, ["soperator", command, "--help"]).exit_code == 0
+    create = _normalized_cli_help(runner.invoke(cli.app, ["soperator", "create", "--help"]).output)
+    assert "--profile" in create and "--release" in create
+    for removed in ("--execute", "--approve", "--resume", "--replan", "--dry-run"):
+        assert removed not in create
+    deploy = _normalized_cli_help(runner.invoke(cli.app, ["deploy", "--help"]).output)
+    assert "--dry-run" in deploy and "rendered" in deploy
+    upgrade = _normalized_cli_help(
+        runner.invoke(cli.app, ["soperator", "upgrade", "--help"]).output
     )
-    for retired_phrase in (
-        "remaining upgrade segment",
-        "later registration",
-        "reruns/resume",
-    ):
-        assert retired_phrase not in deploy_output
+    assert "--to-release" in upgrade and "--dry-run" in upgrade
+    assert "--execute" not in upgrade and "--approve" not in upgrade
+    assert runner.invoke(cli.app, ["soperator", "install", "--help"]).exit_code == 2
+    rendered = _normalized(runner.invoke(cli.app, ["render", "--help"]).output)
+    assert "shared deploy workflow" in rendered
+    assert "ordinary app resources only" not in rendered
 
 
 def test_soperator_commands_expose_exact_canonical_option_sets() -> None:
@@ -3975,6 +3954,14 @@ def test_soperator_commands_expose_exact_canonical_option_sets() -> None:
     actual = {
         name: _soperator_command_metadata(command) for name, command in click_group.commands.items()
     }
+    for name, group in click_group.commands.items():
+        if hasattr(group, "commands"):
+            actual.update(
+                {
+                    f"{name} {child}": _soperator_command_metadata(command)
+                    for child, command in group.commands.items()
+                }
+            )
     expected = {
         str(name): {key: value for key, value in definition.items() if key != "help_clauses"}
         for name, definition in contract["commands"].items()
@@ -4056,36 +4043,22 @@ def _soperator_lifecycle_guard_payload(state: str) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("state", ["disabled-app", "registration-marker"])
-def test_generic_render_rejects_all_soperator_lifecycle_state_before_side_effects(
-    state: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "deployments" / "tenant-a" / "project-a" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        json.dumps(_soperator_lifecycle_guard_payload(state)),
-        encoding="utf-8",
+@pytest.mark.parametrize(
+    "command",
+    [
+        "render",
+        "validate",
+        "validate-generated",
+        "quota-check",
+        "quota-request",
+        "bootstrap-ci",
+        "deploy",
+    ],
+)
+def test_shared_commands_admit_soperator_lifecycle_scope(state, command):
+    cli._require_soperator_lifecycle_scope(
+        _soperator_lifecycle_guard_payload(state), command=command
     )
-    load_attempts: list[bool] = []
-
-    def _load_config(_path: Path, *, persist_normalized: bool = True) -> dict[str, object]:
-        load_attempts.append(persist_normalized)
-        pytest.fail("render reached config normalization")
-
-    monkeypatch.setattr(cli, "load_config", _load_config)
-    monkeypatch.setattr(
-        cli,
-        "_ensure_runtime_auth_material",
-        lambda *_args, **_kwargs: pytest.fail("render reached authentication"),
-    )
-
-    result = runner.invoke(cli.app, ["render", str(config_path), "--force"])
-
-    assert result.exit_code == 1, result.output
-    assert "require a successfully completed Soperator" in _normalized(result.output)
-    assert load_attempts == []
-    assert not (config_path.parent / "generated").exists()
 
 
 @pytest.mark.parametrize("state", ["disabled-app", "registration-marker"])
@@ -4093,8 +4066,6 @@ def test_generic_render_rejects_all_soperator_lifecycle_state_before_side_effect
 @pytest.mark.parametrize(
     "argv_template",
     [
-        ("deploy", "{config}"),
-        ("destroy", "{config}", "--yes"),
         ("terraform", "plan", "{generated}"),
         ("terraform", "apply", "{generated}"),
         ("terraform", "destroy", "{generated}", "--yes"),
@@ -4125,7 +4096,8 @@ def test_generic_generated_commands_reject_all_soperator_lifecycle_state_before_
     (generated_dir / "nebius-cxcli-manifest.json").write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-generated/v1",
+                "schema": "nebius-cxcli-generated/v2",
+                "execution": {"backend": {"bucket": "bucket", "key": "state"}},
                 "runtime_config": _soperator_lifecycle_guard_payload(manifest_state),
                 "render": {"terraform_tfvars": {"sentinel": "must-not-write"}},
             }
@@ -4159,8 +4131,10 @@ def test_generic_generated_commands_reject_all_soperator_lifecycle_state_before_
 
     assert result.exit_code == 1, result.output
     expected = (
-        "require a successfully completed Soperator"
-        if argv[0] == "deploy" or argv[:2] == ["flux", "apply"]
+        "MK8s deletion requires"
+        if argv[:2] == ["terraform", "destroy"]
+        else "accepted generated baseline"
+        if argv[:2] == ["flux", "apply"]
         else "does not manage Soperator clusters"
     )
     assert expected in _normalized(result.output)
@@ -4309,242 +4283,6 @@ def test_soperator_discover_requires_raw_scope_before_callback(
     assert result.exit_code == 2
     assert "--tenant-id" in _normalized(result.output)
     assert calls == []
-
-
-def test_onboarded_discovery_omits_temporary_context_from_saved_rerun(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    manifest_path = tmp_path / "manifest.json"
-    captured: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        cli,
-        "soperator_registration_target",
-        lambda *_args, **_kwargs: {"cluster_id": "mk8s-a", "access": "internal"},
-    )
-
-    @contextmanager
-    def _context(*_args: object, **_kwargs: object):
-        yield "temporary-context"
-
-    monkeypatch.setattr(cli, "_onboarded_soperator_cluster_context", _context)
-    monkeypatch.setattr(
-        cli,
-        "collect_kubectl_soperator_snapshot",
-        lambda **_kwargs: {"helm_releases": []},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_write_soperator_discovery_bundle_from_snapshot",
-        lambda **kwargs: captured.append(dict(kwargs)) or manifest_path,
-    )
-
-    result = cli._run_onboarded_soperator_discovery_command(
-        config_path=config_path,
-        payload={},
-        target_ref="cluster-a",
-        kube_context=None,
-        output_dir=None,
-        namespace=None,
-        release_name=None,
-        redaction="support",
-    )
-
-    assert result == manifest_path
-    assert captured == [
-        {
-            "config_path": config_path,
-            "target_ref": "cluster-a",
-            "snapshot": {"helm_releases": []},
-            "source_kind": "onboarded",
-            "output_dir": None,
-            "namespace": None,
-            "release_name": None,
-            "kube_context": "temporary-context",
-            "durable_kube_context": None,
-            "cluster_id": "mk8s-a",
-            "cluster_name": "",
-            "redaction": "support",
-        }
-    ]
-
-
-def test_discovery_bundle_does_not_persist_temporary_collection_context(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "_collect_soperator_discovery_helm_values", lambda **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_slurm_snapshot",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_accounting_snapshot",
-        lambda **_kwargs: {},
-    )
-
-    manifest_path = cli._write_soperator_discovery_bundle_from_snapshot(
-        config_path=config_path,
-        target_ref="cluster-a",
-        snapshot={"helm_releases": []},
-        source_kind="onboarded",
-        output_dir=tmp_path / "support",
-        namespace="soperator",
-        release_name="soperator",
-        kube_context="temporary-context",
-        durable_kube_context=None,
-        cluster_id="mk8s-a",
-        redaction="support",
-    )
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    identity = json.loads((manifest_path.parent / "identity.json").read_text(encoding="utf-8"))
-    serialized = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(manifest_path.parent.iterdir())
-        if path.is_file()
-    )
-    assert manifest["command"] == [
-        "nebius-cxcli",
-        "soperator",
-        "discover",
-        str(config_path),
-        "--target",
-        "cluster-a",
-        "--output-dir",
-        str(tmp_path / "support"),
-        "--namespace",
-        "soperator",
-        "--release-name",
-        "soperator",
-        "--redaction",
-        "support",
-        "--no-interactive",
-    ]
-    assert identity["kube_context"] == ""
-    assert "temporary-context" not in serialized
-
-
-def test_discovery_uses_helm_storage_and_slurm_workload_namespaces(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    calls: dict[str, str] = {}
-    snapshot = {
-        "helm_releases": [
-            {
-                "name": "soperator-controller",
-                "namespace": "soperator-system",
-                "storage_namespace": "flux-system",
-                "chart": "helm-soperator-1.22.3",
-            }
-        ],
-        "soperator_resources": [
-            {
-                "kind": "SlurmCluster",
-                "metadata": {"name": "soperator", "namespace": "soperator"},
-            }
-        ],
-    }
-
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_helm_values",
-        lambda **kwargs: calls.__setitem__("helm", kwargs["namespace"]) or {},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_slurm_snapshot",
-        lambda **kwargs: calls.__setitem__("slurm", kwargs["namespace"]) or {},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_accounting_snapshot",
-        lambda **kwargs: calls.__setitem__("accounting", kwargs["namespace"]) or {},
-    )
-
-    cli._write_soperator_discovery_bundle_from_snapshot(
-        config_path=config_path,
-        target_ref="cluster-a",
-        snapshot=snapshot,
-        source_kind="onboarded",
-        output_dir=tmp_path / "support",
-        namespace=None,
-        release_name=None,
-        kube_context="temporary-context",
-        durable_kube_context=None,
-        cluster_id="mk8s-a",
-        redaction="support",
-    )
-
-    assert calls == {
-        "helm": "flux-system",
-        "slurm": "soperator",
-        "accounting": "soperator",
-    }
-
-
-def test_discovery_bundle_uses_one_durable_context_for_command_and_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "_collect_soperator_discovery_helm_values", lambda **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_slurm_snapshot",
-        lambda **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_collect_soperator_discovery_accounting_snapshot",
-        lambda **_kwargs: {},
-    )
-
-    manifest_path = cli._write_soperator_discovery_bundle_from_snapshot(
-        config_path=config_path,
-        target_ref="cluster-a",
-        snapshot={"helm_releases": []},
-        source_kind="onboarded",
-        output_dir=tmp_path / "support",
-        namespace="soperator",
-        release_name="soperator",
-        kube_context="durable-context",
-        durable_kube_context="durable-context",
-        cluster_id="mk8s-a",
-        redaction="support",
-    )
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    identity = json.loads((manifest_path.parent / "identity.json").read_text(encoding="utf-8"))
-    assert manifest["command"] == [
-        "nebius-cxcli",
-        "soperator",
-        "discover",
-        str(config_path),
-        "--target",
-        "cluster-a",
-        "--output-dir",
-        str(tmp_path / "support"),
-        "--namespace",
-        "soperator",
-        "--release-name",
-        "soperator",
-        "--kube-context",
-        "durable-context",
-        "--redaction",
-        "support",
-        "--no-interactive",
-    ]
-    assert identity["kube_context"] == "durable-context"
 
 
 @pytest.mark.parametrize("status", ("partial", "not-detected"))
@@ -4818,16 +4556,35 @@ def test_public_discovery_region_mismatch_writes_no_report(
     assert writes == []
 
 
+@pytest.fixture(autouse=True)
+def _status_health_transport(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not request.node.name.startswith("test_soperator_status"):
+        return
+
+    def collect_health(**kwargs: Any) -> dict[str, Any]:
+        snapshot = healthy_snapshot()
+        identity = kwargs["identity"]
+        snapshot["cluster_identity"] = identity.get("cluster_identity", {})
+        snapshot["status_issues"] = identity.get("collection_errors", [])
+        kwargs["progress"]("Reading test component readiness")
+        return snapshot
+
+    monkeypatch.setattr(soperator_status_collect, "collect_status_snapshot", collect_health)
+
+
 def test_soperator_status_forwards_live_context_and_noninteractive_target_selection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     resolver_calls: list[dict[str, object]] = []
     snapshot_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: {"apps": {}})
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
 
     def _resolve(*_args: object, **kwargs: object):
         resolver_calls.append(dict(kwargs))
@@ -4859,7 +4616,7 @@ def test_soperator_status_forwards_live_context_and_noninteractive_target_select
             ],
         }
 
-    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(soperator_status_collect, "read_status_identity", _snapshot)
 
     result = runner.invoke(
         cli.app,
@@ -4879,7 +4636,8 @@ def test_soperator_status_forwards_live_context_and_noninteractive_target_select
     assert result.exit_code == 0, result.output
     assert resolver_calls == [{"target_ref": "cluster-a", "interactive": False}]
     assert snapshot_calls == [{"kube_context": "ctx-a"}]
-    assert "Live Soperator status: deployed" in _normalized(result.output)
+    assert "Installed Soperator:" in _normalized(result.output)
+    assert "Overall health: Healthy" in _normalized(result.output)
 
 
 def _status_observability_workload_inventory() -> dict[str, object]:
@@ -4961,6 +4719,7 @@ def test_soperator_status_verify_observability_is_live_by_default_and_writes_sep
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     operation_receipt = paths.reports_dir / "soperator-release-reconcile-existing.json"
@@ -4990,7 +4749,7 @@ def test_soperator_status_verify_observability_is_live_by_default_and_writes_sep
     }
     auth_calls: list[dict[str, object]] = []
     verify_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: payload)
     monkeypatch.setattr(
         cli,
         "_resolve_soperator_command_target",
@@ -4999,7 +4758,9 @@ def test_soperator_status_verify_observability_is_live_by_default_and_writes_sep
     monkeypatch.setattr(cli, "_source_helm_chart_row", lambda *_args: {"version": "4.1.7"})
     monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: paths)
     monkeypatch.setattr(cli, "read_soperator_operation_status", lambda **_kwargs: None)
-    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", lambda **_kwargs: snapshot)
+    monkeypatch.setattr(
+        soperator_status_collect, "read_status_identity", lambda **_kwargs: snapshot
+    )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_process",
@@ -5036,7 +4797,8 @@ def test_soperator_status_verify_observability_is_live_by_default_and_writes_sep
     )
 
     assert result.exit_code == 0, result.output
-    assert "Live Soperator status: deployed" in _normalized(result.output)
+    assert "Installed Soperator:" in _normalized(result.output)
+    assert "Overall health: Healthy" in _normalized(result.output)
     assert "Observability verification: passed" in _normalized(result.output)
     assert len(auth_calls) == 1
     assert auth_calls[0]["interactive"] is False
@@ -5055,11 +4817,12 @@ def test_soperator_status_verify_observability_rejects_no_live_before_auth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     config_path = tmp_path / "config.yaml"
     config_path.write_text("version: v1\n", encoding="utf-8")
     monkeypatch.setattr(
         cli,
-        "_load_source_payload",
+        "_read_config_payload",
         lambda _path: pytest.fail("invalid flag combination must fail before config or auth"),
     )
 
@@ -5084,6 +4847,7 @@ def test_soperator_status_observability_auth_failure_is_sanitized(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
@@ -5101,7 +4865,7 @@ def test_soperator_status_observability_auth_failure_is_sanitized(
     }
     monkeypatch.setattr(
         cli,
-        "_load_source_payload",
+        "_read_config_payload",
         lambda _path: {
             "client_info": {"nebius": {"project_id": "project-a"}},
             "apps": {},
@@ -5115,7 +4879,9 @@ def test_soperator_status_observability_auth_failure_is_sanitized(
     monkeypatch.setattr(cli, "_source_helm_chart_row", lambda *_args: {"version": "4.1.7"})
     monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: paths)
     monkeypatch.setattr(cli, "read_soperator_operation_status", lambda **_kwargs: None)
-    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", lambda **_kwargs: snapshot)
+    monkeypatch.setattr(
+        soperator_status_collect, "read_status_identity", lambda **_kwargs: snapshot
+    )
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_process",
@@ -5209,19 +4975,24 @@ def test_soperator_status_uses_scoped_context_for_onboarded_cluster_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     payload = {"client_info": {"nebius": {"project_id": "project-a"}}, "apps": {}}
     context_calls: list[dict[str, object]] = []
     snapshot_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: payload)
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: payload)
     monkeypatch.setattr(
         cli,
         "_resolve_soperator_command_target",
         lambda *_args, **_kwargs: (
             target,
-            {"cluster_id": "mk8scluster-a", "access": "internal"},
+            {
+                "cluster_id": "mk8scluster-a",
+                "access": "internal",
+                "inventory": {"cluster_identity": {"kubernetes_uid": "cluster-uid-a"}},
+            },
             True,
         ),
     )
@@ -5239,10 +5010,13 @@ def test_soperator_status_uses_scoped_context_for_onboarded_cluster_id(
     def _snapshot(**kwargs: object) -> dict[str, object]:
         snapshot_calls.append(dict(kwargs))
         return {
-            "helm_releases": [{"name": "soperator", "status": "deployed", "chart_version": "4.1.7"}]
+            "cluster_identity": {"kubernetes_uid": "cluster-uid-a"},
+            "helm_releases": [
+                {"name": "soperator", "status": "deployed", "chart_version": "4.1.7"}
+            ],
         }
 
-    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(soperator_status_collect, "read_status_identity", _snapshot)
 
     result = runner.invoke(
         cli.app,
@@ -5268,23 +5042,68 @@ def test_soperator_status_uses_scoped_context_for_onboarded_cluster_id(
     assert snapshot_calls == [{"kube_context": "temporary-ctx"}]
 
 
+@pytest.mark.parametrize(
+    "identity_source",
+    ["none", "active", "accepted", "wrong-uid", "pending", "pending-verify", "explicit"],
+)
 def test_soperator_status_uses_nonpersistent_managed_handoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    identity_source: str,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
     generated_config = SimpleNamespace()
     manifest: dict[str, object] = {"deploy": {"targets": []}}
     selected_target = {"target_ref": "cluster-a"}
+    identity = {"cluster_id": "mk8scluster-bound", "kubernetes_uid": "bound-uid"}
+    generation = "sha256:" + "a" * 64
+    journal = {
+        "schema": "nebius-cxcli.deployment-applications.v1",
+        "generation": generation,
+        "selected": ["cluster-a"],
+        "targets": {
+            "cluster-a": {"identity": identity, "desiredBundle": generation, "status": "executing"}
+        },
+    }
+    if identity_source != "none":
+        active = {
+            "generation": generation,
+            "plan": {"semanticPlan": {"selectedTargets": ["cluster-a"]}},
+            "recovery": {
+                "tenant/project/generated/reports/deployment-applications.json": base64.b64encode(
+                    json.dumps(journal).encode()
+                ).decode()
+            },
+        }
+        record = {"active": active, "accepted": None}
+        if identity_source == "accepted":
+            record = {
+                "active": None,
+                "accepted": {
+                    "generation": generation,
+                    "evidence": {"identities": {"cluster-a": identity}},
+                },
+            }
+        elif identity_source in {"pending", "pending-verify"}:
+            active["recovery"] = {}
+        monkeypatch.setattr(
+            cli, "read_local_deployment_record", lambda _: SimpleNamespace(value=record)
+        )
+        monkeypatch.setattr(
+            cli,
+            "_validate_managed_soperator_kube_context_identity",
+            lambda **_: pytest.fail("Must use remote identity without local artifacts"),
+        )
     kube_env = {
         "KUBECONFIG": "/private/scoped-kubeconfig",
         cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "managed-ctx",
     }
     handoff_calls: list[dict[str, object]] = []
     snapshot_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: {"apps": {}})
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
     monkeypatch.setattr(
         cli,
         "_resolve_soperator_command_target",
@@ -5306,6 +5125,8 @@ def test_soperator_status_uses_nonpersistent_managed_handoff(
 
     def _handoff(*args: object, **kwargs: object) -> dict[str, str]:
         handoff_calls.append({"args": args, **kwargs})
+        if identity_source != "none":
+            assert kwargs["target"]["cluster_id"] == identity["cluster_id"]
         return kube_env
 
     monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", _handoff)
@@ -5313,10 +5134,15 @@ def test_soperator_status_uses_nonpersistent_managed_handoff(
     def _snapshot(**kwargs: object) -> dict[str, object]:
         snapshot_calls.append(dict(kwargs))
         return {
-            "helm_releases": [{"name": "soperator", "status": "deployed", "chart_version": "4.1.7"}]
+            "helm_releases": [
+                {"name": "soperator", "status": "deployed", "chart_version": "4.1.7"}
+            ],
+            "cluster_identity": {
+                "kubernetes_uid": "wrong" if identity_source == "wrong-uid" else "bound-uid"
+            },
         }
 
-    monkeypatch.setattr(cli, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(soperator_status_collect, "read_status_identity", _snapshot)
 
     result = runner.invoke(
         cli.app,
@@ -5328,326 +5154,65 @@ def test_soperator_status_uses_nonpersistent_managed_handoff(
             "cluster-a",
             "--live",
             "--no-interactive",
+            *(["--kube-context", "explicit-ctx"] if identity_source == "explicit" else []),
+            *(["--verify-observability"] if identity_source == "pending-verify" else []),
         ],
     )
 
-    assert result.exit_code == 0, result.output
+    assert selected_target == {"target_ref": "cluster-a"}
+    if identity_source not in {"none", "accepted"}:
+        output = _normalized(result.output)
+        assert "recover through deploy with the original execution options" in output
+        assert "recover with nebius-cxcli deploy" not in output
+    if identity_source == "pending-verify":
+        assert result.exit_code == 1
+        assert "identity not yet published" in result.output
+        assert not handoff_calls and not snapshot_calls
+        return
+    if identity_source == "wrong-uid":
+        assert result.exit_code == 1
+        assert "identity" in result.output.lower()
+        return
+    assert result.exit_code == (1 if identity_source == "pending" else 0), result.output
+    if identity_source == "pending":
+        assert "not yet published" in result.output
+        assert not handoff_calls and not snapshot_calls
+        return
+    if identity_source == "explicit":
+        assert not handoff_calls
+        assert snapshot_calls == [{"kube_context": "explicit-ctx"}]
+        return
     assert len(handoff_calls) == 1
-    assert handoff_calls[0]["target"] == selected_target
+    assert handoff_calls[0]["target"] == (
+        selected_target
+        if identity_source == "none"
+        else {**selected_target, "cluster_id": identity["cluster_id"]}
+    )
     assert handoff_calls[0]["persist_local_kubeconfig"] is False
     assert handoff_calls[0]["set_current_context"] is False
     assert handoff_calls[0]["allow_terraform_output"] is False
     assert snapshot_calls == [{"kube_context": "managed-ctx", "extra_env": kube_env}]
 
 
-def test_soperator_destroy_requires_target_before_project_discovery(tmp_path: Path) -> None:
+def test_destroy_requires_target_before_project_discovery(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
-        ["soperator", "destroy", str(tmp_path / "config.yaml"), "--dry-run"],
-    )
-
-    assert result.exit_code == 2
-    assert "--target" in _normalized(result.output)
-
-
-def test_soperator_destroy_inventory_includes_cluster_wide_workload_identities() -> None:
-    destroy, preserve = cli._soperator_destroy_inventory(
-        target_ref="cluster-a",
-        cluster_id="mk8scluster-a",
-        ownership="managed",
-        snapshot={
-            "namespaces": ["default", "soperator"],
-            "node_groups": {"workers-a": {}},
-            "cluster_namespace_resources": [
-                {
-                    "kind": "Deployment",
-                    "metadata": {"namespace": "default", "name": "customer-api"},
-                },
-                {
-                    "kind": "StatefulSet",
-                    "metadata": {"namespace": "soperator", "name": "slurm-controller"},
-                },
-            ],
-        },
-        infrastructure=sample_infrastructure_receipt(),
-    )
-
-    assert "kubernetes:default/Deployment/customer-api" in destroy
-    assert "kubernetes:soperator/StatefulSet/slurm-controller" in destroy
-    assert "namespace:default" in destroy
-    assert "mk8s-node-group:workers-a" in destroy
-    assert "sfs:filesystem-jail" in preserve
-
-
-def test_soperator_destroy_rejects_new_unapproved_csi_storage_bindings() -> None:
-    snapshot = {
-        "pvcs": [
-            {
-                "metadata": {"namespace": "soperator", "name": "jail-rootfs"},
-                "spec": {"volumeName": "pv-jail"},
-            }
-        ],
-        "pvs": [
-            {
-                "metadata": {"name": "pv-jail"},
-                "spec": {"csi": {"volumeHandle": "filesystem-jail"}},
-            }
-        ],
-    }
-    infrastructure = sample_infrastructure_receipt()
-
-    cli._assert_soperator_destroy_storage_bindings(
-        snapshot=snapshot,
-        infrastructure=infrastructure,
-    )
-    snapshot["pvcs"].append(
-        {
-            "metadata": {"namespace": "soperator", "name": "new-data"},
-            "spec": {"volumeName": "pv-new-data"},
-        }
-    )
-    snapshot["pvs"].append(
-        {
-            "metadata": {"name": "pv-new-data"},
-            "spec": {"csi": {"volumeHandle": "filesystem-new-data"}},
-        }
-    )
-
-    with pytest.raises(RuntimeError, match="bindings differ"):
-        cli._assert_soperator_destroy_storage_bindings(
-            snapshot=snapshot,
-            infrastructure=infrastructure,
-        )
-
-
-def test_soperator_destroy_resumes_after_config_write_before_receipt_checkpoint(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.reports_dir.mkdir(parents=True)
-    config_bytes = b"version: v1\n"
-    paths.config_path.write_bytes(config_bytes)
-    infrastructure = sample_infrastructure_receipt()
-    receipt = build_soperator_destroy_receipt(
-        target_ref="cluster-a",
-        ownership="managed",
-        project_id="project-a",
-        cluster_id="mk8scluster-a",
-        kubernetes_uid="uid-a",
-        destroy_inventory=("mk8s:mk8scluster-a",),
-        preserve_inventory=("sfs:filesystem-jail",),
-        protected_storage_sha256=infrastructure.receipt_sha256,
-        infrastructure_receipt=infrastructure.as_payload(),
-        config_sha256="sha256:" + "a" * 64,
-        post_cleanup_config_sha256=("sha256:" + hashlib.sha256(config_bytes).hexdigest()),
-    )
-    receipt = replace(
-        receipt,
-        checkpoints=(
-            "approved",
-            "storage_verified_before_cleanup",
-            "cleanup_complete",
-            "delete_requested",
-            "cluster_absent",
-            "storage_verified_after_delete",
-        ),
-        delete_operation_id="operation-a",
-        status="running",
-    )
-    receipt_path = paths.reports_dir / "soperator-destroy-cluster-a.json"
-    write_soperator_destroy_receipt(receipt_path, receipt)
-    payload = {
-        "client_info": {"nebius": {"project_id": "project-a"}},
-        "apps": {"charts": []},
-        "deploy": {"targets": []},
-    }
-    render_calls: list[Path] = []
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: copy.deepcopy(payload))
-    monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: paths)
-    monkeypatch.setattr(cli, "validate_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "_run_internal_render_command",
-        lambda path, **_kwargs: render_calls.append(path),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        ["soperator", "destroy", str(paths.config_path), "--target", "cluster-a"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert render_calls == [paths.config_path]
-    assert load_soperator_destroy_receipt(receipt_path).status == "complete"
-
-
-def test_soperator_destroy_blocks_an_active_non_destroy_operation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text("version: v1\n", encoding="utf-8")
-    payload = {
-        "client_info": {"nebius": {"project_id": "project-a"}},
-        "apps": {"charts": []},
-        "deploy": {"targets": []},
-    }
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: copy.deepcopy(payload))
-    monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: paths)
-    monkeypatch.setattr(
-        cli,
-        "read_soperator_operation_status",
-        lambda **_kwargs: SoperatorOperationStatus(
-            operation="upgrade",
-            status="safety-paused",
-            phase="wait-flux-graph",
-            receipt_path=paths.reports_dir / "upgrade.json",
-            resume_command="resume-upgrade",
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_soperator_command_target",
-        lambda *_args, **_kwargs: pytest.fail("target discovery must remain blocked"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "destroy",
-            str(paths.config_path),
-            "--target",
-            "cluster-a",
-            "--dry-run",
-        ],
+        ["destroy", str(tmp_path / "config.yaml"), "--dry-run"],
     )
 
     assert result.exit_code == 1
-    assert "blocked by an active foreign operation" in _normalized(result.output)
-
-
-def test_soperator_destroy_acquires_local_and_cluster_writer_fences() -> None:
-    source = inspect.getsource(cli.soperator_destroy_command)
-
-    assert "SoperatorOperationLocalLock(" in source
-    assert "SoperatorOperationLease(" in source
-    assert source.index("SoperatorOperationLease(") < source.rindex("run_soperator_destroy(")
-
-
-def test_soperator_destroy_config_cleanup_refuses_post_approval_edits(
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: changed\n", encoding="utf-8")
-
-    with pytest.raises(RuntimeError, match="refusing to overwrite"):
-        cli._commit_soperator_destroy_config_cleanup(
-            config_path=config_path,
-            source_payload={},
-            target_ref="cluster-a",
-            ownership="managed",
-            expected_config_sha256="sha256:" + "a" * 64,
-        )
-
-
-def test_soperator_destroy_config_cleanup_staging_failure_leaves_preimage_unchanged(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    expected_bytes = b"# preserve this operator comment\nversion: original\n"
-    config_path.write_bytes(expected_bytes)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_destroy_cleanup_payload",
-        lambda **_kwargs: {"version": "cleaned"},
-    )
-    monkeypatch.setattr(
-        cli,
-        "_render_soperator_upgrade_admission",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("render failed")),
-    )
-
-    with pytest.raises(RuntimeError, match="render failed"):
-        cli._commit_soperator_destroy_config_cleanup(
-            config_path=config_path,
-            source_payload={"version": "original"},
-            target_ref="cluster-a",
-            ownership="managed",
-            expected_config_sha256=("sha256:" + hashlib.sha256(expected_bytes).hexdigest()),
-            paths=SimpleNamespace(project_dir=tmp_path),
-        )
-
-    assert config_path.read_bytes() == expected_bytes
-
-
-@pytest.mark.parametrize(
-    ("returncode", "stdout", "stderr"),
-    (
-        (1, "", "SENTINEL_RAW_OUTPUT"),
-        (0, "SENTINEL_RAW_OUTPUT", ""),
-    ),
-)
-def test_soperator_discovery_helm_values_never_persist_raw_output(
-    monkeypatch: pytest.MonkeyPatch,
-    returncode: int,
-    stdout: str,
-    stderr: str,
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_process",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
-        ),
-    )
-
-    result = cli._collect_soperator_discovery_helm_values(
-        namespace="soperator",
-        release_name="soperator",
-        kube_context="ctx-a",
-    )
-
-    assert result["status"] == "not_collected"
-    assert "SENTINEL_RAW_OUTPUT" not in json.dumps(result, sort_keys=True)
-
-
-@pytest.mark.parametrize("collector", ("slurm", "accounting"))
-def test_soperator_discovery_command_collectors_never_persist_raw_output(
-    monkeypatch: pytest.MonkeyPatch,
-    collector: str,
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "_run_soperator_upgrade_login_command",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=1,
-            stdout="SENTINEL_CUSTOMER_STDOUT",
-            stderr="SENTINEL_CUSTOMER_STDERR",
-        ),
-    )
-
-    collect = getattr(cli, f"_collect_soperator_discovery_{collector}_snapshot")
-    result = collect(namespace="soperator", kube_context="ctx-a")
-    encoded = json.dumps(result, sort_keys=True)
-
-    assert "SENTINEL_CUSTOMER" not in encoded
-    assert all(entry["status"] == "not_collected" for entry in result["commands"].values())
+    assert "--target" in _normalized(result.output)
 
 
 def test_soperator_status_fails_on_live_collection_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: {"apps": {}})
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
     monkeypatch.setattr(
         cli,
         "_resolve_soperator_command_target",
@@ -5664,8 +5229,8 @@ def test_soperator_status_fails_on_live_collection_errors(
     monkeypatch.setattr(cli, "resolve_project_paths", lambda _path: paths)
     monkeypatch.setattr(cli, "read_soperator_operation_status", lambda **_kwargs: None)
     monkeypatch.setattr(
-        cli,
-        "collect_kubectl_soperator_snapshot",
+        soperator_status_collect,
+        "read_status_identity",
         lambda **_kwargs: {
             "cluster_identity": {"kubernetes_uid": "cluster-uid-a"},
             "collection_errors": ["helm list failed"],
@@ -5688,17 +5253,19 @@ def test_soperator_status_fails_on_live_collection_errors(
     )
 
     assert result.exit_code == 1
-    assert "complete live Kubernetes inventory" in _normalized(result.output)
+    assert "partial report" in _normalized(result.output)
+    assert "Overall health: Unknown" in _normalized(result.output)
 
 
 def test_soperator_status_projects_local_recovery_without_live_mutation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(cli, "read_local_deployment_record", lambda _: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     target = SimpleNamespace(target_ref="cluster-a")
-    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: {"apps": {}})
+    monkeypatch.setattr(cli, "_read_config_payload", lambda _path: {"apps": {}})
     monkeypatch.setattr(
         cli,
         "_resolve_soperator_command_target",
@@ -5714,12 +5281,9 @@ def test_soperator_status_projects_local_recovery_without_live_mutation(
             status="safety-paused",
             phase="wait-flux-graph",
             receipt_path=paths.reports_dir / "upgrade.json",
-            resume_command=(
-                "nebius-cxcli soperator upgrade config.yaml --target cluster-a "
-                "--to-release 4.1.7 --execute --approve"
-            ),
+            resume_command="",
             classification="safety-paused",
-            detail="Mutation is safety-paused.",
+            detail="Mutation is safety-paused. Resume with the original deploy options.",
         ),
     )
 
@@ -5741,71 +5305,8 @@ def test_soperator_status_projects_local_recovery_without_live_mutation(
     assert "Operation status: safety-paused" in output
     assert "Operation phase: wait-flux-graph" in output
     assert "Operation classification: safety-paused" in output
-
-
-def test_managed_soperator_destroy_applies_only_saved_selected_cluster_plan(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        cli,
-        "_generated_bundle_mk8s_module_index",
-        lambda _manifest: {"cluster_a": ("mk8s", "cluster-a")},
-    )
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
-    monkeypatch.setattr(
-        cli,
-        "terraform_init",
-        lambda infra_dir, **_kwargs: calls.append(("init", infra_dir)),
-    )
-
-    def _plan(infra_dir, **kwargs):
-        kwargs["plan_file"].write_bytes(b"selected destroy plan")
-        calls.append(("plan", kwargs))
-
-    monkeypatch.setattr(cli, "terraform_plan", _plan)
-    monkeypatch.setattr(
-        cli,
-        "terraform_show_json",
-        lambda *_args, **_kwargs: {
-            "resource_changes": [
-                {
-                    "address": "module.cluster_a.nebius_mk8s_v1_cluster.this",
-                    "change": {
-                        "actions": ["delete"],
-                        "before": {"id": "mk8scluster-a"},
-                    },
-                }
-            ]
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **kwargs: calls.append(("apply", kwargs["plan_file"])),
-    )
-
-    digest = cli._apply_managed_soperator_destroy_plan(
-        config={},
-        paths=paths,
-        manifest={},
-        target_ref="cluster-a",
-        expected_cluster_id="mk8scluster-a",
-    )
-
-    plan_call = next(item[1] for item in calls if item[0] == "plan")
-    assert plan_call["destroy"] is True
-    assert plan_call["targets"] == (
-        "module.cluster_a",
-        "nebius_iam_v1_group.cluster_a_soperator_observability",
-        "nebius_iam_v1_group_membership.cluster_a_soperator_observability",
-        "nebius_iam_v1_access_permit.cluster_a_soperator_observability",
-    )
-    assert calls[-1][0] == "apply"
-    assert digest.startswith("sha256:")
+    assert "original deploy options" in output
+    assert "Resume:" not in output
 
 
 def test_documented_soperator_commands_use_only_registered_options() -> None:
@@ -5885,7 +5386,7 @@ def test_protected_rootfs_job_lookup_uses_explicit_context(monkeypatch) -> None:
         commands.append(command)
         return SimpleNamespace(returncode=0, stdout=json.dumps(observed), stderr="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _run)
 
     uid, workload_sha256 = cli._ensure_protected_data_plane_job(
         manifest,
@@ -5900,7 +5401,8 @@ def test_protected_rootfs_job_lookup_uses_explicit_context(monkeypatch) -> None:
     assert len(commands) == 1
 
 
-def test_completed_protected_rootfs_job_is_never_recreated(monkeypatch) -> None:
+@pytest.mark.parametrize("allow_create", [False, True])
+def test_recorded_protected_rootfs_job_is_never_recreated(monkeypatch, allow_create) -> None:
     manifest = cli.bind_protected_job_authority(
         cli.rootfs_cleanup_job_manifest(
             namespace="soperator",
@@ -5918,14 +5420,14 @@ def test_completed_protected_rootfs_job_is_never_recreated(monkeypatch) -> None:
         commands.append(command)
         return SimpleNamespace(returncode=1, stdout="", stderr="NotFound")
 
-    monkeypatch.setattr(cli.subprocess, "run", _run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _run)
 
-    with pytest.raises(RuntimeError, match="completed protected rootfs Job.*is missing"):
+    with pytest.raises(RuntimeError, match="protected rootfs Job.*is missing"):
         cli._ensure_protected_data_plane_job(
             manifest,
             kube_context="customer-cluster",
             extra_env={},
-            allow_create=False,
+            allow_create=allow_create,
             expected_job_uid="job-uid-a",
             expected_workload_sha256=(
                 cli._protected_data_plane_job_identity(manifest).workload_sha256
@@ -5956,7 +5458,7 @@ def test_completed_protected_rootfs_job_requires_checkpoint_uid(monkeypatch) -> 
     )
     observed["metadata"]["uid"] = "replacement-job-uid"
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
@@ -6013,7 +5515,7 @@ def test_protected_rootfs_job_wait_fails_promptly_on_authenticated_failure(
         commands.append(command)
         return SimpleNamespace(returncode=0, stdout=json.dumps(observed), stderr="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _run)
     monkeypatch.setattr(
         cli.time,
         "sleep",
@@ -6058,7 +5560,7 @@ def test_protected_rootfs_job_wait_checks_identity_before_terminal_state(
     observed["metadata"]["uid"] = "replacement-job-uid"
     observed["status"] = {"conditions": [{"type": "Complete", "status": "True"}]}
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
@@ -6152,7 +5654,7 @@ def test_protected_rootfs_job_accepts_only_generated_selector_drift(monkeypatch)
             SimpleNamespace(returncode=0, stdout=json.dumps(persisted), stderr=""),
         )
     )
-    monkeypatch.setattr(cli.subprocess, "run", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(cli.kubernetes_process, "run", lambda *_args, **_kwargs: next(responses))
 
     assert cli._ensure_protected_data_plane_job(
         manifest,
@@ -6210,945 +5712,7 @@ def test_generic_create_rejects_soperator_before_provider_work(monkeypatch, tmp_
     )
 
     assert result.exit_code == 1
-    assert "soperator install" in _normalized(result.output)
-
-
-@pytest.mark.parametrize("unsupported_checks", [False, True])
-def test_soperator_install_uses_saved_plan_for_execution(
-    monkeypatch, tmp_path: Path, unsupported_checks: bool
-) -> None:
-    def preflight(*_args):
-        if unsupported_checks:
-            raise ValueError("unsupported upstream check execution contract")
-
-    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", preflight)
-    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
-    config_path = tmp_path / "tenant" / "project" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    paths = cli.resolve_project_paths(config_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    terraform_plan_path = paths.infra_dir / ".soperator-install.tfplan"
-    terraform_plan_path.write_bytes(b"plan")
-    receipt_path = paths.reports_dir / "soperator-install-plan.json"
-    plan = {
-        "operationId": "sha256:" + "b" * 64,
-        "approvalFingerprint": "sha256:" + "a" * 64,
-        "release": {"version": "4.1.7"},
-        "status": "planned",
-    }
-    config = {
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "mk8s",
-                    "enabled": True,
-                    "values": {},
-                }
-            ]
-        }
-    }
-    manifest: dict[str, Any] = {"deploy": {"targets": []}}
-    deployed: list[Path | None] = []
-    config["apps"]["charts"].append(
-        {"id": "grafana", "instance_id": "mk8s", "enabled": True, "values": {"replicas": 2}}
-    )
-    saved_config = json.dumps(config, sort_keys=True)
-    config_path.write_text(saved_config, encoding="utf-8")
-    monkeypatch.setattr(cli, "_create_project", lambda **_kwargs: pytest.fail("resume creation"))
-
-    monkeypatch.setattr(cli, "render_command", lambda **_kwargs: None)
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: (config, paths, manifest))
-    monkeypatch.setattr(cli, "_managed_soperator_install_target_ref", lambda *_args: "mk8s")
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_operation_id",
-        lambda **_kwargs: "sha256:" + "b" * 64,
-    )
-
-    class _Lease:
-        def assert_held(self) -> None:
-            return None
-
-    @contextmanager
-    def _lease(**_kwargs: Any):
-        assert not unsupported_checks, "checks preflight must precede execution authority"
-        yield _Lease()
-
-    monkeypatch.setattr(cli, "_soperator_install_execution_lease", _lease)
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_install_plan",
-        lambda **_kwargs: (terraform_plan_path, receipt_path, plan),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_deploy_generated_artifacts",
-        lambda *_args, **kwargs: (
-            deployed.append(kwargs.get("terraform_plan_file")) or cli.DeployRunSummary()
-        ),
-    )
-    monkeypatch.setattr(cli, "_print_deploy_command_footer", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_write_owner_only_json", lambda *_args, **_kwargs: None)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(config_path),
-            "--resume",
-            "--no-interactive",
-            "--execute",
-            "--approve",
-            "--approval-fingerprint",
-            plan["approvalFingerprint"],
-        ],
-    )
-
-    if unsupported_checks:
-        assert result.exit_code == 1
-        assert "unsupported upstream check execution contract" in _normalized(result.output)
-        assert not deployed
-        return
-    assert result.exit_code == 0, result.output
-    assert deployed == [terraform_plan_path]
-    assert json.dumps(config, sort_keys=True) == saved_config
-    assert config_path.read_text(encoding="utf-8") == saved_config
-
-
-def test_soperator_fresh_install_forwards_every_creation_option(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *_args: None)
-    config_path = tmp_path / "tenant-a" / "project-a" / "config.yaml"
-    paths = _paths(config_path.parent)
-    paths = replace(paths, config_path=config_path)
-    plan_path = paths.infra_dir / ".soperator-install.tfplan"
-    receipt_path = paths.reports_dir / "soperator-install-plan.json"
-    config = {
-        "apps": {"charts": [{"id": "soperator", "instance_id": "cluster-a", "enabled": True}]}
-    }
-    manifest: dict[str, object] = {"deploy": {"targets": []}}
-    values_path = tmp_path / "values.yaml"
-    values_path.write_text("sssd: {enabled: false}\n")
-    create_calls: list[dict[str, object]] = []
-
-    def _create(**kwargs: object) -> Path:
-        create_calls.append(dict(kwargs))
-        return config_path
-
-    @contextmanager
-    def _frozen_context(_release: object):
-        yield
-
-    class _Lease:
-        def assert_held(self) -> None:
-            return None
-
-    @contextmanager
-    def _lease(**_kwargs: object):
-        yield _Lease()
-
-    monkeypatch.setattr(cli, "_create_project", _create)
-
-    def _render(**_kwargs: object) -> None:
-        assert cli._RENDER_DEPLOY_HINT_SUPPRESSED.get()
-
-    monkeypatch.setattr(cli, "render_command", _render)
-    monkeypatch.setattr(
-        cli,
-        "freeze_soperator_release",
-        lambda _selector, **_kwargs: SimpleNamespace(snapshot=SimpleNamespace(release="4.1.7")),
-    )
-    monkeypatch.setattr(cli, "use_frozen_soperator_release", _frozen_context)
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: (config, paths, manifest))
-    monkeypatch.setattr(cli, "_managed_soperator_install_target_ref", lambda *_args: "cluster-a")
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_operation_id",
-        lambda **_kwargs: "sha256:" + "b" * 64,
-    )
-    monkeypatch.setattr(cli, "_soperator_install_execution_lease", _lease)
-    monkeypatch.setattr(
-        cli,
-        "_plan_soperator_install",
-        lambda **_kwargs: (
-            plan_path,
-            receipt_path,
-            {
-                "approvalFingerprint": "sha256:" + "a" * 64,
-                "release": {"version": "4.1.7"},
-            },
-        ),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(tmp_path),
-            "--client-name",
-            "client-a",
-            "--tenant-id",
-            "tenant-a",
-            "--project-id",
-            "project-a",
-            "--region-id",
-            "eu-north1",
-            "--email",
-            "ops@example.invalid",
-            "--profile",
-            "mixed",
-            "--release",
-            "4.1.7",
-            "--network-id",
-            "network-a",
-            "--network-id",
-            "network-b",
-            "--subnet-id",
-            "subnet-a",
-            "--network-ref",
-            "network-ref-a",
-            "--subnet-ref",
-            "subnet-ref-a",
-            "--values-file",
-            str(values_path),
-            "--force",
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert create_calls == [
-        {
-            "target_path": tmp_path,
-            "client_name": "client-a",
-            "tenant_id": "tenant-a",
-            "project_id": "project-a",
-            "region_id": "eu-north1",
-            "email": "ops@example.invalid",
-            "infra_components_opt": ["mk8s", "sfs"],
-            "apps_components_opt": ["soperator"],
-            "soperator_release": SimpleNamespace(release="4.1.7"),
-            "soperator_profile": "nebius-mixed-v1",
-            "soperator_values": {"sssd": {"enabled": False}},
-            "network_ids_opt": ["network-a", "network-b"],
-            "subnet_ids_opt": ["subnet-a"],
-            "network_refs_opt": ["network-ref-a"],
-            "subnet_refs_opt": ["subnet-ref-a"],
-            "validate_sources": True,
-            "validate_config": True,
-            "no_interactive": True,
-            "force": True,
-        }
-    ]
-
-
-def test_soperator_install_replan_replaces_saved_plan_only_in_resume_dry_run(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(cli, "_preflight_soperator_install_checks", lambda *_args: None)
-    config_path = tmp_path / "tenant" / "project" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    paths = cli.resolve_project_paths(config_path)
-    config = {
-        "apps": {"charts": [{"id": "soperator", "instance_id": "cluster-a", "enabled": True}]}
-    }
-    manifest: dict[str, object] = {"deploy": {"targets": []}}
-    events: list[str] = []
-    saved_receipt = {"status": "planned", "planGeneration": "sha256:" + "d" * 64}
-
-    class _Lease:
-        def assert_held(self) -> None:
-            return None
-
-    @contextmanager
-    def _lease(**_kwargs: object):
-        events.append("lease")
-        yield _Lease()
-
-    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: (config, paths, manifest))
-    monkeypatch.setattr(cli, "_managed_soperator_install_target_ref", lambda *_args: "cluster-a")
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_operation_id",
-        lambda **_kwargs: "sha256:" + "b" * 64,
-    )
-    monkeypatch.setattr(cli, "_soperator_install_execution_lease", _lease)
-
-    def _validate(**_kwargs: object):
-        events.append("validate-before-lease")
-        return (
-            paths.infra_dir / ".soperator-install.tfplan",
-            paths.reports_dir / "soperator-install-plan.json",
-            saved_receipt,
-        )
-
-    def _replan(**kwargs: object):
-        events.append("replan")
-        assert kwargs["expected_receipt"] == saved_receipt
-        return (
-            paths.infra_dir / ".soperator-install.tfplan",
-            paths.reports_dir / "soperator-install-plan.json",
-            {
-                "approvalFingerprint": "sha256:" + "a" * 64,
-                "release": {"version": "4.1.7"},
-            },
-        )
-
-    monkeypatch.setattr(cli, "_validate_soperator_install_replan_receipt", _validate)
-    monkeypatch.setattr(cli, "_replan_soperator_install", _replan)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(config_path),
-            "--resume",
-            "--replan",
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert events == ["validate-before-lease", "lease", "replan"]
-
-
-def test_soperator_install_replan_rejects_non_resume_mode_before_project_work(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "_create_project",
-        lambda **_kwargs: pytest.fail("invalid --replan must fail before project work"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(tmp_path),
-            "--profile",
-            "mixed",
-            "--release",
-            "4.1.7",
-            "--replan",
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "--replan is valid only with --resume --dry-run" in _normalized(result.output)
-    from nebius_cxcli.soperator_install_progress import install_progress_active
-
-    assert not install_progress_active()
-
-
-def test_soperator_install_replan_accepts_only_an_exact_planned_receipt(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    authority = _install_plan_authority()
-    receipt = _install_replan_receipt(authority)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_authority",
-        lambda **_kwargs: copy.deepcopy(authority),
-    )
-    cli._write_owner_only_json(
-        paths.reports_dir / "soperator-install-plan.json",
-        receipt,
-    )
-
-    _plan_path, _receipt_path, loaded = cli._validate_soperator_install_replan_receipt(
-        config={},
-        paths=paths,
-        manifest={},
-        target_ref="cluster-a",
-    )
-
-    assert loaded == receipt
-
-
-@pytest.mark.parametrize(
-    ("status", "marker"),
-    (
-        pytest.param("planned", "startedAt", id="started"),
-        pytest.param("planned", "infraCompleteAt", id="infra-complete"),
-        pytest.param("planned", "completedAt", id="completed-marker"),
-        pytest.param("planned", "failedAt", id="failed-marker"),
-        pytest.param("planned", "failureType", id="failure-type"),
-        pytest.param("executing", None, id="executing"),
-        pytest.param("failed", None, id="failed"),
-        pytest.param("complete", None, id="complete"),
-    ),
-)
-def test_soperator_install_replan_rejects_execution_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    status: str,
-    marker: str | None,
-) -> None:
-    paths = _paths(tmp_path)
-    authority = _install_plan_authority()
-    receipt = _install_replan_receipt(authority)
-    receipt["status"] = status
-    if marker is not None:
-        receipt[marker] = "evidence"
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_authority",
-        lambda **_kwargs: copy.deepcopy(authority),
-    )
-    cli._write_owner_only_json(
-        paths.reports_dir / "soperator-install-plan.json",
-        receipt,
-    )
-
-    with pytest.raises(RuntimeError, match="never-executed saved plan"):
-        cli._validate_soperator_install_replan_receipt(
-            config={},
-            paths=paths,
-            manifest={},
-            target_ref="cluster-a",
-        )
-
-
-def test_soperator_install_replan_rejects_missing_or_corrupt_receipt(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_authority",
-        lambda **_kwargs: _install_plan_authority(),
-    )
-
-    with pytest.raises(RuntimeError, match="readable owner-only"):
-        cli._validate_soperator_install_replan_receipt(
-            config={}, paths=paths, manifest={}, target_ref="cluster-a"
-        )
-
-    cli._write_owner_only_json(
-        paths.reports_dir / "soperator-install-plan.json",
-        {"schema": "wrong", "status": "planned"},
-    )
-    with pytest.raises(RuntimeError, match="receipt is invalid"):
-        cli._validate_soperator_install_replan_receipt(
-            config={}, paths=paths, manifest={}, target_ref="cluster-a"
-        )
-
-
-def test_soperator_install_replan_rejects_saved_authority_drift(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    authority = _install_plan_authority()
-    receipt = _install_replan_receipt(authority)
-    drifted = copy.deepcopy(authority)
-    drifted["target"]["ref"] = "cluster-b"
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_authority",
-        lambda **_kwargs: drifted,
-    )
-    cli._write_owner_only_json(
-        paths.reports_dir / "soperator-install-plan.json",
-        receipt,
-    )
-
-    with pytest.raises(RuntimeError, match="authority no longer matches"):
-        cli._validate_soperator_install_replan_receipt(
-            config={}, paths=paths, manifest={}, target_ref="cluster-a"
-        )
-
-
-def test_soperator_install_plan_generations_always_change_the_fingerprint(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    plan_path = paths.infra_dir / ".soperator-install.tfplan"
-    plan_path.write_bytes(b"same-plan")
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_authority",
-        lambda **_kwargs: _install_plan_authority(),
-    )
-
-    first = cli._soperator_install_plan_material(
-        config_path=paths.config_path,
-        paths=paths,
-        manifest={},
-        terraform_plan_path=plan_path,
-        target_ref="cluster-a",
-    )
-    second = cli._soperator_install_plan_material(
-        config_path=paths.config_path,
-        paths=paths,
-        manifest={},
-        terraform_plan_path=plan_path,
-        target_ref="cluster-a",
-    )
-
-    assert first["planGeneration"] != second["planGeneration"]
-    assert first["approvalFingerprint"] != second["approvalFingerprint"]
-
-
-def test_soperator_install_replan_publishes_validated_replacement(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    terraform_plan_path, receipt_path = cli._soperator_install_plan_paths(paths)
-    terraform_plan_path.write_bytes(b"old-plan")
-    terraform_plan_path.chmod(0o600)
-    old_receipt = {"approvalFingerprint": "sha256:" + "a" * 64}
-    cli._write_owner_only_json(receipt_path, old_receipt)
-    new_receipt = {"approvalFingerprint": "sha256:" + "b" * 64}
-    monkeypatch.setattr(
-        cli,
-        "_validate_soperator_install_replan_receipt",
-        lambda **_kwargs: (terraform_plan_path, receipt_path, old_receipt),
-    )
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
-
-    def _plan(_infra_dir: Path, **kwargs: object) -> None:
-        candidate = kwargs["plan_file"]
-        assert isinstance(candidate, Path)
-        candidate.write_bytes(b"new-plan")
-
-    monkeypatch.setattr(cli, "terraform_plan", _plan)
-    monkeypatch.setattr(cli, "terraform_show_json", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "_validate_soperator_install_terraform_plan_scope",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_material",
-        lambda **_kwargs: new_receipt,
-    )
-
-    returned_plan, returned_receipt, receipt = cli._replan_soperator_install(
-        config={},
-        paths=paths,
-        manifest={},
-        target_ref="cluster-a",
-        expected_receipt=old_receipt,
-    )
-
-    assert returned_plan == terraform_plan_path
-    assert returned_receipt == receipt_path
-    assert receipt == new_receipt
-    assert terraform_plan_path.read_bytes() == b"new-plan"
-    assert cli.read_owner_only_json(receipt_path, label="test receipt") == new_receipt
-    assert not any(path.name.endswith(".replan") for path in paths.infra_dir.iterdir())
-
-
-@pytest.mark.parametrize("failure_stage", ("plan", "show", "scope", "receipt"))
-def test_soperator_install_replan_preserves_saved_pair_on_validation_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    failure_stage: str,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    terraform_plan_path, receipt_path = cli._soperator_install_plan_paths(paths)
-    terraform_plan_path.write_bytes(b"old-plan")
-    terraform_plan_path.chmod(0o600)
-    old_receipt = {"approvalFingerprint": "sha256:" + "a" * 64}
-    cli._write_owner_only_json(receipt_path, old_receipt)
-    old_receipt_bytes = receipt_path.read_bytes()
-    monkeypatch.setattr(
-        cli,
-        "_validate_soperator_install_replan_receipt",
-        lambda **_kwargs: (terraform_plan_path, receipt_path, old_receipt),
-    )
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
-
-    def _plan(_infra_dir: Path, **kwargs: object) -> None:
-        candidate = kwargs["plan_file"]
-        assert isinstance(candidate, Path)
-        candidate.write_bytes(b"new-plan")
-        if failure_stage == "plan":
-            raise RuntimeError("plan failed")
-
-    def _show(*_args: object, **_kwargs: object) -> dict[str, object]:
-        if failure_stage == "show":
-            raise RuntimeError("show failed")
-        return {}
-
-    def _scope(*_args: object, **_kwargs: object) -> None:
-        if failure_stage == "scope":
-            raise RuntimeError("scope failed")
-
-    def _receipt(**_kwargs: object) -> dict[str, str]:
-        if failure_stage == "receipt":
-            raise RuntimeError("receipt failed")
-        return {"approvalFingerprint": "sha256:" + "b" * 64}
-
-    monkeypatch.setattr(cli, "terraform_plan", _plan)
-    monkeypatch.setattr(cli, "terraform_show_json", _show)
-    monkeypatch.setattr(cli, "_validate_soperator_install_terraform_plan_scope", _scope)
-    monkeypatch.setattr(cli, "_soperator_install_plan_material", _receipt)
-
-    with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
-        cli._replan_soperator_install(
-            config={},
-            paths=paths,
-            manifest={},
-            target_ref="cluster-a",
-            expected_receipt=old_receipt,
-        )
-
-    assert terraform_plan_path.read_bytes() == b"old-plan"
-    assert receipt_path.read_bytes() == old_receipt_bytes
-    assert not any(path.name.endswith(".replan") for path in paths.infra_dir.iterdir())
-
-
-def test_soperator_install_replan_restores_saved_plan_when_receipt_publish_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    terraform_plan_path, receipt_path = cli._soperator_install_plan_paths(paths)
-    terraform_plan_path.write_bytes(b"old-plan")
-    terraform_plan_path.chmod(0o600)
-    old_receipt = {"approvalFingerprint": "sha256:" + "a" * 64}
-    cli._write_owner_only_json(receipt_path, old_receipt)
-    old_receipt_bytes = receipt_path.read_bytes()
-    monkeypatch.setattr(
-        cli,
-        "_validate_soperator_install_replan_receipt",
-        lambda **_kwargs: (terraform_plan_path, receipt_path, old_receipt),
-    )
-    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
-    monkeypatch.setattr(
-        cli,
-        "terraform_plan",
-        lambda _infra_dir, **kwargs: kwargs["plan_file"].write_bytes(b"new-plan"),
-    )
-    monkeypatch.setattr(cli, "terraform_show_json", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        cli,
-        "_validate_soperator_install_terraform_plan_scope",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        cli,
-        "_soperator_install_plan_material",
-        lambda **_kwargs: {"approvalFingerprint": "sha256:" + "b" * 64},
-    )
-    real_write_owner_only_json = cli._write_owner_only_json
-
-    def _write_receipt_then_fail(path: Path, payload: Mapping[str, Any]) -> None:
-        real_write_owner_only_json(path, payload)
-        if path == receipt_path:
-            raise RuntimeError("receipt publish failed")
-
-    monkeypatch.setattr(cli, "_write_owner_only_json", _write_receipt_then_fail)
-
-    with pytest.raises(RuntimeError, match="receipt publish failed"):
-        cli._replan_soperator_install(
-            config={},
-            paths=paths,
-            manifest={},
-            target_ref="cluster-a",
-            expected_receipt=old_receipt,
-        )
-
-    assert terraform_plan_path.read_bytes() == b"old-plan"
-    assert receipt_path.read_bytes() == old_receipt_bytes
-
-
-def test_soperator_install_replan_retains_recovery_copies_when_rollback_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    paths = _paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    terraform_plan_path, receipt_path = cli._soperator_install_plan_paths(paths)
-    terraform_plan_path.write_bytes(b"old-plan")
-    terraform_plan_path.chmod(0o600)
-    candidate_plan_path = paths.infra_dir / ".candidate.tfplan"
-    candidate_plan_path.write_bytes(b"new-plan")
-    candidate_plan_path.chmod(0o600)
-    old_receipt = {"approvalFingerprint": "sha256:" + "a" * 64}
-    new_receipt = {"approvalFingerprint": "sha256:" + "b" * 64}
-    cli._write_owner_only_json(receipt_path, old_receipt)
-
-    real_write_owner_only_json = cli._write_owner_only_json
-
-    def _write_receipt_then_fail(path: Path, payload: Mapping[str, Any]) -> None:
-        real_write_owner_only_json(path, payload)
-        if path == receipt_path:
-            raise RuntimeError("receipt publish failed")
-
-    real_replace = cli.os.replace
-    canonical_plan_replacements = 0
-
-    def _replace(src: object, dst: object, *args: object, **kwargs: object) -> None:
-        nonlocal canonical_plan_replacements
-        if not args and not kwargs and Path(dst) == terraform_plan_path:
-            canonical_plan_replacements += 1
-            if canonical_plan_replacements == 2:
-                raise OSError("plan restore blocked")
-        real_replace(src, dst, *args, **kwargs)
-
-    monkeypatch.setattr(cli, "_write_owner_only_json", _write_receipt_then_fail)
-    monkeypatch.setattr(cli.os, "replace", _replace)
-
-    with pytest.raises(RuntimeError, match="rollback was incomplete") as exc_info:
-        cli._publish_soperator_install_replan(
-            candidate_plan_path=candidate_plan_path,
-            terraform_plan_path=terraform_plan_path,
-            receipt_path=receipt_path,
-            previous_receipt=old_receipt,
-            receipt=new_receipt,
-        )
-
-    plan_backups = [path for path in paths.infra_dir.iterdir() if path.name.endswith(".backup")]
-    receipt_backups = [
-        path for path in paths.reports_dir.iterdir() if path.name.endswith(".backup")
-    ]
-    assert not terraform_plan_path.exists()
-    assert len(plan_backups) == 1
-    assert plan_backups[0].read_bytes() == b"old-plan"
-    assert len(receipt_backups) == 1
-    assert cli.read_owner_only_json(receipt_backups[0], label="test receipt backup") == old_receipt
-    assert str(plan_backups[0]) in str(exc_info.value)
-    assert str(receipt_backups[0]) in str(exc_info.value)
-
-
-def test_soperator_install_rejects_one_step_automated_apply_before_project_work(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "_create_project",
-        lambda **_kwargs: pytest.fail("must require reviewed plan before project work"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(tmp_path),
-            "--profile",
-            "mixed",
-            "--no-interactive",
-            "--execute",
-            "--approve",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "--resume" in _normalized(result.output)
-    assert "--approval-fingerprint" in _normalized(result.output)
-
-
-def test_soperator_install_noninteractive_requires_release_before_resolver_or_project_work(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "resolve_soperator_release",
-        lambda *_args, **_kwargs: pytest.fail("missing release must fail before resolution"),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_create_project",
-        lambda **_kwargs: pytest.fail("missing release must fail before project work"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(tmp_path),
-            "--profile",
-            "mixed",
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "requires --release latest or exact X.Y.Z" in _normalized(result.output)
-
-
-def test_soperator_install_resume_rejects_release_override_before_plan_load(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "tenant" / "project" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_install_plan",
-        lambda **_kwargs: pytest.fail("conflicting release must fail before plan load"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(config_path),
-            "--resume",
-            "--release",
-            "4.1.7",
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "reuses its frozen release" in _normalized(result.output)
-
-
-@pytest.mark.parametrize(
-    "fresh_args",
-    (
-        pytest.param(["--client-name", "other"], id="client-name"),
-        pytest.param(["--tenant-id", "tenant-b"], id="tenant-id"),
-        pytest.param(["--project-id", "project-b"], id="project-id"),
-        pytest.param(["--region-id", "eu-west1"], id="region-id"),
-        pytest.param(["--email", "operator@example.invalid"], id="email"),
-        pytest.param(["--profile", "gpu"], id="profile"),
-        pytest.param(["--network-id", "network-b"], id="network-id"),
-        pytest.param(["--subnet-id", "subnet-b"], id="subnet-id"),
-        pytest.param(["--network-ref", "network-b"], id="network-ref"),
-        pytest.param(["--subnet-ref", "subnet-b"], id="subnet-ref"),
-        pytest.param(["--force"], id="force"),
-    ),
-)
-def test_soperator_install_resume_rejects_fresh_only_options_before_plan_load(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    fresh_args: list[str],
-) -> None:
-    config_path = tmp_path / "tenant" / "project" / "config.yaml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    monkeypatch.setattr(
-        cli,
-        "_load_soperator_install_plan",
-        lambda **_kwargs: pytest.fail("fresh-only options must fail before plan load"),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "soperator",
-            "install",
-            str(config_path),
-            "--resume",
-            *fresh_args,
-            "--no-interactive",
-            "--dry-run",
-        ],
-    )
-
-    output = _normalized(result.output)
-    assert result.exit_code == 1
-    assert "does not accept fresh-install options" in output
-    assert fresh_args[0] in output
-
-
-def test_soperator_install_plan_scope_accepts_only_mk8s_and_sfs_modules(monkeypatch) -> None:
-    monkeypatch.setattr(
-        cli,
-        "rendered_module_sources",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(module_name="cluster", component_id="mk8s"),
-            SimpleNamespace(module_name="storage", component_id="sfs"),
-        ),
-    )
-    monkeypatch.setattr(cli, "resolve_component_sources_profile", lambda: "portable")
-
-    cli._validate_soperator_install_terraform_plan_scope(
-        {},
-        {
-            "resource_changes": [
-                {
-                    "address": "module.cluster.nebius_mk8s_v1_cluster.this",
-                    "change": {"actions": ["create"]},
-                },
-                {
-                    "address": "module.storage.nebius_compute_v1_filesystem.jail",
-                    "change": {"actions": ["create"]},
-                },
-            ]
-        },
-    )
-
-
-def test_soperator_install_plan_scope_rejects_unrelated_or_destructive_changes(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        cli,
-        "rendered_module_sources",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(module_name="cluster", component_id="mk8s"),
-            SimpleNamespace(module_name="storage", component_id="sfs"),
-            SimpleNamespace(module_name="database", component_id="managed-postgresql"),
-        ),
-    )
-    monkeypatch.setattr(cli, "resolve_component_sources_profile", lambda: "portable")
-
-    with pytest.raises(RuntimeError, match="unrelated infrastructure"):
-        cli._validate_soperator_install_terraform_plan_scope({}, {"resource_changes": []})
-
-    monkeypatch.setattr(
-        cli,
-        "rendered_module_sources",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(module_name="cluster", component_id="mk8s"),
-            SimpleNamespace(module_name="storage", component_id="sfs"),
-        ),
-    )
-    with pytest.raises(RuntimeError, match="delete or replacement"):
-        cli._validate_soperator_install_terraform_plan_scope(
-            {},
-            {
-                "resource_changes": [
-                    {
-                        "address": "module.cluster.nebius_mk8s_v1_cluster.this",
-                        "change": {"actions": ["delete", "create"]},
-                    }
-                ]
-            },
-        )
+    assert "soperator create" in _normalized(result.output)
 
 
 @pytest.mark.parametrize(
@@ -7363,7 +5927,7 @@ def test_full_stack_child_translates_frozen_zero_to_non_override(
 
 
 def test_full_stack_parent_forwards_fenced_authority_to_release_child() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
 
     assert re.search(
         r"def _assert_campaign_authority\(\) -> SoperatorLeaseAuthority:.*?"
@@ -7376,7 +5940,7 @@ def test_full_stack_parent_forwards_fenced_authority_to_release_child() -> None:
 
 
 def test_full_stack_surfaces_post_plan_authority_and_maintenance_progress() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
 
     plan = source.index("_print_upgrade_plan_lines(")
     authority = source.index('"operation-authority"', plan)
@@ -7398,8 +5962,8 @@ def test_full_stack_surfaces_post_plan_authority_and_maintenance_progress() -> N
 
 
 def test_full_stack_parent_forwards_campaign_spool_checkpoint_to_release_child() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
-    common_source = inspect.getsource(cli._run_common_soperator_release_upgrade)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
+    common_source = function_source(cli._run_common_soperator_release_upgrade)
 
     assert re.search(
         r"campaign_controller_spool_store = CampaignControllerSpoolMigrationStore\(.*?"
@@ -7413,8 +5977,8 @@ def test_full_stack_parent_forwards_campaign_spool_checkpoint_to_release_child()
 
 
 def test_full_stack_final_readiness_refreshes_sources_and_reproves_release_graph() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
-    boundary_source = inspect.getsource(cli.run_final_runtime_validation_boundary)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
+    boundary_source = function_source(cli.run_final_runtime_validation_boundary)
 
     assert re.search(
         r"def _final_readiness\(\).*?"
@@ -7441,12 +6005,12 @@ def test_full_stack_final_readiness_refreshes_sources_and_reproves_release_graph
 
 
 def test_full_stack_derives_provider_authority_and_revalidates_each_frozen_hop() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
-    compatibility_source = inspect.getsource(cli.assert_frozen_compatibility_row_supported)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
+    compatibility_source = function_source(cli.assert_frozen_compatibility_row_supported)
 
     assert "--allow-provider-api-upgrade" not in source
     assert re.search(
-        r"provider_api_authorized=bool\(execute and approve and is_onboarded\)",
+        r"provider_api_authorized=bool\(\s*\(execute or assert_parent_fence is not None\) and is_onboarded\s*\)",
         source,
     )
     assert re.search(
@@ -7462,7 +6026,7 @@ def test_full_stack_derives_provider_authority_and_revalidates_each_frozen_hop()
 
 
 def test_full_stack_recovery_reuses_frozen_resolved_max_surge_count() -> None:
-    source = inspect.getsource(cli.soperator_upgrade_command)
+    source = function_source(cli._run_soperator_upgrade_campaign).replace("cli.", "")
 
     assert re.search(
         r"intent = recovery_intent.*?"
@@ -7482,14 +6046,34 @@ def test_full_stack_recovery_reuses_frozen_resolved_max_surge_count() -> None:
     )
 
 
+@pytest.mark.parametrize("lose_authority", [False, True])
+@pytest.mark.parametrize("reuse_candidate", [False, True])
 def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    lose_authority: bool,
+    reuse_candidate: bool,
 ) -> None:
+    # This fixture owns release preparation; graph admission has dedicated tests.
+    monkeypatch.setattr("nebius_cxcli.soperator_graph_transition.preflight_transition", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_read_soperator_slurm_cluster_journal", lambda **kw: None)
     monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
     monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
+    completion_events = []
+    lease_held = True
+    monkeypatch.setattr(
+        cli,
+        "accept_ordinary_app_baseline",
+        lambda *_args, **_kwargs: completion_events.append("baseline"),
+    )
+
+    def prepare(*args, **kwargs):
+        nonlocal lease_held
+        completion_events.append("prepare")
+        lease_held = not lose_authority
+
+    monkeypatch.setattr("nebius_cxcli.operation_completion.prepare_completion", prepare)
     paths = _paths(tmp_path)
     source_payload = {
         "client_info": {"nebius": {"project_id": "project-a"}},
@@ -7560,21 +6144,19 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **_kwargs: "uid")
     monkeypatch.setattr(cli, "load_active_soperator_release_intent", lambda **_kwargs: None)
     freeze_calls = []
+    frozen_snapshot = replace(
+        sample_snapshot(),
+        registry="oci://registry.example.invalid/soperator",
+        capability_sha256="sha256:" + "2" * 64,
+        snapshot_sha256="sha256:" + "3" * 64,
+        populate_jail_image="registry.example.invalid/jail@sha256:" + "4" * 64,
+    )
     monkeypatch.setattr(
         cli,
         "freeze_soperator_release",
         lambda *_args, **_kwargs: (
             freeze_calls.append(_kwargs),
-            SimpleNamespace(
-                snapshot=SimpleNamespace(
-                    release="4.1.7",
-                    capability_contract="upstream-flux-v1",
-                    capability_sha256="sha256:" + "2" * 64,
-                    snapshot_sha256="sha256:" + "3" * 64,
-                    source_manifest_sha256="sha256:" + "5" * 64,
-                    populate_jail_image=("registry.example.invalid/jail@sha256:" + "4" * 64),
-                )
-            ),
+            SimpleNamespace(snapshot=frozen_snapshot),
         )[1],
     )
     monkeypatch.setattr(
@@ -7595,7 +6177,8 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
 
     class _Lease:
         def assert_held(self) -> None:
-            pass
+            if not lease_held:
+                raise RuntimeError("authority lost during completion preparation")
 
     @contextmanager
     def _cluster_lease(**_kwargs: Any):
@@ -7658,6 +6241,7 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
             umbrella_render_sha256="sha256:" + "6" * 64,
         )
 
+    monkeypatch.setattr(cli, "load_soperator_adapter_documents", lambda *_a: [])
     monkeypatch.setattr(
         cli,
         "verify_soperator_release_artifacts",
@@ -7693,30 +6277,72 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
         "_apply_rendered_flux_with_soperator_job_policy",
         lambda *_args, **kwargs: (
             applies.append(kwargs),
-            SimpleNamespace(complete=lambda: None),
+            SimpleNamespace(complete=lambda: completion_events.append("seal")),
         )[1],
     )
 
-    cli._run_common_soperator_release_upgrade(
-        config_path=paths.config_path,
-        source_payload=source_payload,
-        target=target,
-        ownership="managed",
-        target_selector="4.1.7",
-        target_snapshot_sha256="sha256:" + "3" * 64,
-        dry_run=False,
-        job_policy="wait-to-finish",
-        cancel_job_ids=(),
-        requeue_job_ids=(),
-        job_wait_timeout="0s",
-        job_refresh_interval="30s",
+    from nebius_cxcli.soperator_jail_protection import (
+        freeze_jail_protection,
+        protect_jail_directories,
     )
+
+    protection = freeze_jail_protection(
+        protect_jail_directories(
+            apply_jail_persistent_mount_values({}, layout="managed", target_ref="cluster-a"),
+            paths=["/workspace"],
+            layout="managed",
+            target_ref="cluster-a",
+        )
+    )
+
+    def run():
+        arguments = dict(
+            config_path=paths.config_path,
+            source_payload=source_payload,
+            target=target,
+            ownership="managed",
+            target_selector="4.1.7",
+            target_snapshot_sha256="sha256:" + "3" * 64,
+            jail_protection=protection,
+            supervise=False,
+            job_policy="wait-to-finish",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout="0s",
+            job_refresh_interval="30s",
+        )
+        prepared = (
+            cli._run_common_soperator_release_upgrade(
+                **arguments, dry_run=True, admission_preview=True
+            )
+            if reuse_candidate
+            else None
+        )
+        return cli._run_common_soperator_release_upgrade(
+            **arguments, dry_run=False, prepared=prepared
+        )
+
+    if lose_authority:
+        with pytest.raises(RuntimeError, match="authority lost during completion preparation"):
+            run()
+        assert completion_events == ["prepare"]
+        assert intents == ["begin"]
+        return
+    run()
+    assert completion_events == ["prepare", "seal", "baseline"]
 
     plan_output = capsys.readouterr().out
     assert "authoritative telemetry credential" not in plan_output
     assert "OBSERVABILITY static key" not in plan_output
     assert "soperator status --verify-observability" in plan_output
     assert "version: 4.1.7" in writes[0]
+    assert yaml.safe_load(writes[0])["apps"]["charts"][0]["repo"] == frozen_snapshot.chart_oci_url(
+        "umbrella"
+    )
+    assert (
+        freeze_jail_protection(yaml.safe_load(writes[0])["apps"]["charts"][0]["values"])
+        == protection
+    )
     assert applies[0]["strategy"].strategy.value == "in-place"
     assert applies[0]["infrastructure_plan_sha256"].startswith("sha256:")
     assert applies[0]["source_capability_sha256"] == "sha256:" + "1" * 64
@@ -7725,16 +6351,31 @@ def test_common_in_place_upgrade_writes_target_then_uses_exact_profile(
     assert intents == ["begin", "complete"]
     assert source_payload == original_source_payload
     assert verified_values == [rendered_values]
+    assert len(freeze_calls) == 1
     assert freeze_calls[0]["snapshot_sha256"] == "sha256:" + "3" * 64
 
 
+@pytest.mark.parametrize("completed_publication", [False, True])
 def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_latest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    completed_publication: bool,
 ) -> None:
+    monkeypatch.setattr(cli, "_read_soperator_slurm_cluster_journal", lambda **kw: None)
+    from nebius_cxcli import operation_completion
+
+    monkeypatch.setattr(operation_completion, "prepare_completion", lambda *a, **kw: None)
+    publication_checks = []
+
+    def verify_publication(**kwargs):
+        publication_checks.append(kwargs)
+        return completed_publication
+
+    monkeypatch.setattr(cli, "completed_render_generation_matches", verify_publication)
     monkeypatch.setattr(cli, "_preflight_soperator_upgrade_checks", lambda *_args: None)
     monkeypatch.setattr(cli, "_preflight_soperator_checks", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "accept_ordinary_app_baseline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("nebius_cxcli.soperator_graph_transition.preflight_transition", lambda *_args, **_kwargs: None)
     paths = _paths(tmp_path)
     paths.config_path.write_text("version: v1\n", encoding="utf-8")
     _write_rendered_soperator_values(
@@ -7766,14 +6407,14 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
     target = cli._parse_soperator_upgrade_target("cluster-a")
     generated_config = SimpleNamespace()
     manifest: dict[str, Any] = {"deploy": {"targets": []}}
-    frozen_snapshot = SimpleNamespace(
-        release="4.1.7",
-        capability_contract="upstream-flux-v1",
+    frozen_snapshot = replace(
+        sample_snapshot(),
+        registry="oci://registry.example.invalid/soperator",
         capability_sha256="sha256:" + "2" * 64,
         snapshot_sha256="sha256:" + "3" * 64,
-        source_manifest_sha256="sha256:" + "5" * 64,
         populate_jail_image="registry.example.invalid/jail@sha256:" + "4" * 64,
     )
+    source_payload["apps"]["charts"][0]["repo"] = frozen_snapshot.chart_oci_url("umbrella")
     intent = SimpleNamespace(
         source_release="4.1.6",
         source_contract="upstream-flux-v1",
@@ -7862,7 +6503,7 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
             admitted_config=source_payload,
             staged_paths=paths,
             rendered_flux_sha256="sha256:" + "7" * 64,
-            project_generation_sha256="sha256:" + "8" * 64,
+            project_generation_sha256="sha256:" + ("a" if completed_publication else "8") * 64,
             project_generation_plan=SimpleNamespace(
                 writes={paths.config_path: cli.render_updated_source_payload(source_payload)},
                 removals=(),
@@ -7894,6 +6535,7 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
         chart_package_sha256=(),
         umbrella_render_sha256="sha256:" + "6" * 64,
     )
+    monkeypatch.setattr(cli, "load_soperator_adapter_documents", lambda *_a: [])
     monkeypatch.setattr(
         cli,
         "verify_soperator_release_artifacts",
@@ -7968,6 +6610,7 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
             pass
 
         def current_generation_sha256(self) -> str:
+            assert not completed_publication, "historical publication requires owner verification"
             return "sha256:" + "8" * 64
 
         def commit(self, *_args: object, **_kwargs: object) -> None:
@@ -7998,6 +6641,7 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
             source_payload["apps"]["charts"][0]["values"]
         ),
         dry_run=False,
+        supervise=False,
         job_policy="wait-to-finish",
         cancel_job_ids=(),
         requeue_job_ids=(),
@@ -8007,6 +6651,8 @@ def test_interrupted_latest_upgrade_reuses_frozen_target_without_resolving_lates
 
     assert applies[0]["operation_source_release"] == "4.1.6"
     assert applies[0]["source_capability_sha256"] == "sha256:" + "1" * 64
+    assert len(publication_checks) == (2 if completed_publication else 1)
+    assert all(row["admitted_sha256"] == "sha256:" + "8" * 64 for row in publication_checks)
 
 
 def test_slurm_restore_replays_only_checkpoint_owned_state_in_safe_order(
@@ -8869,3 +7515,65 @@ def test_checks_transport_accepts_native_batched_create_json_stream():
     output = '{"kind":"Job","metadata":{"name":"one"}}\n{"kind":"Job","metadata":{"name":"two"}}\n'
     assert _soperator_checks_kubernetes_payload(["create", "-f", "-", "-o", "json"], output) == {}
     assert _soperator_checks_kubernetes_payload(["get", "jobs"], '{"items":[]}') == {"items": []}
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_deploy_job_gate_uses_workload_namespace_when_chart_is_stored_in_flux_system(
+    monkeypatch, exists
+):
+    from nebius_cxcli.soperator_adapter import SOPERATOR_ADAPTER_NAMESPACE
+
+    observed = []
+    monkeypatch.setattr(
+        cli,
+        "_soperator_release_refs_for_job_policy",
+        lambda *a, **kw: (SimpleNamespace(namespace="flux-system"),),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_soperator_upgrade_live_slurmcluster_exists",
+        lambda **kw: observed.append(kw["namespace"]) or exists,
+    )
+
+    class ReachedWorkloadPolicy(Exception):
+        pass
+
+    def workers(**kwargs):
+        assert kwargs["namespace"] == SOPERATOR_ADAPTER_NAMESPACE
+        raise ReachedWorkloadPolicy()
+
+    monkeypatch.setattr(cli, "_soperator_upgrade_worker_nodeset_pod_candidates", workers)
+
+    def gate():
+        return cli._soperator_flux_apply_slurm_job_gate(
+            {},
+            command_name="deploy",
+            target_ref="cluster",
+            extra_env={},
+            job_policy="fail",
+            cancel_job_ids=(),
+            requeue_job_ids=(),
+            job_wait_timeout_seconds=60,
+            job_refresh_interval_seconds=5,
+        )
+
+    if exists:
+        with pytest.raises(ReachedWorkloadPolicy):
+            gate()
+    else:
+        assert gate() == ()
+    assert observed == [SOPERATOR_ADAPTER_NAMESPACE]
+
+
+def test_provider_failure_detail_retains_cause_before_long_temporary_path():
+    detail = cli._soperator_upgrade_supervisor_failure_detail(
+        RuntimeError(
+            "Terraform command `terraform init -input=false` failed in /tmp/"
+            + "long-path/" * 40
+            + ":\n\x1b[31mError: Failed to query available provider packages\x1b[0m\nconnection reset by peer"
+        )
+    )
+    assert "Failed to query available provider packages" in detail
+    assert "connection reset by peer" in detail
+    assert "long-path" not in detail
+    assert "\x1b" not in detail

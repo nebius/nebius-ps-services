@@ -106,3 +106,11 @@ topology/resources limit generalization.
 A user's two small nodes, local laptop or simulated service is not evidence
 for production-scale behavior. Offer conditional advanced exercises with
 explicit prerequisites instead of pretending unavailable systems were tested.
+
+## Download and runtime delivery
+
+Use [Portable publication](portable-publication.md) for external result archives
+and build templates. Keep complete source listings readable in HTML; supply actual
+runtime files through the established checkout/sync workflow. Add a separate kit
+only when that delivery otherwise lacks required files. Preserve result evidence
+bytes and use explicit public-safe archive inventories.

@@ -1,17 +1,16 @@
 """Lab titles, teaching narrative, execution guidance and lesson links agree."""
 
+from course_builder import config as cb_config, content as cb_content, markdown as cb_markdown, metadata as cb_metadata
+import ast
 import html
+import importlib.util
 import json
 import re
 import subprocess
-import ast
-import importlib.util
 
 import pytest
-
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
-
 
 SECTIONS = (
     "Before you start",
@@ -26,12 +25,11 @@ SECTIONS = (
 
 @pytest.mark.parametrize("course", COURSES)
 def test_every_lab_has_an_authored_guide_and_explicit_lessons(course):
-    builder = load_builder()
     root = ROOT / course
-    lessons = builder.parse_course(root / "COURSE.md")[2]
-    metadata = builder.course_metadata(root)
-    guides = builder.lab_guides(root, metadata, len(lessons))
-    assert len(guides) == len(builder.executable_sources(root))
+    lessons = cb_metadata.parse_course(root / "COURSE.md")[2]
+    metadata = cb_metadata.course_metadata(root)
+    guides = cb_metadata.lab_guides(root, metadata, len(lessons))
+    assert len(guides) == len(cb_metadata.executable_sources(root))
     introductions = set()
     for guide in guides:
         assert tuple(guide["sections"]) == SECTIONS
@@ -44,15 +42,17 @@ def test_every_lab_has_an_authored_guide_and_explicit_lessons(course):
 
 @pytest.mark.parametrize("course", COURSES)
 def test_lab_narrative_and_identity_survive_rendering(course):
-    builder = load_builder()
     root = ROOT / course
-    lessons = builder.parse_course(root / "COURSE.md")[2]
-    metadata = builder.course_metadata(root)
+    lessons = cb_metadata.parse_course(root / "COURSE.md")[2]
+    metadata = cb_metadata.course_metadata(root)
     document = (root / "index.html").read_text()
-    lesson_html = re.findall(r'<section class="lesson".*?</section>', document, re.S)
+    lesson_html = sorted(
+        re.findall(r'<section class="lesson".*?</section>', document, re.DOTALL),
+        key=lambda block: int(re.search(r'data-lesson-number="([0-9]+)"', block)[1]),
+    )
     references = {
-        name: "#" + builder.guide_id(name)
-        for name in builder.COMMON_GUIDES + builder.SUPPORTING_GUIDES.get(course, ())
+        name: "#" + cb_content.guide_id(name)
+        for name in cb_config.COMMON_GUIDES + cb_config.SUPPORTING_GUIDES.get(course, ())
     }
     references.update(
         {
@@ -65,25 +65,25 @@ def test_lab_narrative_and_identity_survive_rendering(course):
     references.update(
         {
             f"reference/labs/{guide['source'].stem}.md": "#lab-"
-            + builder.slug(guide["source"].stem)
-            for guide in builder.lab_guides(root, metadata, len(lessons))
+            + cb_markdown.slug(guide["source"].stem)
+            for guide in cb_metadata.lab_guides(root, metadata, len(lessons))
         }
     )
-    for guide in builder.lab_guides(root, metadata, len(lessons)):
-        target = "lab-" + builder.slug(guide["source"].stem)
+    for guide in cb_metadata.lab_guides(root, metadata, len(lessons)):
+        target = "lab-" + cb_markdown.slug(guide["source"].stem)
         article = re.search(
-            rf'<article class="lab" id="{target}".*?</article>', document, re.S
+            rf'<article class="lab" id="{target}".*?</article>', document, re.DOTALL
         ).group()
         assert f"<h3>{html.escape(guide['title'])}</h3>" in article
-        assert builder.block(guide["introduction"]) in article
+        assert cb_markdown.block(guide["introduction"]) in article
         for section in SECTIONS:
             assert f"<h4>{section}</h4>" in article
-            links = builder.lab_guide_links(guide, references)
+            links = cb_content.lab_guide_links(guide, references)
             assert (
-                builder.block(
+                cb_markdown.block(
                     guide["sections"][section],
                     links,
-                    prefix=f"{target}-{builder.slug(section)}-",
+                    prefix=f"{target}-{cb_markdown.slug(section)}-",
                 )
                 in article
             )
@@ -92,7 +92,7 @@ def test_lab_narrative_and_identity_survive_rendering(course):
                 f'href="#{target}">{html.escape(guide["title"])}</a>'
                 in lesson_html[number - 1]
             )
-            assert f'href="#{builder.slug(lessons[number - 1]["title"])}"' in article
+        assert "Related lessons" not in article
         assert html.escape(guide["source"].read_text()) in article
     assert (
         "State which resource or execution path should change before running."
@@ -101,6 +101,8 @@ def test_lab_narrative_and_identity_survive_rendering(course):
 
 
 def fixture_course(tmp_path):
+    (tmp_path / "reference/grafana").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reference/grafana/01_example.json").write_text("{}")
     (tmp_path / "labs").mkdir()
     (tmp_path / "labs/01_example.py").write_text('"""Example."""\n')
     (tmp_path / "reference/labs").mkdir(parents=True)
@@ -124,7 +126,6 @@ def fixture_course(tmp_path):
     "defect", ["missing", "extra", "number", "section", "lesson", "duplicate"]
 )
 def test_invalid_lab_guides_fail_fast(tmp_path, defect):
-    builder = load_builder()
     metadata, path = fixture_course(tmp_path)
     if defect == "missing":
         path.unlink()
@@ -141,13 +142,12 @@ def test_invalid_lab_guides_fail_fast(tmp_path, defect):
     else:
         metadata["labs"].append(metadata["labs"][0].copy())
     with pytest.raises(ValueError, match="guide|lesson|lab"):
-        builder.lab_guides(tmp_path, metadata, 1)
+        cb_metadata.lab_guides(tmp_path, metadata, 1)
 
 
 def test_valid_authored_guide(tmp_path):
-    builder = load_builder()
     metadata, _path = fixture_course(tmp_path)
-    guide = builder.lab_guides(tmp_path, metadata, 1)[0]
+    guide = cb_metadata.lab_guides(tmp_path, metadata, 1)[0]
     assert guide["title"] == "Lab 01: Example"
     assert guide["number"] == "01"
 
@@ -156,7 +156,8 @@ def test_metadata_has_explicit_lesson_membership():
     for course in COURSES:
         metadata = json.loads((ROOT / course / "reference/course.json").read_text())
         assert all(
-            set(item) == {"path", "optional", "lessons"} for item in metadata["labs"]
+            set(item) == {"path", "optional", "lessons", "dashboard"}
+            for item in metadata["labs"]
         )
 
 
@@ -165,9 +166,13 @@ def test_guide_commands_are_valid_shell_and_use_existing_sources_and_options(cou
     root = ROOT / course
     options_by_source: dict[str, set[str]] = {}
     for guide in (root / "reference/labs").glob("*.md"):
-        for command in re.findall(r"```bash\n(.*?)\n```", guide.read_text(), re.S):
+        for command in re.findall(r"```bash\n(.*?)\n```", guide.read_text(), re.DOTALL):
             result = subprocess.run(
-                ["bash", "-n"], input=command, text=True, capture_output=True
+                ["bash", "-n"],
+                input=command,
+                text=True,
+                capture_output=True,
+                check=False,
             )
             assert result.returncode == 0, guide
             for line in command.splitlines():
@@ -244,7 +249,7 @@ def test_synthetic_workload_rates_have_operator_units_and_joined_boundary():
         ),
         ("llm-training/reference/labs/05_lora_sft.md", "masks padding only"),
         (
-            "custom-cuda-kernels/reference/cluster-smoke-test.md",
+            "custom-cuda-kernels/reference/labs/10_hopper_cluster.md",
             "COURSE_ENABLE_SM90A=ON",
         ),
     ],
@@ -262,27 +267,25 @@ def test_recomputation_guide_names_forward_backward_only_boundary():
 
 
 def test_unknown_guide_link_is_not_silently_dropped(tmp_path):
-    builder = load_builder()
     metadata, path = fixture_course(tmp_path)
     path.write_text(path.read_text() + "\n[Missing reference](../missing.md)\n")
-    guide = builder.lab_guides(tmp_path, metadata, 1)[0]
+    guide = cb_metadata.lab_guides(tmp_path, metadata, 1)[0]
     with pytest.raises(ValueError, match="unresolved link"):
-        builder.lab_guide_links(guide, {})
+        cb_content.lab_guide_links(guide, {})
 
 
 def test_standalone_validator_rejects_stale_guide_narrative(tmp_path, monkeypatch):
-    builder = load_builder()
     metadata, path = fixture_course(tmp_path)
-    guides = builder.lab_guides(tmp_path, metadata, 1)
+    guides = cb_metadata.lab_guides(tmp_path, metadata, 1)
     lessons = [
         {
             "title": "Example lesson",
-            "Practice labs": f"- [{guides[0]['title']}](reference/labs/{guides[0]['source'].stem}.md)",
+            "Practice": f"Apply the specific explanation.\n\n- [{guides[0]['title']}](reference/labs/{guides[0]['source'].stem}.md)",
         }
     ]
-    document = builder.lesson_markup(
+    document = cb_content.lesson_markup(
         lessons[0], 1, practice_labs=guides
-    ) + builder.lab_markup(tmp_path, guides[0], lessons, {})
+    ) + cb_content.lab_markup(tmp_path, guides[0], lessons, {})
     spec = importlib.util.spec_from_file_location(
         "guide_validator", ROOT / "tools/validate_course_template.py"
     )
@@ -293,8 +296,15 @@ def test_standalone_validator_rejects_stale_guide_narrative(tmp_path, monkeypatc
         document,
         metadata,
         [("1. Example lesson", lessons[0], 0)],
-        builder.executable_sources(tmp_path),
+        cb_metadata.executable_sources(tmp_path),
     )
+    with pytest.raises(SystemExit, match="Practice context differs"):
+        validator.validate_lab_guides(
+            document.replace("Apply the specific explanation.", "Stale activity."),
+            metadata,
+            [("1. Example lesson", lessons[0], 0)],
+            cb_metadata.executable_sources(tmp_path),
+        )
     path.write_text(
         path.read_text().replace(
             "Specific explanation", "Substantively revised explanation", 1
@@ -305,5 +315,5 @@ def test_standalone_validator_rejects_stale_guide_narrative(tmp_path, monkeypatc
             document,
             metadata,
             [("1. Example lesson", lessons[0], 0)],
-            builder.executable_sources(tmp_path),
+            cb_metadata.executable_sources(tmp_path),
         )

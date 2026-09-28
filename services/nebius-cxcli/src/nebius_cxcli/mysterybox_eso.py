@@ -950,6 +950,58 @@ def mysterybox_eso_extra_objects_for_target(
     return objects
 
 
+def require_rendered_mysterybox_bindings(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+    documents: list[dict[str, Any]],
+    scope: str = "all",
+) -> None:
+    """Require every generated secret mapping, without fetching Terraform outputs."""
+    config = next(
+        (config for ref, config in _mysterybox_enabled_targets(payload) if ref == target_ref), None
+    )
+    if config is None:
+        return
+    for item in _generated_external_secrets(payload, config, target_ref=target_ref, scope=scope):
+        matches = [
+            doc
+            for doc in documents
+            if doc.get("kind") == "ExternalSecret"
+            and str(doc.get("apiVersion", "")).startswith("external-secrets.io/")
+            and doc.get("metadata", {}).get("name") == item["name"]
+            and doc.get("metadata", {}).get("namespace") == item["namespace"]
+        ]
+        spec = _mapping(matches[0].get("spec")) if len(matches) == 1 else {}
+        complete = True
+        for source_key, rendered_key, ref_key in (
+            ("data", "data", "remoteRef"),
+            ("data_from", "dataFrom", "extract"),
+        ):
+            expected = _list_of_mappings(item.get(source_key))
+            actual = _list_of_mappings(spec.get(rendered_key))
+            complete &= len(expected) == len(actual)
+            for index, raw in enumerate(expected):
+                candidates = (
+                    [row for row in actual if row.get("secretKey") == raw.get("secret_key")]
+                    if source_key == "data"
+                    else actual[index : index + 1]
+                )
+                ref = _mapping(candidates[0].get(ref_key)) if len(candidates) == 1 else {}
+                key = ref.get("key")
+                complete &= isinstance(key, str) and bool(key.strip())
+                if raw.get("secret_id"):
+                    complete &= key == raw["secret_id"]
+                for field in ("property", "version"):
+                    if raw.get(field):
+                        complete &= ref.get(field) == raw[field]
+        if not matches or not complete:
+            raise ValueError(
+                f"MysteryBox secret binding is unresolved for target '{target_ref}'; "
+                "run deploy to resolve required outputs, then retry"
+            )
+
+
 def _is_managed_extra_object(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return False

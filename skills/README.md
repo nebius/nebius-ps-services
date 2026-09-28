@@ -30,6 +30,13 @@ The full `SKILL.md` loads after selection, so
 workflow detail belongs in the body and focused supporting files rather than
 the always-visible description.
 
+Global instruction templates reuse task authorization for necessary skill
+scripts after their effects are inspected, without a separate command approval.
+Global instruction templates allow necessary credential and secret creation
+within an authorized task, with secure operational storage and no disclosure.
+Explicit restrictive-instruction repair routes through `project-agent-instructions`;
+`maintain-project-specs` records policy without inventing another approval gate.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Table of Contents
@@ -84,7 +91,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | --- | --- | --- |
 | `agent-nebius-auth-diagnose` | Implicit allowed | Resolve an explicit or config-owned default-profile Nebius project and diagnose agent-auth or hook failures without mutation. |
 | `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
-| `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with computer-use GUI UAT. |
+| `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
 | `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations and recovery. |
@@ -96,8 +103,8 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `commit` | Explicit only | Create one claim-bound local commit for the complete repository diff across all changed project folders; stages with repo-root `git add -A` inside the exact transaction and never pushes. |
-| `commit-push` | Explicit only | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
+| `commit` | Implicit allowed | Create one claim-bound local commit for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
+| `commit-push` | Implicit allowed | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests with branch-safe generic preparation or exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
@@ -115,7 +122,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Design software features, APIs, vertical slices, and proven remediation handoffs before implementation, delegating agent subsystems through `ai-agent-design` to `ai-stack` before `/plan`. |
+| `design` | Implicit allowed | Read project design and code, give implemented code precedence, report and resolve conflicts, and plan by default; implement only on explicit request while canonical documents remain with `maintain-project-specs`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -162,7 +169,7 @@ support for ambiguous failure diagnosis.
 | `sdlc-create-requirements` | Explicit only | Author canonical `REQ-*` records as the routed Agentic SDLC requirements adapter to `maintain-project-specs`, preserving stable IDs and safe environment boundaries. |
 | `sdlc-evaluate` | Explicit only | Evaluate acceptance criteria and emit normalized, commit-bound failure events; use Grafana only for a predefined evidenced operational gate. |
 | `sdlc-gather-context` | Explicit only | Build compact feature context packs from product, vendor, internal, codebase, layer-boundary, and test sources. |
-| `sdlc-gui-test` | Explicit only | Control and evaluate GUI behavior through Computer Use, Browser, or Playwright as required, with screenshots or accessibility snapshots. |
+| `sdlc-gui-test` | Explicit only | Evaluate web GUI acceptance with owned headless Playwright Test and optional isolated headless MCP exploration; honor explicit native-desktop requirements separately. |
 | `sdlc-implement-plan` | Explicit only | Coordinate immutable dependency/corrective waves, preserve diagnosis/oracle bindings, integrate in order, rerun invalidated evidence, and clean without force. |
 | `sdlc-merge-pr` | Explicit only | Merge a specific Agentic SDLC pull request only after explicit user request, final readiness checks, and exact promoted/reviewed head verification. |
 | `sdlc-prepare-execution` | Explicit only | Prepare or resume the persistent feature integration worktree and deterministic task waves after plan lock and before TDD. |
@@ -250,7 +257,7 @@ $publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/exam
 
 $sdlc-workflow-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 
-$sdlc-workflow-test --create --keep
+$sdlc-workflow-test --create-live-test --keep
 
 $sdlc-workflow-test --resume
 
@@ -414,7 +421,16 @@ and persistent desktop TOC provide the standard reading experience.
 Invoke it explicitly with `$create-learning-course`; implicit invocation is
 disabled because the workflow can create or revise many local files.
 Every lesson has a conceptual title and follows Objective, How it works,
-Practice and Mental model. Connected explanations introduce concepts and
+Practice and Mental model, followed only by optional References. Each course
+has exactly one shared Where to Go Next and one Glossary, with no lesson or
+guide copies. Glossary terms and abbreviations sort A–Z by displayed key,
+ignoring case; repeated entries preserve distinct meanings. Onward options
+relate to completed course competencies and add no completion gates. Next-step
+options use bullets and Official references use numbers. Courses share typography
+and heading roles. Mission and syllabus
+remain authoring inputs; their unique learner context belongs in the orientation
+or owning lesson, without published planning sections or navigation entries.
+Connected explanations introduce concepts and
 unfamiliar abbreviations in context and contain a meaningful core diagram;
 the final mental model summarizes prior teaching. The workflow preserves
 worked examples, guided practice, feedback and transfer assessment.
@@ -424,6 +440,11 @@ and runtime requirements remain course-profile choices. The source kit
 includes research references, HTML/CSS/SVG templates, a read-only structural
 and embedded-source checker, and technical/nontechnical evaluation cases.
 Source updates do not install the skill or prove fresh-runtime activation.
+
+The starter includes reusable build/check scripts, archive and size-budget
+helpers, copied presentation assets and packaging tests. Configure its renderer
+adapter; no installed skill is required for later course builds. Keep bulky
+companion downloads external and reading content embedded.
 
 ### `research`
 
@@ -468,6 +489,20 @@ when the durable remediation changes a system contract such as a component
 boundary, public interface, data owner, migration, or cross-component workflow.
 Unknown causes and complex repairs inside one existing private boundary remain
 in `troubleshoot`.
+
+It reads the selected project's design documents and affected executable code
+before proposing changes. Code wins when documentation conflicts with the
+implementation, and the response reports the discrepancy with source references.
+New proposals must resolve unintended conflicts with existing consumers and
+contracts. Confirmed unused greenfield prototypes may receive a planned
+anti-pattern refactor without compatibility shims unless requested. Missing
+documentation or unknown usage does not establish that exception.
+
+Planning is non-mutating by default. An explicit design-and-implement request
+may continue through implementation skills after design when host mode permits;
+actual Plan Mode remains binding. `maintain-project-specs` is the sole owner of
+canonical requirements/design updates, with `design` returning decisions and
+evidence rather than publishing project design documents itself.
 
 For AI applications, `design` identifies the subsystem and delegates its
 behavior, topology, policy, and contract design once to `ai-agent-design`.
@@ -889,30 +924,26 @@ verifier environments before installing it; the renamed skill does not read or
 clean old-format ownership markers, labels, or Compose names.
 
 The no-flag invocation remains the lightweight resource-validator verifier and
-does not touch Docker or a browser. Every explicit `--create` first safely
+does not touch Docker or a browser. Every explicit `--create-live-test` first safely
 destroys the previous active exactly owned environment, then builds and tests a
 fresh browser GUI, Django/Gunicorn web/API server, and PostgreSQL database
-through the normal two-command Agentic SDLC workflow. It launches one fresh
-verifier-owned Chrome process group with a private profile and exact marker,
-never an existing Chrome instance. It uses two owned Docker Compose
-containers, a dynamically assigned loopback web port, an internal-only database
-endpoint, semantic cross-layer evidence, and computer-use GUI UAT correlated
-with API and database observations. By default it writes a complete report and
-then removes every exact owned live resource, even after failure. Browser
-cleanup revalidates and signals only the recorded process group; identity
-ambiguity fails closed as `CLEANUP_FAILED` before Docker mutation.
+through the normal two-command Agentic SDLC workflow. It runs four fresh owned headless Chrome stages with Playwright Test,
+using two owned Docker Compose containers, a dynamic loopback web port and an
+internal-only database. Assertions, screenshots, traces, exact target SHAs and
+API/database observations are bound to stage receipts. The outer verifier
+restarts Compose between UAT stages while retaining the volume and rediscovering
+the port. Every stage closes its owned processes, even with `--keep`.
 
-Initial Computer Use capture proves capability discovery only. The live profile
-repeats a fresh capture immediately before GUI evaluation and UAT with an
-unlocked host unless locked Computer Use is explicitly enabled for the session,
-and a visible foreground current-Space browser window. A
-pre-navigation visibility failure is reported as `ENVIRONMENT_DEFECT`; a hung
-or non-responsive shared Computer Use service stops further calls and requires
-separately authorized recovery while the owned application is preserved.
+Native desktop capture, foreground windows, monitor selection and screen unlock
+are not prerequisites for web acceptance. Optional headless isolated Playwright
+MCP exploration is separate. Laptops must remain awake with the agent and Docker
+running. Locked-agent continuity needs a real observed lock-interval trial; a
+headless browser smoke test alone does not certify it. Build-time downloads may
+include fixed public images, pinned Python packages and pinned Playwright npm
+packages. Runtime services remain local.
 
-`--create --keep` performs the same replacement and then retains the new owned
-project, private state/evidence, running services, database volume, built image,
-and dedicated Chrome instance/profile. A later
+`--create-live-test --keep` performs the same replacement and then retains the new owned
+project, private state/evidence, running services, database volume, built image. Browser processes are always closed. A later
 `--resume` revalidates and continues that application only after a failed or
 partial kept run. A later `--destroy` closes only that exact verifier-owned
 Chrome process group and removes resources whose canonical identities and two
@@ -1067,7 +1098,8 @@ dispatch.
 Private run state, plans, evidence, screenshots, transcripts, and steering live
 under `<agent-home>/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
 Each active feature also has schema-v7 execution state and private worktrees
-there. After plan lock, `sdlc-prepare-execution` creates a persistent
+there. A plan's adjacent lock marker appends `.lock` to its complete `.md`
+filename. After plan lock, `sdlc-prepare-execution` creates a persistent
 integration branch/worktree and enforces the initialized monorepo folder as the
 claim and worker-cwd boundary. Task Implementer and Agentic SDLC remain
 separate peer workflows: both use Worktree infrastructure, but Agentic SDLC
@@ -1207,9 +1239,10 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-classify-failure`: validates commit-bound failure events and optional
   diagnoses, enforces stable-blocker and feature budgets, and either routes a
   proven cause to its owner, conditionally requests troubleshooting, or stops.
-- `sdlc-gui-test`: controls and evaluates GUI flows through Computer Use when
-  desktop state matters, or Browser/Playwright when suitable, with screenshots
-  or accessibility snapshots.
+- `sdlc-gui-test`: evaluates web GUI acceptance with owned headless Playwright
+  Test, repeatable assertions, screenshots and traces. Optional headless,
+  isolated Playwright MCP exploration is separate; explicitly required native
+  desktop behavior retains its own acceptance contract.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
 - `sdlc-commit`: seals final integration changes, ff-only promotes the exact
@@ -1250,7 +1283,8 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 ### `commit`
 
 `commit` creates a fast local Git commit on the current branch without pushing.
-One explicit invocation binds a private authorization, previews the complete
+One semantically explicit request binds a private authorization through the
+current root-turn receipt, previews the complete
 monorepo tree through a temporary index, then lets one digest-pinned helper run
 repo-root `git add -A`, lightweight staged validation, normal hooks, and exact
 direct-child/tree verification under the shared repository lock. Project
@@ -1264,6 +1298,11 @@ SDLC keeps `sdlc-commit`. The skill stops instead of pushing, creating PRs,
 repairing branches, or writing Agentic SDLC evidence.
 
 ### `commit-push`
+
+Both commit skills allow semantic selection. Requests such as "commit and push
+using $commit-push" or "please commit and push" need no repeated leading
+invocation. Selection and root-turn metadata alone never grant Git authority;
+the agent must identify an actual authorized action before binding the receipt.
 
 `commit-push` commits all current local changes on the active non-default
 feature branch and pushes that branch to `origin`. It reuses the claim-bound
@@ -1749,7 +1788,7 @@ single-Stop arbiter entry. This is a current-tree inventory, not a fixed allowli
 | `SessionStart` matching `startup\|resume\|clear\|compact` | `global-context-management` [`session_start_context.py.template`](global-context-management/assets/session_start_context.py.template), installed from its byte-identical `config-codex` mirror | Resolves the workspace root and advertises the session-scoped private `current.md` path. It secures existing task-state permissions and creates an empty `0700`/`0600` scaffold only after compaction. Missing session information or unsafe initialization degrades to unavailable context instead of blocking the session. |
 | `SessionStart` matching `startup\|resume\|clear\|compact` | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | Reads the actual canonical markers, stays silent for a current v2 pair, and otherwise emits bounded `CONTRACT_PENDING`, `CONTRACT_INVALID`, or `CONTRACT_MIGRATION_REQUIRED` context. It never derives status from a missing private `lifecycle.json` and never authors repository files. |
 | `UserPromptSubmit` for all prompts | `global-context-management` [`user_prompt_context.py.template`](global-context-management/assets/user_prompt_context.py.template), installed from its byte-identical `config-codex` mirror | Emits nothing for a simple prompt. For a complex prompt, it creates or secures the empty task-state scaffold, suggests a bounded set of related same-workspace state-file paths without injecting their contents, and adds context-management guidance. A local opt-in policy may also request bounded read-only subagents. |
-| `UserPromptSubmit` for all prompts | `commit` [`commit_intent.py`](commit/assets/hooks/commit_intent.py) | Recognizes optional `please`, then either a root-user `$commit` or `$commit-push` directly or a bounded leading directive from `run`, `apply`, `execute`, `invoke`, or `use`, while excluding casual mentions, questions, quotations, help, subagents, system turns, compaction, and Stop continuations. It stores only current repository/session/turn/prompt digests and owner metadata in an owner-private authorization, then injects the canonical authorization and claim paths; it never stages, commits, or pushes. |
+| `UserPromptSubmit` for all prompts | `commit` [`commit_intent.py`](commit/assets/hooks/commit_intent.py) | Records a separate nonauthorizing receipt containing current repository/session/turn/prompt digests for eligible root turns. The root agent interprets action intent semantically, including natural language and skill mentions anywhere, and binds the exact receipt plus a typed action during canonical preparation. Receipt replay, generated origins, raw staging and raw commits remain denied. The hook never stages, commits, pushes, or overwrites active authorization. |
 | `UserPromptSubmit` for all prompts | `troubleshoot` [`remediation_attempt_guard.py`](troubleshoot/assets/hooks/remediation_attempt_guard.py) | Parses only an exact leading `$troubleshoot`, authorizes default or explicitly bounded attempt/time limits, records the private authorization sidecar, and establishes a separate same-session terminal-report obligation without storing the prompt. It supplies bounded profile or repair context and blocks invalid authorization transitions. A resolved marker remains completed evidence: a later bare invocation admits discovery without preemptive next-tranche state, while explicit profile flags preserve the marker through the profile-only handshake. |
 | `UserPromptSubmit` for all prompts | `maintain-project-specs` [`project_specs_lifecycle.py`](maintain-project-specs/assets/hooks/project_specs_lifecycle.py) | For direct root-user turns, stages only prompt/session/turn digests plus unclassified intent metadata and injects statement-level classification guidance. It skips workers, generated/Stop/system/compaction turns, and secret-bearing input; raw prompt text is never persisted. Root agents own semantic classification and paired spec publication. |
 | `UserPromptSubmit` for all prompts | `prompt-session-intake` [`prompt_session_intake.py`](prompt-session-intake/assets/hooks/prompt_session_intake.py) | Binds only exact Task Implementer or Agentic SDLC init/run invocations. Later direct turns always pass to the current agent; eligible safe input stages metadata-only event-v2 session/turn causality and never a prompt body. The current agent records merge/no-op/sensitive and only a durable project-intent projection may reach the canonical prompt through an operation-and-projection-bound adapter. Secrets, stale provenance, conflicts, unsafe state, ambiguity, and internal capture errors skip persistence without stopping delivery. Unbound, Stop-generated, compaction, system, and subagent prompts do not stage. The hook never edits a workflow prompt or starts a run. |

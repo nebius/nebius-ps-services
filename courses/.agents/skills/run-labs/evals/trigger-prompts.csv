@@ -1,0 +1,17 @@
+id,should_trigger,prompt
+one-lab,true,Run Advanced GPU Communication Lab 34 and update its results.
+multi-course,true,Run all labs in fundamentals and training with both workload sizes.
+resume,true,Resume the interrupted course evidence campaign without submitting completed jobs again.
+all,true,Refresh screenshots and reference results for all six practical courses.
+provisioned-course,true,Run the selected course labs and refresh their existing file-provisioned course dashboards and results.
+workstation-start,true,Run the selected course labs from my workstation using the prepared Slurm login node.
+login-only,false,Explain how to log in with sync-labs.sh; do not run labs or refresh evidence.
+authoring,false,Redesign Lab 34 to remove output text equality from acceptance.
+install,false,Install Slurm and the Nsight viewers on a new cluster.
+explain,false,Explain what the small and large workload profiles mean.
+production,false,Troubleshoot our production inference service latency regression.
+prepared-monitoring-resume,true,Resume Lab 11 with the existing prepared monitoring installation and preserve local-only metrics routing.
+repeated-viewer-recovery,true,Resume the prepared lab campaign and recover its Nsight streamer and viewer again as needed to finish report screenshots; the first two restarts already happened.
+unrelated-service-recovery,false,Restart the production Nsight service used by another team; this is an infrastructure incident with no course lab campaign.
+full-tool-recovery,true,Resume the prepared course campaign and fully recover its Grafana service and both Nsight viewers and profiler runtimes as needed; preserve configuration and storage.
+failed-profiler-recovery,true,Finish the selected lab evidence after a diagnosed nsys tool failure; recover the existing runtime and use a fresh campaign for only the failed lab and profile.

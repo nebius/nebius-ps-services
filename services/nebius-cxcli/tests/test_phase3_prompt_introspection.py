@@ -25,6 +25,29 @@ from nebius_cxcli.component_sources import ComponentDefault
 from nebius_cxcli.components import ComponentEntry
 
 
+def _local_observability_answers(monkeypatch):
+    from types import SimpleNamespace
+
+    from nebius_cxcli import grafana_install
+
+    for method in ("select", "confirm", "text"):
+        monkeypatch.setattr(
+            grafana_install.questionary,
+            method,
+            lambda *_args, **kwargs: SimpleNamespace(ask=lambda: kwargs.get("default")),
+        )
+
+
+def _observability_wizard_entries():
+    from nebius_cxcli.components import component_entries
+
+    return tuple(
+        entry
+        for entry in component_entries("apps")
+        if entry.group.lower() == "observability" or entry.id == "gateway-helm"
+    )
+
+
 def _mk8s_observability_wizard_entry() -> ComponentEntry:
     return ComponentEntry(
         id="mk8s",
@@ -70,9 +93,23 @@ def _grafana_entry() -> ComponentEntry:
         description="Grafana observability console",
         group="observability",
         source="https://grafana-community.github.io/helm-charts/grafana",
-        version="12.1.3",
+        version="13.2.5",
         default_namespace="observability",
         default_release_name="grafana",
+    )
+
+
+def _postgresql_entry() -> ComponentEntry:
+    return ComponentEntry(
+        id="postgresql",
+        scope="apps",
+        config_path="apps.observability.postgresql",
+        description="PostgreSQL application database",
+        group="observability",
+        source="oci://registry-1.docker.io/cloudpirates/postgres",
+        version="0.20.6",
+        default_namespace="observability",
+        default_release_name="postgresql",
     )
 
 
@@ -535,6 +572,7 @@ def test_mk8s_k8s_version_sorts_before_public_endpoint_and_platform() -> None:
     ]
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_can_skip_preselected_soperator_profile(monkeypatch) -> None:
     prompted_paths: list[str] = []
     payload = {
@@ -1009,6 +1047,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
     )
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
     monkeypatch,
 ) -> None:
@@ -1253,6 +1292,7 @@ def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
     )
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
     monkeypatch,
 ) -> None:
@@ -1409,6 +1449,7 @@ def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
     assert "worker_ephemeral_nodes" not in inputs["soperator"]
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
     monkeypatch,
 ) -> None:
@@ -1552,6 +1593,7 @@ def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
     assert "worker_ephemeral_nodes" not in inputs["soperator"]
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
     monkeypatch,
 ) -> None:
@@ -1675,6 +1717,7 @@ def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
     )
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
     monkeypatch,
 ) -> None:
@@ -1809,6 +1852,7 @@ def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
     assert "worker_ephemeral_nodes" not in inputs["soperator"]
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
     monkeypatch,
 ) -> None:
@@ -1967,6 +2011,7 @@ def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
     assert not any("all_worker_shards" in path for path in gpu_prompted_paths)
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
     monkeypatch,
 ) -> None:
@@ -2105,6 +2150,7 @@ def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
     }
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_disabled(
     monkeypatch,
 ) -> None:
@@ -2209,6 +2255,7 @@ def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_dis
     assert worker_gpu["ephemeral_nodes"]["enabled"] is False
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_backtrack(
     monkeypatch,
 ) -> None:
@@ -2716,6 +2763,7 @@ def test_sfs_layout_filesystem_prompts_are_skipped_without_filesystems_map() -> 
 def test_run_component_field_wizard_announces_observability_app_at_enable_prompt(
     monkeypatch,
 ) -> None:
+    _local_observability_answers(monkeypatch)
     events: list[str] = []
 
     def _capture_continue_phase(
@@ -2748,7 +2796,7 @@ def test_run_component_field_wizard_announces_observability_app_at_enable_prompt
         selected_infra={"mk8s"},
         selected_apps=set(),
         infra_entries=(_mk8s_observability_wizard_entry(),),
-        app_entries=(_observability_agent_entry(), _grafana_entry(), _gateway_entry()),
+        app_entries=_observability_wizard_entries(),
         provider_lookup=None,
     )
 
@@ -2758,27 +2806,27 @@ def test_run_component_field_wizard_announces_observability_app_at_enable_prompt
         "prompt:deploy.targets[0].observability.enabled"
     )
     assert events.index("prompt:deploy.targets[0].observability.enabled") < adjusted_index
-    assert adjusted_index < events.index(
-        "phase:Configure 'nebius-observability-agent on mk8s' component fields now?"
-    )
+    assert adjusted_index < events.index("phase:Configure 'grafana on mk8s' component fields now?")
     assert "answering 'n' keeps the selected app defaults" in events[adjusted_index]
 
     updated_payload = yaml.safe_load(updated_yaml)
     enabled_apps = {row["id"]: row for row in updated_payload["apps"]["charts"]}
-    assert enabled_apps["nebius-observability-agent"]["enabled"] is True
+    assert "nebius-observability-agent" not in enabled_apps
     assert enabled_apps["grafana"]["enabled"] is True
     assert enabled_apps["gateway-helm"]["enabled"] is True
+    assert enabled_apps["victoria-metrics-k8s-stack"]["enabled"] is True
 
 
 def test_run_component_field_wizard_defaults_observability_enabled_from_selected_apps(
     monkeypatch,
 ) -> None:
+    _local_observability_answers(monkeypatch)
     observed_defaults: list[object] = []
     payload = _mk8s_observability_payload()
     payload["apps"] = {
         "charts": [
             {
-                "id": "nebius-observability-agent",
+                "id": "grafana",
                 "instance_id": "mk8s",
                 "enabled": True,
             }
@@ -2805,9 +2853,9 @@ def test_run_component_field_wizard_defaults_observability_enabled_from_selected
     updated_yaml, completed = _run_component_field_wizard(
         config_yaml=yaml.safe_dump(payload, sort_keys=False),
         selected_infra={"mk8s"},
-        selected_apps={"nebius-observability-agent"},
+        selected_apps={"grafana"},
         infra_entries=(_mk8s_observability_wizard_entry(),),
-        app_entries=(_observability_agent_entry(), _grafana_entry(), _gateway_entry()),
+        app_entries=_observability_wizard_entries(),
         provider_lookup=None,
     )
 
@@ -2955,6 +3003,7 @@ def test_run_component_field_wizard_previews_app_defaults_before_skip_prompt(
 def test_run_component_field_wizard_removes_backtracked_observability_app(
     monkeypatch,
 ) -> None:
+    _local_observability_answers(monkeypatch)
     answers = {
         "deploy.targets[0].observability.enabled": [True, False],
         "deploy.targets[0].observability.kubernetes.logs.enabled": [cli_module._WIZARD_BACKTRACK],
@@ -2983,7 +3032,7 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
         selected_infra={"mk8s"},
         selected_apps=set(),
         infra_entries=(_mk8s_observability_wizard_entry(),),
-        app_entries=(_observability_agent_entry(), _grafana_entry(), _gateway_entry()),
+        app_entries=_observability_wizard_entries(),
         provider_lookup=None,
     )
 
@@ -2991,9 +3040,11 @@ def test_run_component_field_wizard_removes_backtracked_observability_app(
     updated_payload = yaml.safe_load(updated_yaml)
     assert updated_payload["deploy"]["targets"][0]["observability"]["enabled"] is False
     assert updated_payload["apps"]["charts"] == []
+    assert "routing" not in updated_payload["deploy"]["targets"][0]["observability"]
 
 
 @pytest.mark.parametrize("backtrack", [False, True])
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_install_wizard_groups_core_and_prerequisites_without_extra_telemetry(
     monkeypatch, backtrack
 ):
@@ -3023,20 +3074,19 @@ def test_install_wizard_groups_core_and_prerequisites_without_extra_telemetry(
     phases = []
     output = []
     prompts = []
+    dependency_phase = "Customize 'external-secrets on mk8s' settings?"
 
     def phase(label, **_kwargs):
         phases.append(label)
-        if (
-            label.startswith("Configure 'external-secrets")
-            and backtrack
-            and phases.count(label) == 1
-        ):
+        if label == dependency_phase and backtrack and phases.count(label) == 1:
             return cli_module._WizardPhaseDecision(False, back=True)
         return label == "Configure 'mk8s' component fields now?"
 
     def answer(label, current, **_kwargs):
         prompts.append(label)
         assert ".observability" not in label
+        if label.endswith(".values.slurmNodes.login.sshRootPublicKeys"):
+            return [], False
         return current, False
 
     monkeypatch.setattr(cli_module, "module_variables", lambda _source: ())
@@ -3056,6 +3106,7 @@ def test_install_wizard_groups_core_and_prerequisites_without_extra_telemetry(
         soperator_install=True,
     )
     assert completed
+    assert phases.count(dependency_phase) == (2 if backtrack else 1)
     assert "infra.components[0].inputs.cluster.public_endpoint" in prompts
     text = "\n".join(output)
     groups = [
@@ -3079,6 +3130,8 @@ def test_install_wizard_groups_core_and_prerequisites_without_extra_telemetry(
 
 
 def test_install_wizard_quit_during_upstream_configuration_returns_incomplete(monkeypatch):
+    from nebius_cxcli.soperator_values import seed_soperator_values
+
     payload = _mk8s_observability_payload()
     payload["apps"]["charts"] = [
         {
@@ -3092,6 +3145,7 @@ def test_install_wizard_quit_during_upstream_configuration_returns_incomplete(mo
     entry = ComponentEntry(
         id="soperator", scope="apps", config_path="apps.soperator", description="upstream"
     )
+    seed_soperator_values(payload, {"slurmNodes": {"login": {"sshRootPublicKeys": []}}})
     monkeypatch.setattr(
         cli_module,
         "_wizard_continue_phase",
@@ -3292,7 +3346,9 @@ def test_run_component_field_wizard_uses_scope_specific_phase_defaults(monkeypat
     ]
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_mixed_target_wizard_announces_only_required_observability_targets(monkeypatch):
+    _local_observability_answers(monkeypatch)
     import copy
 
     payload = _mk8s_observability_payload()
@@ -3307,7 +3363,7 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
             "target_ref": "sop",
             "enabled": True,
             "version": "4.1.7",
-            "values": {},
+            "values": {"deploymentProfile": "standard"},
         }
     ]
     protected = copy.deepcopy(payload["apps"]["charts"][0])
@@ -3338,7 +3394,7 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
         selected_infra={"mk8s", "sop"},
         selected_apps={"soperator"},
         infra_entries=(_mk8s_observability_wizard_entry(),),
-        app_entries=(_observability_agent_entry(), _grafana_entry(), _gateway_entry()),
+        app_entries=_observability_wizard_entries(),
         provider_lookup=None,
     )
     assert completed
@@ -3348,9 +3404,14 @@ def test_mixed_target_wizard_announces_only_required_observability_targets(monke
         core[key] == protected[key] for key in ("instance_id", "target_ref", "enabled", "version")
     )
     assert {(row["id"], row["target_ref"]) for row in rows if row["id"] != "soperator"} == {
-        ("nebius-observability-agent", "mk8s"),
         ("grafana", "mk8s"),
+        ("postgresql", "mk8s"),
+        ("victoria-metrics-k8s-stack", "mk8s"),
         ("gateway-helm", "mk8s"),
+        ("victoria-logs-single", "mk8s"),
+        ("victoria-traces-single", "mk8s"),
+        ("opentelemetry-collector", "mk8s"),
+        ("opentelemetry-logs", "mk8s"),
     }
     assert notices
     assert all("@sop" not in notice for notice in notices)

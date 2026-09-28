@@ -8,16 +8,18 @@ import shutil
 import subprocess
 import tempfile
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .archive_safety import open_bounded_tar_gz
 from .soperator_cache import locked_cache_entry, prepare_private_cache_root
-from .soperator_flux_graph import expected_soperator_release_names
 from .soperator_release import SoperatorReleaseSnapshot
+from .soperator_release_graph import selected_soperator_release_graph
 from .soperator_release_source import (
     SoperatorSourceReceipt,
     default_soperator_source_cache_root,
@@ -57,21 +59,32 @@ def _sha256_file(path: Path) -> str:
 
 def _verify_rendered_release_graph(
     render: bytes,
-    values: Mapping[str, object],
+    lock: SoperatorReleaseSnapshot,
+    *,
+    source_documents: Sequence[Mapping[str, object]] = (),
 ) -> None:
-    rendered_releases = {
-        str(document.get("metadata", {}).get("name") or "")
-        for document in yaml.safe_load_all(render)
-        if isinstance(document, dict) and document.get("kind") == "HelmRelease"
-    }
-    expected_releases = set(expected_soperator_release_names(values))
-    if rendered_releases != expected_releases:
-        missing = sorted(expected_releases - rendered_releases)
-        unexpected = sorted(rendered_releases - expected_releases)
-        raise ValueError(
-            "locked Soperator release graph differs from the verified upstream render "
-            f"(missing={missing}, unexpected={unexpected})"
+    selected = selected_soperator_release_graph(
+        lock,
+        [doc for doc in yaml.safe_load_all(render) if isinstance(doc, dict)],
+        source_documents=source_documents,
+    )
+
+    def signature(node):
+        return (
+            node.release_name,
+            node.namespace,
+            node.owner,
+            node.chart_key,
+            node.dependencies,
+            node.is_main,
         )
+
+    consumers = {signature(node) for node in selected}
+    if not any(
+        consumers == {signature(node) for node in graph}
+        for graph in (lock.release_graph, *lock.stage_graphs.values())
+    ):
+        raise ValueError("Soperator final consumers differ from the admitted operation stages")
 
 
 def _chart_file_map(package: Path) -> dict[str, bytes]:
@@ -137,7 +150,7 @@ def _chart_file_map(package: Path) -> dict[str, bytes]:
 def _run(command: list[str], *, label: str) -> subprocess.CompletedProcess[str]:
     timeout = 300
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             command,
             capture_output=True,
             text=True,
@@ -236,7 +249,7 @@ def _package_verified_source_chart(
     destination: Path,
     *,
     helm: str,
-    dependency_packages: dict[str, Path],
+    dependency_packages: dict[tuple[str, str, str], Path],
 ) -> Path:
     staged = destination / "source"
     shutil.copytree(source_chart, staged)
@@ -251,7 +264,16 @@ def _package_verified_source_chart(
         if not isinstance(dependency, dict):
             raise ValueError(f"source chart {source_chart.name} has invalid dependency metadata")
         name = str(dependency.get("name") or "").strip()
-        package = dependency_packages.get(name)
+        repository = str(dependency.get("repository") or "").rstrip("/")
+        version = str(dependency.get("version") or "")
+        candidates = [
+            (identity, package)
+            for identity, package in dependency_packages.items()
+            if identity[0] == name and identity[1].rstrip("/") == repository
+        ]
+        exact = [package for identity, package in candidates if identity[2] == version]
+        selected = exact or [package for _, package in candidates]
+        package = selected[0] if len(selected) == 1 else None
         if not name or package is None:
             raise ValueError(
                 f"source chart {source_chart.name} dependency {name or '?'} is not locked"
@@ -267,7 +289,7 @@ def _package_verified_source_chart(
     return packages[0]
 
 
-def render_soperator_consumers(
+def render_soperator_source_documents(
     lock: SoperatorReleaseSnapshot,
     source: SoperatorSourceReceipt,
     values: Mapping[str, object],
@@ -298,11 +320,50 @@ def render_soperator_consumers(
             )
         except RuntimeError:
             raise ValueError("Frozen Soperator umbrella rejected the configuration") from None
-    return tuple(
-        doc
-        for doc in yaml.safe_load_all(result.stdout)
-        if isinstance(doc, dict) and doc.get("kind") == "HelmRelease"
+    return tuple(doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict))
+
+
+def render_soperator_consumers(
+    lock: SoperatorReleaseSnapshot,
+    source: SoperatorSourceReceipt,
+    values: Mapping[str, Any],
+    *,
+    adapter_documents: list[dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    from .soperator_release_resolver import _render_upstream_umbrella
+
+    helm = shutil.which("helm")
+    if not helm:
+        raise RuntimeError("helm is required to render Soperator consumers")
+    _, consumers = _bind_rendered_consumers(
+        lock,
+        list(render_soperator_source_documents(lock, source, values)),
+        values,
+        source_documents=_render_upstream_umbrella(Path(source.source_dir), helm=helm),
+        adapter_documents=adapter_documents,
     )
+    return consumers
+
+
+def _bind_rendered_consumers(
+    lock: SoperatorReleaseSnapshot,
+    documents: list[dict[str, Any]],
+    values: Mapping[str, Any],
+    *,
+    source_documents: list[dict[str, Any]],
+    adapter_documents: list[dict[str, Any]],
+) -> tuple[SoperatorReleaseSnapshot, tuple[dict[str, Any], ...]]:
+    from dataclasses import replace
+
+    from .soperator_artifact_selection import bind_final_consumers, transform_consumer_documents
+
+    documents = transform_consumer_documents(documents, values, lock.post_render_patches)
+    _verify_rendered_release_graph(
+        yaml.safe_dump_all(documents).encode(), lock, source_documents=source_documents
+    )
+    graph = selected_soperator_release_graph(lock, documents, source_documents=source_documents)
+    selected = replace(lock, release_graph=graph)
+    return selected, bind_final_consumers(selected, documents, values, adapter_documents)
 
 
 def soperator_consumer_namespaces(
@@ -333,7 +394,7 @@ def _validate_child_renders(
     for doc in consumers:
         role = roles.get(doc.get("metadata", {}).get("name"))
         if role is None or role not in packages:
-            continue
+            raise ValueError("Soperator consumer has no verified chart package")
         spec = doc.get("spec", {})
         values = spec.get("values") or {}
         if not isinstance(values, Mapping):
@@ -346,7 +407,7 @@ def _validate_child_renders(
         path.write_text(yaml.safe_dump(dict(values)))
         path.chmod(0o600)
         try:
-            _run(
+            rendered = _run(
                 [
                     helm,
                     "template",
@@ -359,6 +420,17 @@ def _validate_child_renders(
                 ],
                 label=f"validate frozen {role} configuration",
             )
+            if role == "activeChecks":
+                from .soperator_acceptance_hooks import verify_waiter_inventory
+
+                verify_waiter_inventory(
+                    _chart_file_map(packages[role]),
+                    [
+                        doc
+                        for doc in yaml.safe_load_all(rendered.stdout)
+                        if isinstance(doc, Mapping)
+                    ],
+                )
         except RuntimeError:
             raise ValueError(f"Frozen Soperator {role} chart rejected the configuration") from None
 
@@ -369,9 +441,14 @@ def verify_soperator_release_artifacts(
     *,
     cache_root: Path | None = None,
     values: Mapping[str, object] | None = None,
+    post_render_patches: tuple[Mapping[str, Any], ...] | None = None,
+    adapter_documents: list[dict[str, Any]] | None = None,
 ) -> SoperatorArtifactReceipt:
     """Verify chart packages and the umbrella render against accepted source."""
 
+    if post_render_patches is not None and post_render_patches != lock.post_render_patches:
+        raise ValueError("Soperator patches differ from the admitted request")
+    post_render_patches = lock.post_render_patches
     helm = shutil.which("helm")
     if not helm:
         raise RuntimeError("helm is required to verify the official Soperator release artifacts")
@@ -385,7 +462,7 @@ def verify_soperator_release_artifacts(
     umbrella_package: Path | None = None
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-source-charts-") as temp_value:
         temp = Path(temp_value)
-        dependency_packages: dict[str, Path] = {}
+        dependency_packages: dict[tuple[str, str, str], Path] = {}
         consumer_packages: dict[str, Path] = {}
         for key, third_party_chart in lock.third_party_charts.items():
             package = _cache_chart_package(
@@ -397,9 +474,12 @@ def verify_soperator_release_artifacts(
                 expected_oci_digest=third_party_chart.oci_digest,
                 cache_dir=chart_cache,
             )
-            dependency_packages[third_party_chart.chart] = package
+            dependency_packages[
+                (third_party_chart.chart, third_party_chart.repository, third_party_chart.version)
+            ] = package
             consumer_packages[key] = package
             package_digests.append(third_party_chart.package_sha256)
+        official_packages = {}
         for key, upstream_chart in lock.charts.items():
             official = _cache_chart_package(
                 helm=helm,
@@ -410,6 +490,12 @@ def verify_soperator_release_artifacts(
                 expected_oci_digest=upstream_chart.digest,
                 cache_dir=chart_cache,
             )
+            official_packages[key] = official
+            dependency_packages[(upstream_chart.name, lock.registry, upstream_chart.version)] = (
+                official
+            )
+        for key, upstream_chart in lock.charts.items():
+            official = official_packages[key]
             source_package_dir = temp / key
             source_package_dir.mkdir()
             source_package = _package_verified_source_chart(
@@ -425,8 +511,15 @@ def verify_soperator_release_artifacts(
             source_files.pop("Chart.lock", None)
             official_files.pop("Chart.lock", None)
             if source_files != official_files:
+                differing = sorted(
+                    name
+                    for name in source_files.keys() | official_files.keys()
+                    if source_files.get(name) != official_files.get(name)
+                )
                 raise ValueError(
-                    f"official OCI chart {upstream_chart.name} differs from release source"
+                    f"official OCI chart {upstream_chart.name} differs from release source "
+                    f"for target {lock.target_ref}: "
+                    + ", ".join(name[:160] for name in differing[:8])
                 )
             package_digests.append(upstream_chart.package_sha256)
             consumer_packages[key] = official
@@ -467,13 +560,18 @@ def verify_soperator_release_artifacts(
         if source_render != package_render:
             raise ValueError("official OCI umbrella render differs from release source")
         if values is not None:
-            _verify_rendered_release_graph(source_render, values)
-            consumers = tuple(
-                doc
-                for doc in yaml.safe_load_all(source_render)
-                if isinstance(doc, dict) and doc.get("kind") == "HelmRelease"
+            from .soperator_release_resolver import _render_upstream_umbrella
+
+            consumer_snapshot, consumers = _bind_rendered_consumers(
+                lock,
+                [doc for doc in yaml.safe_load_all(source_render) if isinstance(doc, dict)],
+                values,
+                source_documents=_render_upstream_umbrella(source_root, helm=helm),
+                adapter_documents=adapter_documents or [],
             )
-            _validate_child_renders(lock, consumers, consumer_packages, helm=helm, directory=temp)
+            _validate_child_renders(
+                consumer_snapshot, consumers, consumer_packages, helm=helm, directory=temp
+            )
         render_digest = _sha256_bytes(source_render)
 
     return SoperatorArtifactReceipt(

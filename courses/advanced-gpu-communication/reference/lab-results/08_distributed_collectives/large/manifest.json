@@ -1,0 +1,70 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "712c6fe0e92a3a385a4c0dd6fdeadf60aeabcf290b0fb85e9ad2059b08aa8245",
+      "sha256": "aaf153c27b47d03a5e91e66479ebf0a33c72cb948d4cd9dee166d24c8bd7dbd4",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "83480132b6f87a7f3fe5ab44d13b3f882d05a25370fdd3aad5a900fa22749e7e",
+      "sha256": "85ed9d34c52a203632ecbe3f6c70f776ae79dc9734c57b66b0a1f1dcbcf0b76f",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-payload4-payload32-trial1-overview.png",
+      "sha256": "bb02835532d57c21e30988cedc90552e059a897d52a2b7ada26e5f45920d05cf",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-payload4-payload32-trial1-median-seconds-page1.png",
+      "sha256": "8f2e271e5bc42eba063a8e827471dc70c2016448b95687cebf8e56fddf138876",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-payload4-payload32-trial1-effective-payload-gib-per-s-page1.png",
+      "sha256": "02fb754d9219ecb2dad21ea3801a077933f057b5a809981183624e7b3408d9c8",
+      "tool": "grafana"
+    },
+    {
+      "file": "nsight-systems-baseline-rank0-timeline.png",
+      "sha256": "de5d84acdf321b69931729df339788f211f10d777fd734cc4ed3d72ca9ec8efa",
+      "tool": "systems"
+    },
+    {
+      "file": "nsight-systems-candidate-rank0-timeline.png",
+      "sha256": "4b05ccef8861e800d270804a50793dce235ba02217a686492e00230d6859f565",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "08_distributed_collectives",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "381a4141ce9a81b3e27e5f8e4669ad105e30431550558e2949a7f6f193218080"
+}

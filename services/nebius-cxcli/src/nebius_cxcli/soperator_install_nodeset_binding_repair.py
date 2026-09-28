@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .paths import ProjectPaths
 from .soperator_checks import SoperatorChecksExecution
 from .soperator_checks_policy import compile_checks_policy
@@ -39,6 +39,7 @@ class NodeSetBindingRepair:
     candidate: Callable[..., dict[str, bytes]]
     capture: Callable[..., dict[str, Any]]
     failure_key: str
+    requires_ancestor: bool = True
 
 
 def prepare_install_nodeset_binding_repair(
@@ -76,8 +77,10 @@ def prepare_install_nodeset_binding_repair(
             create=False,
         )
         return saved
-    if ancestor is None or ancestor.get("previousOperationSpecSha256") == scheduling_journal.get(
-        "operationSpecSha256"
+    if (ancestor is None and binding.requires_ancestor) or (
+        ancestor is not None
+        and ancestor.get("previousOperationSpecSha256")
+        == scheduling_journal.get("operationSpecSha256")
     ):
         return ancestor
     candidate = binding.candidate(existing)
@@ -114,8 +117,14 @@ def prepare_install_nodeset_binding_repair(
         or spec.get("target_release") != snapshot.release
         or spec.get("desired_values_sha256") != hashes[VALUES_FILE]
         or spec.get("adapter_sha256") != hashes["soperator-nebius-adapter.yaml"]
-        or ancestor.get("replacementFiles") != hashes
-        or ancestor.get("interventionGeneration") != spec.get("intervention_generation")
+        or (
+            ancestor is not None
+            and (
+                ancestor.get("replacementFiles") != hashes
+                or ancestor.get("interventionGeneration") != spec.get("intervention_generation")
+            )
+        )
+        or (ancestor is None and spec.get("intervention_generation") != 0)
     ):
         raise RuntimeError("NodeSet binding repair changed source, storage or ancestry")
     values = yaml.safe_load(_documents(existing[VALUES_FILE])[0]["data"]["values.yaml"])
@@ -126,7 +135,7 @@ def prepare_install_nodeset_binding_repair(
     def read_kube(args: list[str], document: Mapping[str, Any] | None) -> Mapping[str, Any]:
         if args[0] != "get" or document is not None:
             raise RuntimeError("Topology admission is read-only")
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["kubectl", "--context", kube_context, *args],
             env=dict(env),
             capture_output=True,
@@ -152,7 +161,7 @@ def prepare_install_nodeset_binding_repair(
     state = copy.deepcopy(runner.state)
 
     def read_worker(worker: str, args: list[str]) -> str:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",

@@ -1,0 +1,42 @@
+{
+  "correctness": {
+    "atol": 0.01,
+    "output_allclose": true,
+    "rtol": 0.01
+  },
+  "lab": "32_inference_capstone",
+  "measurements": {
+    "concurrency": 1,
+    "incremental_peak_bytes": {
+      "materialized": 138412032,
+      "sdpa": 2098688
+    },
+    "isl": 2048,
+    "iterations": 10,
+    "max_abs_error": 0.015625,
+    "osl": 1,
+    "timing": {
+      "materialized": {
+        "median_ms": 0.3394,
+        "min_ms": 0.3337,
+        "p90_ms": 0.3619
+      },
+      "sdpa": {
+        "median_ms": 0.0381,
+        "min_ms": 0.0375,
+        "p90_ms": 0.0441
+      }
+    },
+    "variant_order": "candidate-first",
+    "warmup": 3
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 18,
+    "variant_order": "candidate-first",
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

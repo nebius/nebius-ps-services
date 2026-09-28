@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,loop_expert_gemm_median_seconds,value,0.000106,s
+baseline-trial1,padded_grouped_bmm_median_seconds,value,0.00014230000000000002,s
+baseline-trial1,training_step_slowest_rank_median_seconds,value,0.0010135,s
+baseline-trial1,forward_all_to_all_median_seconds,value,0.00026900000000000003,s
+repeat-trial1,loop_expert_gemm_median_seconds,value,0.0001016,s
+repeat-trial1,padded_grouped_bmm_median_seconds,value,0.000123,s
+repeat-trial1,training_step_slowest_rank_median_seconds,value,0.0010041,s
+repeat-trial1,forward_all_to_all_median_seconds,value,0.0002671,s

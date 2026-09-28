@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,payload_bytes_per_second,value,489835000.0,Bps
+baseline-trial1,transfer_seconds,value,7.8e-06,s
+baseline-trial1,transfer_p99_seconds,value,1.4e-05,s
+candidate-trial1,payload_bytes_per_second,value,298499000.0,Bps
+candidate-trial1,transfer_seconds,value,9.9e-06,s
+candidate-trial1,transfer_p99_seconds,value,1.4999999999999999e-05,s

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,7 +36,23 @@ def normalize_project_folder_name(value: str, *, fallback: str) -> str:
     return fallback.strip()
 
 
+_PRIVATE_PROJECT_ROOT: ContextVar[Path | None] = ContextVar("private_project_root", default=None)
+
+
+@contextmanager
+def private_project_root(root: Path) -> Iterator[None]:
+    """Bind internal lifecycle path resolution to one private execution cache."""
+    token = _PRIVATE_PROJECT_ROOT.set(root.resolve())
+    try:
+        yield
+    finally:
+        _PRIVATE_PROJECT_ROOT.reset(token)
+
+
 def find_git_root(start: Path) -> Path:
+    private_root = _PRIVATE_PROJECT_ROOT.get()
+    if private_root is not None and start.resolve().is_relative_to(private_root):
+        return private_root
     try:
         result = subprocess.run(
             ["git", "-C", str(start), "rev-parse", "--show-toplevel"],

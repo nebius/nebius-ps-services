@@ -91,7 +91,7 @@ def read_owner_only_json(path: Path, *, label: str) -> object:
             os.close(descriptor)
 
 
-def write_owner_only_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_owner_only_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Atomically publish JSON through an exclusive owner-only temporary file."""
 
     if path.name in {"", ".", ".."}:
@@ -145,6 +145,15 @@ def write_owner_only_json(path: Path, payload: Mapping[str, Any]) -> None:
             with suppress(FileNotFoundError):
                 os.unlink(temporary_name, dir_fd=parent_descriptor)
         os.close(parent_descriptor)
+
+
+def write_owner_only_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Publish a private lifecycle receipt and its execution recovery checkpoint."""
+    _write_owner_only_json(path, payload)
+
+    from .deployment_recovery import checkpoint_execution
+
+    checkpoint_execution()
 
 
 __all__ = ["read_owner_only_json", "write_owner_only_json"]

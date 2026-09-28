@@ -41,7 +41,7 @@ def owner_directory(kind: str, owner: str) -> Path:
         return Path("evidence") / "profiles" / owner / "sources"
     if kind == "lane" and owner in verifier.LIVE_LANES:
         return Path("evidence") / owner / "artifacts"
-    if kind == "skill" and owner in verifier.REQUIRED_SDLC_SKILLS:
+    if kind == "skill" and owner in verifier.REQUIRED_EVIDENCE_SKILLS:
         return Path("evidence") / "skills" / owner / "artifacts"
     raise ValueError(f"unknown {kind} owner: {owner}")
 

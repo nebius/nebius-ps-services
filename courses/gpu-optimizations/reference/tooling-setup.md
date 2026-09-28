@@ -1,91 +1,8 @@
-# Diagnostic tooling setup
+# Diagnostic tooling reference
 
-A diagnostic tool collects evidence about execution. A monitor samples device
-state over time; a profiler connects activity to operations or a timeline; a
-benchmark runs a declared workload and measures its result. These roles answer
-different questions, even when one product offers more than one role.
+shared environment setup owns the shared installation and readiness checks for Systems, Compute, and private Grafana. Use the same qualified versions throughout the courses. Soperator supplies the existing DCGM collectors, VMAgent, and local VictoriaMetrics database; do not deploy another collector or database for these exercises.
 
-NVIDIA Data Center GPU Manager (DCGM) supplies GPU monitoring and management
-interfaces. DCGM Exporter turns selected DCGM fields into metrics that
-Prometheus, a time-series monitoring system, can collect. NVIDIA's CUDA
-Profiling Tools Interface (CUPTI) supplies activity and performance data to
-profiling tools. Installing one of these components does not create a complete
-monitoring or profiling service; the collection path and permissions still
-have to exist in the environment where the workload runs.
-
-Use this checklist from the allocated compute-node environment. A command that
-exists on the login node but disappears inside a Slurm job is not available to
-the lab. The official installation and user guides are collected in
-[RESOURCES.md](../RESOURCES.md).
-
-## Start with the site-owned path
-
-Prefer the cluster's supported module, container, or base image. Driver tools,
-hardware-counter permissions, CUPTI, DCGM, and profiler versions interact with
-the host driver and security policy. A learner-local package must not replace
-or weaken those controls.
-
-Run the inventory first:
-
-```bash
-sbatch slurm/tooling_preflight.sbatch
-```
-
-Record the PyTorch, CUDA, driver, Nsight, and DCGM versions from the Slurm
-output. Also record which commands are missing. The preflight deliberately
-suppresses hostnames, executable paths, GPU UUIDs, and raw DCGM discovery.
-Installation is complete only when the command is visible inside the same
-allocation used by the labs.
-
-## Installation and ownership map
-
-| Tool | Installation path | Verify in the Slurm job | Owner |
-| --- | --- | --- | --- |
-| `nvidia-smi` | Installed with the NVIDIA driver | `nvidia-smi` | Cluster administrator |
-| PyTorch Profiler | Included in the pinned PyTorch CUDA environment | `python -c 'import torch; print(torch.profiler)'` | Course environment owner |
-| NVTX from PyTorch | Included as `torch.cuda.nvtx` in the PyTorch CUDA environment | `python -c 'import torch; print(torch.cuda.nvtx)'` | Course environment owner |
-| Nsight Systems | Prefer a site module or CUDA Toolkit; NVIDIA also publishes Linux CLI-only packages such as `nsight-systems-cli` | `nsys --version` and `nsys status -e` | Cluster administrator |
-| Nsight Compute | Prefer the CUDA Toolkit or NVIDIA standalone package; the CLI is `ncu` | `ncu --version`, `ncu --list-sets`, `ncu --list-sections`; confirm every set/section used by a lab | Cluster administrator |
-| Roofline analysis | No separate package; it is an Nsight Compute section set and report view | Confirm that `roofline` appears in `ncu --list-sets` | Nsight Compute owner |
-| DCGM | Install the DCGM 4 package that matches the CUDA user-mode driver major version; the host engine and field policy are site services | `dcgmi --version`, `dcgmi discovery -l`, `dcgmi profile --list --entity-id gpu:0` | Cluster administrator |
-| DCGM Exporter | Deploy the NVIDIA exporter against the site-owned DCGM host engine, normally through the cluster monitoring stack | `dcgm-exporter --help`; verify the protected Prometheus target through the site monitoring path | Cluster administrator / monitoring owner |
-| `nvbandwidth` | Build or install NVIDIA's versioned utility in a cluster-approved tools image; retain its commit or release identity | `nvbandwidth --help` | Cluster administrator / performance tools owner |
-| NCCL Tests | Build the NVIDIA test executables against the same NCCL and MPI/runtime family used by the cluster | `all_reduce_perf --help`, `all_gather_perf --help`, `reduce_scatter_perf --help`, `alltoall_perf --help` | Cluster administrator / communication owner |
-| vLLM Bench | Included with a compatible, pinned vLLM environment; keep it separate from the training environment | `vllm bench --help` | Serving environment owner |
-| AIPerf | For new NVIDIA generative-AI benchmarks, use an exact approved version or a hash-locked requirements file in an isolated client environment | `aiperf --help` | Benchmark client owner |
-| MLPerf | Reproduce only with the official benchmark rules, approved implementation, dataset, quality target, and submission scenario | Verify the selected suite's official checker and result format | Benchmark program owner |
-
-Serving benchmarks use AIPerf in the LLM Inference course's isolated client
-and engine environments. Pin the client, preserve its configuration and
-artifact schema, and compare only equivalent metric definitions.
-
-Use only an official package index or a cluster-approved mirror. Do not use an
-unqualified `pip install` on a managed cluster. Record the exact resolved
-version and retain the approved lock or hash file with the private run record.
-
-## Administrator-owned package examples
-
-These are provisioning examples, not learner lab commands:
-
-```bash
-# After the NVIDIA developer-tools repository is configured for the host OS:
-NSYS_PACKAGE_VERSION='replace-with-approved-version'
-sudo apt-get install --yes --no-install-recommends \
-  "nsight-systems-cli=${NSYS_PACKAGE_VERSION}"
-
-# DCGM 4 package name uses the CUDA user-mode driver major version.
-# Replace this example with the version supported by the site's driver stack.
-CUDA_VERSION_MAJOR=13
-DCGM_PACKAGE_VERSION='replace-with-approved-version'
-sudo apt-get install --yes --no-install-recommends \
-  "datacenter-gpu-manager-4-cuda${CUDA_VERSION_MAJOR}=${DCGM_PACKAGE_VERSION}"
-```
-
-Nsight Compute may arrive with the CUDA Toolkit or a standalone NVIDIA
-installer. Package names and supported distributions change, so the cluster
-owner must use the current official installation guide rather than copying an
-old versioned package name. Learners should not run these administrator
-commands on a managed cluster.
+PyTorch Profiler remains useful for operator dispatch in the advanced labs. Use the explicit external-only branch when collecting a separate Nsight trace, so two CUDA profilers do not compete for the same process. Profiling, sanitizers, and telemetry answer different questions; confirm an optimization with repeated unprofiled runs and the lab's correctness contract.
 
 ## What each tool can prove
 
@@ -121,6 +38,10 @@ load client for service-level latency and throughput, and MLPerf only when the
 formal benchmark contract is actually being reproduced.
 
 ## Permissions and profiler coordination
+
+Inside an allocated worker, `nsys status -e` reports capture prerequisites and
+`ncu --list-sets` lists the installed collection sets. These are diagnostic
+checks; shared environment setup's actual canary captures establish readiness for this runtime.
 
 An `ERR_NVGPUCTRPERM`-style error is a recorded permission blocker. Escalate it
 to the cluster owner; do not weaken host security. DCGM profiling fields and

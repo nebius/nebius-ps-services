@@ -2278,10 +2278,10 @@ def save_requirements_refinement(
     return validated
 
 
-def verify_requirements_refinement_contract(
+def _ready_requirements_refinement(
     workspace_path: Path, run_id: str
-) -> dict[str, object]:
-    """Bind the latest accepted intent to the exact compiled requirements file."""
+) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+    """Read the current requirements lock without requiring or settling design."""
 
     manifest_path = workspace_path.expanduser().resolve()
     workspace = validate_workspace(manifest_path)
@@ -2343,6 +2343,34 @@ def verify_requirements_refinement_contract(
             "REQUIREMENTS_REFINEMENT_REQUIRED",
             "docs/requirements.md changed after the latest refinement was compiled",
         )
+    return project_root, run_dir, binding, refinement
+
+
+def verify_requirements_refinement_ready(
+    workspace_path: Path, run_id: str
+) -> dict[str, object]:
+    """Check admission to context/design only; publish no impact authority."""
+
+    _project_root, _run_dir, _binding, refinement = _ready_requirements_refinement(
+        workspace_path, run_id
+    )
+    return {
+        "action": "requirements_refinement_ready",
+        "run_id": run_id,
+        "revision": refinement["revision"],
+        "intent_sha256": refinement["intent_sha256"],
+        "compiled_requirements_sha256": refinement["compiled_requirements_sha256"],
+    }
+
+
+def verify_requirements_refinement_contract(
+    workspace_path: Path, run_id: str
+) -> dict[str, object]:
+    """Settle complete prompt impact after requirements and design are ready."""
+
+    project_root, run_dir, binding, refinement = _ready_requirements_refinement(
+        workspace_path, run_id
+    )
     try:
         impact, impact_sha256 = publish_prompt_impact(
             project_root, run_dir, binding, refinement
@@ -2352,9 +2380,9 @@ def verify_requirements_refinement_contract(
     return {
         "action": "requirements_refinement_verified",
         "run_id": run_id,
-        "revision": latest["revision"],
-        "intent_sha256": latest["intent_sha256"],
-        "compiled_requirements_sha256": digest,
+        "revision": refinement["revision"],
+        "intent_sha256": refinement["intent_sha256"],
+        "compiled_requirements_sha256": refinement["compiled_requirements_sha256"],
         "impact": public_impact_status(impact),
         "impact_sha256": impact_sha256,
     }
@@ -3707,9 +3735,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser.add_argument("--prompt", type=Path)
     verify_parser.add_argument("--run-id")
     verify_parser.add_argument("--json", action="store_true")
+    refinement_ready_parser = subparsers.add_parser(
+        "refinement-ready",
+        help="Internal: read-only requirements admission to context/design.",
+    )
+    refinement_ready_parser.add_argument("--workspace", required=True, type=Path)
+    refinement_ready_parser.add_argument("--run-id", required=True)
+    refinement_ready_parser.add_argument("--json", action="store_true")
     refinement_verify_parser = subparsers.add_parser(
         "refinement-verify",
-        help="Internal: verify the latest prompt-to-requirements lock.",
+        help="Internal: settle prompt impact after canonical design is ready.",
     )
     refinement_verify_parser.add_argument("--workspace", required=True, type=Path)
     refinement_verify_parser.add_argument("--run-id", required=True)
@@ -3801,6 +3836,8 @@ def main(argv: list[str] | None = None) -> int:
             result = cancel_queued_prompt(args.workspace, args.prompt)
         elif args.command == "queue-next":
             result = activate_queue_head(args.workspace)
+        elif args.command == "refinement-ready":
+            result = verify_requirements_refinement_ready(args.workspace, args.run_id)
         elif args.command == "refinement-verify":
             result = verify_requirements_refinement_contract(
                 args.workspace, args.run_id

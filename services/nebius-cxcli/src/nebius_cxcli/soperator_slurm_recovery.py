@@ -314,13 +314,13 @@ def _subjects(event: Mapping[str, object]) -> list[str]:
     subjects: list[str] = []
     for key in ("job_ids", "node_names"):
         value = event.get(key)
-        if isinstance(value, list):
+        if isinstance(value, (list, tuple)):
             subjects.extend(str(item) for item in value if str(item or "").strip())
     reservation = str(event.get("reservation_name") or "").strip()
     if reservation:
         subjects.append(reservation)
     partitions = event.get("partitions")
-    if isinstance(partitions, list):
+    if isinstance(partitions, (list, tuple)):
         subjects.extend(
             str(item.get("partition") or "")
             for item in partitions

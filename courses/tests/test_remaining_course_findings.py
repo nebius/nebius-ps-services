@@ -69,10 +69,10 @@ def test_course_validator_passes(course: str) -> None:
 
 def test_root_catalog_order_and_prerequisites() -> None:
     document = (ROOT / "README.md").read_text()
-    positions = [document.index(f"]({course}/README.md)") for course in COURSES]
+    positions = [document.index(f"]({course}/index.html)") for course in COURSES]
     assert positions == sorted(positions)
-    assert "Fundamentals and Optimizations are prerequisites" in document
-    assert "not prerequisites for Custom CUDA" in document
+    assert positions[0] < positions[1] < positions[2]
+    assert "these specializations are independent" in " ".join(document.split())
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -166,6 +166,7 @@ def test_only_official_https_references_are_published() -> None:
     allowed = {
         "arxiv.org",
         "docs.nvidia.com",
+        "docs.nebius.com",
         "developer.nvidia.com",
         "docs.pytorch.org",
         "pytorch.org",
@@ -175,6 +176,7 @@ def test_only_official_https_references_are_published() -> None:
         "slurm.schedmd.com",
         "cmake.org",
         "www.lmsys.org",
+        "grafana.com",
     }
     from urllib.parse import urlparse
 
@@ -186,6 +188,7 @@ def test_only_official_https_references_are_published() -> None:
             urlparse(url).hostname in allowed
             or url.startswith("https://github.com/NVIDIA/")
             or url.startswith("https://github.com/triton-inference-server/")
+            or url.startswith("https://github.com/linux-rdma/perftest/")
             for url in urls
         )
 

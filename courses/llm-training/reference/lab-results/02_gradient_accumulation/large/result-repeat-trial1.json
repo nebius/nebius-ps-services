@@ -1,0 +1,27 @@
+{
+  "correctness": {
+    "sampled_gradients_match": true
+  },
+  "lab": "02_gradient_accumulation",
+  "measurements": {
+    "accumulated": {
+      "median_elapsed_ms": 34.4448,
+      "median_peak_allocated_mib": 5706.5
+    },
+    "full_batch": {
+      "median_elapsed_ms": 3.1786,
+      "median_peak_allocated_mib": 4682.0
+    },
+    "microbatch": 16,
+    "sampled_max_gradient_error": 1e-07,
+    "total_batch": 128
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -20,7 +20,6 @@ from .component_sources import (
     reset_component_sources_cache,
 )
 from .soperator_release import (
-    SOPERATOR_UPSTREAM_REGISTRY,
     SOPERATOR_UPSTREAM_UMBRELLA_CHART,
     SoperatorVersion,
 )
@@ -218,14 +217,13 @@ def _entry_from_helm_chart(
     )
 
 
-def soperator_install_entry(version: str) -> ComponentEntry:
+def soperator_install_entry(version: str, *, chart_repo: str) -> ComponentEntry:
     """Return the internal entry for one frozen official Soperator release."""
     raw_version = str(version or "").strip()
     if not raw_version or raw_version.lower() == "latest":
         raise ValueError("Soperator internal entries require an exact frozen X.Y.Z release")
     normalized_version = str(SoperatorVersion.parse(raw_version))
     chart_name = SOPERATOR_UPSTREAM_UMBRELLA_CHART
-    chart_repo = f"{SOPERATOR_UPSTREAM_REGISTRY}/{chart_name}"
     settings = soperator_wizard_settings()
     return _entry_from_helm_chart(
         component_id="soperator",
@@ -295,6 +293,13 @@ def component_entries(
     *,
     source_profile: SourceProfile | None = None,
 ) -> tuple[ComponentEntry, ...]:
+    from .frozen_catalog import active_catalog
+
+    if active_catalog() is not None:
+        # Process-global LRU entries cannot carry an operation-scoped catalog.
+        # Bypass them without clearing another concurrent operation's caches.
+        factory = _infra_component_entries if scope == "infra" else _app_component_entries
+        return factory.__wrapped__(source_profile)
     if scope == "infra":
         return _infra_component_entries(source_profile)
     return _app_component_entries(source_profile)

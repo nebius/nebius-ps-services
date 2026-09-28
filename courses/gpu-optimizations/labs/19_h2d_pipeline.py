@@ -10,11 +10,12 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,7 +34,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
-    width = 512 if args.profile == "smoke" else 2048
+    width = 512 if args.profile == "small" else 2048
     compute = torch.cuda.Stream()
     copy = torch.cuda.Stream() if args.mode == "pipeline" else compute
     hosts = [torch.empty((width, width), pin_memory=True) for _ in range(args.slots)]
@@ -79,7 +80,7 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     torch.set_num_threads(1)
     torch.backends.cuda.matmul.allow_tf32 = False
     with torch.inference_mode():
@@ -110,4 +111,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

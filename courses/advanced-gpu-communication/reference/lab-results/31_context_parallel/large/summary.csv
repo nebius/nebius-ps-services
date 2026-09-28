@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,step_seconds,value,1.4992718696594238,s
+baseline-trial1,tokens_per_second,value,175839.24413369622,count:tokens/s
+baseline-trial1,parameter_error,value,0.00048828125,none
+candidate-trial1,step_seconds,value,0.7351466417312622,s
+candidate-trial1,tokens_per_second,value,357049.01566280663,count:tokens/s
+candidate-trial1,parameter_error,value,0.00048828125,none

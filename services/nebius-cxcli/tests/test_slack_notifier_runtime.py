@@ -102,7 +102,7 @@ def test_secret_has_keys_treats_explicit_kubernetes_not_found_as_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        slack_runtime.subprocess,
+        slack_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=("kubectl",),
@@ -124,7 +124,7 @@ def test_secret_has_keys_does_not_treat_free_text_not_found_as_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        slack_runtime.subprocess,
+        slack_runtime.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=("kubectl",),
@@ -143,10 +143,12 @@ def test_secret_has_keys_does_not_treat_free_text_not_found_as_absent(
         )
 
 
-def test_target_kube_context_reads_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_target_kube_context_does_not_infer_from_process_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("NEBIUS_CXCLI_TARGET_KUBE_CONTEXT", "cluster1-context")
 
-    assert slack_runtime._target_kube_context({}) == "cluster1-context"
+    assert slack_runtime._target_kube_context({}) == ""
 
 
 def test_existing_webhook_requires_target_specific_env_for_target_ref(

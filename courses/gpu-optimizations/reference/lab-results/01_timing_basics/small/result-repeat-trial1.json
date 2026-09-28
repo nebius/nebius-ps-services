@@ -1,0 +1,21 @@
+{
+  "correctness": {
+    "finite_output": true
+  },
+  "lab": "01_timing_basics",
+  "measurements": {
+    "cuda_events": {
+      "median_ms": 0.035,
+      "min_ms": 0.0336,
+      "p90_ms": 0.0361
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

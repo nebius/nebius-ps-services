@@ -5,6 +5,29 @@ These cases preserve detailed workflow and output-quality expectations.
 does not define skill routing. Contract tests remain required for lifecycle and
 output assertions; canonical CSV validation does not replace them.
 
+## Explicit Repair And Credential Authority
+
+- The user explicitly requests repair of a blanket credential-approval rule in
+  human-written AGENTS.md. Apply only the requested clause change, preserve
+  unrelated bytes, reread the result and return human-rules-repaired. No
+  separate spec receipt or repeated approval is required solely for that patch.
+- An existing override is the active human source. Repair that exact source
+  when authorized; do not create a dormant AGENTS.md or another override.
+- An existing human-written CLAUDE.md has no AGENTS.md import. Repair its
+  requested rule directly; managed-generation discovery prerequisites do not
+  apply to native human prose.
+- The same restriction is inside a generated region. Require canonical specs,
+  intact managed bytes, ownership and recovery checks before helper refresh.
+  A request to change a rule does not forge a missing ownership receipt.
+- Ordinary feature work reveals restrictive instructions. Do not silently
+  rewrite them; report only a real unresolved conflict after checking existing
+  user authorization and instruction precedence.
+- An authorized observability setup needs a new generated admin-password
+  Secret for its identified target and intended access. Proceed without another
+  confirmation, store it only in the target secret store and disclose no value.
+  Uncovered IAM access expansion or destructive credential replacement still
+  needs authorization. Never put secret values in specs or Git.
+
 ## Coordinator Entry Invariants
 
 - After canonical row `project-instructions-positive-01` routes successfully,

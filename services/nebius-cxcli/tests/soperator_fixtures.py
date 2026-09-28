@@ -13,7 +13,6 @@ from nebius_cxcli.soperator_infrastructure_identity import (
 from nebius_cxcli.soperator_release import (
     SOPERATOR_MAIN_RELEASE_NAME,
     SOPERATOR_RELEASE_SNAPSHOT_SCHEMA,
-    SOPERATOR_UPSTREAM_REGISTRY,
     SOPERATOR_UPSTREAM_REPOSITORY,
     SoperatorChartSnapshot,
     SoperatorReleaseGraphNode,
@@ -26,6 +25,7 @@ from nebius_cxcli.soperator_release import (
 def sample_snapshot(
     *,
     release: str = "4.1.7",
+    target_ref: str = "soperator",
     release_names: tuple[str, ...] = (SOPERATOR_MAIN_RELEASE_NAME,),
     source_contract: str = "upstream-flux-v1",
     third_party_release_chart_keys: Mapping[str, str] | None = None,
@@ -65,6 +65,11 @@ def sample_snapshot(
     return seal_soperator_release_snapshot(
         SoperatorReleaseSnapshot(
             schema=SOPERATOR_RELEASE_SNAPSHOT_SCHEMA,
+            target_ref=target_ref,
+            request_sha256="sha256:" + "e" * 64,
+            stage_graphs={},
+            auxiliary_artifacts={},
+            post_render_patches=(),
             selector=release,
             release=release,
             repository=SOPERATOR_UPSTREAM_REPOSITORY,
@@ -75,7 +80,7 @@ def sample_snapshot(
             archive_sha256=digest,
             archive_root=f"soperator-{release}",
             source_manifest_sha256="sha256:" + "5" * 64,
-            registry=SOPERATOR_UPSTREAM_REGISTRY,
+            registry="oci://cr.eu-north1.nebius.cloud/soperator",
             capability_contract=source_contract,
             capability_sha256="sha256:" + "6" * 64,
             charts={"umbrella": chart},
@@ -185,3 +190,104 @@ def sample_jail_logs_binding():
         },
     ]
     return values, documents
+
+
+def _enabled(value, *, default=False):
+    return value is True if value is not None else default
+
+
+def _nested(values, *path):
+    current = values
+    for key in path:
+        if not isinstance(current, Mapping):
+            return {}
+        current = current.get(key)
+    return current if isinstance(current, Mapping) else {}
+
+
+def expected_soperator_release_names(values: Mapping[str, object]) -> frozenset[str]:
+    names = {
+        "soperator-fluxcd-ns",
+        "soperator-fluxcd-kruise",
+        "soperator-fluxcd-security-profiles-operator",
+        "soperator-fluxcd-custom-configmaps",
+        "soperator-fluxcd-soperator",
+        "soperator-fluxcd-nodeconfigurator",
+        "soperator-fluxcd-slurm-cluster",
+    }
+    if _enabled(_nested(values, "certManager").get("enabled"), default=True):
+        names.add("soperator-fluxcd-cert-manager")
+    if _enabled(_nested(values, "mariadbOperator").get("enabled"), default=True):
+        names.update(
+            {
+                "soperator-fluxcd-mariadb-operator-crds",
+                "soperator-fluxcd-mariadb-operator",
+            }
+        )
+    if _enabled(_nested(values, "soperator", "soperatorChecks").get("enabled"), default=True):
+        names.add("soperator-fluxcd-soperatorchecks")
+    if _enabled(_nested(values, "nodesets").get("enabled")):
+        names.add("soperator-fluxcd-nodesets")
+    if _enabled(_nested(values, "soperatorActiveChecks").get("enabled"), default=True):
+        names.add("soperator-fluxcd-soperator-activechecks")
+    if _enabled(_nested(values, "storageClasses").get("enabled")):
+        names.add("soperator-fluxcd-storageclasses")
+    backup = _nested(values, "backup")
+    if _enabled(backup.get("enabled")):
+        names.add("soperator-fluxcd-k8up")
+        if _enabled(_nested(backup, "config").get("enabled")):
+            names.add("soperator-fluxcd-backup-config")
+    observability = _nested(values, "observability")
+    if _enabled(observability.get("enabled")):
+        vm_stack = _nested(observability, "vmStack")
+        vm_logs_enabled = _enabled(_nested(observability, "vmLogs").get("enabled"), default=True)
+        vm_stack_enabled = _enabled(vm_stack.get("enabled"), default=True)
+        if _enabled(_nested(observability, "prometheusOperator").get("enabled"), default=True):
+            names.add("soperator-fluxcd-prometheus-operator-crds")
+        if vm_logs_enabled:
+            names.add("soperator-fluxcd-vm-logs")
+        if vm_stack_enabled:
+            names.update(
+                {
+                    "soperator-fluxcd-victoria-metrics-operator-crds",
+                    "soperator-fluxcd-vm-stack",
+                }
+            )
+            token_kind = str(observability.get("publicEndpointTokenKind") or "secret")
+            writer = _nested(vm_stack, "tsaToken", "writer")
+            if (
+                _enabled(observability.get("publicEndpointEnabled"), default=True)
+                and token_kind == "secret"
+                and _enabled(writer.get("enabled"), default=True)
+            ):
+                names.add("soperator-fluxcd-tsa-token-writer")
+        opentelemetry = _nested(observability, "opentelemetry")
+        if _enabled(opentelemetry.get("enabled"), default=True):
+            names.update(
+                {
+                    "soperator-fluxcd-opentelemetry-collector-events",
+                    "soperator-fluxcd-opentelemetry-collector-logs",
+                }
+            )
+            if _enabled(
+                _nested(opentelemetry, "logs", "values", "jailLogs").get("enabled"),
+                default=True,
+            ):
+                names.add("soperator-fluxcd-opentelemetry-collector-jail-logs")
+        if _enabled(_nested(observability, "dcgmExporter").get("enabled"), default=True):
+            names.add("soperator-fluxcd-dcgm-exporter")
+        if _enabled(_nested(values, "notifier").get("enabled")) and _enabled(
+            _nested(observability, "vmStack").get("enabled"), default=True
+        ):
+            names.add("soperator-fluxcd-soperator-notifier")
+    if _enabled(_nested(values, "soperator", "monitoringDashboards").get("enabled")):
+        names.add("soperator-fluxcd-monitoring-dashboards")
+    return frozenset(names)
+
+
+def sample_selected_graph(lock, values):
+    names = expected_soperator_release_names(values)
+    nodes = {node.release_name: node for node in lock.release_graph}
+    if names - nodes.keys():
+        raise ValueError("Soperator values enable an unverified release")
+    return tuple(nodes[name] for name in sorted(names))

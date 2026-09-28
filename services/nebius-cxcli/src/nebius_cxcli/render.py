@@ -23,7 +23,7 @@ from .observability import (
     materialize_observability_infra_values,
 )
 from .paths import ProjectPaths
-from .project_bundle_transaction import normalize_project_bundle_target
+from .project_bundle_transaction import ProjectBundleTransaction, normalize_project_bundle_target
 from .soperator_child_charts import materialize_soperator_child_chart_values
 from .soperator_config_materialization import (
     _materialize_soperator_component_defaults,
@@ -51,7 +51,12 @@ _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
         "ordinary-apps-baseline.json",
-        "soperator-install-plan.json",
+        "deployment-applications.json",
+        # Admission is refreshed by validation during an executing lifecycle.
+        # A render tombstone would invalidate its own committed generation.
+        "compatibility-admission.json",
+        "soperator-campaign-application-generations.json",
+        "soperator-campaign-dependencies.json",
         "soperator-release-reconcile.json",
         "soperator-upgrade-report.md",
         "soperator-upgrade-report.json",
@@ -70,6 +75,9 @@ _LIFECYCLE_REPORT_GLOBS = (
     "deploy-gpu-visibility-report*.json",
     "soperator-campaign-checks-*.json",
     "soperator-checks-*.json",
+    "soperator-fast-readiness-*.json",
+    "destroy-*.json",
+    # Unsupported predecessor receipts require explicit operator retirement.
     "soperator-destroy-*.json",
     "soperator-install-render-repair-*.json",
     "soperator-install-checks-repair-*.json",
@@ -88,9 +96,7 @@ _LIFECYCLE_REPORT_GLOBS = (
     "soperator-slurm-actions-*.json",
     "soperator-upgrade-admission-*.json",
 )
-_LIFECYCLE_REPORT_DIRNAMES = frozenset(
-    {".locks", "soperator-clusters", "soperator-discovery", "soperator-install-history"}
-)
+_LIFECYCLE_REPORT_DIRNAMES = frozenset({".locks", "soperator-clusters", "soperator-discovery"})
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
 _TERRAFORM_RUNTIME_NAMES = frozenset(
     {
@@ -278,6 +284,55 @@ def build_project_generation_plan(
     )
 
 
+def completed_render_generation_matches(
+    *,
+    paths: ProjectPaths,
+    desired: ProjectGenerationPlan,
+    admitted_sha256: str,
+    admitted_preimage_sha256: str,
+) -> bool:
+    """Verify an admitted publication after its tombstones have taken effect.
+
+    A fresh render cannot reproduce deleted-file preimages. Recover those
+    from the completed transaction, verify both admitted digests, and prove
+    every current render-owned byte. Lifecycle receipts belong to their
+    writers, so a historical render deletion cannot own their later contents.
+    """
+    journal = ProjectBundleTransaction(paths.project_dir).completed_generation()
+    if journal is None or journal["generationSha256"] != admitted_sha256:
+        return False
+    writes: dict[Path, bytes] = {}
+    removals: list[Path] = []
+    preimages: dict[Path, str] = {}
+    lifecycle = set(_lifecycle_report_artifact_paths(paths.reports_dir))
+    for item in journal["targets"]:
+        target = normalize_project_bundle_target(paths.project_dir, Path(item["path"]))
+        preimages[target] = item["oldSha256"]
+        if item["action"] == "write":
+            content = desired.writes.get(target)
+            if (
+                content is None
+                or "sha256:" + hashlib.sha256(content).hexdigest() != item["newSha256"]
+            ):
+                return False
+            if _project_generation_target_preimage(target) != item["newSha256"]:
+                return False
+            writes[target] = content
+        else:
+            removals.append(target)
+            observed = _project_generation_target_preimage(target)
+            if target not in lifecycle and observed != "absent":
+                return False
+    if set(writes) != set(desired.writes) or not set(desired.removals) <= set(removals):
+        return False
+    return project_generation_plan_fingerprints(
+        project_dir=paths.project_dir,
+        writes=writes,
+        removals=tuple(sorted(removals)),
+        expected_preimages=preimages,
+    ) == (admitted_sha256, admitted_preimage_sha256)
+
+
 def _project_generation_target_preimage(path: Path) -> str:
     try:
         metadata = path.lstat()
@@ -410,7 +465,7 @@ def promote_staged_generated_paths(
             backup_dir = final_paths.project_dir / f".generated-backup-{uuid4().hex}"
             final_paths.generated_dir.rename(backup_dir)
         staged_paths.generated_dir.rename(final_paths.generated_dir)
-    except Exception:
+    except BaseException:
         if (
             backup_dir is not None
             and backup_dir.exists()

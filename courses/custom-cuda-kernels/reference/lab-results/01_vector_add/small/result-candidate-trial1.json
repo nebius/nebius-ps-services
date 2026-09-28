@@ -1,0 +1,24 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "01_vector_add",
+  "measurements": {
+    "blocks": 8,
+    "elements": 1003,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.005152,
+    "kernel_min_ms": 0.004928,
+    "kernel_p90_ms": 0.00576,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 0,
+    "threads_per_block": 128,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "threads": 128,
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

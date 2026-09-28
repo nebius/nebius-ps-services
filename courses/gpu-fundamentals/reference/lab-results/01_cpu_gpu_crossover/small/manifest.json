@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "f9b5bde1f8e345d6ac8fdedd518e75c027494e8c1c8488f52f58fc742c7c28aa",
+      "sha256": "322305590842e7160bd661e668ad5cc443d5fdb0c896a9998441c9b0e549d596",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "98a46371a4da53ef502daa7cebbd8381faa95ba3f7cce1c827ef54f3fc27fb54",
+      "sha256": "1c8c18ba931c26a7ce2c090fb4ad2907babc4fbc357e375b4455dcb2c9f3d8bb",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "b62ecc40bb0f0080385e49cb3108f60e614ab08965bb9a693984ee6eb4e64093",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "63e4144b5021e319d85f9fded795597541c5ea12677561884c7da10a9e8063c3",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "d8c4290f8f9e74f1287af8d3d2121230a11113d5922a5324aa967744bf89007e",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "1687e7f8542eb9a4bdf28591e64fc33962b36562ae6e7bfdde9131daab0abb40",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "4cfdc216bbc11eb70fe42d98125778135c2d1a394ad78fd3741dcc109adc7245",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_cpu_gpu_crossover",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "cf6b8c4761d4c6c38f78945ebfabe7fca03844a0382cbd7ef39a4dd2eee824ea"
+}

@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -332,6 +332,47 @@ class QuotaReport:
             "coverage_gaps": [asdict(item) for item in self.coverage_gaps],
             "errors": list(self.errors),
         }
+
+
+def deployment_quota_report(report: QuotaReport) -> QuotaReport:
+    """Project physical-capacity rows into shared, net-new quota allowance checks."""
+    groups: dict[tuple[str, str], list[QuotaCheck]] = {}
+    for check in report.checks:
+        groups.setdefault((check.quota_name, check.region), []).append(check)
+    checks: list[QuotaCheck] = []
+    for rows in groups.values():
+        if not any(
+            row.source_scope.startswith("capacity-dashboard")
+            or row.quota_name.startswith(("compute.instance.gpu.", "gpu.capacity."))
+            for row in rows
+        ):
+            checks.extend(rows)
+            continue
+        available_values = [
+            available
+            for row in rows
+            for limit, usage in (
+                (row.tenant_limit, row.tenant_usage),
+                (row.project_limit, row.project_usage),
+            )
+            if (available := _available_quota(limit, usage)) is not None
+        ]
+        available = min(available_values) if available_values else None
+        required = sum(row.required for row in rows)
+        checks.append(
+            replace(
+                rows[0],
+                component_label=", ".join(dict.fromkeys(row.component_label for row in rows)),
+                required=required,
+                available=available,
+                sufficient=None if available is None else required <= available,
+                source_scope="quota-allowance",
+                description="Tenant/project GPU quota allowance",
+                reason="; ".join(dict.fromkeys(row.reason for row in rows)),
+                contributors=tuple(item for row in rows for item in row.contributors),
+            )
+        )
+    return replace(report, checks=tuple(checks))
 
 
 def _format_amount(amount: int | None, unit: str) -> str:

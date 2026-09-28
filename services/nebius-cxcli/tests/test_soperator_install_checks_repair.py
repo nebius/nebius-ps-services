@@ -268,7 +268,7 @@ def test_hook_recovery_is_fenced_and_uid_scoped(monkeypatch, hook, mode):
         hook["spec"]["activeDeadlineSeconds"] = patch[-1]["value"]
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(repair.subprocess, "run", run)
+    monkeypatch.setattr(repair.kubernetes_process, "run", run)
 
     def authority():
         if mode == "lost-authority":

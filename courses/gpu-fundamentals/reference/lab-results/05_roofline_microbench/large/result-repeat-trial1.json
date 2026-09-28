@@ -1,0 +1,33 @@
+{
+  "correctness": {
+    "finite_outputs": true
+  },
+  "lab": "05_roofline_microbench",
+  "measurements": {
+    "bandwidth_kernel": {
+      "arithmetic_intensity_flop_per_byte": 0.1667,
+      "estimated_gib_per_s": 3965.93,
+      "timing": {
+        "median_ms": 0.3607,
+        "min_ms": 0.3579,
+        "p90_ms": 0.3631
+      }
+    },
+    "gemm": {
+      "achieved_tflops": 780.13,
+      "timing": {
+        "median_ms": 1.4094,
+        "min_ms": 1.4063,
+        "p90_ms": 1.4503
+      }
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

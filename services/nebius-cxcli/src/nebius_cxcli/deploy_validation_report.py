@@ -248,7 +248,11 @@ def _build_validation_result(
     return DeployValidationResult(
         kind=kind,
         name=_validation_display_name(kind, spec=spec, payload=payload),
-        status="passed" if passed else "failed",
+        status="skipped"
+        if passed and payload.get("skipped") is True
+        else "passed"
+        if passed
+        else "failed",
         report_path=report_path,
         report_exists=True,
         summary=summary,

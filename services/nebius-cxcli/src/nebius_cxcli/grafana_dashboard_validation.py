@@ -7,6 +7,7 @@ import re
 import time
 from base64 import b64encode
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -23,8 +24,9 @@ from .grafana_runtime import (
     GRAFANA_TARGET_CLUSTER_ID_ENV,
     _active_grafana_rows,
     _grafana_admin_credentials,
-    _grafana_base_url,
     _grafana_component_id,
+    grafana_api_endpoint,
+    grafana_api_environment,
     grafana_release_specs,
 )
 from .runtime_config import to_plain_data
@@ -730,8 +732,7 @@ def _validate_loki(
     label_query = '{__bucket__="default"}'
     if target_cluster_id:
         label_query = (
-            '{__bucket__="default", '
-            f'k8s_cluster_id=~"{_regex_literal(target_cluster_id)}"' + "}"
+            f'{{__bucket__="default", k8s_cluster_id=~"{_regex_literal(target_cluster_id)}"' + "}"
         )
     labels_payload: Any = {}
     try:
@@ -1008,206 +1009,220 @@ def validate_grafana_dashboard_fits(
     if progress_callback is not None:
         progress_callback("init", 0, total_checks)
     for spec in release_specs:
-        spec_extra_env = _extra_env_for_target(spec.target_ref)
-        target_cluster_id = str(
-            (spec_extra_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV) or ""
-        ).strip()
-        base_url = _grafana_base_url(spec, extra_env=spec_extra_env)
-        credentials = _grafana_admin_credentials(spec, extra_env=spec_extra_env)
-        if not base_url or not credentials:
-            for contract in contracts:
-                datasource = contract.datasource
-                dashboard_ref = contract.dashboard_ref
-                progress_label = _progress_label(
-                    target=spec.target_ref,
-                    dashboard_ref=dashboard_ref,
+        with ExitStack() as endpoint_stack:
+            spec_extra_env = _extra_env_for_target(spec.target_ref)
+            target_cluster_id = str(
+                (spec_extra_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV) or ""
+            ).strip()
+            endpoint_error = ""
+            try:
+                spec_extra_env = grafana_api_environment(spec_extra_env)
+                base_url = endpoint_stack.enter_context(
+                    grafana_api_endpoint(spec, extra_env=spec_extra_env, loopback_only=True)
                 )
-                _progress_start(progress_label)
-                _append_result(
-                    progress_label,
-                    DashboardFitResult(
-                        target_ref=spec.target_ref,
-                        signal=contract.signal,
-                        dashboard_ref=dashboard_ref,
-                        dashboard_uid=contract.dashboard_uid,
-                        datasource=datasource.name,
-                        datasource_uid=datasource.uid,
-                        datasource_type=datasource.datasource_type,
-                        read_endpoint=datasource.read_endpoint,
-                        source=_dashboard_source_label(contract),
-                        errors=("Grafana URL or admin credentials could not be resolved",),
-                    ),
-                )
-            continue
-        username, password = credentials
-        try:
-            grafana_datasources = _grafana_get_json(
-                base_url,
-                "api/datasources",
-                username=username,
-                password=password,
+            except RuntimeError as exc:
+                base_url = ""
+                endpoint_error = str(exc)
+            credentials = (
+                _grafana_admin_credentials(spec, extra_env=spec_extra_env) if base_url else None
             )
-        except RuntimeError as exc:
-            for contract in contracts:
-                datasource = contract.datasource
-                dashboard_ref = contract.dashboard_ref
-                progress_label = _progress_label(
-                    target=spec.target_ref,
-                    dashboard_ref=dashboard_ref,
-                )
-                _progress_start(progress_label)
-                _append_result(
-                    progress_label,
-                    DashboardFitResult(
-                        target_ref=spec.target_ref,
-                        signal=contract.signal,
+            if not base_url or not credentials:
+                for contract in contracts:
+                    datasource = contract.datasource
+                    dashboard_ref = contract.dashboard_ref
+                    progress_label = _progress_label(
+                        target=spec.target_ref,
                         dashboard_ref=dashboard_ref,
-                        dashboard_uid=contract.dashboard_uid,
-                        datasource=datasource.name,
-                        datasource_uid=datasource.uid,
-                        datasource_type=datasource.datasource_type,
-                        read_endpoint=datasource.read_endpoint,
-                        source=_dashboard_source_label(contract),
-                        errors=(str(exc),),
-                    ),
-                )
-            continue
-        live_by_uid = (
-            {
-                str(item.get("uid") or ""): item
-                for item in grafana_datasources
-                if isinstance(item, Mapping)
-            }
-            if isinstance(grafana_datasources, list)
-            else {}
-        )
-        for contract in contracts:
-            datasource = contract.datasource
-            dashboard_ref = contract.dashboard_ref
-            progress_label = _progress_label(
-                target=spec.target_ref,
-                dashboard_ref=dashboard_ref,
-            )
-            _progress_start(progress_label)
-            dashboard_json = str(contract.dashboard_spec.get("json") or "").strip()
-            dashboard_uid = contract.dashboard_uid or _dashboard_json_uid(dashboard_json)
-            dashboard_source = _dashboard_source_label(contract)
-            errors: list[str] = []
-            warnings: list[str] = []
-            checks: list[str] = []
-            if target_cluster_id and contract.signal in {"metrics", "logs"}:
-                checks.append(f"Target cluster ID: {target_cluster_id}")
-            elif spec.target_ref and contract.signal in {"metrics", "logs"}:
-                warnings.append(
-                    "Target cluster ID was not resolved; dashboard variables were validated with "
-                    "wildcard values"
-                )
-            live_datasource = _mapping(live_by_uid.get(datasource.uid))
-            if not live_datasource:
-                errors.append(
-                    f"Grafana datasource {datasource.name} with UID {datasource.uid} is missing"
-                )
-            elif str(live_datasource.get("type") or "").strip() != datasource.datasource_type:
-                errors.append(
-                    f"Grafana datasource {datasource.name} has type "
-                    f"{live_datasource.get('type')}, expected {datasource.datasource_type}"
-                )
-            dashboard_payload: Mapping[str, Any] | None = None
-            if dashboard_json:
-                try:
-                    dashboard_payload = _dashboard_payload(dashboard_json)
-                except RuntimeError as exc:
-                    errors.append(str(exc))
-                imported_payload, import_warnings = _dashboard_import_payload(
-                    base_url=base_url,
+                    )
+                    _progress_start(progress_label)
+                    _append_result(
+                        progress_label,
+                        DashboardFitResult(
+                            target_ref=spec.target_ref,
+                            signal=contract.signal,
+                            dashboard_ref=dashboard_ref,
+                            dashboard_uid=contract.dashboard_uid,
+                            datasource=datasource.name,
+                            datasource_uid=datasource.uid,
+                            datasource_type=datasource.datasource_type,
+                            read_endpoint=datasource.read_endpoint,
+                            source=_dashboard_source_label(contract),
+                            errors=(
+                                endpoint_error
+                                or "Grafana URL or admin credentials could not be resolved",
+                            ),
+                        ),
+                    )
+                continue
+            username, password = credentials
+            try:
+                grafana_datasources = _grafana_get_json(
+                    base_url,
+                    "api/datasources",
                     username=username,
                     password=password,
-                    dashboard_uid=dashboard_uid,
                 )
-                warnings.extend(import_warnings)
-                if imported_payload and _dashboard_json_uid(dashboard_json) != dashboard_uid:
+            except RuntimeError as exc:
+                for contract in contracts:
+                    datasource = contract.datasource
+                    dashboard_ref = contract.dashboard_ref
+                    progress_label = _progress_label(
+                        target=spec.target_ref,
+                        dashboard_ref=dashboard_ref,
+                    )
+                    _progress_start(progress_label)
+                    _append_result(
+                        progress_label,
+                        DashboardFitResult(
+                            target_ref=spec.target_ref,
+                            signal=contract.signal,
+                            dashboard_ref=dashboard_ref,
+                            dashboard_uid=contract.dashboard_uid,
+                            datasource=datasource.name,
+                            datasource_uid=datasource.uid,
+                            datasource_type=datasource.datasource_type,
+                            read_endpoint=datasource.read_endpoint,
+                            source=_dashboard_source_label(contract),
+                            errors=(str(exc),),
+                        ),
+                    )
+                continue
+            live_by_uid = (
+                {
+                    str(item.get("uid") or ""): item
+                    for item in grafana_datasources
+                    if isinstance(item, Mapping)
+                }
+                if isinstance(grafana_datasources, list)
+                else {}
+            )
+            for contract in contracts:
+                datasource = contract.datasource
+                dashboard_ref = contract.dashboard_ref
+                progress_label = _progress_label(
+                    target=spec.target_ref,
+                    dashboard_ref=dashboard_ref,
+                )
+                _progress_start(progress_label)
+                dashboard_json = str(contract.dashboard_spec.get("json") or "").strip()
+                dashboard_uid = contract.dashboard_uid or _dashboard_json_uid(dashboard_json)
+                dashboard_source = _dashboard_source_label(contract)
+                errors: list[str] = []
+                warnings: list[str] = []
+                checks: list[str] = []
+                if target_cluster_id and contract.signal in {"metrics", "logs"}:
+                    checks.append(f"Target cluster ID: {target_cluster_id}")
+                elif spec.target_ref and contract.signal in {"metrics", "logs"}:
                     warnings.append(
-                        f"Catalog dashboard JSON UID differs from expected UID {dashboard_uid}"
+                        "Target cluster ID was not resolved; dashboard variables were validated with "
+                        "wildcard values"
                     )
-            elif dashboard_uid:
-                imported_payload, import_warnings = _dashboard_import_payload(
-                    base_url=base_url,
-                    username=username,
-                    password=password,
-                    dashboard_uid=dashboard_uid,
-                )
-                dashboard_payload = imported_payload
-                warnings.extend(import_warnings)
-            else:
-                warnings.append(
-                    "Dashboard query JSON is not local to the catalog and no imported "
-                    "dashboard UID is declared; live fit was not checked"
-                )
-            if dashboard_payload is not None and not errors:
-                if datasource.datasource_type == "prometheus":
-                    next_errors, next_warnings, next_checks = _validate_prometheus(
+                live_datasource = _mapping(live_by_uid.get(datasource.uid))
+                if not live_datasource:
+                    errors.append(
+                        f"Grafana datasource {datasource.name} with UID {datasource.uid} is missing"
+                    )
+                elif str(live_datasource.get("type") or "").strip() != datasource.datasource_type:
+                    errors.append(
+                        f"Grafana datasource {datasource.name} has type "
+                        f"{live_datasource.get('type')}, expected {datasource.datasource_type}"
+                    )
+                dashboard_payload: Mapping[str, Any] | None = None
+                if dashboard_json:
+                    try:
+                        dashboard_payload = _dashboard_payload(dashboard_json)
+                    except RuntimeError as exc:
+                        errors.append(str(exc))
+                    imported_payload, import_warnings = _dashboard_import_payload(
                         base_url=base_url,
-                        datasource_uid=datasource.uid,
-                        datasource_name=datasource.name,
                         username=username,
                         password=password,
-                        dashboard=dashboard_payload,
-                        now=now,
-                        start=start,
-                        missing_metric_is_error=contract.signal != "dashboard",
-                        run_query_checks=contract.signal != "dashboard",
-                        target_cluster_id=target_cluster_id,
+                        dashboard_uid=dashboard_uid,
                     )
-                elif datasource.datasource_type == "loki":
-                    next_errors, next_warnings = _validate_loki(
+                    warnings.extend(import_warnings)
+                    if imported_payload and _dashboard_json_uid(dashboard_json) != dashboard_uid:
+                        warnings.append(
+                            f"Catalog dashboard JSON UID differs from expected UID {dashboard_uid}"
+                        )
+                elif dashboard_uid:
+                    imported_payload, import_warnings = _dashboard_import_payload(
                         base_url=base_url,
-                        datasource_uid=datasource.uid,
-                        datasource_name=datasource.name,
                         username=username,
                         password=password,
-                        dashboard=dashboard_payload,
-                        now=now,
-                        start=start,
-                        target_cluster_id=target_cluster_id,
-                        missing_label_is_error=contract.signal != "dashboard",
+                        dashboard_uid=dashboard_uid,
                     )
-                    next_checks = []
-                elif datasource.datasource_type == "tempo":
-                    next_errors, next_warnings = _validate_tempo(
-                        base_url=base_url,
-                        datasource_uid=datasource.uid,
-                        datasource_name=datasource.name,
-                        username=username,
-                        password=password,
-                        dashboard=dashboard_payload,
-                        now=now,
-                        start=start,
-                    )
-                    next_checks = []
+                    dashboard_payload = imported_payload
+                    warnings.extend(import_warnings)
                 else:
-                    next_errors = [f"Unsupported datasource type {datasource.datasource_type}"]
-                    next_warnings = []
-                    next_checks = []
-                errors.extend(next_errors)
-                warnings.extend(next_warnings)
-                checks.extend(next_checks)
-            _append_result(
-                progress_label,
-                DashboardFitResult(
-                    target_ref=spec.target_ref,
-                    signal=contract.signal,
-                    dashboard_ref=dashboard_ref,
-                    dashboard_uid=dashboard_uid,
-                    datasource=datasource.name,
-                    datasource_uid=datasource.uid,
-                    datasource_type=datasource.datasource_type,
-                    read_endpoint=datasource.read_endpoint,
-                    source=dashboard_source,
-                    checks=tuple(checks),
-                    errors=tuple(errors),
-                    warnings=tuple(warnings),
-                ),
-            )
+                    warnings.append(
+                        "Dashboard query JSON is not local to the catalog and no imported "
+                        "dashboard UID is declared; live fit was not checked"
+                    )
+                if dashboard_payload is not None and not errors:
+                    if datasource.datasource_type == "prometheus":
+                        next_errors, next_warnings, next_checks = _validate_prometheus(
+                            base_url=base_url,
+                            datasource_uid=datasource.uid,
+                            datasource_name=datasource.name,
+                            username=username,
+                            password=password,
+                            dashboard=dashboard_payload,
+                            now=now,
+                            start=start,
+                            missing_metric_is_error=contract.signal != "dashboard",
+                            run_query_checks=contract.signal != "dashboard",
+                            target_cluster_id=target_cluster_id,
+                        )
+                    elif datasource.datasource_type == "loki":
+                        next_errors, next_warnings = _validate_loki(
+                            base_url=base_url,
+                            datasource_uid=datasource.uid,
+                            datasource_name=datasource.name,
+                            username=username,
+                            password=password,
+                            dashboard=dashboard_payload,
+                            now=now,
+                            start=start,
+                            target_cluster_id=target_cluster_id,
+                            missing_label_is_error=contract.signal != "dashboard",
+                        )
+                        next_checks = []
+                    elif datasource.datasource_type == "tempo":
+                        next_errors, next_warnings = _validate_tempo(
+                            base_url=base_url,
+                            datasource_uid=datasource.uid,
+                            datasource_name=datasource.name,
+                            username=username,
+                            password=password,
+                            dashboard=dashboard_payload,
+                            now=now,
+                            start=start,
+                        )
+                        next_checks = []
+                    else:
+                        next_errors = [f"Unsupported datasource type {datasource.datasource_type}"]
+                        next_warnings = []
+                        next_checks = []
+                    errors.extend(next_errors)
+                    warnings.extend(next_warnings)
+                    checks.extend(next_checks)
+                _append_result(
+                    progress_label,
+                    DashboardFitResult(
+                        target_ref=spec.target_ref,
+                        signal=contract.signal,
+                        dashboard_ref=dashboard_ref,
+                        dashboard_uid=dashboard_uid,
+                        datasource=datasource.name,
+                        datasource_uid=datasource.uid,
+                        datasource_type=datasource.datasource_type,
+                        read_endpoint=datasource.read_endpoint,
+                        source=dashboard_source,
+                        checks=tuple(checks),
+                        errors=tuple(errors),
+                        warnings=tuple(warnings),
+                    ),
+                )
     if progress_callback is not None:
         progress_callback("done", completed_checks, total_checks)
     return tuple(results)

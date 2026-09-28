@@ -14,6 +14,7 @@ COURSES = (
     "llm-training",
     "llm-inference",
     "custom-cuda-kernels",
+    "advanced-gpu-communication",
 )
 
 
@@ -26,7 +27,12 @@ def main() -> None:
     for course in COURSES:
         validator = ROOT / course / "tools" / "validate_course.py"
         subprocess.run([sys.executable, str(validator)], cwd=ROOT / course, check=True)
-    print("PASS: all five course validators")
+    subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "validate_text_course.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    print("PASS: six practical validators and the text-only course validator")
 
 
 if __name__ == "__main__":

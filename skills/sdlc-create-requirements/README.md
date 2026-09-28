@@ -30,7 +30,11 @@ Environment section for later evaluation and UAT.
 ## Output
 
 - A canonical v2 requirements/design pair exists and passes the shared owner;
-  this adapter changes only the requirements managed region.
+  this adapter changes only the requirements managed region. Missing documents
+  first return to the coordinator for owner-managed draft-pair bootstrap.
+- Read-only `refinement-ready` binds the latest intent and compiled requirements
+  before context/design. Full impact verification waits for ready design and
+  remains required before planning or execution.
 - Every requirement has acceptance criteria, validation method, test method, and evaluation method.
 - Live Experiment Environment status is recorded.
 - Open questions and change log are explicit.

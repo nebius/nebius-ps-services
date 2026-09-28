@@ -1,0 +1,29 @@
+{
+  "correctness": {
+    "cached_decode_matches_recomputation": true
+  },
+  "lab": "08_kv_cache",
+  "measurements": {
+    "cached_decode": {
+      "median_ms": 3.3577,
+      "min_ms": 3.3301,
+      "p90_ms": 3.5869
+    },
+    "decode_max_absolute_error": 2e-07,
+    "generated_tokens": 64,
+    "key_value_cache_mib": 1.25,
+    "recompute_decode": {
+      "median_ms": 2.7481,
+      "min_ms": 2.7127,
+      "p90_ms": 3.027
+    }
+  },
+  "parameters": {
+    "iterations": 3,
+    "seed": 17,
+    "warmup": 1,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

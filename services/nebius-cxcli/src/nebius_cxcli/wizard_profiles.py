@@ -192,7 +192,7 @@ def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     for shape in ("cpu", "gpu"):
         fields[f"inputs.soperator.worker_{shape}_total_nodes"] = {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "number",

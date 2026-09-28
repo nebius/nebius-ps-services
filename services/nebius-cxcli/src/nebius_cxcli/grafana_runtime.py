@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import secrets
 import string
 import subprocess
+import tempfile
 import time
 from base64 import b64decode, b64encode
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +24,7 @@ from urllib.request import Request, urlopen
 
 import yaml
 
+from . import kubernetes_process
 from .app_mutation import assert_app_mutation_authority, guarded_app_manifest
 from .component_instances import component_type_id
 from .component_sources import (
@@ -123,6 +127,11 @@ def grafana_release_specs(
     if not grafana_component_id:
         return ()
     grafana_settings = _grafana_cli_settings()
+    read_endpoints = _mapping(observability_endpoint_summary(payload_or_config).get("read"))
+    needs_token = any(
+        item.auth == "nebius_bearer" and read_endpoints.get(item.read_endpoint)
+        for item in grafana_settings.datasources
+    )
     specs: list[GrafanaReleaseSpec] = []
     for row in _active_grafana_rows(payload_or_config):
         row_target_ref = app_chart_target_ref(row)
@@ -130,6 +139,13 @@ def grafana_release_specs(
             continue
         if not normalized_target_ref and row_target_ref:
             continue
+        from .observability_routing import connections, target_settings
+
+        if target_settings(payload_or_config, row_target_ref):
+            needs_token = any(
+                item.get("auth") == "nebius"
+                for item in connections(payload_or_config, row_target_ref)
+            )
         values = _mapping(row.get("values"))
         admin = _mapping(values.get("admin"))
         env_value_from = _mapping(values.get("envValueFrom"))
@@ -168,10 +184,14 @@ def grafana_release_specs(
                 ).strip(),
                 token_secret_name=str(
                     token_secret_ref.get("name") or grafana_settings.read_token.secret_name
-                ).strip(),
+                ).strip()
+                if needs_token
+                else "",
                 token_key=str(
                     token_secret_ref.get("key") or grafana_settings.read_token.key
-                ).strip(),
+                ).strip()
+                if needs_token
+                else "",
                 gateway_name=gateway_name,
                 gateway_namespace=gateway_namespace,
             )
@@ -191,9 +211,7 @@ def _kubectl_env(extra_env: Mapping[str, str] | None) -> dict[str, str]:
 
 
 def _target_kube_context(extra_env: Mapping[str, str] | None) -> str:
-    return str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV) or "").strip() or (
-        _current_kube_context(extra_env)
-    )
+    return str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV) or "").strip()
 
 
 def _kubectl_command(
@@ -243,7 +261,7 @@ def _run_kubectl(
 ) -> subprocess.CompletedProcess[str]:
     command = _kubectl_command(args, extra_env=extra_env)
     assert_app_mutation_authority()
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         input=input_text,
@@ -301,7 +319,7 @@ def _secret_has_keys(
         ["-n", namespace, "get", "secret", name, "-o", "json"],
         extra_env=extra_env,
     )
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         capture_output=True,
@@ -493,7 +511,7 @@ def _grafana_secret_delivery_adapter(
             ["-n", namespace, "get", "secret", name, "-o", "json"],
             extra_env=extra_env,
         )
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             command,
             env=_kubectl_env(extra_env),
             capture_output=True,
@@ -528,7 +546,7 @@ def _grafana_secret_delivery_adapter(
 def _read_token_probe_url(payload_or_config: Any) -> str:
     endpoints = _mapping(observability_endpoint_summary(payload_or_config).get("read"))
     for datasource in _grafana_cli_settings().datasources:
-        if datasource.datasource_type != "prometheus":
+        if datasource.datasource_type != "prometheus" or datasource.auth != "nebius_bearer":
             continue
         read_endpoint = str(endpoints.get(datasource.read_endpoint) or "").strip()
         if read_endpoint:
@@ -626,7 +644,7 @@ def cleanup_observability_read_token_secret(
         ["-n", namespace, "get", "secret", name, "-o", "json"],
         extra_env=extra_env,
     )
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         capture_output=True,
@@ -769,13 +787,14 @@ def ensure_grafana_runtime_secrets(
             )
             if callable(emit):
                 emit(f"Created Grafana admin credential secret `{spec.admin_secret_name}`.")
-        _ensure_grafana_read_token_secret(
-            payload_or_config,
-            spec,
-            extra_env=extra_env,
-            target_ref=target_ref,
-            emit=emit,
-        )
+        if spec.token_secret_name and spec.token_key:
+            _ensure_grafana_read_token_secret(
+                payload_or_config,
+                spec,
+                extra_env=extra_env,
+                target_ref=target_ref,
+                emit=emit,
+            )
 
 
 def _load_balancer_base_url(
@@ -857,30 +876,83 @@ def _grafana_base_url(
     return _load_balancer_base_url(service)
 
 
-def _current_kube_context(extra_env: Mapping[str, str] | None) -> str:
-    explicit_context = str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV) or "").strip()
-    if explicit_context:
-        return explicit_context
-    kubeconfig_value = str(
-        (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
+def grafana_api_environment(extra_env: Mapping[str, str] | None) -> dict[str, str]:
+    context = _target_kube_context(extra_env)
+    if not context:
+        raise RuntimeError("Grafana API access requires an explicit Kubernetes context")
+    return {**(extra_env or {}), GRAFANA_TARGET_KUBE_CONTEXT_ENV: context}
+
+
+@contextmanager
+def grafana_api_endpoint(
+    spec: GrafanaReleaseSpec,
+    *,
+    extra_env: Mapping[str, str] | None,
+    timeout_seconds: float = 15.0,
+    loopback_only: bool = False,
+) -> Iterator[str]:
+    """Temporary API access; never persist a forwarded URL as a public endpoint."""
+    context = _target_kube_context(extra_env)
+    if not context:
+        raise RuntimeError("Private Grafana access requires an explicit Kubernetes context")
+    env = {**(extra_env or {}), GRAFANA_TARGET_KUBE_CONTEXT_ENV: context}
+    public_url = "" if loopback_only else _grafana_base_url(spec, extra_env=env)
+    if public_url:
+        yield public_url
+        return
+    service = _kubectl_json(
+        ["-n", spec.namespace, "get", "service", spec.service_name, "-o", "json"],
+        extra_env=env,
     )
-    kubeconfig_paths = (
-        tuple(item for item in kubeconfig_value.split(os.pathsep) if item)
-        if kubeconfig_value
-        else (str(Path.home().expanduser() / ".kube" / "config"),)
-    )
-    for kubeconfig_path in kubeconfig_paths:
-        path = Path(kubeconfig_path).expanduser()
-        if not path.exists():
-            continue
+    service_spec = _mapping(service.get("spec"))
+    ports = [p for p in service_spec.get("ports", []) if p.get("protocol", "TCP") == "TCP"]
+    if service_spec.get("type", "ClusterIP") != "ClusterIP" or len(ports) != 1:
+        raise RuntimeError("Private Grafana requires a ClusterIP Service with one TCP port")
+    port = ports[0].get("port")
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise RuntimeError("Grafana Service has an invalid TCP port")
+    command = [
+        "kubectl",
+        "--context",
+        context,
+        "-n",
+        spec.namespace,
+        "port-forward",
+        "--address",
+        "127.0.0.1",
+        f"service/{spec.service_name}",
+        f":{port}",
+    ]
+    assert_app_mutation_authority()
+    with tempfile.TemporaryFile() as output:
+        process = kubernetes_process.popen(
+            command,
+            env={**os.environ, **env},
+            stdout=output,
+            stderr=subprocess.STDOUT,
+        )
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            continue
-        context = str(_mapping(payload).get("current-context") or "").strip()
-        if context:
-            return context
-    return ""
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                assert_app_mutation_authority()
+                if process.poll() is not None:
+                    raise RuntimeError("Grafana loopback port-forward exited before readiness")
+                output.seek(0)
+                status = output.read(65536).decode("utf-8", errors="replace")
+                match = re.search(r"Forwarding from 127\.0\.0\.1:(\d+) ->", status)
+                if match:
+                    yield f"http://127.0.0.1:{int(match.group(1))}/"
+                    return
+                time.sleep(0.05)
+            raise RuntimeError("Grafana loopback port-forward readiness timed out")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
 
 
 def _explore_url(
@@ -1016,49 +1088,66 @@ def grafana_prometheus_has_fresh_series(
     query: str,
     not_before: float,
     extra_env: Mapping[str, str] | None,
+    datasource_uid: str,
+    expected_value: float | None = None,
 ) -> bool:
-    """Run one exact PromQL query through the configured Grafana datasource proxy."""
-
-    if not str(query or "").strip() or not_before <= 0:
-        raise ValueError("Grafana Soperator parity requires a query and positive start time")
-    specs = grafana_release_specs(payload_or_config, target_ref=target_ref)
-    if not specs:
-        return False
-    datasource_uids = tuple(
+    """Verify a direct metric selector on one datasource, using sample freshness."""
+    if (
+        not re.fullmatch(r"[a-zA-Z_:][a-zA-Z0-9_:]*(?:\{[^{}]*\})?", query)
+        or not math.isfinite(not_before)
+        or not_before <= 0
+    ):
+        raise ValueError("Freshness requires a direct metric selector and positive start time")
+    if expected_value is not None and not math.isfinite(expected_value):
+        raise ValueError("Expected publication value must be finite")
+    configured = {
         item.uid
         for item in _grafana_cli_settings().datasources
-        if item.datasource_type == "prometheus" and item.uid
-    )
-    if not datasource_uids:
-        raise RuntimeError("Grafana has no configured Prometheus datasource for parity proof")
-    for spec in specs:
-        base_url = _grafana_base_url(spec, extra_env=extra_env)
-        credentials = _grafana_admin_credentials(spec, extra_env=extra_env)
-        if not base_url or not credentials:
-            raise RuntimeError("Grafana URL or admin credentials could not be resolved")
-        username, password = credentials
-        for datasource_uid in datasource_uids:
-            payload = _get_grafana_json(
-                base_url,
-                f"api/datasources/proxy/uid/{quote(datasource_uid, safe='')}/api/v1/query",
-                username=username,
-                password=password,
-                params={"query": query, "time": str(int(time.time()))},
-            )
-            data = _mapping(_mapping(payload).get("data"))
-            result = data.get("result")
-            if not isinstance(result, list):
-                continue
-            for item in result:
-                sample = _mapping(item).get("value")
-                if not isinstance(sample, list) or len(sample) < 2:
-                    continue
-                try:
-                    observed_at = float(sample[0])
-                except (TypeError, ValueError):
-                    continue
-                if observed_at >= not_before:
-                    return True
+        if item.datasource_type == "prometheus"
+    }
+    from .observability_routing import connections, target_settings
+
+    if target_settings(payload_or_config, target_ref):
+        configured = {
+            item["uid"]
+            for item in connections(payload_or_config, target_ref)
+            if item["type"] == "prometheus"
+        }
+    if datasource_uid not in configured:
+        raise ValueError("Select one configured Prometheus datasource UID")
+    for spec in grafana_release_specs(payload_or_config, target_ref=target_ref):
+        env = grafana_api_environment(extra_env)
+        with grafana_api_endpoint(spec, extra_env=env) as base_url:
+            credentials = _grafana_admin_credentials(spec, extra_env=env)
+            if not credentials:
+                raise RuntimeError("Grafana admin credentials could not be resolved")
+            username, password = credentials
+
+            def fetch(expression, username=username, password=password, base_url=base_url):
+                payload = _get_grafana_json(
+                    base_url,
+                    f"api/datasources/proxy/uid/{quote(datasource_uid, safe='')}/api/v1/query",
+                    username=username,
+                    password=password,
+                    params={"query": expression, "time": str(int(time.time()))},
+                )
+                if _mapping(payload).get("status") != "success":
+                    return {}
+                result = _mapping(_mapping(payload).get("data")).get("result", [])
+                return {
+                    json.dumps(row.get("metric", {}), sort_keys=True): float(row["value"][1])
+                    for row in result
+                    if isinstance(row, Mapping) and len(row.get("value", [])) == 2
+                }
+
+            value_filter = query if expected_value is None else f"({query} == {expected_value:g})"
+            # One evaluation must establish both value and source-sample freshness.
+            rows = fetch(f"({value_filter}) and (timestamp({query}) >= {not_before:.6f})")
+            if any(
+                math.isfinite(value) and (expected_value is None or value == expected_value)
+                for value in rows.values()
+            ):
+                return True
     return False
 
 
@@ -1483,7 +1572,7 @@ def collect_grafana_runtime_status(
     target_ref: str = "",
 ) -> tuple[dict[str, Any], ...]:
     statuses: list[dict[str, Any]] = []
-    kube_context = _current_kube_context(extra_env)
+    kube_context = _target_kube_context(extra_env)
     target_cluster_id = str((extra_env or {}).get(GRAFANA_TARGET_CLUSTER_ID_ENV) or "").strip()
     grafana_settings = _grafana_cli_settings()
     explore_queries = {item.signal: item.query for item in grafana_settings.explore_queries}
@@ -1503,6 +1592,31 @@ def collect_grafana_runtime_status(
             "gateway_namespace": spec.gateway_namespace,
             "base_url": base_url,
         }
+        if not base_url and not spec.gateway_name and kube_context:
+            service = _kubectl_json(
+                ["-n", spec.namespace, "get", "service", spec.service_name, "-o", "json"],
+                extra_env=extra_env,
+            )
+            service_spec = _mapping(service.get("spec"))
+            ports = [p for p in service_spec.get("ports", []) if p.get("protocol", "TCP") == "TCP"]
+            if (
+                service_spec.get("type", "ClusterIP") == "ClusterIP"
+                and len(ports) == 1
+                and isinstance(ports[0].get("port"), int)
+            ):
+                status["access"] = "private-port-forward"
+                status["port_forward_command"] = [
+                    "kubectl",
+                    "--context",
+                    kube_context,
+                    "-n",
+                    spec.namespace,
+                    "port-forward",
+                    "--address",
+                    "127.0.0.1",
+                    f"service/{spec.service_name}",
+                    f"3000:{ports[0]['port']}",
+                ]
         if kube_context:
             status["kube_context"] = kube_context
         if target_cluster_id:
@@ -1517,6 +1631,33 @@ def collect_grafana_runtime_status(
                 explore_queries=explore_queries,
                 org_id=grafana_settings.org_id,
             )
+            from .observability_routing import connections, target_settings
+
+            routing = target_settings(payload_or_config, spec.target_ref)
+            if routing:
+                dashboard_signal_bindings = {}
+                configured = connections(payload_or_config, spec.target_ref)
+                explore_urls = {}
+                for signal in routing.get("signals", ("metrics", "logs", "traces")):
+                    preferred = signal + (
+                        "-remote" if routing[signal]["storage"] == "remote" else "-local"
+                    )
+                    item = next(source for source in configured if source["name"] == preferred)
+                    explore_urls[f"{signal}_url"] = _explore_url(
+                        base_url,
+                        datasource_uid=item["uid"],
+                        datasource_type=item["type"],
+                        org_id=grafana_settings.org_id,
+                        query="up"
+                        if signal == "metrics"
+                        else "*"
+                        if item["type"] == "victoriametrics-logs-datasource"
+                        else "",
+                    )
+                status["datasources"] = [
+                    {key: item[key] for key in ("name", "uid", "type", "url", "isDefault")}
+                    for item in configured
+                ]
             try:
                 root_url_ready = _ensure_grafana_public_root_url(
                     spec,

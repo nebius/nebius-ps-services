@@ -11,10 +11,11 @@ import subprocess
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
+from course_evidence import gpu_family
 
 FIELDS = (
     "name",
@@ -67,7 +68,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     snapshot = query_nvidia_smi()
     sharing = {
         "full_or_mig": describe_mig_mode(snapshot["mig.mode.current"]),
@@ -86,7 +87,8 @@ def main() -> None:
             "configuration_changed": False,
         },
         correctness={
-            "single_h100": snapshot["name"].startswith("NVIDIA H100"),
+            "single_full_gpu": gpu_family(snapshot["name"])
+            == environment["gpu_family"],
             "read_only": True,
         },
     )

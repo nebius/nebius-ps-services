@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import shlex
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from destroy_fakes import receipt as destroy_receipt
+from nebius_cxcli.destroy import (
+    write_destroy_receipt,
+)
+from nebius_cxcli.destroy_state import destroy_receipt_path
 from nebius_cxcli.paths import ProjectPaths
 from nebius_cxcli.soperator_checks_policy import freeze_checks_proposal
-from nebius_cxcli.soperator_destroy import (
-    build_soperator_destroy_receipt,
-    write_soperator_destroy_receipt,
-)
 from nebius_cxcli.soperator_full_stack_upgrade import (
     CampaignSegmentResult,
     FrozenCompatibilityRow,
@@ -31,7 +34,6 @@ from nebius_cxcli.soperator_status import (
     read_soperator_operation_status,
     run_soperator_observability_verification,
 )
-from soperator_fixtures import sample_infrastructure_receipt
 
 
 def _paths(tmp_path: Path) -> ProjectPaths:
@@ -197,30 +199,20 @@ def test_status_phase_and_classification_helpers_fail_closed() -> None:
         _required_classification("ProviderSpecificError", operation="destroy")
 
 
-def test_status_reports_failed_destroy_without_modifying_receipt(tmp_path: Path) -> None:
+@pytest.mark.parametrize("delete_sfs,preserve_pvc", [(False, False), (True, True)])
+def test_status_reports_failed_destroy_without_modifying_receipt(
+    tmp_path: Path, delete_sfs, preserve_pvc
+) -> None:
     paths = _paths(tmp_path)
-    infrastructure = sample_infrastructure_receipt()
-    receipt = build_soperator_destroy_receipt(
-        target_ref="cluster-a",
-        ownership="managed",
-        project_id="project-a",
-        cluster_id="mk8scluster-a",
-        kubernetes_uid="uid-a",
-        destroy_inventory=("mk8s:mk8scluster-a",),
-        preserve_inventory=("sfs:filesystem-jail",),
-        protected_storage_sha256=infrastructure.receipt_sha256,
-        infrastructure_receipt=infrastructure.as_payload(),
-        config_sha256="sha256:" + "a" * 64,
-        post_cleanup_config_sha256="sha256:" + "b" * 64,
-    )
-    receipt_path = paths.reports_dir / "soperator-destroy-cluster-a.json"
-    write_soperator_destroy_receipt(receipt_path, receipt)
+    receipt = destroy_receipt(delete_sfs=delete_sfs, preserve_pvc_disks=preserve_pvc)
+    receipt_path = destroy_receipt_path(paths, receipt.cluster_id)
+    write_destroy_receipt(receipt_path, receipt)
     raw = json.loads(receipt_path.read_text(encoding="utf-8"))
     raw.update(
         {
             "status": "failed",
             "failure_classification": "runtime-error",
-            "checkpoints": ["approved", "storage_verified_before_cleanup"],
+            "checkpoints": ["approved", "cluster_absent"],
         }
     )
     _write_private(receipt_path, raw)
@@ -232,10 +224,18 @@ def test_status_reports_failed_destroy_without_modifying_receipt(tmp_path: Path)
     assert (status.operation, status.status, status.phase) == (
         "destroy",
         "failed",
-        "storage_verified_before_cleanup",
+        "cluster_absent",
     )
     assert status.classification == "runtime-error"
-    assert "soperator destroy" in status.resume_command
+    assert shlex.split(status.resume_command) == [
+        "nebius-cxcli",
+        "destroy",
+        str(paths.config_path),
+        "--target",
+        receipt.cluster_id,
+        *(["--delete-sfs"] if delete_sfs else []),
+        *(["--preserve-pvc-disks"] if preserve_pvc else []),
+    ]
     assert (receipt_path.read_bytes(), receipt_path.stat().st_mtime_ns) == before
 
 
@@ -243,22 +243,9 @@ def test_status_can_exclude_destroy_to_detect_a_foreign_active_operation(
     tmp_path: Path,
 ) -> None:
     paths = _paths(tmp_path)
-    infrastructure = sample_infrastructure_receipt()
-    receipt = build_soperator_destroy_receipt(
-        target_ref="cluster-a",
-        ownership="managed",
-        project_id="project-a",
-        cluster_id="mk8scluster-a",
-        kubernetes_uid="uid-a",
-        destroy_inventory=("mk8s:mk8scluster-a",),
-        preserve_inventory=("sfs:filesystem-jail",),
-        protected_storage_sha256=infrastructure.receipt_sha256,
-        infrastructure_receipt=infrastructure.as_payload(),
-        config_sha256="sha256:" + "a" * 64,
-        post_cleanup_config_sha256="sha256:" + "b" * 64,
-    )
-    write_soperator_destroy_receipt(
-        paths.reports_dir / "soperator-destroy-cluster-a.json",
+    receipt = destroy_receipt()
+    write_destroy_receipt(
+        paths.reports_dir / "destroy-cluster-a.json",
         receipt,
     )
     _write_private(
@@ -318,7 +305,10 @@ def test_status_reports_upgrade_safety_pause_and_frozen_resume(tmp_path: Path) -
         "wait-flux-graph",
     )
     assert status.classification == "safety-paused"
-    assert "--to-release 4.1.7 --execute --approve" in status.resume_command
+    assert status.resume_command == ""
+    assert "nebius-cxcli deploy " in status.detail
+    assert str(paths.config_path) in status.detail
+    assert "original deploy options" in status.detail
 
 
 def test_status_projects_upgrade_transition_failure_classification(tmp_path: Path) -> None:
@@ -391,7 +381,7 @@ def test_status_does_not_reflect_unknown_upgrade_classification(
     assert "abc123" not in status.classification
 
 
-def test_status_ignores_complete_operations_and_reports_saved_install(tmp_path: Path) -> None:
+def test_status_ignores_complete_operations(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     _write_private(
         paths.reports_dir / "soperator-release-intent-cluster-a.json",
@@ -401,47 +391,7 @@ def test_status_ignores_complete_operations_and_reports_saved_install(tmp_path: 
             "target_ref": "cluster-a",
         },
     )
-    install_path = paths.reports_dir / "soperator-install-plan.json"
-    _write_private(
-        install_path,
-        {
-            "schema": "nebius-cxcli.soperator-install-plan.v1",
-            "status": "planned",
-            "target": {"ref": "cluster-a"},
-        },
-    )
-
-    status = read_soperator_operation_status(paths=paths, target_ref="cluster-a")
-
-    assert status is not None
-    assert (status.operation, status.status, status.phase) == (
-        "install",
-        "planned",
-        "saved-plan",
-    )
-    assert status.resume_command.endswith("--resume --dry-run")
-
-
-def test_status_normalizes_failed_install_exception_type(tmp_path: Path) -> None:
-    paths = _paths(tmp_path)
-    install_path = paths.reports_dir / "soperator-install-plan.json"
-    _write_private(
-        install_path,
-        {
-            "schema": "nebius-cxcli.soperator-install-plan.v1",
-            "status": "failed",
-            "failureType": "ProviderSpecificCredentialError",
-            "target": {"ref": "cluster-a"},
-        },
-    )
-    before = install_path.read_bytes()
-
-    status = read_soperator_operation_status(paths=paths, target_ref="cluster-a")
-
-    assert status is not None
-    assert status.classification == "operation-error"
-    assert "ProviderSpecificCredentialError" not in status.detail
-    assert install_path.read_bytes() == before
+    assert read_soperator_operation_status(paths=paths, target_ref="cluster-a") is None
 
 
 def test_status_never_treats_observability_receipt_as_an_operation(tmp_path: Path) -> None:
@@ -464,19 +414,21 @@ def test_status_never_treats_observability_receipt_as_an_operation(tmp_path: Pat
     assert receipt_path.read_bytes() == before
 
 
+@pytest.mark.parametrize("supervisor_state", ["retrying", "recovery-required"])
 def test_status_projects_parent_full_stack_campaign_before_child_receipts(
     tmp_path: Path,
+    supervisor_state: str,
 ) -> None:
-    paths = _paths(tmp_path)
+    paths = _paths(tmp_path / "project with spaces")
     intent = _campaign_intent()
     receipt_path = campaign_receipt_path(paths.project_dir, target_ref=intent.target_ref)
     create_or_resume_campaign(path=receipt_path, intent=intent)
     record_campaign_supervisor_state(
         path=receipt_path,
         intent=intent,
-        state="retrying",
+        state=supervisor_state,
         attempt=3,
-        disposition="retrying",
+        disposition=supervisor_state,
         current_segment="mk8s-hop:1.34",
         maintenance_state="active",
         failure_type="RuntimeError",
@@ -496,15 +448,129 @@ def test_status_projects_parent_full_stack_campaign_before_child_receipts(
     assert status is not None
     assert (status.operation, status.status, status.phase) == (
         "upgrade",
-        "retrying",
+        supervisor_state,
         "mk8s-hop:1.34",
     )
     assert status.receipt_path == receipt_path
-    assert status.classification == "retrying"
-    assert "--to-release latest" in status.resume_command
-    assert "--to-k8s-version latest" in status.resume_command
+    assert status.classification == supervisor_state
+    assert status.resume_command == ""
+    assert "original deploy options" in status.detail
     assert "Backend: managed/terraform" in status.detail
-    assert "worker@1.34=ubuntu24.04/cuda13.0" in status.detail
+    assert "Frozen provider compatibility:" not in status.detail
+    assert "worker@1.34=ubuntu24.04/cuda13.0" not in status.detail
+    stored = json.loads(receipt_path.read_text())
+    assert stored["intent"]["compatibility_rows"]
+    assert stored["intent"]["compatibility_rows"][0]["drivers_preset"] == "cuda13.0"
+
+
+@pytest.mark.parametrize("custom_controls", [False, True])
+def test_campaign_status_does_not_invent_missing_deployment_controls(
+    tmp_path, monkeypatch, custom_controls
+):
+    from typer.testing import CliRunner
+
+    from nebius_cxcli import cli
+    from nebius_cxcli.deployment_cli import DeployOptions
+    from nebius_cxcli.deployment_state import DeploymentGeneration, DeploymentState
+    from nebius_cxcli.deployment_workflow import run_deployment
+    from nebius_cxcli.frozen_catalog import freeze_catalog
+    from test_deployment_state import Store, settings
+    from test_deployment_workflow import Executor, plan
+
+    paths = _paths(tmp_path / "project with spaces")
+    options = DeployOptions(
+        job_policy="requeue-selected" if custom_controls else "requeue-hold-all",
+        requeue_job_ids=("42", "43") if custom_controls else (),
+        job_wait_timeout="2h" if custom_controls else "0s",
+        job_refresh_interval="15s" if custom_controls else "30s",
+        target_ref="cluster-a" if custom_controls else None,
+        skip_validation_kinds=frozenset({"mk8s_gpu_visibility"})
+        if custom_controls
+        else frozenset(),
+    )
+    intent = replace(
+        _campaign_intent(),
+        job_policy=options.job_policy,
+        requeue_job_ids=options.requeue_job_ids,
+        job_wait_timeout=options.job_wait_timeout,
+        job_refresh_interval=options.job_refresh_interval,
+    )
+    receipt_path = campaign_receipt_path(paths.project_dir, target_ref=intent.target_ref)
+    create_or_resume_campaign(path=receipt_path, intent=intent)
+    receipt_before = receipt_path.read_bytes()
+    state = DeploymentState(Store(), settings(), assert_held=lambda: None)
+    generation = DeploymentGeneration({"runtime_config": {}}, {})
+    live = []
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run_deployment(
+            generation=generation,
+            plan=plan(),
+            state=state,
+            executor=Executor(live, interrupt=True),
+            dry_run=False,
+            controls=options.controls(),
+        )
+    resumed = Executor(live)
+    manifest = {"render": {"inputs": freeze_catalog({})}}
+    monkeypatch.setattr(
+        cli, "_load_generic_soperator_lifecycle_context", lambda *a, **kw: ({}, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_require_soperator_lifecycle_scope", lambda *a, **kw: None)
+
+    def resume(config, paths, manifest, *, options):
+        run_deployment(
+            generation=generation,
+            plan=plan(),
+            state=state,
+            executor=resumed,
+            dry_run=False,
+            controls=options.controls(),
+        )
+
+    monkeypatch.setattr(cli, "deploy_rendered_bundle", resume)
+    result = CliRunner().invoke(cli.app, ["deploy", str(paths.config_path)])
+    assert result.exit_code == 1
+    assert "same execution controls" in result.output
+    assert not resumed.restored
+
+    status = read_soperator_operation_status(paths=paths, target_ref=intent.target_ref)
+    assert status is not None
+    assert status.resume_command == ""
+    assert "original deploy options" in status.detail
+    assert f"--job-policy {options.job_policy}" in status.detail
+    assert f"--job-wait-timeout {options.job_wait_timeout}" in status.detail
+    assert f"--job-refresh-interval {options.job_refresh_interval}" in status.detail
+    if custom_controls:
+        assert "--requeue-job 42 --requeue-job 43" in status.detail
+    assert receipt_path.read_bytes() == receipt_before
+
+    argv = [
+        "deploy",
+        str(paths.config_path),
+        "--job-policy",
+        options.job_policy,
+        "--job-wait-timeout",
+        options.job_wait_timeout,
+        "--job-refresh-interval",
+        options.job_refresh_interval,
+    ]
+    if custom_controls:
+        argv.extend(
+            [
+                "--requeue-job",
+                "42",
+                "--requeue-job",
+                "43",
+                "--target",
+                "cluster-a",
+                "--skip-validation",
+                "gpu-visibility",
+            ]
+        )
+    result = CliRunner().invoke(cli.app, argv)
+    assert result.exit_code == 0, result.output
+    assert resumed.restored
+    assert state.read().value["active"] is None
 
 
 def test_status_keeps_completed_upgrade_evidence_without_active_operation(

@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "3cb0e75383ec217c416aa641a1423fe26eb86645e084e9c88016fc26e628c20a",
+      "sha256": "f9ec3e0becb91067d3218f782aff0da376b42100f3ff2292ddadd749f733a90d",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "61f8f3ecdc442c1d8c325a6e3bd3c13b2848d49f794f1ec235e10016f881930b",
+      "sha256": "61d3fded43af3347e1fd31cef22291b7bdb230d7949fe2f5e407b1a7ae39b362",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "b4e0061f848ee79ef2ad78ee311edf906e42e2629d402c83336d914b15b3f08e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "c329d4eb4ef5a511dcde93222e69ca628404d88c2f4d1fddb3f1bc405c9989b4",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "463d369e20e6ca0894a2c8059ac591960297e628be8d1820c2fb7611a4f6bbbc",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "9971d26ef1659cb29f4eab2fb3632b0b09b4ad74de47e190ad1a4711b2d41629",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "fd66db79a36eaf7d50311e4c65630d4caed8975c826b49b756e76f705e360e0a",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_timing_basics",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a9250a8c5f62518225ab966445945257d3c022014ef8c8d7188a962f8e12f3ad",
+  "summary_sha256": "b3dc2b4bb32211fb8e77622f8b0a536108e13e874e9239125c887120e805d8f2"
+}

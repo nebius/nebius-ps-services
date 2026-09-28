@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,per_step_item_median_seconds,value,0.0022557000000000002,s
+baseline-trial1,delayed_item_median_seconds,value,0.0015558000000000002,s
+candidate-trial1,per_step_item_median_seconds,value,0.0044196,s
+candidate-trial1,delayed_item_median_seconds,value,0.0030285000000000004,s

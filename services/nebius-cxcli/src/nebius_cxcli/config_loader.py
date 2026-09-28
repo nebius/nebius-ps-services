@@ -76,7 +76,11 @@ def normalize_runtime_config_payload(
     payload: dict[str, Any],
     *,
     base_dir: Path | None = None,
+    observability_target_refs: frozenset[str] | None = None,
 ) -> bool:
+    from .observability_routing import validate_observability_target_refs
+
+    validate_observability_target_refs(payload, observability_target_refs)
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
     apps_node = payload.get("apps")
     chart_rows = apps_node.get("charts", []) if isinstance(apps_node, dict) else []
@@ -109,7 +113,7 @@ def normalize_runtime_config_payload(
         changed = True
     if normalize_observability_project_settings(payload):
         changed = True
-    if ensure_observability_app_rows(payload):
+    if ensure_observability_app_rows(payload, observability_target_refs=observability_target_refs):
         changed = True
     if materialize_observability_infra_values(payload):
         changed = True
@@ -128,21 +132,36 @@ def normalize_runtime_config_payload(
     return changed
 
 
-def validate_config(payload: dict[str, Any], *, base_dir: Path | None = None) -> AttrDict:
+def validate_config(
+    payload: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+    observability_target_refs: frozenset[str] | None = None,
+) -> AttrDict:
     """Validate payload with runtime rules and wrap for attribute access."""
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
     validate_dynamic_payload_structure(payload)
-    normalize_runtime_config_payload(payload, base_dir=base_dir)
+    from .compatibility_runtime import materialize_selection
+
+    materialize_selection(payload)
+    normalize_runtime_config_payload(
+        payload, base_dir=base_dir, observability_target_refs=observability_target_refs
+    )
     validate_dynamic_payload_structure(payload)
     validate_runtime_payload(payload)
     normalized = to_runtime_payload(payload)
     return wrap_runtime_config(normalized)
 
 
-def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
+def load_config(
+    path: Path,
+    *,
+    persist_normalized: bool = False,
+    observability_target_refs: frozenset[str] | None = None,
+) -> AttrDict:
     """Load one config.yaml file and return runtime-wrapped config."""
     try:
         path_stat = path.lstat()
@@ -162,7 +181,9 @@ def load_config(path: Path, *, persist_normalized: bool = False) -> AttrDict:
             "config.yaml must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
     before = dump_yaml(payload) if persist_normalized else ""
-    config = validate_config(payload, base_dir=path.parent)
+    config = validate_config(
+        payload, base_dir=path.parent, observability_target_refs=observability_target_refs
+    )
     if persist_normalized and dump_yaml(payload) != before:
         _write_text_atomic(
             path,

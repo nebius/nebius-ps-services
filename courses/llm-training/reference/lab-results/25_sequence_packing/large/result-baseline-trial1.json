@@ -1,0 +1,43 @@
+{
+  "correctness": {
+    "all_examples_assigned": true,
+    "every_adjacent_packed_boundary_checked": true,
+    "no_cross_example_attention": true,
+    "within_example_causal_controls_pass": true
+  },
+  "lab": "25_sequence_packing",
+  "measurements": {
+    "bins": [
+      [
+        113,
+        91,
+        48
+      ],
+      [
+        77,
+        63,
+        31
+      ]
+    ],
+    "lengths": [
+      31,
+      48,
+      63,
+      77,
+      91,
+      113
+    ],
+    "packed_capacity_tokens": 512,
+    "packing_efficiency": 0.8262,
+    "padded_tokens": 678,
+    "padding_efficiency": 0.6239,
+    "valid_tokens": 423
+  },
+  "parameters": {
+    "capacity": 256,
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

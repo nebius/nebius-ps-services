@@ -1,16 +1,26 @@
 # Syllabus
 
+## Hardware routes
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+This course has no multi-node executable labs. Hopper thread-block clusters in Lab 10 operate inside one GPU and remain in the base route. Use [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html) for cross-GPU practice.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Before the first experiment, complete shared environment setup and read the unnumbered **Using GPU performance tools** lesson. Existing lesson and executable lab IDs remain stable. Each lab applies measure → inspect → predict → change one variable → measure again → explain.
+
 Estimated guided time: **36 hours**.
 
 ## Learning progression
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice labs → Mental model**. Read the definitions, mechanisms and worked examples in **How it works**, then open a **Practice labs** link, then follow the lab's **Theory preparation** in **Before you start**. Its named lessons explain the techniques before full execution; **Concepts and code path** connects them to the implementation. Before running, explain what each technique does, why it is used, how its inputs and dependencies work, and what timing and numerical checks establish. A preview is reading only; a later revisit adds a new interpretation without making an untaught technique a hidden prerequisite for the first run.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../README.md#how-to-set-up-the-lab) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
 
 Begin with the library-first decision and a reproducible SM90 build. Write one correct vector kernel, learn validation/profiling, then build fusion, memory and reduction skills. Establish resource limits before diagnosing tails, combine mechanisms in pipelines and RMSNorm, and complete acceptance before optional Hopper and Tile branches.
 
-Follow the lesson order below. Lab numbers are identifiers, not the execution order;
+Follow the base lesson group first, then the separate advanced group below. Lab numbers are identifiers, not the execution order;
 use each lesson's assigned activity and the lab guide's prerequisites. A preview
 means inspecting the explanation or code without running an advanced experiment.
 Return to a repeated lab when the later lesson adds a new interpretation or check.
@@ -28,7 +38,7 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | Lesson | Topic | Competency to build | Practice at this stage |
 | --- | --- | --- | --- |
 | 1 | Custom kernel decision making | Reject custom ownership unless maintained paths leave an important gap | Library-first worksheet; run Lab 01 in Lesson 3 |
-| 2 | CUDA compilation and execution targets | Build a reproducible SM90 program and verify the allocated device | Lab 00 |
+| 2 | CUDA compilation and execution targets | Build a reproducible SM90 program and verify the allocated device | Lab 13 |
 | 3 | Kernel indexing and execution safety | Map elements to threads with complete bounds and error checks | Lab 01 |
 | 4 | Kernel correctness and performance evidence | Validate outputs and safety before collecting focused profiler evidence | Revisit Lab 01 with sanitizer/profiler launchers |
 | 5 | Elementwise kernel fusion | Remove intermediate traffic while preserving the elementwise operation | Lab 02 |
@@ -49,8 +59,8 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 After Lesson 4, demonstrate a correct edge case, understand what memcheck establishes and choose one profiling question. Revisit racecheck/synccheck when shared-memory cooperation appears. After Lesson 10, distinguish resource capacity from uneven work. Lesson 14 completes the required single-H100 path; Lessons 15–16 are optional and are not prerequisites for RMSNorm or the capstone.
 
 Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice labs**, and ends with a **Mental model**. The linked guides integrate
-examples and commands in **Practice**, with H100 scope, trade-offs, evidence,
+in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
+worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
 failure analysis and review in their relevant sections. Before moving on,
 explain the new mechanism and its limitation in your own words; a completed
 command alone is not evidence of understanding.

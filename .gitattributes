@@ -1,0 +1,2 @@
+# Preserve manifest-hashed CSV evidence, including its standard CRLF records.
+courses/*/reference/lab-results/**/summary.csv -text whitespace=trailing-space,space-before-tab,cr-at-eol

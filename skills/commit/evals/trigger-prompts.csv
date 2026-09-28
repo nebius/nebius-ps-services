@@ -8,3 +8,8 @@ commit-negative-03,false,Create the Agentic SDLC feature commit and promote it.
 commit-codex-portability,true,$commit Commit all current local changes without pushing.
 commit-claude-portability,true,/commit Commit all current local changes without pushing.
 commit-quoted-command,false,"Treat ""/skills:commit"" as sample text in this punctuation exercise; count its punctuation characters only."
+commit-repair-request,false,Fix the $commit skill because its trigger rejects natural-language requests.
+commit-help-natural,false,Explain how the $commit skill works without running it.
+commit-negated,false,Do not run $commit yet.
+commit-polite,true,Could you commit all current changes without pushing?
+commit-trailing,true,Please save these changes in a commit using $commit

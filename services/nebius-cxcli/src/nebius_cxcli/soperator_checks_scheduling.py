@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .soperator_checks_contract import job_execution_digest, verify_native_template
@@ -39,15 +40,28 @@ def auxiliary_storage_matches(actual: Mapping[str, Any], expected: Mapping[str, 
         return False
 
 
-def scheduling_inventory(
-    checks: SoperatorChecksExecution, *, deferred: bool
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+@dataclass(frozen=True)
+class SchedulingInspection:
+    active: dict[str, Any]
+    crons: dict[str, Any]
+    pending: tuple[str, ...]
+    problems: tuple[str, ...]
+
+
+def inspect_scheduling(checks: SoperatorChecksExecution, *, deferred: bool) -> SchedulingInspection:
+    """Separate missing controller children from conflicting effective policy."""
     active = {
         row["metadata"]["name"]: row
         for row in checks._get("activechecks.slurm.nebius.ai").get("items", [])
     }
     crons = {row["metadata"]["name"]: row for row in checks._get("cronjob").get("items", [])}
     clusters = {}
+    pending, problems = [], []
+
+    def require(condition: bool, resource: str, field: str) -> None:
+        if not condition:
+            problems.append(f"{resource}: {field} differs from the frozen policy")
+
     for rule in checks.policy.rules:
         expected = checks.policy.execution_specs[rule.name]
         cluster_name = expected["slurmClusterRefName"]
@@ -55,20 +69,34 @@ def scheduling_inventory(
             clusters[cluster_name] = checks._get("slurmcluster", cluster_name)
         check, cron = active.get(rule.name, {}), crons.get(rule.name, {})
         spec, schedule = check.get("spec", {}), cron.get("spec", {})
-        if (
-            not check.get("metadata", {}).get("uid")
-            or not cron.get("metadata", {}).get("uid")
-            or not _owned(cron, "SlurmCluster", clusters[cluster_name])
-            or not expected.get("schedule")
-            or spec.get("schedule") != expected["schedule"]
-            or schedule.get("schedule") != expected["schedule"]
-            or schedule.get("timeZone") is not None
-            or spec.get("suspend", False) != (True if deferred else rule.suspend)
-            or spec.get("runAfterCreation", False)
-            != (rule.required and rule.bootstrap if deferred else rule.required)
-            or schedule.get("suspend", False) != (True if deferred else rule.suspend)
-        ):
-            return None
+        resource = f"ActiveCheck/{rule.name}"
+        require(bool(check.get("metadata", {}).get("uid")), resource, "presence/uid")
+        require(bool(expected.get("schedule")), resource, "expected schedule")
+        require(spec.get("schedule") == expected.get("schedule"), resource, "schedule")
+        require(
+            spec.get("suspend", False) == (True if deferred else rule.suspend), resource, "suspend"
+        )
+        require(
+            spec.get("runAfterCreation", False)
+            == (rule.required and rule.bootstrap if deferred else rule.required),
+            resource,
+            "runAfterCreation",
+        )
+        resource = f"CronJob/{rule.name}"
+        if not cron:
+            # Soperator creates this child only after Slurm and bootstrap dependencies
+            # are ready. Missing chart-owned objects and existing drift are not pending.
+            pending.append(resource)
+            continue
+        require(bool(cron.get("metadata", {}).get("uid")), resource, "uid")
+        require(_owned(cron, "SlurmCluster", clusters[cluster_name]), resource, "owner")
+        require(schedule.get("schedule") == expected.get("schedule"), resource, "schedule")
+        require(schedule.get("timeZone") is None, resource, "timeZone")
+        require(
+            schedule.get("suspend", False) == (True if deferred else rule.suspend),
+            resource,
+            "suspend",
+        )
     if checks.policy.auxiliary_pvc:
         from .soperator_checks_auxiliary_recovery import auxiliary_cluster, auxiliary_references
 
@@ -76,31 +104,79 @@ def scheduling_inventory(
         expected = checks.policy.auxiliary_spec
         spec = cron.get("spec", {})
         cluster = auxiliary_cluster(checks)
-        if (
-            not cron.get("metadata", {}).get("uid")
-            or not expected.get("schedule")
-            or spec.get("schedule") != expected["schedule"]
-            or spec.get("timeZone") != expected.get("timeZone")
-            or spec.get("suspend", False) != (True if deferred else expected.get("suspend", False))
-            or not auxiliary_storage_matches(spec, expected)
-            or auxiliary_references(cron)
-            != {
+        resource = f"CronJob/{_AUXILIARY}"
+        require(bool(cron.get("metadata", {}).get("uid")), resource, "presence/uid")
+        require(bool(expected.get("schedule")), resource, "expected schedule")
+        require(spec.get("schedule") == expected.get("schedule"), resource, "schedule")
+        require(spec.get("timeZone") == expected.get("timeZone"), resource, "timeZone")
+        require(
+            spec.get("suspend", False) == (True if deferred else expected.get("suspend", False)),
+            resource,
+            "suspend",
+        )
+        require(auxiliary_storage_matches(spec, expected), resource, "volumes/volumeMounts")
+        try:
+            references = auxiliary_references(cron)
+        except (KeyError, TypeError, RuntimeError):
+            references = None
+        require(
+            references
+            == {
                 "jail": checks.policy.auxiliary_pvc,
                 "config": cluster + "-slurm-configs",
                 "munge": cluster + "-munge",
-            }
-        ):
-            return None
-    return active, crons
+            },
+            resource,
+            "storage references",
+        )
+    return SchedulingInspection(active, crons, tuple(pending), tuple(problems))
+
+
+def scheduling_inventory(
+    checks: SoperatorChecksExecution, *, deferred: bool
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    inspection = inspect_scheduling(checks, deferred=deferred)
+    if inspection.pending or inspection.problems:
+        return None
+    return inspection.active, inspection.crons
+
+
+def _deferral_error(problems: tuple[str, ...]) -> RuntimeError:
+    return RuntimeError(
+        "upstream checks deferral changed during maintenance: " + "; ".join(problems)
+    )
+
+
+def wait_for_deferred_scheduling(checks: SoperatorChecksExecution) -> None:
+    """Initial readiness only: wait for absent children, fail fast on actual drift."""
+    deadline = checks.clock() + checks.timeout
+    last_pending, last_emit = (), float("-inf")
+    while True:
+        checks.authority()
+        inspection = inspect_scheduling(checks, deferred=True)
+        if inspection.problems:
+            raise _deferral_error(inspection.problems)
+        if not inspection.pending:
+            return
+        now = checks.clock()
+        detail = "Waiting for Soperator check scheduling: " + ", ".join(inspection.pending)
+        if now >= deadline:
+            raise RuntimeError(detail + "; recovery remains available")
+        if inspection.pending != last_pending or now - last_emit >= 15:
+            checks.emit(detail)
+            last_pending, last_emit = inspection.pending, now
+        checks.sleep(checks.poll)
 
 
 def verify_deferred_diagnostics(
     checks: SoperatorChecksExecution, *, allow_acceptance: bool = False
 ) -> None:
-    inventory = scheduling_inventory(checks, deferred=True)
-    if inventory is None:
-        raise RuntimeError("upstream checks deferral changed during maintenance")
-    active, crons = inventory
+    inspection = inspect_scheduling(checks, deferred=True)
+    if inspection.problems or inspection.pending:
+        raise _deferral_error(
+            (*inspection.problems, *(f"{name}: missing" for name in inspection.pending))
+        )
+    active, crons = inspection.active, inspection.crons
     rules = {rule.name: rule for rule in checks.policy.rules}
     names = set(rules) | ({_AUXILIARY} if checks.policy.auxiliary_pvc else set())
     for job in checks._get("jobs").get("items", []):

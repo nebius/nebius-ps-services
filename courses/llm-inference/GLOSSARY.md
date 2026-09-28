@@ -1,54 +1,69 @@
 # Glossary
 
-- **Inference:** using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
-- **Token:** a model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
-- **Autoregressive generation:** selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
-- **Greedy decoding:** choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
-- **EOS:** end-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
-- **Radix tree:** a compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
-
-- **AIPerf:** NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
-- **Closed-loop load:** each client waits for completion before sending again, which can hide overload behind client pacing.
-- **Continuous batching:** admitting and retiring requests between model iterations instead of waiting for a fixed batch to finish together; TensorRT-LLM also calls this in-flight batching or iteration-level batching.
-- **CUDA Graph:** a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
-- **Decode:** autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
-- **Disaggregated serving:** separate prefill and decode worker pools connected by request and KV-state handoff.
-- **DP:** Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
-- **E2E latency:** end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
-- **EP:** expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
-- **Goodput:** completed work that meets declared service objectives.
-- **GQA/MQA:** attention layouts with fewer KV heads than query heads.
-- **HBM:** high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
-- **ISL/OSL:** input and output sequence lengths used to describe request work.
-- **ITL:** inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
-- **ICL:** inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
-- **KV cache:** cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
-- **KV-aware routing:** worker selection that combines reusable-prefix state with projected active load.
-- **Length bucketing:** grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
-- **Model artifact bundle:** the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
-- **MoE:** mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
-- **Open-loop load:** arrivals generated independently of response completion, exposing queue growth beyond service capacity.
-- **Paged KV cache:** managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
-- **PP:** pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
-- **Preemption:** temporarily suspending a running request to free resources; resumption may require restoring or recomputing KV state. Rejecting a new request is a separate admission decision.
-- **Prefill:** processing prompt tokens to form KV state and the logits for the first output token; also called the context phase in TensorRT-LLM.
-- **Prefix caching:** reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
-- **Remote model code:** Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
-- **SDPA:** scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
-- **Service correctness:** correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
-- **SLO:** service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
-- **Speculative decoding:** proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
-- **Throughput:** completed requests or tokens per second for a declared workload and boundary.
-- **TP (tensor parallelism):** splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
-- **TPOT:** time per output token; an average generation interval per subsequent token. Tool conventions vary, so compare its formula and endpoints with ITL rather than assuming the names imply different aggregations.
-- **TTFT:** time from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
-- **Temperature:** positive divisor applied to logits before softmax; lower values sharpen the distribution.
-- **Top-k:** sampling filter retaining the k highest-scoring candidates, followed by renormalization.
-- **Top-p:** sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
-- **Logit:** an unnormalized model score; softmax converts logits to probabilities.
-- **Response completion:** the final protocol event, which can occur after the last generated content token.
-
-- **Idle TTL:** an expiry interval renewed on access in the supplied cache model; capacity can evict an entry sooner.
-- **LRU eviction:** discarding or demoting the least recently used eligible cache entry under capacity pressure.
-- **GDS:** GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
-- **Cache restoration:** making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.
+- **AIPerf** — NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
+- **API** — Application programming interface; the request and response contract exposed by a service or software component.
+- **Autoregressive generation** — selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
+- **Cache restoration** — making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.
+- **Calibration** — Using representative data to choose quantization ranges or scales.
+- **Closed-loop load** — each client waits for completion before sending again, which can hide overload behind client pacing.
+- **Continuous batching** — admitting and retiring requests between model iterations instead of waiting for a fixed batch to finish together; TensorRT-LLM also calls this in-flight batching or iteration-level batching.
+- **Copy-on-write** — Creating a private copy before modifying state that is shared with another owner.
+- **CUDA Graph** — a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
+- **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
+- **Decode** — autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
+- **Dequantization** — Reconstructing approximate numerical values from quantized codes and their scale metadata.
+- **Disaggregated serving** — separate prefill and decode worker pools connected by request and KV-state handoff.
+- **DP** — Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
+- **E2E latency** — end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
+- **EOS** — end-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
+- **EP** — expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
+- **Execution engine** — The component that performs model computation and manages execution resources.
+- **Fragmentation** — Storage wasted by an allocation layout, including unused slots in a partially filled block.
+- **Free list** — A collection of reusable cache blocks available for allocation.
+- **GDS** — GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
+- **Goodput** — completed work that meets declared service objectives.
+- **GQA/MQA** — grouped-query attention / multi-query attention; layouts with fewer key/value heads than query heads.
+- **Greedy decoding** — choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
+- **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **ICL** — inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
+- **Idle TTL** — an expiry interval renewed on access in the supplied cache model; capacity can evict an entry sooner.
+- **Inference** — using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
+- **ISL/OSL** — input and output sequence lengths used to describe request work.
+- **ITL** — inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
+- **KV cache** — cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
+- **KV-aware routing** — worker selection that combines reusable-prefix state with projected active load.
+- **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
+- **Logit** — an unnormalized model score; softmax converts logits to probabilities.
+- **LRU eviction** — discarding or demoting the least recently used eligible cache entry under capacity pressure.
+- **Model artifact bundle** — the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
+- **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
+- **Open-loop load** — arrivals generated independently of response completion, exposing queue growth beyond service capacity.
+- **Paged KV cache** — managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
+- **PP** — pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
+- **Preemption** — temporarily suspending a running request to free resources; resumption may require restoring or recomputing KV state. Rejecting a new request is a separate admission decision.
+- **Prefill** — processing prompt tokens to form KV state and the logits for the first output token; also called the context phase in TensorRT-LLM.
+- **Prefix caching** — reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
+- **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Quantization** — Representing values using a smaller set of numerical levels, with metadata that maps stored codes to approximate original values.
+- **Radix tree** — a compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
+- **Readiness** — The ability of a service to accept the intended requests, beyond merely having a running process.
+- **Reference count** — A count of owners that still require a shared block or object.
+- **Remote model code** — Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
+- **Response completion** — the final protocol event, which can occur after the last generated content token.
+- **SDPA** — scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
+- **Service correctness** — correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
+- **SLO** — service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
+- **Speculative decoding** — proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
+- **Temperature** — positive divisor applied to logits before softmax; lower values sharpen the distribution.
+- **Throughput** — completed requests or tokens per second for a declared workload and boundary.
+- **Token** — a model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
+- **Top-k** — sampling filter retaining the k highest-scoring candidates, followed by renormalization.
+- **Top-p** — sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
+- **TP (tensor parallelism)** — splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
+- **TPOT** — time per output token; an average generation interval per subsequent token. Tool conventions vary, so compare its formula and endpoints with ITL rather than assuming the names imply different aggregations.
+- **TTFT** — time to first token, measured from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
+- **Warm-up** — untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
+- **Zero point** — A stored offset that maps real zero into a quantized representation.

@@ -118,7 +118,7 @@
               "type": "command",
               "command": "python3 \"${PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent codex --hook commit_intent.py --plugin-root \"${PLUGIN_ROOT}\"",
               "timeout": 30,
-              "statusMessage": "Binding explicit commit intent",
+              "statusMessage": "Recording commit intent context",
               "additionalContextLimit": 1200
             }
           ]

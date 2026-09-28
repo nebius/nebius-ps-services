@@ -2361,7 +2361,7 @@ def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPat
     def _timeout(*_args, **_kwargs):  # type: ignore[no-untyped-def]
         raise subprocess.TimeoutExpired(["kubectl", "get", "pod"], timeout=30)
 
-    monkeypatch.setattr(mk8s_gpu.subprocess, "run", _timeout)
+    monkeypatch.setattr(mk8s_gpu.kubernetes_process, "run", _timeout)
 
     with pytest.raises(RuntimeError, match="kubectl get pod timed out after 30 seconds"):
         mk8s_gpu._run_kubectl(["get", "pod"], extra_env=None, timeout_seconds=30)
@@ -2380,7 +2380,7 @@ def test_run_kubectl_adds_explicit_context_from_extra_env(
 
     mk8s_gpu._run_kubectl(
         ["get", "nodes"],
-        extra_env={"KUBECTL_CONTEXT": "external-context"},
+        extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "external-context"},
         timeout_seconds=30,
     )
 
@@ -4165,3 +4165,31 @@ def test_normalize_mk8s_gpu_project_deployment_testing_settings_preserves_genera
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
     assert mk8s_gpu_deployment_testing["gpu_visibility"]["max_nodes"] == 3
     assert "nccl" not in mk8s_gpu_deployment_testing
+
+
+def test_soperator_gpu_exporter_ownership_is_target_scoped():
+    payload = _mk8s_payload(infiniband_fabric="fabric-6")
+    payload["infra"]["components"].append(_cluster2_gpu_row())
+    payload["apps"]["charts"] = [
+        {"id": "soperator", "instance_id": "mk8s", "target_ref": "mk8s", "enabled": True},
+        *[
+            {
+                "id": "nvidia-gpu-operator",
+                "instance_id": target,
+                "target_ref": target,
+                "enabled": True,
+                "values": {},
+            }
+            for target in ("mk8s", "cluster2")
+        ],
+    ]
+    assert mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+    soperator_gpu = payload["apps"]["charts"][1]["values"]
+    ordinary_gpu = payload["apps"]["charts"][2]["values"]
+    assert soperator_gpu["dcgmExporter"]["enabled"] is False
+    assert ordinary_gpu.get("dcgmExporter", {}).get("enabled", True) is True
+    assert soperator_gpu["driver"]["enabled"] is False
+    assert soperator_gpu["toolkit"]["enabled"] is False
+    assert not mk8s_gpu.materialize_mk8s_gpu_app_values(payload)
+    selection = mk8s_gpu.resolve_mk8s_gpu_app_selection(payload)
+    assert not any("dcgmExporter" in issue for issue in selection.issues)

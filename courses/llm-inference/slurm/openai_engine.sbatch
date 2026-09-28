@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=gpu-course-engine-probe
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=00:30:00
+#SBATCH --output=%x-%j.out
+
+set -euo pipefail
+set -o noclobber
+umask 077
+export PYTHONDONTWRITEBYTECODE=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
+
+show_usage() {
+  printf 'Usage:\n  python3 tools/submit_lab.py --lab 30_engine_profile [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
+  printf '\nStarts a loopback-only vLLM server, runs the bounded OpenAI protocol probe, and stops the server.\n'
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then show_usage; exit 0; fi
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then printf 'ERROR: submit this script with sbatch.\n' >&2; exit 2; fi
+if [[ ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then printf 'ERROR: SLURM_JOB_ID must be numeric.\n' >&2; exit 2; fi
+: "${VLLM_IMAGE_DIGEST:?set the exact qualified vLLM image as an OCI digest}"
+: "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
+if [[ ${VLLM_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then
+  printf 'ERROR: the image must use @sha256 and COURSE_CONTAINER_RUNNER must be executable.\n' >&2
+  exit 2
+fi
+model=${1:-Qwen/Qwen2.5-0.5B-Instruct}
+revision=${2:-7ae557604adf67be50417f59c2c2f167def9a775}
+if [[ ! ${revision} =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'ERROR: REVISION must be an immutable 40-character Hugging Face commit ID.\n' >&2
+  exit 2
+fi
+if [[ $# -gt 2 ]]; then show_usage >&2; exit 2; fi
+course_dir=$PWD
+if [[ ! -f "${course_dir}/labs/30_engine_profile.py" ]]; then
+  printf 'ERROR: submit from the course root containing labs/30_engine_profile.py.\n' >&2
+  exit 2
+fi
+course_python="${COURSE_PYTHON:-python3}"
+command -v "${course_python}" >/dev/null 2>&1 || { printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2; exit 2; }
+if [[ -z ${COURSE_RUN_ID:-} ]]; then
+  COURSE_RUN_ID=$("${course_python}" -c 'import secrets; print(secrets.token_hex(6))')
+fi
+if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
+  printf 'ERROR: COURSE_RUN_ID must be exactly 12 lowercase hex characters.\n' >&2
+  exit 2
+fi
+export COURSE_RUN_ID
+mkdir -p "${course_dir}/results/30_engine_profile/logs" "${course_dir}/results"
+port=$((20000 + SLURM_JOB_ID % 20000))
+owned_model="course-lab30-${COURSE_RUN_ID}"
+"${course_python}" - "${port}" <<'PY'
+import socket
+import sys
+with socket.socket() as listener:
+    try:
+        listener.bind(("127.0.0.1", int(sys.argv[1])))
+    except OSError:
+        raise SystemExit("ERROR: selected loopback port is already occupied.")
+PY
+server_log="${course_dir}/results/30_engine_profile/logs/vllm-server-run-${COURSE_RUN_ID}.log"
+
+"${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" vllm serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+  --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
+  --served-model-name "${model}" "${owned_model}" \
+  --max-model-len 2048 >"${server_log}" 2>&1 &
+server_pid=$!
+cleanup() {
+  local pid=${server_pid:-}
+  if [[ -z ${pid} ]]; then return; fi
+  server_pid=""
+  kill "${pid}" 2>/dev/null || true
+  local stop_attempts=50
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      wait "${pid}" 2>/dev/null || true
+      return
+    fi
+    sleep 0.1
+  done
+  kill -KILL "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+}
+handle_signal() {
+  trap - INT TERM
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
+ready=0
+for _ in $(seq 1 120); do
+  if ! kill -0 "${server_pid}" 2>/dev/null; then
+    printf 'ERROR: vLLM exited before becoming ready; inspect %s.\n' "${server_log}" >&2
+    exit 2
+  fi
+  if "${course_python}" -c \
+    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/health', timeout=2)" \
+    >/dev/null 2>&1; then
+    "${course_python}" - "${port}" "${owned_model}" <<'PY'
+import json
+import sys
+import urllib.request
+with urllib.request.urlopen(
+    f"http://127.0.0.1:{sys.argv[1]}/v1/models", timeout=2
+) as response:
+    models = json.load(response).get("data", [])
+if not any(model.get("id") == sys.argv[2] for model in models):
+    raise SystemExit("ERROR: ready server does not match this run's model identity.")
+PY
+    ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 240 seconds.\n' >&2; exit 2; fi
+
+"${course_python}" "${course_dir}/labs/30_engine_profile.py" \
+  --protocol openai --server-url "http://127.0.0.1:${port}" --model "${model}" \
+  --output-dir "${course_dir}/results"
+printf 'PASS: private vLLM log and sanitized Lab 30 evidence recorded for run %s.\n' "${COURSE_RUN_ID}"

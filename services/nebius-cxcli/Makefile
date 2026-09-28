@@ -94,11 +94,7 @@ test-unit: env
 	$(OFFLINE_TEST_ENV) $(UV_RUN) pytest -m "not integration"
 
 test-integration: env
-	@if [ -d tests/integration ] && find tests/integration -type f \( -name 'test_*.py' -o -name '*_test.py' \) | grep -q .; then \
-		$(UV_RUN) pytest -m integration tests/integration; \
-	else \
-		echo "No integration tests under tests/integration"; \
-	fi
+	$(OFFLINE_TEST_ENV) $(UV_RUN) pytest -m integration tests
 
 coverage: coverage-check
 

@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
-import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .paths import ProjectPaths
 from .project_bundle_transaction import ProjectBundleTransaction
 from .soperator_adapter import (
     SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS,
     render_soperator_monitoring_dashboard_documents,
 )
+from .soperator_deployment_profile import rendered_deployment_profile
 from .soperator_operation import (
     SoperatorOperationAnchor,
     SoperatorOperationSpec,
@@ -38,9 +40,13 @@ RUNTIME_REPAIR_REASON = "install-nodeset-runtime-binding-v1"
 STORAGE_REPAIR_REASON = "install-worker-scratch-binding-v1"
 USERNS_REPAIR_REASON = "install-enroot-userns-binding-v1"
 DOCKER_REPAIR_REASON = "install-worker-docker-binding-v1"
+DOCKER_STORAGE_REPAIR_REASON = "install-worker-docker-storage-v1"
 TOPOLOGY_REPAIR_REASON = "install-worker-topology-binding-v1"
+OBSERVABILITY_REPAIR_REASON = "install-native-observability-v1"
 CPU_MASK_REPAIR_REASON = "install-worker-cpu-mask-binding-v1"
 INPUT_REPAIR_EVIDENCE_KEYS = {
+    OBSERVABILITY_REPAIR_REASON: "installObservabilityRepair",
+    DOCKER_STORAGE_REPAIR_REASON: "installDockerStorageRepair",
     CPU_MASK_REPAIR_REASON: "installCpuMaskRepair",
     TOPOLOGY_REPAIR_REASON: "installTopologyRepair",
     DOCKER_REPAIR_REASON: "installDockerRepair",
@@ -56,7 +62,13 @@ INPUT_REPAIR_EVIDENCE_KEYS = {
 INPUT_REPAIR_RELEASE_KEYS = {
     reason: (
         "nodesetsRelease"
-        if reason in {DOCKER_REPAIR_REASON, TOPOLOGY_REPAIR_REASON, CPU_MASK_REPAIR_REASON}
+        if reason
+        in {
+            DOCKER_REPAIR_REASON,
+            DOCKER_STORAGE_REPAIR_REASON,
+            TOPOLOGY_REPAIR_REASON,
+            CPU_MASK_REPAIR_REASON,
+        }
         else "profileRelease"
         if reason == USERNS_REPAIR_REASON
         else "collectorRelease"
@@ -100,6 +112,59 @@ def _disable_dashboard(values: dict[str, Any], release: str) -> None:
     soperator["monitoringDashboards"] = {"enabled": False}
 
 
+def _remove_dashboard_child_patches(
+    outer: dict[str, Any], *, previous: Mapping[str, bytes], release: str
+) -> None:
+    graph_maps = [
+        doc
+        for doc in _documents(previous[GRAPH_FILE])
+        if doc.get("kind") == "ConfigMap"
+        and doc.get("metadata", {}).get("name") == "nebius-cxcli-soperator-release-graph"
+    ]
+    if len(graph_maps) != 1:
+        raise RuntimeError("Install dashboard graph contract is ambiguous")
+    rows = [
+        row
+        for row in json.loads(graph_maps[0]["data"]["graph.json"])["releases"]
+        if row.get("releaseName") == DASHBOARD_RELEASE
+    ]
+    if len(rows) != 1 or type(rows[0].get("stage")) is not int or rows[0]["stage"] < 0:
+        raise RuntimeError("Install dashboard repair lacks its exact original child stage")
+    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    pair = []
+    for name in (UPSTREAM_DASHBOARD_RELEASE, DASHBOARD_RELEASE):
+        target = {
+            "group": "helm.toolkit.fluxcd.io",
+            "version": "v2",
+            "kind": "HelmRelease",
+            "name": name,
+        }
+        matches = [item for item in patches if item.get("target", {}).get("name") == name]
+        if (
+            len(matches) != 1
+            or matches[0].get("target") != target
+            or set(matches[0]) != {"target", "patch"}
+        ):
+            raise RuntimeError("Install dashboard repair lacks its exact original child patch pair")
+        pair.append(matches[0])
+    expected_labels = {
+        "apiVersion": "helm.toolkit.fluxcd.io/v2",
+        "kind": "HelmRelease",
+        "metadata": {
+            "name": DASHBOARD_RELEASE,
+            "labels": {
+                "soperator.nebius.ai/release-graph": "nebius-cxcli",
+                "soperator.nebius.ai/release-stage": str(rows[0]["stage"]),
+                "app.kubernetes.io/version": release,
+            },
+        },
+    }
+    if yaml.safe_load(pair[1]["patch"]) != expected_labels:
+        raise RuntimeError("Install dashboard repair changed its original child ownership patch")
+    for item in pair:
+        patches.remove(item)
+
+
 def validate_dashboard_render_delta(
     previous: Mapping[str, bytes],
     candidate: Mapping[str, bytes],
@@ -141,21 +206,7 @@ def validate_dashboard_render_delta(
         raise RuntimeError("Install dashboard outer release is ambiguous")
     outer = outer_docs[0]
     _disable_dashboard(outer["spec"]["values"], release)
-    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
-    removed = [
-        item
-        for item in patches
-        if item.get("target")
-        == {
-            "group": "helm.toolkit.fluxcd.io",
-            "version": "v2",
-            "kind": "HelmRelease",
-            "name": UPSTREAM_DASHBOARD_RELEASE,
-        }
-    ]
-    if len(removed) != 1:
-        raise RuntimeError("Install dashboard repair lacks its exact original child patch")
-    patches.remove(removed[0])
+    _remove_dashboard_child_patches(outer, previous=previous, release=release)
     if outer_docs != _documents(candidate[OUTER_FILE]):
         raise RuntimeError("Install dashboard repair changes unrelated release wiring")
 
@@ -194,6 +245,47 @@ def validate_dashboard_render_delta(
     )
     if graph_docs != _documents(candidate[GRAPH_FILE]):
         raise RuntimeError("Install dashboard repair changes unrelated graph authority")
+
+
+def _validate_dashboard_pre_main_frontier(predecessor: Mapping[str, Any]) -> None:
+    status = predecessor.get("status")
+    final_status = (
+        {"running": "running", "recovery-required": "failed"}.get(status)
+        if isinstance(status, str)
+        else None
+    )
+    transitions = predecessor.get("transitions", [])
+    if (
+        final_status is None
+        or not isinstance(transitions, list)
+        or any(not isinstance(row, Mapping) for row in transitions)
+        or [(row.get("phase"), row.get("status")) for row in transitions]
+        != [
+            ("resolve-immutable-sources", "complete"),
+            ("establish-boot-storage-barrier", "complete"),
+            ("apply-declarative-release", final_status),
+        ]
+        or predecessor.get("irreversibleFrontier") is not None
+    ):
+        raise RuntimeError("Install dashboard repair is outside its original pre-main frontier")
+    applied = transitions[-1]
+    intent = predecessor.get("irreversibleIntent")
+    if final_status == "failed" and (
+        applied.get("failureType") != "operation-error"
+        or applied.get("receiptSha256") is not None
+        or type(applied.get("failureAttempts")) is not int
+        or applied["failureAttempts"] < 1
+        or (
+            intent is not None
+            and intent
+            != {
+                "transitionId": applied.get("id"),
+                "phase": "apply-declarative-release",
+                "disposition": "pending-forward-only",
+            }
+        )
+    ):
+        raise RuntimeError("Install dashboard repair lacks its exact failed apply evidence")
 
 
 def validate_failed_dashboard(
@@ -247,7 +339,9 @@ def _kube_get(
     ]
     if optional:
         command.append("--ignore-not-found=true")
-    result = subprocess.run(command, env=dict(env), capture_output=True, text=True, timeout=45)
+    result = kubernetes_process.run(
+        command, env=dict(env), capture_output=True, text=True, timeout=45
+    )
     if result.returncode:
         raise RuntimeError("Install dashboard repair cannot prove its Kubernetes checkpoint")
     if optional and not result.stdout.strip():
@@ -289,10 +383,7 @@ def dashboard_repair_candidate(
     values[0]["data"]["values.yaml"] = yaml.safe_dump(compiled, sort_keys=False)
     outer = _documents(previous[OUTER_FILE])
     _disable_dashboard(outer[0]["spec"]["values"], release)
-    patches = outer[0]["spec"]["postRenderers"][0]["kustomize"]["patches"]
-    patches[:] = [
-        item for item in patches if item.get("target", {}).get("name") != UPSTREAM_DASHBOARD_RELEASE
-    ]
+    _remove_dashboard_child_patches(outer[0], previous=previous, release=release)
     graph = [
         doc
         for doc in _documents(previous[GRAPH_FILE])
@@ -381,8 +472,10 @@ def _bind_repair_admission(
         STORAGE_REPAIR_REASON: "installStorageRepairSha256",
         USERNS_REPAIR_REASON: "installUsernsRepairSha256",
         DOCKER_REPAIR_REASON: "installDockerRepairSha256",
+        DOCKER_STORAGE_REPAIR_REASON: "installDockerStorageRepairSha256",
         TOPOLOGY_REPAIR_REASON: "installTopologyRepairSha256",
         CPU_MASK_REPAIR_REASON: "installCpuMaskRepairSha256",
+        OBSERVABILITY_REPAIR_REASON: "installObservabilityRepairSha256",
     }[repair["schema"]]
     if (
         data.get("operationSpecSha256") != repair["previousOperationSpecSha256"]
@@ -408,7 +501,7 @@ def _bind_repair_admission(
         {"op": "add", "path": "/data/" + key, "value": admission_hash},
     ]
     assert_authority()
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",
@@ -496,25 +589,20 @@ def prepare_install_dashboard_repair(
         raise RuntimeError("Install dashboard repair requires one exact reconcile predecessor")
     predecessor = predecessors[0]
     spec = predecessor["operation"]["spec"]
-    transitions = predecessor.get("transitions", [])
+    _validate_dashboard_pre_main_frontier(predecessor)
     if (
-        predecessor.get("status") != "running"
-        or spec.get("strategy") != "install"
+        spec.get("strategy") != "install"
         or spec.get("current_release") != ""
         or spec.get("target_release") != snapshot.release
         or spec.get("target_ref") != target_ref
         or spec.get("intervention_generation") != 0
-        or [(row.get("phase"), row.get("status")) for row in transitions]
-        != [
-            ("resolve-immutable-sources", "complete"),
-            ("establish-boot-storage-barrier", "complete"),
-            ("apply-declarative-release", "running"),
-        ]
         or spec.get("desired_values_sha256") != _file_hashes(existing)[VALUES_FILE]
         or spec.get("adapter_sha256") != _file_hashes(existing)["soperator-nebius-adapter.yaml"]
         or spec.get("stage_plan_sha256")
         != soperator_reconcile_stage_plan_sha256(
-            strategy="install", rendered_graph_sha256=soperator_stage_plan_sha256(paths)
+            strategy="install",
+            rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+            deployment_profile=rendered_deployment_profile(paths),
         )
     ):
         raise RuntimeError("Install dashboard repair is outside its original pre-main frontier")
@@ -584,6 +672,9 @@ def prepare_install_dashboard_repair(
         "predecessorReceiptSha256": _digest(predecessor),
         "retiredRelease": {"namespace": "flux-system", "name": DASHBOARD_RELEASE, "uid": uid},
         "previousFiles": _file_hashes(existing),
+        "predecessorFiles": {
+            name: base64.b64encode(content).decode() for name, content in existing.items()
+        },
         "replacementFiles": _file_hashes(candidate),
     }
     transaction = ProjectBundleTransaction(paths.project_dir)

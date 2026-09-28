@@ -7,11 +7,12 @@ import argparse
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -25,7 +26,7 @@ def main() -> None:
             "--group-size must be at least 2 for within-group normalization"
         )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
     prompts = 4
@@ -34,17 +35,24 @@ def main() -> None:
         old_log_probs + torch.randn_like(old_log_probs) * 0.02
     ).requires_grad_()
     rewards = torch.randn((prompts, args.group_size), device="cuda")
-    advantages = (rewards - rewards.mean(dim=1, keepdim=True)) / (
-        rewards.std(dim=1, keepdim=True, unbiased=False) + 1e-4
-    )
-    ratio = (new_log_probs - old_log_probs).exp()
-    clipped_ratio = ratio.clamp(0.8, 1.2)
-    surrogate = torch.minimum(ratio * advantages, clipped_ratio * advantages)
-    reference_log_probs = old_log_probs - 0.01
-    log_ratio = reference_log_probs - new_log_probs
-    approximate_kl = log_ratio.exp() - log_ratio - 1
-    loss = -(surrogate - 0.02 * approximate_kl).mean()
-    loss.backward()
+
+    def objective() -> tuple[object, object, object]:
+        advantages = (rewards - rewards.mean(dim=1, keepdim=True)) / (
+            rewards.std(dim=1, keepdim=True, unbiased=False) + 1e-4
+        )
+        ratio = (new_log_probs - old_log_probs).exp()
+        clipped_ratio = ratio.clamp(0.8, 1.2)
+        surrogate = torch.minimum(ratio * advantages, clipped_ratio * advantages)
+        reference_log_probs = old_log_probs - 0.01
+        log_ratio = reference_log_probs - new_log_probs
+        approximate_kl = log_ratio.exp() - log_ratio - 1
+        loss = -(surrogate - 0.02 * approximate_kl).mean()
+        loss.backward()
+        return advantages, approximate_kl, loss
+
+    advantages, approximate_kl, loss = annotated_operation(
+        objective, "grpo_objective"
+    )()
     group_mean_error = float(advantages.mean(dim=1).abs().max())
     if group_mean_error > 1e-5 or not torch.isfinite(loss):
         raise SystemExit(
@@ -70,4 +78,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

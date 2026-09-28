@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,median_ttft_seconds,value,0.016031,s
+baseline-trial1,p90_ttft_seconds,value,0.459841,s
+baseline-trial1,median_e2e_seconds,value,0.090422,s
+baseline-trial1,median_inter_chunk_gap_seconds,value,0.0015760000000000001,s
+baseline-trial1,request_throughput_per_second,value,9.907,reqps
+candidate-trial1,median_ttft_seconds,value,0.297038,s
+candidate-trial1,p90_ttft_seconds,value,0.580586,s
+candidate-trial1,median_e2e_seconds,value,0.374207,s
+candidate-trial1,median_inter_chunk_gap_seconds,value,0.0016040000000000002,s
+candidate-trial1,request_throughput_per_second,value,10.634,reqps

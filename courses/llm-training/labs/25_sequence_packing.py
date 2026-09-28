@@ -7,7 +7,7 @@ import argparse
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
@@ -38,7 +38,7 @@ def main() -> None:
     if args.capacity < 32:
         raise SystemExit("--capacity must be at least 32")
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     lengths = [31, 48, 63, 77, 91, 113]
     if max(lengths) > args.capacity:
         raise SystemExit("capacity is smaller than an example")
@@ -102,4 +102,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from course_evidence import annotated_operation
+
+    annotated_operation(main, "lab_workload")()

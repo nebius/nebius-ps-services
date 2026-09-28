@@ -1,0 +1,2205 @@
+{
+  "schema": "gpu-course-observability/v1",
+  "course": "advanced-gpu-communication",
+  "labs": {
+    "01_fabric_topology": {
+      "lab": "01_fabric_topology",
+      "title": "Lab 01: Verify the GPU fabric and rank placement",
+      "kind": "qualification",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "ranks",
+          "path": "ranks",
+          "title": "Participating ranks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured ranks. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "nvlink_peers_per_gpu",
+          "path": "nvlink_peers_per_gpu",
+          "title": "NVLink peers per GPU",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured nvlink_peers_per_gpu. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "active_ib_ports_per_node_min",
+          "path": "active_ib_ports_per_node_min",
+          "title": "Minimum active IB ports per node",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured active_ib_ports_per_node_min. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "all_reduce_median_seconds",
+          "path": "all_reduce.median_ms",
+          "title": "Collective duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured all_reduce.median_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        }
+      ],
+      "question": "Inspect ranks, NVLink peers and active IB ports in Grafana, then the exact collective sum in JSON. Require the cluster owner to check Fabric Manager and NVSwitch health separately: NVLink labels alone do not prove switch health or GPUDirect RDMA. Repeat qualification before and after an owner-approved repair; readiness is a pass/fail result, not a speedup.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/01_fabric_topology.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 01_fabric_topology slurm/fabric.sbatch labs/01_fabric_topology.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 01_fabric_topology --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/01_fabric_topology.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Repeat hardware qualification and compare readiness evidence",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Participating ranks",
+        "NVLink peers per GPU",
+        "Minimum active IB ports per node",
+        "Collective duration"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Inspect ranks, NVLink peers and active IB ports in Grafana, then the exact collective sum in JSON. Require the cluster owner to check Fabric Manager and NVSwitch health separately: NVLink labels alone do not prove switch health or GPUDirect RDMA. Repeat qualification before and after an owner-approved repair; readiness is a pass/fail result, not a speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open all rank reports. Expand CUDA streams and the course_measure NVTX range; confirm the tiny all-reduce appears on every participating rank. This is a readiness trace, not a bandwidth benchmark."
+      },
+      "gpu_telemetry": true
+    },
+    "02_collective_readiness": {
+      "lab": "02_collective_readiness",
+      "title": "Lab 02: Verify the two-node H100 platform",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [],
+      "question": "Draw one process-to-device arrow on each node and one communication edge between them. Explain why successful local CUDA execution does not prove that NCCL can communicate across the inter-node network.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/02_collective_readiness.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 02_collective_readiness slurm/two_node.sbatch labs/02_collective_readiness.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 02_collective_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/02_collective_readiness.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "nccl_backend"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open both rank reports. Expand CUDA API, CUDA GPU and NCCL rows inside lab_workload; correlate the readiness all-reduce on the two hosts. A passing sum is correctness evidence, not throughput evidence."
+      },
+      "gpu_telemetry": true
+    },
+    "03_training_readiness": {
+      "lab": "03_training_readiness",
+      "title": "Lab 03: Verify the distributed training allocation",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "world_size",
+          "path": "world_size",
+          "title": "World size",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.world_size. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "distinct_host_count",
+          "path": "distinct_host_count",
+          "title": "Distinct host count",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.distinct_host_count. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw the rank/device mapping and explain why each node uses local rank zero. Which later failures could still occur after this check passes, such as model memory exhaustion or mismatched collective order?",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/03_training_readiness.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 03_training_readiness slurm/training_two_rank.sbatch labs/03_training_readiness.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 03_training_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/03_training_readiness.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "World size",
+        "Distinct host count"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "world_size",
+        "distinct_host_count"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open both rank reports. Inspect lab_workload, CUDA streams and NCCL activity for the readiness all-reduce; require both ranks to participate before interpreting later training traces."
+      },
+      "gpu_telemetry": true
+    },
+    "04_inference_readiness": {
+      "lab": "04_inference_readiness",
+      "title": "Lab 04: Verify the two-node inference mechanics platform",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "world_size",
+          "path": "world_size",
+          "title": "World size",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.world_size. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "distinct_host_count",
+          "path": "distinct_host_count",
+          "title": "Distinct host count",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.distinct_host_count. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw the two worker/device pairs and explain why local rank is zero on each node. Name the additional initialization boundaries that a real distributed engine introduces beyond this communication group.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/04_inference_readiness.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 04_inference_readiness slurm/two_node.sbatch labs/04_inference_readiness.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 04_inference_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/04_inference_readiness.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "World size",
+        "Distinct host count"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "world_size",
+        "distinct_host_count"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL all-reduce; this probe establishes collective readiness, not serving latency."
+      },
+      "gpu_telemetry": true
+    },
+    "05_transport_readiness": {
+      "lab": "05_transport_readiness",
+      "title": "Lab 05: Establish the optimization platform contract",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [],
+      "question": "Write the invariants that must remain fixed in a later comparison: device variant, rank count, global work, dtype, environment and timed operations. Which of these would invalidate a direct baseline/candidate ratio if changed?",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/05_transport_readiness.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 05_transport_readiness slurm/two_node.sbatch labs/05_transport_readiness.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 05_transport_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/05_transport_readiness.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "nccl_backend"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL collective. Confirm placement separately from the trace; kernel duration alone does not identify the network transport."
+      },
+      "gpu_telemetry": true
+    },
+    "06_nvlink_bandwidth": {
+      "lab": "06_nvlink_bandwidth",
+      "title": "Lab 06: Compare copy engines and SM peer traffic",
+      "kind": "qualification",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "engine"
+      ],
+      "metrics": [
+        {
+          "name": "minimum_GBps",
+          "path": "minimum_GBps",
+          "title": "Slowest directed peer bandwidth",
+          "unit": "GBs",
+          "scale": 1,
+          "description": "Measured minimum_GBps. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "mean_GBps",
+          "path": "mean_GBps",
+          "title": "Mean directed peer bandwidth",
+          "unit": "GBs",
+          "scale": 1,
+          "description": "Measured mean_GBps. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "pair_count",
+          "path": "pair_count",
+          "title": "Validated directed GPU pairs",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured pair_count. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "directed_pair_GBps",
+          "path": "pairs.*.GBps",
+          "title": "Directed peer bandwidth",
+          "unit": "GBs",
+          "scale": 1,
+          "description": "56 directed pairs in source-major order, skipping self-pairs. JSON pairs retains source and destination indices. Each pair is measured separately; do not add them as concurrent fabric throughput.",
+          "optional": false
+        }
+      ],
+      "question": "Compare the slowest pair and mean bandwidth, then open the private vendor JSON and locate asymmetric pairs in bandwidth_matrix. A CE-versus-SM difference is a mechanism study; decide which resource your application can spare. Independently repeat the same engine three times. Keep buffer size and sample count fixed. H100 inter-node InfiniBand is not nvbandwidth multi-node NVLink/IMEX; this lab intentionally stays within one worker.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/06_nvlink_bandwidth.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce",
+      "systems_command": "python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --export=ALL,COURSE_PROFILE_TOOL=nsys --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce",
+      "compute_command": null,
+      "tuning_control": "`--engine`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Slowest directed peer bandwidth",
+        "Mean directed peer bandwidth",
+        "Validated directed GPU pairs"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the slowest pair and mean bandwidth, then open the private vendor JSON and locate asymmetric pairs in bandwidth_matrix. A CE-versus-SM difference is a mechanism study; decide which resource your application can spare. Independently repeat the same engine three times. Keep buffer size and sample count fixed. H100 inter-node InfiniBand is not nvbandwidth multi-node NVLink/IMEX; this lab intentionally stays within one worker.",
+      "systems": {
+        "applicable": true,
+        "target": "vendor",
+        "reason": "Capture the actual vendor executable inside each allocated worker; preserve raw numerical output separately.",
+        "view": "Open nvbandwidth.nsys-rep beside the private vendor JSON. Compare CUDA GPU memory-copy rows for CE against kernel rows for SM at the same buffer size. NVTX ranges are vendor-owned; no course_measure annotation is promised. Use clean matrix bandwidth for the comparison, not capture timings."
+      },
+      "gpu_telemetry": true
+    },
+    "07_rdma_bandwidth": {
+      "lab": "07_rdma_bandwidth",
+      "title": "Lab 07: Validate host and GPU memory over InfiniBand",
+      "kind": "qualification",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "memory",
+        "tx_depth"
+      ],
+      "metrics": [
+        {
+          "name": "bidirectional_Gbps",
+          "path": "bidirectional_Gbps",
+          "title": "Validated bidirectional bandwidth",
+          "unit": "Gbits",
+          "scale": 1,
+          "description": "Measured bidirectional_Gbps. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "validated_bytes_min",
+          "path": "validated_bytes_min",
+          "title": "Minimum validated endpoint bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured validated_bytes_min. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        }
+      ],
+      "question": "Require both endpoint logs to say VALIDATION: PASSED with nonzero chunks and bytes, and both JSON reports to identify IB/RC and CUDA device 0 for the candidate. Bidirectional Gbit/s is aggregate traffic in both directions, not one-way GB/s. After the host/GPU comparison, hold GPU memory fixed and independently change --tx-depth from 128 to 64; publish the two printed result paths; the publisher detects the single changed parameter. Match NIC/GPU locality from nvidia-smi topo -m and ibdev2netdev before testing. NET/IB alone is insufficient evidence of GPUDirect. Registration failure is a failed prerequisite, not evidence that host memory is faster.",
+      "interpretation": "This verbs benchmark measures NIC DMA into host or GPU memory. CUDA tracing cannot establish RDMA wire bandwidth; use validated perftest throughput and topology evidence. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/07_rdma_bandwidth.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 07_rdma_bandwidth slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory host --server-device \"${SERVER_HCA:?qualified mlx5 device}\" --client-device \"${CLIENT_HCA:?qualified mlx5 device}\"",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "`--memory`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Validated bidirectional bandwidth",
+        "Minimum validated endpoint bytes"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Require both endpoint logs to say VALIDATION: PASSED with nonzero chunks and bytes, and both JSON reports to identify IB/RC and CUDA device 0 for the candidate. Bidirectional Gbit/s is aggregate traffic in both directions, not one-way GB/s. After the host/GPU comparison, hold GPU memory fixed and independently change --tx-depth from 128 to 64; publish the two printed result paths; the publisher detects the single changed parameter. Match NIC/GPU locality from nvidia-smi topo -m and ibdev2netdev before testing. NET/IB alone is insufficient evidence of GPUDirect. Registration failure is a failed prerequisite, not evidence that host memory is faster.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This verbs benchmark measures NIC DMA into host or GPU memory. CUDA tracing cannot establish RDMA wire bandwidth; use validated perftest throughput and topology evidence.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": true
+    },
+    "08_distributed_collectives": {
+      "lab": "08_distributed_collectives",
+      "title": "Lab 08: Measure a two-node NCCL all-reduce",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "payload_mib"
+      ],
+      "metrics": [
+        {
+          "name": "median_seconds",
+          "path": "median_ms",
+          "title": "Median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "effective_payload_gib_per_s",
+          "path": "effective_payload_gib_per_s",
+          "title": "Effective payload gib per s",
+          "unit": "Bps",
+          "scale": 1073741824,
+          "description": "Measured artifact field measurements.effective_payload_gib_per_s. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.07374e+09; unit Bps.",
+          "optional": false
+        }
+      ],
+      "question": "Explain why small messages can be dominated by startup latency and why larger messages may expose transfer cost. Draw the operation's dependencies and distinguish application payload from the bytes moved by a particular collective algorithm.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/08_distributed_collectives.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 08_distributed_collectives slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4",
+      "systems_command": "python3 tools/submit_lab.py --lab 08_distributed_collectives --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4",
+      "compute_command": null,
+      "tuning_control": "`--payload-mib`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median (seconds)",
+        "Effective payload gib per s"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        {
+          "path": "payload_mib",
+          "varies_with": [
+            "payload_mib"
+          ]
+        }
+      ],
+      "workload_parameters": [
+        "payload_mib"
+      ],
+      "guided_comparison": "Use `--payload-mib` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `payload_mib` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "09_nccl_transport_sweep": {
+      "lab": "09_nccl_transport_sweep",
+      "title": "Lab 09: Measure a two-node NCCL message-size curve",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "variant"
+      ],
+      "metrics": [
+        {
+          "name": "curve_median_seconds",
+          "path": "curve.*.median_ms",
+          "title": "Curve / case / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.curve.*.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "curve_algbw_gbps_at_median",
+          "path": "curve.*.algbw_GBps_at_median",
+          "title": "Curve / case / algbw GBps at median",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured artifact field measurements.curve.*.algbw_GBps_at_median. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e+09; unit Bps.",
+          "optional": false
+        },
+        {
+          "name": "curve_normalized_busbw_gbps_at_median",
+          "path": "curve.*.normalized_busbw_GBps_at_median",
+          "title": "Curve / case / normalized busbw GBps at median",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured artifact field measurements.curve.*.normalized_busbw_GBps_at_median. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e+09; unit Bps.",
+          "optional": false
+        }
+      ],
+      "question": "Build a small worksheet for three representative sizes: 8 KiB, 1 MiB and 64 MiB. For each, retain all three independent run medians and their range, then compare the median of those run medians between profiles. Do not pool every within-job sample and call them independent runs. Explain whether the effect is limited to small-message latency, large-message transfer, or neither.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/09_nccl_transport_sweep.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 09_nccl_transport_sweep slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576",
+      "systems_command": "python3 tools/submit_lab.py --lab 09_nccl_transport_sweep --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576",
+      "compute_command": null,
+      "tuning_control": "`--variant`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Curve / case / median (seconds)",
+        "Curve / case / algbw GBps at median",
+        "Curve / case / normalized busbw GBps at median"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "dtype",
+        "collective",
+        "timing_scope",
+        "warmup",
+        "iterations",
+        "curve.*.bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--variant` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "10_nccl_tests_report": {
+      "lab": "10_nccl_tests_report",
+      "title": "Lab 10: Run and interpret NVIDIA NCCL Tests on Slurm",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "variant"
+      ],
+      "metrics": [
+        {
+          "name": "rows_out_of_place_time_seconds",
+          "path": "rows.*.out_of_place.time_us",
+          "title": "Rows / case / out of place / time (seconds)",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured artifact field measurements.rows.*.out_of_place.time_us. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e-06; unit s.",
+          "optional": false
+        },
+        {
+          "name": "rows_out_of_place_algbw_gbps",
+          "path": "rows.*.out_of_place.algbw_GBps",
+          "title": "Rows / case / out of place / algbw GBps",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured artifact field measurements.rows.*.out_of_place.algbw_GBps. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e+09; unit Bps.",
+          "optional": false
+        },
+        {
+          "name": "rows_in_place_time_seconds",
+          "path": "rows.*.in_place.time_us",
+          "title": "Rows / case / in place / time (seconds)",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured artifact field measurements.rows.*.in_place.time_us. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e-06; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Read the outputs in four passes: capability, selected path, correctness, then performance. Read-only `nvidia-smi topo -m` describes local proximity; `ibv_devinfo`, `ibstat` and `rdma link show` can establish port/link context when installed. They are not substitutes for the runtime log. An IB transport may carry RoCE; an active Ethernet port does not prove RoCE use. A Socket profile intentionally selects NCCL's Socket network plugin. Default versus socket is an RDMA comparison only if diagnostics establish that default selected RDMA.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/10_nccl_tests_report.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 10_nccl_tests_report slurm/nccl_tests.sbatch default",
+      "systems_command": "python3 tools/submit_lab.py --lab 10_nccl_tests_report --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/nccl_tests.sbatch default",
+      "compute_command": null,
+      "tuning_control": "`--variant`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Rows / case / out of place / time (seconds)",
+        "Rows / case / out of place / algbw GBps",
+        "Rows / case / in place / time (seconds)"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "benchmark_version",
+        "nccl_headers",
+        "nccl_library",
+        "ranks",
+        "warmup",
+        "iterations",
+        "validation_iterations",
+        "rows.*.bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--variant` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "11_collective_layout": {
+      "lab": "11_collective_layout",
+      "title": "Lab 11: Compare flat and hierarchical all-reduce",
+      "kind": "distributed",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "layout"
+      ],
+      "metrics": [
+        {
+          "name": "collective_median_seconds",
+          "path": "collective.median_ms",
+          "title": "Collective duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured collective.median_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "name": "useful_GBps",
+          "path": "useful_GBps",
+          "title": "Useful payload rate",
+          "unit": "GBs",
+          "scale": 1,
+          "description": "Measured useful_GBps. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        }
+      ],
+      "question": "In Systems, align rank reports using the same collective sequence and the local_reduce, leader_all_reduce and local_broadcast NVTX ranges. Compare the inter-node tail and waiting nonleaders with flat_all_reduce. Grafana Collective duration is the median of each iteration\u2019s slowest-rank time; Useful payload rate is bytes divided by that time, not NCCL normalized bus bandwidth. Independently run the same comparison with --nodes=1 to isolate local overhead, keeping those results in a separate eight-rank comparison.",
+      "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
+      "dashboard": "reference/grafana/11_collective_layout.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 11_collective_layout slurm/fabric.sbatch labs/11_collective_layout.py --profile small --layout flat",
+      "systems_command": "python3 tools/submit_lab.py --lab 11_collective_layout --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/11_collective_layout.py --profile small --layout flat",
+      "compute_command": null,
+      "tuning_control": "`--layout`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Collective duration",
+        "Useful payload rate"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "In Systems, align rank reports using the same collective sequence and the local_reduce, leader_all_reduce and local_broadcast NVTX ranges. Compare the inter-node tail and waiting nonleaders with flat_all_reduce. Grafana Collective duration is the median of each iteration\u2019s slowest-rank time; Useful payload rate is bytes divided by that time, not NCCL normalized bus bandwidth. Independently run the same comparison with --nodes=1 to isolate local overhead, keeping those results in a separate eight-rank comparison.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "12_distributed_scaling": {
+      "lab": "12_distributed_scaling",
+      "title": "Lab 12: Compare one GPU with two-node DDP",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "world_size"
+      ],
+      "metrics": [
+        {
+          "name": "median_step_seconds",
+          "path": "median_step_ms",
+          "title": "Median step (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.median_step_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "samples_per_second",
+          "path": "samples_per_second",
+          "title": "Samples per second",
+          "unit": "count:samples/s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.samples_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "global_batch",
+          "path": "global_batch",
+          "title": "Global batch",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.global_batch. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Compute speedup as one-rank time divided by two-rank time, then divide by two for efficiency. Explain how communication and reduced local batch size can each limit the result.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/12_distributed_scaling.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 12_distributed_scaling slurm/single_gpu.sbatch labs/12_distributed_scaling.py --profile small --global-batch 64",
+      "systems_command": "python3 tools/submit_lab.py --lab 12_distributed_scaling --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/12_distributed_scaling.py --profile small --global-batch 64",
+      "compute_command": null,
+      "tuning_control": "one versus two ranks at the same global batch",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median step (seconds)",
+        "Samples per second",
+        "Global batch"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "global_batch",
+        "timing_scope"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Use one versus two ranks at the same global batch as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "13_collective_overlap": {
+      "lab": "13_collective_overlap",
+      "title": "Lab 13: Test whether communication can overlap independent compute",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "serialized_median_seconds",
+          "path": "serialized_median_ms",
+          "title": "Serialized median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.serialized_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "overlapped_median_seconds",
+          "path": "overlapped_median_ms",
+          "title": "Overlapped median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.overlapped_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "serialized_to_overlap_ratio",
+          "path": "serialized_to_overlap_ratio",
+          "title": "Serialized to overlap ratio",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.serialized_to_overlap_ratio. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw compute and communication intervals plus the final join. Compare the ideal `max(compute, communication)` intuition with measured completion, remembering shared resources and launch overhead. Use a profiler before asserting that simultaneous execution occurred.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/13_collective_overlap.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 13_collective_overlap slurm/two_node.sbatch labs/13_collective_overlap.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 13_collective_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/13_collective_overlap.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Compare serialized communication plus compute with asynchronous overlap at fixed payload and matrix size",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Serialized median (seconds)",
+        "Overlapped median (seconds)",
+        "Serialized to overlap ratio"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "matrix_size",
+        "collective_mib",
+        "timing_scope"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare serialized communication plus compute with asynchronous overlap at fixed payload and matrix size. Independently inspect both ranks and identify the final dependency join before choosing overlap.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "14_distributed_profiling": {
+      "lab": "14_distributed_profiling",
+      "title": "Lab 14: Correlate PyTorch and Systems traces across ranks",
+      "kind": "distributed",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "overlap"
+      ],
+      "metrics": [
+        {
+          "name": "step_median_seconds",
+          "path": "step.median_ms",
+          "title": "Slowest-rank step duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured step.median_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "name": "step_max_seconds",
+          "path": "step.max_ms",
+          "title": "Worst sampled step duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured step.max_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        }
+      ],
+      "question": "In Systems, select communication, independent_compute and wait_for_collective ranges and inspect CUDA/NCCL lanes on every rank. Is reduced waiting real overlap or a slower GEMM sharing resources? For framework attribution, make a separate --torch-trace run: open each rank JSON in a local Chrome trace viewer, inspect training_like_step, aten::mm, c10d collectives, CUDA activity and allocated memory. Shapes and memory collection add overhead. Do not compare those timings with clean runs or capture PyTorch and Systems simultaneously. Independently try the same fixed-shape comparison on one node; do not mix eight- and sixteen-rank slots.",
+      "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
+      "dashboard": "reference/grafana/14_distributed_profiling.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 14_distributed_profiling slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off",
+      "systems_command": "python3 tools/submit_lab.py --lab 14_distributed_profiling --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off",
+      "compute_command": null,
+      "tuning_control": "`--overlap`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Slowest-rank step duration",
+        "Worst sampled step duration"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "In Systems, select communication, independent_compute and wait_for_collective ranges and inspect CUDA/NCCL lanes on every rank. Is reduced waiting real overlap or a slower GEMM sharing resources? For framework attribution, make a separate --torch-trace run: open each rank JSON in a local Chrome trace viewer, inspect training_like_step, aten::mm, c10d collectives, CUDA activity and allocated memory. Shapes and memory collection add overhead. Do not compare those timings with clean runs or capture PyTorch and Systems simultaneously. Independently try the same fixed-shape comparison on one node; do not mix eight- and sixteen-rank slots.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "15_ddp_train": {
+      "lab": "15_ddp_train",
+      "title": "Lab 15: Train replicated models with DDP",
+      "kind": "distributed",
+      "nvtx_range": "forward",
+      "tuning_parameters": [
+        "zero_grad_fill"
+      ],
+      "metrics": [
+        {
+          "name": "slowest_rank_elapsed_seconds",
+          "path": "slowest_rank_elapsed_ms",
+          "title": "Slowest rank elapsed (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.slowest_rank_elapsed_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "final_mean_loss",
+          "path": "final_mean_loss",
+          "title": "Final mean loss",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.final_mean_loss. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "max_rank_peak_allocated_bytes",
+          "path": "max_rank_peak_allocated_mib",
+          "title": "Maximum rank peak allocated memory",
+          "unit": "bytes",
+          "scale": 1048576,
+          "description": "Measured artifact field measurements.max_rank_peak_allocated_mib. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.04858e+06; unit bytes.",
+          "optional": false
+        },
+        {
+          "name": "global_tokens",
+          "path": "global_tokens",
+          "title": "Global tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.global_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Map local examples to the global objective. For the default averaged-gradient behavior, explain why each rank must scale a summed loss by world size divided by global valid-token count when valid counts differ.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/15_ddp_train.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 15_ddp_train slurm/training_two_rank.sbatch labs/15_ddp_train.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 15_ddp_train --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/15_ddp_train.py --profile small",
+      "compute_command": null,
+      "tuning_control": "`--zero-grad-fill`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Slowest rank elapsed (seconds)",
+        "Final mean loss",
+        "Maximum rank peak allocated memory",
+        "Global tokens"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model_shape",
+        "precision",
+        "world_size",
+        "global_tokens"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the default gradient release with --zero-grad-fill at fixed model, data, seed and update count. Inspect the zero_grad range and complete-step time, require the same finite-loss/update checks, and compare final loss within numerical tolerance. Independently inspect whether clearing traffic or buffer allocation dominates before choosing a policy.",
+      "equivalence": [
+        {
+          "path": "final_mean_loss",
+          "rtol": 0.001,
+          "atol": 0.0001
+        }
+      ],
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "16_fsdp2_train": {
+      "lab": "16_fsdp2_train",
+      "title": "Lab 16: Observe FSDP2 sharded training state",
+      "kind": "distributed",
+      "nvtx_range": "forward",
+      "tuning_parameters": [
+        "zero_grad_fill"
+      ],
+      "metrics": [
+        {
+          "name": "slowest_rank_elapsed_seconds",
+          "path": "slowest_rank_elapsed_ms",
+          "title": "Slowest rank elapsed (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.slowest_rank_elapsed_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "final_mean_loss",
+          "path": "final_mean_loss",
+          "title": "Final mean loss",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.final_mean_loss. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "max_rank_peak_allocated_bytes",
+          "path": "max_rank_peak_allocated_mib",
+          "title": "Maximum rank peak allocated memory",
+          "unit": "bytes",
+          "scale": 1048576,
+          "description": "Measured artifact field measurements.max_rank_peak_allocated_mib. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.04858e+06; unit bytes.",
+          "optional": false
+        }
+      ],
+      "question": "Draw persistent shards separately from temporarily gathered parameters. Which memory survives between steps? Which communication is needed before forward and during backward? Explain why small models can become slower when communication overhead dominates.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/16_fsdp2_train.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 16_fsdp2_train slurm/training_two_rank.sbatch labs/16_fsdp2_train.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 16_fsdp2_train --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/16_fsdp2_train.py --profile small",
+      "compute_command": null,
+      "tuning_control": "`--zero-grad-fill`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Slowest rank elapsed (seconds)",
+        "Final mean loss",
+        "Maximum rank peak allocated memory"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model_shape",
+        "precision",
+        "world_size"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the default gradient release with --zero-grad-fill at fixed model, data, seed and update count. Inspect the zero_grad range and complete-step time, require the same finite-loss/update checks, and compare final loss within numerical tolerance. Independently inspect whether clearing traffic or buffer allocation dominates before choosing a policy.",
+      "equivalence": [
+        {
+          "path": "final_mean_loss",
+          "rtol": 0.001,
+          "atol": 0.0001
+        }
+      ],
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "17_training_expert_parallel": {
+      "lab": "17_training_expert_parallel",
+      "title": "Lab 17: Trace expert routing, gradients, and grouped work",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "loop_expert_gemm_median_seconds",
+          "path": "loop_expert_gemm_median_ms",
+          "title": "Loop expert gemm median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.loop_expert_gemm_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "padded_grouped_bmm_median_seconds",
+          "path": "padded_grouped_bmm_median_ms",
+          "title": "Padded grouped bmm median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.padded_grouped_bmm_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "training_step_slowest_rank_median_seconds",
+          "path": "training_step_slowest_rank_median_ms",
+          "title": "Training step slowest rank median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.training_step_slowest_rank_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "forward_all_to_all_median_seconds",
+          "path": "forward_all_to_all_median_ms",
+          "title": "Forward all to all median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.forward_all_to_all_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Trace one token's outward and return routes. Why must its gradient follow the inverse mapping? Compare the busiest expert's token count with the mean across experts, and account for extra padding before interpreting grouped-operation performance.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/17_training_expert_parallel.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 17_training_expert_parallel slurm/training_two_rank.sbatch labs/17_training_expert_parallel.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 17_training_expert_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/17_training_expert_parallel.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Compare per-expert token load with the slowest-rank completion",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Loop expert gemm median (seconds)",
+        "Padded grouped bmm median (seconds)",
+        "Training step slowest rank median (seconds)",
+        "Forward all to all median (seconds)"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "hidden_size",
+        "tokens_sent_to_experts_per_rank",
+        "global_expert_token_load",
+        "local_experts_per_rank",
+        "expert_output_width"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare per-expert token load with the slowest-rank completion. Independently identify the most loaded expert and propose one routing/batching change while retaining token conservation and reference output.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "18_training_tensor_parallel": {
+      "lab": "18_training_tensor_parallel",
+      "title": "Lab 18: Partition a linear layer and verify its backward pass",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "training_step_slowest_rank_median_seconds",
+          "path": "training_step_slowest_rank_median_ms",
+          "title": "Training step slowest rank median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.training_step_slowest_rank_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "input_gradient_all_reduce_median_seconds",
+          "path": "input_gradient_all_reduce_median_ms",
+          "title": "Input gradient all reduce median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.input_gradient_all_reduce_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "parameter_shard_bytes_per_rank",
+          "path": "parameter_shard_bytes_per_rank",
+          "title": "Parameter shard bytes per rank",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.parameter_shard_bytes_per_rank. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Write the shapes of X, each weight shard, local Y, and dX. Why are input-gradient contributions summed for a column split? Which communication moves from backward to forward when the partition orientation changes?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/18_training_tensor_parallel.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 18_training_tensor_parallel slurm/training_two_rank.sbatch labs/18_training_tensor_parallel.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 18_training_tensor_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/18_training_tensor_parallel.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Compare the sharded linear result and input gradient with the replicated reference",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Training step slowest rank median (seconds)",
+        "Input gradient all reduce median (seconds)",
+        "Parameter shard bytes per rank"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "batch",
+        "width",
+        "learning_rate",
+        "replicated_parameter_bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the sharded linear result and input gradient with the replicated reference. Independently identify the required collective from the tensor shapes before choosing the partition orientation.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "19_gradient_overlap": {
+      "lab": "19_gradient_overlap",
+      "title": "Lab 19: Reduce gradients when they become ready",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "bucket_mib"
+      ],
+      "metrics": [
+        {
+          "name": "schedules_ascending_serialized_step_median_seconds",
+          "path": "schedules.ascending.serialized_step_median_ms",
+          "title": "Schedules / ascending / serialized step median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.schedules.ascending.serialized_step_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "schedules_ascending_overlapped_step_median_seconds",
+          "path": "schedules.ascending.overlapped_step_median_ms",
+          "title": "Schedules / ascending / overlapped step median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.schedules.ascending.overlapped_step_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "schedules_descending_overlapped_step_median_seconds",
+          "path": "schedules.descending.overlapped_step_median_ms",
+          "title": "Schedules / descending / overlapped step median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.schedules.descending.overlapped_step_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Why may gradient readiness reverse forward construction order? Draw the first communication that can begin and the final exposed tail. Explain how bucket size trades collective startup overhead against earlier readiness.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/19_gradient_overlap.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap slurm/training_two_rank.sbatch labs/19_gradient_overlap.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/19_gradient_overlap.py --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap slurm/ncu_single_gpu.sbatch --profile small --bucket-mib 8 24",
+      "tuning_control": "`--bucket-mib`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Schedules / ascending / serialized step median (seconds)",
+        "Schedules / ascending / overlapped step median (seconds)",
+        "Schedules / descending / overlapped step median (seconds)"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--bucket-mib` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true,
+      "compute_companion": {
+        "path": "labs/gradient_overlap_compute.py",
+        "nvtx_range": "gradient_backward"
+      }
+    },
+    "20_parallelism_mechanics": {
+      "lab": "20_parallelism_mechanics",
+      "title": "Lab 20: Follow pipeline and context partitions through backward",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "pipeline_parallel_stages",
+          "path": "pipeline_parallel.stages",
+          "title": "Pipeline parallel / stages",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.pipeline_parallel.stages. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "pipeline_parallel_microbatches",
+          "path": "pipeline_parallel.microbatches",
+          "title": "Pipeline parallel / microbatches",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.pipeline_parallel.microbatches. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "pipeline_parallel_activation_send_bytes",
+          "path": "pipeline_parallel.activation_send_bytes",
+          "title": "Pipeline parallel / activation send bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.pipeline_parallel.activation_send_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "context_parallel_sequence_fraction_per_rank",
+          "path": "context_parallel.sequence_fraction_per_rank",
+          "title": "Context parallel / sequence fraction per rank",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.context_parallel.sequence_fraction_per_rank. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw the forward and backward arrows between pipeline stages. Why must the second stage treat the received activation as differentiable? For context partitioning, explain why normalizing each local sum by local size would change the intended global gradient.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/20_parallelism_mechanics.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 20_parallelism_mechanics slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 20_parallelism_mechanics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Pipeline parallel / stages",
+        "Pipeline parallel / microbatches",
+        "Pipeline parallel / activation send bytes",
+        "Context parallel / sequence fraction per rank"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Open both rank reports. Expand lab_workload, CUDA streams and NCCL send/receive/all-gather rows. Identify pipeline bubbles and context exchange, then check the numerical-equivalence panels before proposing an overlap change."
+      },
+      "gpu_telemetry": true
+    },
+    "21_ddp_buckets": {
+      "lab": "21_ddp_buckets",
+      "title": "Lab 21: Tune real DDP buckets and communication hooks",
+      "kind": "distributed",
+      "nvtx_range": "ddp_measured_step",
+      "tuning_parameters": [
+        "bucket_cap_mb",
+        "hook"
+      ],
+      "metrics": [
+        {
+          "name": "step_median_seconds",
+          "path": "step.median_ms",
+          "title": "Step / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.step.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "slowest_rank_step_samples_seconds",
+          "path": "slowest_rank_step_samples_ms.*",
+          "title": "Slowest rank step samples (seconds) / case",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.slowest_rank_step_samples_ms.*. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Do post-warm-up buckets differ from startup buckets? Does a smaller cap produce earlier communication or simply more collective overhead? Can conversion or low-rank factor work outweigh reduced transfer? PowerSGD may leave small tensors uncompressed; do not compute wire bandwidth from the raw bucket ledger. A faster configuration with growing numerical drift is a candidate for further evaluation, not an accepted optimization.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/21_ddp_buckets.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 21_ddp_buckets slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1",
+      "systems_command": "python3 tools/submit_lab.py --lab 21_ddp_buckets --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1",
+      "compute_command": null,
+      "tuning_control": "`--bucket-cap-mb`, `--hook`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Step / median (seconds)",
+        "Slowest rank step samples (seconds) / case"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--bucket-cap-mb`, `--hook` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "22_fabric_training": {
+      "lab": "22_fabric_training",
+      "title": "Lab 22: Tune microbatching at fixed global batch",
+      "kind": "distributed",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "microbatch"
+      ],
+      "metrics": [
+        {
+          "name": "step_median_seconds",
+          "path": "step.median_ms",
+          "title": "Training step duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured step.median_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "name": "samples_per_second",
+          "path": "samples_per_second",
+          "title": "Useful samples per second",
+          "unit": "count:samples/s",
+          "scale": 1,
+          "description": "Measured samples_per_second. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "peak_allocated_bytes",
+          "path": "peak_allocated_bytes",
+          "title": "Maximum rank allocated memory",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured peak_allocated_bytes. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "loss",
+          "path": "loss",
+          "title": "Global mean loss",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured loss. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        }
+      ],
+      "question": "Use Systems forward, backward and optimizer ranges to count launch gaps and locate the final gradient synchronization. Grafana compares useful samples/s, slowest-rank step time, peak allocated memory and global mean loss. The tiny MLP isolates update and communication mechanics; it is not a production LLM throughput estimate. Each timed replay includes model reset, identically in both variants. Peak memory includes reference buffers. Independently test microbatch 2, then explain whether larger kernels repaid memory cost. A separate --nodes=1 campaign tests strong scaling with the same global batch; never change node count inside a microbatch comparison.",
+      "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
+      "dashboard": "reference/grafana/22_fabric_training.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 22_fabric_training slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1",
+      "systems_command": "python3 tools/submit_lab.py --lab 22_fabric_training --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1",
+      "compute_command": null,
+      "tuning_control": "`--microbatch`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Training step duration",
+        "Useful samples per second",
+        "Maximum rank allocated memory",
+        "Global mean loss"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Use Systems forward, backward and optimizer ranges to count launch gaps and locate the final gradient synchronization. Grafana compares useful samples/s, slowest-rank step time, peak allocated memory and global mean loss. The tiny MLP isolates update and communication mechanics; it is not a production LLM throughput estimate. Each timed replay includes model reset, identically in both variants. Peak memory includes reference buffers. Independently test microbatch 2, then explain whether larger kernels repaid memory cost. A separate --nodes=1 campaign tests strong scaling with the same global batch; never change node count inside a microbatch comparison.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "23_inference_expert_parallel": {
+      "lab": "23_inference_expert_parallel",
+      "title": "Lab 23: Route inference tokens to expert owners",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "round_trip_median_seconds",
+          "path": "round_trip.median_ms",
+          "title": "Round trip / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.round_trip.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "expert_load_max_to_mean",
+          "path": "expert_load_max_to_mean",
+          "title": "Expert load max to mean",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.expert_load_max_to_mean. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "toy_expert_parameter_fraction_per_rank",
+          "path": "toy_expert_parameter_fraction_per_rank",
+          "title": "Toy expert parameter fraction per rank",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.toy_expert_parameter_fraction_per_rank. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Trace one token through dispatch, expert execution, and return permutation. Which expert determines the longest local workload? Explain why balanced token counts can still hide unequal expert computation costs.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/23_inference_expert_parallel.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 23_inference_expert_parallel slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 23_inference_expert_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile small",
+      "compute_command": null,
+      "tuning_control": "Follow dispatch, expert computation, and return permutation on both ranks",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Round trip / median (seconds)",
+        "Expert load max to mean",
+        "Toy expert parameter fraction per rank"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Follow dispatch, expert computation, and return permutation on both ranks. Independently identify load imbalance from the busiest expert while requiring output equivalence and token conservation.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "24_inference_tensor_parallel": {
+      "lab": "24_inference_tensor_parallel",
+      "title": "Lab 24: Compare inference tensor-partition communication patterns",
+      "kind": "distributed",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "batch_size"
+      ],
+      "metrics": [
+        {
+          "name": "column_parallel_all_gather_median_seconds",
+          "path": "column_parallel_all_gather_median_ms",
+          "title": "Column parallel all gather median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.column_parallel_all_gather_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "row_parallel_all_reduce_median_seconds",
+          "path": "row_parallel_all_reduce_median_ms",
+          "title": "Row parallel all reduce median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.row_parallel_all_reduce_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "logical_collective_tensor_bytes",
+          "path": "logical_collective_tensor_bytes",
+          "title": "Logical collective tensor bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.logical_collective_tensor_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "parameter_shard_bytes_per_rank",
+          "path": "parameter_shard_bytes_per_rank",
+          "title": "Parameter shard bytes per rank",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.parameter_shard_bytes_per_rank. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Why does one split concatenate output columns while the other sums partial outputs? Predict what reversing the gathered rank order would do: shape checks would pass, but reference agreement would fail. Which activation dimensions determine communicated bytes? Compare batch one with the default batch at the same width; use sample variability and three independent runs to explain the communication-to-compute ratio. Finally, list the validation-only tensors a deployment could remove and the KV-cache/workspace allocations it would need to add.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/24_inference_tensor_parallel.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 24_inference_tensor_parallel slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 24_inference_tensor_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small",
+      "compute_command": null,
+      "tuning_control": "`--batch-size`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Column parallel all gather median (seconds)",
+        "Row parallel all reduce median (seconds)",
+        "Logical collective tensor bytes",
+        "Parameter shard bytes per rank"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "width"
+      ],
+      "workload_parameters": [
+        "batch_size"
+      ],
+      "guided_comparison": "Use `--batch-size` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `batch_size` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "25_fabric_inference": {
+      "lab": "25_fabric_inference",
+      "title": "Lab 25: Compare request replicas with tensor-parallel decoding",
+      "kind": "distributed",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "placement"
+      ],
+      "metrics": [
+        {
+          "name": "batch_median_seconds",
+          "path": "batch.median_ms",
+          "title": "Fixed-request decode duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured batch.median_ms. Compare matched workload and placement in both slots. Milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "name": "tokens_per_second",
+          "path": "tokens_per_second",
+          "title": "Useful generated tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured tokens_per_second. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        },
+        {
+          "name": "peak_allocated_bytes",
+          "path": "peak_allocated_bytes",
+          "title": "Maximum rank allocated memory",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured peak_allocated_bytes. Compare matched workload and placement in both slots. Retain the original artifact for complete context.",
+          "optional": false
+        }
+      ],
+      "question": "In Systems, compare decode_projection with decode_all_reduce across ranks. Explain why tensor parallelism can lose on a small model even while splitting its weights. Grafana\u2019s token rate counts each global request once, not once per rank. Peak allocated memory includes correctness reference buffers and is not a model-capacity bound. Independently repeat with the large workload profile as a separate comparison. Continue with Labs 32–34 for measured client latency and real server traces.",
+      "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
+      "dashboard": "reference/grafana/25_fabric_inference.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 25_fabric_inference slurm/fabric.sbatch labs/25_fabric_inference.py --profile small --placement replicated",
+      "systems_command": "python3 tools/submit_lab.py --lab 25_fabric_inference --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/25_fabric_inference.py --profile small --placement replicated",
+      "compute_command": null,
+      "tuning_control": "`--placement`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Fixed-request decode duration",
+        "Useful generated tokens per second",
+        "Maximum rank allocated memory"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "In Systems, compare decode_projection with decode_all_reduce across ranks. Explain why tensor parallelism can lose on a small model even while splitting its weights. Grafana\u2019s token rate counts each global request once, not once per rank. Peak allocated memory includes correctness reference buffers and is not a model-capacity bound. Independently repeat with the large workload profile as a separate comparison. Continue with Labs 32–34 for measured client latency and real server traces.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "26_collective_latency": {
+      "lab": "26_collective_latency",
+      "title": "Lab 26: Separate collective latency from payload throughput",
+      "kind": "distributed",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "algorithm"
+      ],
+      "metrics": [
+        {
+          "path": "cases.*.median_ms",
+          "name": "median_seconds",
+          "title": "Slowest-rank median",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured cases.*.median_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "cases.*.max_ms",
+          "name": "maximum_seconds",
+          "title": "Worst sampled duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured cases.*.max_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "cases.*.useful_GBps",
+          "name": "useful_bytes_per_second",
+          "title": "Useful payload rate",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured cases.*.useful_GBps; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Select network_all_reduce NVTX ranges and NCCL/CUDA lanes on all sixteen Systems reports. Separate a launch gap from a long collective. Repeat with Ring at the same sizes; explain whether the candidate changes startup cost or the large-message slope. Never conclude that forcing one algorithm is universally better.",
+      "interpretation": "The source initializes sixteen ranks, performs an exact MAX reduction, and records the slowest completed rank for every sample. Cases contain 4, 4096 and 1048576 bytes. Useful GB/s divides payload bytes by elapsed seconds; it is not a physical InfiniBand link counter or NCCL bus bandwidth. Auto can already select Tree, so equal results are meaningful.",
+      "dashboard": "reference/grafana/26_collective_latency.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 26_collective_latency slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm auto",
+      "systems_command": "python3 tools/submit_lab.py --lab 26_collective_latency --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm auto",
+      "compute_command": null,
+      "tuning_control": "algorithm",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Slowest-rank median",
+        "Worst sampled duration",
+        "Useful payload rate"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "cases.*.payload_bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only algorithm; Select network_all_reduce NVTX ranges and NCCL/CUDA lanes on all sixteen Systems reports. Separate a launch gap from a long collective. Repeat with Ring at the same sizes; explain whether the candidate changes startup cost or the large-message slope. Never conclude that forcing one algorithm is universally better.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "27_rdma_latency": {
+      "lab": "27_rdma_latency",
+      "title": "Lab 27: Measure GPU-memory RDMA read completion latency",
+      "kind": "qualification",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "memory"
+      ],
+      "metrics": [
+        {
+          "path": "median_us",
+          "name": "median_seconds",
+          "title": "Median RDMA read latency",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured median_us; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "p99_us",
+          "name": "p99_seconds",
+          "title": "P99 RDMA read latency",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured p99_us; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Read both private endpoint logs and the vendor JSON transport fields. Compare the p99 tail with the median: a lower median can coexist with worse variability. Repeat the same GPU-memory comparison using cuda-peermem only when available. CUDA kernel replay is inapplicable to this network completion measurement; use vendor evidence and job-window Grafana context.",
+      "interpretation": "This verbs benchmark measures NIC completion latency. It is not a CUDA-kernel workload; use perftest latency and the checked host/GPU registration mode. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/27_rdma_latency.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 27_rdma_latency slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device \"$SERVER_HCA\" --client-device \"$CLIENT_HCA\" --memory host",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "memory",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median RDMA read latency",
+        "P99 RDMA read latency"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "payload_bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only memory; Read both private endpoint logs and the vendor JSON transport fields. Compare the p99 tail with the median: a lower median can coexist with worse variability. Repeat the same GPU-memory comparison using cuda-peermem only when available. CUDA kernel replay is inapplicable to this network completion measurement; use vendor evidence and job-window Grafana context.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This verbs benchmark measures NIC completion latency. It is not a CUDA-kernel workload; use perftest latency and the checked host/GPU registration mode.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": true
+    },
+    "28_nic_selection": {
+      "lab": "28_nic_selection",
+      "title": "Lab 28: Test NCCL network-adapter selection",
+      "kind": "distributed",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "hca_policy"
+      ],
+      "metrics": [
+        {
+          "path": "cases.*.median_ms",
+          "name": "median_seconds",
+          "title": "Collective median duration",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured cases.*.median_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "cases.*.useful_GBps",
+          "name": "useful_bytes_per_second",
+          "title": "Useful payload rate",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured cases.*.useful_GBps; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Match each global rank to its worker and inspect NET/IB transport, selected HCA and GDR evidence in the logs. In Systems inspect the network_all_reduce range and stragglers. Try another observed HCA in a separate comparison; keep both baseline and candidate HCA arguments identical within that pair. Explain GPU-to-NIC locality before interpreting a throughput difference.",
+      "interpretation": "The single policy sets an exact NCCL_IB_HCA match for each node. The all policy leaves adapter selection automatic; it does not assert that every adapter is active. NCCL INIT, NET and GRAPH logs provide selected-path evidence. A faster run or an environment variable alone cannot prove GPUDirect RDMA. Correlate logs with the topology and completed collective results.",
+      "dashboard": "reference/grafana/28_nic_selection.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 28_nic_selection slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "systems_command": "python3 tools/submit_lab.py --lab 28_nic_selection --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "compute_command": null,
+      "tuning_control": "hca_policy",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Collective median duration",
+        "Useful payload rate"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "cases.*.payload_bytes"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only hca_policy; Match each global rank to its worker and inspect NET/IB transport, selected HCA and GDR evidence in the logs. In Systems inspect the network_all_reduce range and stragglers. Try another observed HCA in a separate comparison; keep both baseline and candidate HCA arguments identical within that pair. Explain GPU-to-NIC locality before interpreting a throughput difference.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "29_nixl_transfer": {
+      "lab": "29_nixl_transfer",
+      "title": "Lab 29: Measure NIXL GPU transfer progress",
+      "kind": "qualification",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "progress_thread"
+      ],
+      "metrics": [
+        {
+          "path": "GBps",
+          "name": "payload_bytes_per_second",
+          "title": "NIXL payload rate",
+          "unit": "Bps",
+          "scale": 1000000000.0,
+          "description": "Measured GBps; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "transfer_us",
+          "name": "transfer_seconds",
+          "title": "Mean transfer phase",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured transfer_us; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "transfer_p99_us",
+          "name": "transfer_p99_seconds",
+          "title": "P99 transfer phase",
+          "unit": "s",
+          "scale": 1e-06,
+          "description": "Measured transfer_p99_us; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Inspect preparation_us, post_us, transfer_us and transfer_p99_us in the authoritative artifact. A faster transfer phase can be offset by thread scheduling or registration costs. Repeat the fixed comparison with the large workload; never compare different payload sizes as an optimization. These vendor phases and GPU/node telemetry are the evidence; CUDA-kernel replay is inapplicable to this UCX transfer.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/29_nixl_transfer.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 29_nixl_transfer slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off",
+      "systems_command": "python3 tools/submit_lab.py --lab 29_nixl_transfer --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off",
+      "compute_command": null,
+      "tuning_control": "progress_thread",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "NIXL payload rate",
+        "Mean transfer phase",
+        "P99 transfer phase"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "block_bytes",
+        "batch_size"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only progress_thread; Inspect preparation_us, post_us, transfer_us and transfer_p99_us in the authoritative artifact. A faster transfer phase can be offset by thread scheduling or registration costs. Repeat the fixed comparison with the large workload; never compare different payload sizes as an optimization. These vendor phases and GPU/node telemetry are the evidence; CUDA-kernel replay is inapplicable to this UCX transfer.",
+      "systems": {
+        "applicable": true,
+        "target": "vendor",
+        "reason": "Capture the actual vendor executable inside each allocated worker; preserve raw numerical output separately.",
+        "view": "Open rank0.nsys-rep and rank1.nsys-rep beside the private vendor output. Inspect UCX, CUDA API and OS runtime rows around buffer preparation and progress. GPU payload DMA may have no CUDA kernel event; use clean NIXL transfer_us and bandwidth for the network result. No course NVTX range is emitted by the vendor executable."
+      },
+      "gpu_telemetry": true
+    },
+    "30_megatron_overlap": {
+      "lab": "30_megatron_overlap",
+      "title": "Lab 30: Overlap Megatron gradient communication",
+      "kind": "distributed",
+      "nvtx_range": "bridge_training_step",
+      "tuning_parameters": [
+        "overlap"
+      ],
+      "metrics": [
+        {
+          "path": "step_seconds",
+          "name": "step_seconds",
+          "title": "Median training step",
+          "unit": "s",
+          "scale": 1,
+          "description": "Measured step_seconds; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "tokens_per_second",
+          "name": "tokens_per_second",
+          "title": "Training tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured tokens_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "parameter_max_abs_error",
+          "name": "parameter_error",
+          "title": "Maximum parameter error",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured parameter_max_abs_error; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Capture overlap off and on in separate diagnostic jobs, using the same reference for both. Check exported statistics for every rank, then open representative reports from each worker in Systems and select bridge_training_step. Load large reports in small groups and close them between comparisons. Locate backward compute, gradient collectives and the final exposed communication tail. An overlap flag does not prove useful overlap: check whether concurrent communication slowed compute. Independently repeat the same experiment with the large-profile sequence length and report when exposed communication matters.",
+      "interpretation": "The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction, fixed global batch and fixed sequence length. Parameter-gather overlap stays disabled. TensorBoard iteration-time is measured in seconds and includes the vendor training loop. The callback checks skipped steps, finite loss and full final weights; a reference mismatch blocks comparison. Synthetic tokens establish execution equivalence, not model quality or production scaling.",
+      "dashboard": "reference/grafana/30_megatron_overlap.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 30_megatron_overlap slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "systems_command": "python3 tools/submit_lab.py --lab 30_megatron_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "compute_command": null,
+      "tuning_control": "overlap",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median training step",
+        "Training tokens per second",
+        "Maximum parameter error"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "tokens_per_step",
+        "reference_sha256"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only overlap; Capture overlap off and on in separate diagnostic jobs, using the same reference for both. Check exported statistics for every rank, then open representative reports from each worker in Systems and select bridge_training_step. Load large reports in small groups and close them between comparisons. Locate backward compute, gradient collectives and the final exposed communication tail. An overlap flag does not prove useful overlap: check whether concurrent communication slowed compute. Independently repeat the same experiment with the large-profile sequence length and report when exposed communication matters.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "31_context_parallel": {
+      "lab": "31_context_parallel",
+      "title": "Lab 31: Place hierarchical context-parallel communication",
+      "kind": "distributed",
+      "nvtx_range": "bridge_training_step",
+      "tuning_parameters": [
+        "layout"
+      ],
+      "metrics": [
+        {
+          "path": "step_seconds",
+          "name": "step_seconds",
+          "title": "Median context-parallel step",
+          "unit": "s",
+          "scale": 1,
+          "description": "Measured step_seconds; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "tokens_per_second",
+          "name": "tokens_per_second",
+          "title": "Processed tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured tokens_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "parameter_max_abs_error",
+          "name": "parameter_error",
+          "title": "Maximum parameter error",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured parameter_max_abs_error; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Capture flat and hierarchical layouts in separate diagnostic jobs, using the same reference for both. In Systems correlate attention and communication lanes across ranks0\u20137 and8\u201315. Verify rank placement rather than assuming [8,2] names a physical topology. Compare the exposed cross-node tail for the two layouts. Independently vary workload profile in a new matched campaign; explain why additional hierarchy overhead may hurt a short sequence.",
+      "interpretation": "Both configurations retain sixteen context ranks, the same tokens, model, global batch and optimizer. The hierarchical layout uses a2a+p2p with sizes [8,2]; the flat layout uses p2p. Eight query groups support the inner split, and sequence lengths divide the context partition. Keep torchrun node-contiguous rank order. Compare final parameters to the flat reference before accepting the measured step distribution.",
+      "dashboard": "reference/grafana/31_context_parallel.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 31_context_parallel slurm/fabric.sbatch labs/31_context_parallel.py --profile small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "systems_command": "python3 tools/submit_lab.py --lab 31_context_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/31_context_parallel.py --profile small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "compute_command": null,
+      "tuning_control": "layout",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median context-parallel step",
+        "Processed tokens per second",
+        "Maximum parameter error"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "tokens_per_step",
+        "reference_sha256"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only layout; Capture flat and hierarchical layouts in separate diagnostic jobs, using the same reference for both. In Systems correlate attention and communication lanes across ranks0\u20137 and8\u201315. Verify rank placement rather than assuming [8,2] names a physical topology. Compare the exposed cross-node tail for the two layouts. Independently vary workload profile in a new matched campaign; explain why additional hierarchy overhead may hurt a short sequence.",
+      "systems": {
+        "applicable": true,
+        "target": "rank",
+        "reason": "Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation.",
+        "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
+      },
+      "gpu_telemetry": true
+    },
+    "32_dynamo_disaggregation": {
+      "lab": "32_dynamo_disaggregation",
+      "title": "Lab 32: Compare aggregated and disaggregated Dynamo serving",
+      "kind": "server-client",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "layout"
+      ],
+      "metrics": [
+        {
+          "path": "ttft_p99_ms",
+          "name": "ttft_p99_seconds",
+          "title": "P99 time to first content",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured ttft_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "tokens_per_second",
+          "name": "tokens_per_second",
+          "title": "Generated tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured tokens_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "chunk_gap_p99_ms",
+          "name": "chunk_gap_p99_seconds",
+          "title": "P99 streamed chunk gap",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured chunk_gap_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        }
+      ],
+      "question": "Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point.",
+      "interpretation": "The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill.",
+      "dashboard": "reference/grafana/32_dynamo_disaggregation.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir \"$MODEL_PATH\" --layout aggregated",
+      "systems_command": "python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
+      "compute_command": null,
+      "tuning_control": "layout",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "P99 time to first content",
+        "Generated tokens per second",
+        "P99 streamed chunk gap"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "prompt_corpus_sha256",
+        "output_signature",
+        "request_count",
+        "prompt_tokens_total",
+        "output_tokens_total"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only layout; Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
+      },
+      "gpu_telemetry": true
+    },
+    "33_dynamo_routing": {
+      "lab": "33_dynamo_routing",
+      "title": "Lab 33: Test KV-cache-aware request routing",
+      "kind": "server-client",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "router"
+      ],
+      "metrics": [
+        {
+          "path": "ttft_p50_ms",
+          "name": "ttft_p50_seconds",
+          "title": "Median time to first content",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured ttft_p50_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "ttft_p99_ms",
+          "name": "ttft_p99_seconds",
+          "title": "P99 time to first content",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured ttft_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "requests_per_second",
+          "name": "requests_per_second",
+          "title": "Completed request rate",
+          "unit": "reqps",
+          "scale": 1,
+          "description": "Measured requests_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        }
+      ],
+      "question": "Capture round-robin and KV-aware routing in separate diagnostic jobs. Compare client TTFT distributions with server prefill activity in a separate Systems capture. Inspect router and worker logs for event readiness; a selected router name is not evidence of cache hits. Independently increase concurrency in a new fixed pair and explain whether load balance begins to dominate prefix locality. Report both median and tail latency.",
+      "interpretation": "The serving runner enables prefix caching and publishes KV events from each worker. Four deterministic prefix families create reuse opportunities; each run warms its own fresh deployment before timing. KV-aware routing balances cache reuse and load, so lower TTFT is not guaranteed. Complete output and signature checks prevent a failed or changed response stream from becoming an apparent improvement.",
+      "dashboard": "reference/grafana/33_dynamo_routing.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir \"$MODEL_PATH\" --router round-robin",
+      "systems_command": "python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
+      "compute_command": null,
+      "tuning_control": "router",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median time to first content",
+        "P99 time to first content",
+        "Completed request rate"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "prompt_corpus_sha256",
+        "output_signature",
+        "request_count",
+        "prompt_tokens_total",
+        "output_tokens_total"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only router; Capture round-robin and KV-aware routing in separate diagnostic jobs. Compare client TTFT distributions with server prefill activity in a separate Systems capture. Inspect router and worker logs for event readiness; a selected router name is not evidence of cache hits. Independently increase concurrency in a new fixed pair and explain whether load balance begins to dominate prefix locality. Report both median and tail latency.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
+      },
+      "gpu_telemetry": true
+    },
+    "34_serving_goodput": {
+      "lab": "34_serving_goodput",
+      "title": "Lab 34: Tune serving goodput under latency objectives",
+      "kind": "server-client",
+      "nvtx_range": "network_all_reduce",
+      "tuning_parameters": [
+        "concurrency"
+      ],
+      "metrics": [
+        {
+          "path": "goodput_per_second",
+          "name": "goodput_per_second",
+          "title": "Requests meeting both SLOs",
+          "unit": "reqps",
+          "scale": 1,
+          "description": "Measured goodput_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "requests_per_second",
+          "name": "requests_per_second",
+          "title": "All completed requests",
+          "unit": "reqps",
+          "scale": 1,
+          "description": "Measured requests_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+          "optional": false
+        },
+        {
+          "path": "ttft_p99_ms",
+          "name": "ttft_p99_seconds",
+          "title": "P99 first-token latency",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured ttft_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        },
+        {
+          "path": "request_mean_itl_p99_ms",
+          "name": "request_mean_itl_p99_seconds",
+          "title": "P99 request-mean token interval",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured request_mean_itl_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+          "optional": false
+        }
+      ],
+      "question": "Read profile_export_aiperf.json together with profile_export.jsonl, profile_export_raw.jsonl and outputs.json. Distinguish successful requests from SLO-passing requests; zero goodput can be a valid result. Independently try concurrency 32 against the same baseline and explain whether queueing, decode work or the network limits useful capacity. Use this lab\u2019s separate server capture to inspect GPU execution alongside AIPerf measurements.",
+      "interpretation": "Compare identical transmitted requests and server-verified generated-token work. Different response text is allowed; output signatures are diagnostic. Fixed completion counts include reasoning tokens. Missing usage or failed requests invalidate the comparison, while zero goodput and either performance direction are valid. Use separate server captures for diagnosis; sampled telemetry does not prove a latency mechanism.",
+      "dashboard": "reference/grafana/34_serving_goodput.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir \"$MODEL_PATH\" --concurrency 8",
+      "systems_command": "python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
+      "compute_command": null,
+      "tuning_control": "concurrency",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Requests meeting both SLOs",
+        "All completed requests",
+        "P99 first-token latency",
+        "P99 request-mean token interval"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "measurement_contract",
+        "workload_sha256",
+        "requested_output_tokens",
+        "completed_requests",
+        "output_tokens_mean",
+        "input_tokens_mean",
+        "input_lengths",
+        "output_lengths"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Change only concurrency; Read profile_export_aiperf.json together with profile_export.jsonl, profile_export_raw.jsonl and outputs.json. Distinguish successful requests from SLO-passing requests; zero goodput can be a valid result. Independently try concurrency 32 against the same baseline and explain whether queueing, decode work or the network limits useful capacity. Use this lab\u2019s separate server capture to inspect GPU execution alongside AIPerf measurements.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open server-rank0.nsys-rep and server-rank1.nsys-rep from the private vendor folder. Expand the GPU worker process trees, CUDA streams and NCCL activity during AIPerf requests after model startup. Compare gaps and kernel activity with client TTFT/ITL; GPU utilization is not request latency. Model startup alone is an incomplete serving trace."
+      },
+      "gpu_telemetry": true
+    }
+  },
+  "setup": {
+    "lab": "environment_readiness",
+    "title": "Environment readiness",
+    "kind": "qualification",
+    "nvtx_range": "ready_kernel",
+    "tuning_parameters": [],
+    "metrics": [
+      {
+        "name": "systems_report_bytes",
+        "path": "systems_report_bytes",
+        "title": "Systems report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      },
+      {
+        "name": "compute_report_bytes",
+        "path": "compute_report_bytes",
+        "title": "Compute report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      }
+    ],
+    "question": "Can both workers execute the canary and produce readable reports?",
+    "interpretation": "Baseline and candidate slots contain the two worker readiness results. They are readiness records, not optimization candidates. Inspect GPU telemetry and require fresh publication confirmation.",
+    "dashboard": "reference/grafana/environment_readiness.json"
+  }
+}

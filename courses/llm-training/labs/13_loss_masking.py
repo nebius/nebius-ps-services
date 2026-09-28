@@ -7,7 +7,7 @@ import argparse
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
@@ -25,7 +25,7 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     vocab_size = 128
     model = build_tiny_lm(
@@ -86,4 +86,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from course_evidence import annotated_operation
+
+    annotated_operation(main, "lab_workload")()

@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+trials-trial1-1,baseline_median_seconds,value,7.680000000000001e-06,s
+trials-trial1-1,candidate_median_seconds,value,5.232e-06,s
+trials-trial1-2,baseline_median_seconds,value,7.3920000000000005e-06,s
+trials-trial1-2,candidate_median_seconds,value,5.248e-06,s
+trials-trial1-3,baseline_median_seconds,value,7.872e-06,s
+trials-trial1-3,candidate_median_seconds,value,5.184000000000001e-06,s

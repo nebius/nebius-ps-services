@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "82657d47cfa6f20bf932fe7cd062fb0fdfafa9a632374b2eb82e02011163c18b",
+      "sha256": "669d87e28e7a13ccc71c199ce2826482a9e4410722bd29842453f36e4fdb26d8",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "85fcb23615a85f0f66272d68bc154483fda5873d1bbc9e6a189243e0c75e01aa",
+      "sha256": "2e2cca81eb221b86b90338963abb33dbf93569d99279255b503f52bb1541454c",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "fe3e86eba4b992da56975bf943f37d915f33960501c58d1eb33161602d0494a8",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "03dc96f568d3d4a06bdd144939bc83962663c3994b8d522dd9bc980e41122140",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "94bb01d884207c446310de3d7ffadac3f914fedd0e60f9321ecdff2c3b30d8d0",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "24caa5ac8e4e031e04a1ff722595cc0bd7fd0c63cb67a6b962c09d7f78413840",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "a3d9c624067f4ca1197ba59291ee2dc90de88b3649a5d91e8b30dcff6a5f86ed",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "04_layout_and_coalescing",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "59ff1e8fa35dbae15cb22a85b1e03f6d93807bb13356180578f22cc068c99502"
+}

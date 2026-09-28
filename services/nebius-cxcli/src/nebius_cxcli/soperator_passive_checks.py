@@ -36,6 +36,31 @@ class PassivePending(RuntimeError):
     """Await the next native periodic run without repeating completed evidence."""
 
 
+def _status_map_entries(rows: Any, key: str) -> list[dict[str, Any]]:
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get(key), str) or not row[key]
+        for row in rows
+    ):
+        raise RuntimeError("passive worker status contains an invalid map list")
+    if len({row[key] for row in rows}) != len(rows):
+        raise RuntimeError("passive worker status contains duplicate map identities")
+    return sorted(rows, key=lambda row: row[key])
+
+
+def _canonical_container_status(status: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize only Kubernetes-declared map lists; retain health and identity."""
+    result = copy.deepcopy(dict(status))
+    if "allocatedResourcesStatus" in result:
+        resources = _status_map_entries(result["allocatedResourcesStatus"], "name")
+        for resource in resources:
+            if "resources" in resource:
+                resource["resources"] = _status_map_entries(resource["resources"], "resourceID")
+        result["allocatedResourcesStatus"] = resources
+    if "volumeMounts" in result:
+        result["volumeMounts"] = _status_map_entries(result["volumeMounts"], "mountPath")
+    return result
+
+
 class PassiveDiagnostics:
     def __init__(self, checks: SoperatorChecksExecution) -> None:
         self.checks = checks
@@ -114,6 +139,7 @@ class PassiveDiagnostics:
         container = [row for row in statuses if row.get("name") == "slurmd"]
         if not metadata.get("uid") or len(container) != 1 or not container[0].get("ready"):
             raise RuntimeError("passive worker identity/readiness is unavailable")
+        before_status = _canonical_container_status(container[0])
         identity = {
             "uid": metadata["uid"],
             "container": container[0].get("containerID"),
@@ -133,7 +159,7 @@ class PassiveDiagnostics:
                 "python3",
                 "-c",
                 _PROBE,
-                json.dumps(expected),
+                json.dumps({**expected, "worker": worker}),
                 mode,
             ],
             None,
@@ -146,7 +172,12 @@ class PassiveDiagnostics:
             for row in after.get("status", {}).get("containerStatuses", [])
             if row.get("name") == "slurmd"
         ]
-        if after.get("metadata", {}).get("uid") != identity["uid"] or after_container != container:
+        if (
+            after.get("metadata", {}).get("uid") != identity["uid"]
+            or after.get("spec", {}).get("nodeName") != identity["node"]
+            or len(after_container) != 1
+            or _canonical_container_status(after_container[0]) != before_status
+        ):
             raise RuntimeError("passive worker changed during observation")
         return {**result, "identity": identity}
 
@@ -157,7 +188,9 @@ class PassiveDiagnostics:
     def _worker_path(self, worker: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+", worker) or worker in {".", ".."}:
             raise RuntimeError("invalid passive worker receipt identity")
-        return self.checks.path.parent / (self.checks.path.stem + "-passive") / (worker + ".json")
+        # Flat lifecycle receipts are preserved by render and authenticated recovery;
+        # a nested directory would be mistaken for desired generated configuration.
+        return self.checks.path.with_name(self.checks.path.stem + "-passive-" + worker + ".json")
 
     def _worker_receipt(
         self,
@@ -185,24 +218,22 @@ class PassiveDiagnostics:
         return evidence
 
     def _scheduler(self) -> None:
-        desired = self.checks.policy.passive.get("scheduler", {})
-        live = dict(
-            re.findall(
-                r"(?m)^\s*(HealthCheckInterval|HealthCheckProgram|HealthCheckNodeState|Prolog|Epilog)\s*=\s*(\S+)",
-                self.checks.slurm("scontrol show config"),
-            )
-        )
-        if any(live.get(key) != value for key, value in desired.items()):
-            raise RuntimeError(
-                "desired passive scheduler or operational hook wiring has not converged"
-            )
+        from .soperator_passive_scheduler import verify_scheduler
 
-    def _fallback_expected(self) -> dict[str, Any]:
+        verify_scheduler(
+            self.checks.slurm("scontrol show config"),
+            self.checks.policy.passive.get("scheduler", {}),
+        )
+
+    def _fallback_expected(self, *, freeze_source: bool = True) -> dict[str, Any]:
         cm = self.checks._get("configmap", "slurm-scripts")
         data = cm.get("data", {})
         if self.state.get("customSource"):
-            frozen = self.state.setdefault("sourceFallbackData", copy.deepcopy(data))
-            self.checks._save()
+            if freeze_source:
+                frozen = self.state.setdefault("sourceFallbackData", copy.deepcopy(data))
+                self.checks._save()
+            else:
+                frozen = self.state.get("sourceFallbackData")
         else:
             frozen = self.checks.policy.passive.get("opaque")
         if not isinstance(frozen, dict) or data != frozen:
@@ -242,7 +273,7 @@ class PassiveDiagnostics:
         )
         if fallback and paused:
             raise RuntimeError("unsupported passive policy cannot be declared paused")
-        if scheduler and policy.get("supported"):
+        if scheduler:
             self._scheduler()
         expected = (
             self._fallback_expected()
@@ -447,6 +478,15 @@ class PassiveDiagnostics:
         self.checks._save()
 
     def verify_acceptance(self, *, sealed: bool) -> None:
+        from .soperator_deployment_profile import _coverage
+
+        coverage = self.checks.policy.diagnostics
+        if coverage and (
+            coverage != _coverage()
+            or self.checks.policy.passive.get("supported") is not True
+            or self.checks.policy.passive.get("diagnostics") != []
+        ):
+            raise RuntimeError("Fast passive acceptance requires exact frozen coverage")
         proof = self.state.get("acceptance", {})
         if proof.get("status") not in {"accepted", "enabled-fallback"}:
             raise RuntimeError(
@@ -454,8 +494,66 @@ class PassiveDiagnostics:
             )
         if set(proof.get("workers", {})) != set(self.checks.state["acceptance"]["workers"]):
             raise RuntimeError("passive acceptance does not cover the complete worker inventory")
-        if not sealed:
+        # Fast disables the diagnostic Slurm jobs supplying these hook reports.
+        # Its mandatory final ordinary-user smoke owns job-execution readiness;
+        # bootstrap acceptance must not invent diagnostic hook proof or a PASS.
+        # Worker coverage and current passive-policy verification still apply.
+        if proof.get("status") == "accepted" and not coverage:
+            required = {
+                rule.name for rule in self.checks.policy.readiness if rule.check_type == "slurmJob"
+            }
+            covered_workers: set[str] = set()
+            for entry in self.checks.state["jobs"].values():
+                if entry["check"] not in required:
+                    continue
+                hooks = entry.get("passiveEvidence", {})
+                if (
+                    entry.get("slurmIds") != [hooks.get("job")]
+                    or not str(hooks.get("attempt", "")).isdecimal()
+                    or set(hooks.get("workers", {}))
+                    != set(entry.get("slurmResult", {}).get("nodes", []))
+                    or any(
+                        set(contexts) != {"prolog", "epilog"}
+                        for contexts in hooks.get("workers", {}).values()
+                    )
+                ):
+                    raise RuntimeError(
+                        "Required readiness lacks exact native prolog/epilog evidence"
+                    )
+                covered_workers.update(hooks["workers"])
+            if covered_workers != set(self.checks.state["acceptance"]["workers"]):
+                raise RuntimeError(
+                    "Required readiness does not exercise native hooks on every worker"
+                )
+        if sealed:
+            self.verify_restored()
+        else:
+            if set(self.checks._node_inventory()) != set(
+                self.checks.state["acceptance"]["workers"]
+            ):
+                raise RuntimeError("passive acceptance worker inventory changed")
             self.verify(paused=False, fresh=True)
+
+    def verify_restored(self) -> None:
+        """Observe current restoration without rerunning or rewriting accepted diagnostics."""
+        self._scheduler()
+        expected = (
+            self._expected(paused=False)
+            if self.checks.policy.passive.get("supported") and not self.state.get("customSource")
+            else self._fallback_expected(freeze_source=False)
+        )
+        inventory = self.checks._node_inventory()
+        accepted = self.checks.state.get("acceptance", {})
+        if not inventory or set(inventory) != set(accepted.get("workers", [])):
+            raise RuntimeError("passive restoration worker inventory changed")
+        with ThreadPoolExecutor(max_workers=min(16, len(inventory))) as pool:
+            futures = [
+                pool.submit(self._observe, worker, expected, "observe") for worker in inventory
+            ]
+            for future in futures:
+                result = future.result()
+                if result["hashes"] != expected["hashes"] or result["config"] != expected["config"]:
+                    raise RuntimeError("effective passive policy has not been restored")
 
     def _source_restore(self, cm: Mapping[str, Any]) -> None:
         intent = self.state["sourceIntent"]

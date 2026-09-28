@@ -1,0 +1,72 @@
+{
+  "correctness": {
+    "all_iterations_completed": true,
+    "bounded_positive_output_token_counts": true,
+    "one_completion_per_request": true
+  },
+  "lab": "10_vllm_offline",
+  "measurements": {
+    "elapsed_seconds": 5.7149,
+    "finish_reasons": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "output_tokens_per_request": {
+      "max": 64,
+      "median": 64.0,
+      "min": 64
+    },
+    "output_tokens_per_second": 447.95,
+    "output_tokens_total": 2560,
+    "requests": 40
+  },
+  "parameters": {
+    "enforce_eager": true,
+    "in_process": false,
+    "iterations": 10,
+    "max_model_len": 2048,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

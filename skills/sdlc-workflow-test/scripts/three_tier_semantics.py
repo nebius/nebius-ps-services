@@ -7,12 +7,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import three_tier_target
+import three_tier_browser
+
 
 SCENARIO = "three-tier-task-board-v1"
-RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v2"
+RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v3"
 REQUIRED_SDLC_PHASES = (
-    "sdlc-create-requirements",
     "sdlc-start",
+    "sdlc-create-requirements",
     "sdlc-gather-context",
     "sdlc-create-design",
     "sdlc-auto-steering",
@@ -45,9 +48,8 @@ REQUIRED_GUI_STEPS = (
     "filter-completed",
     "restart-services-keep-volume",
     "observe-post-restart-persistence",
-    "close-test-tab",
+    "close-browser",
 )
-KEEP_GUI_STEP = "retain-test-tab"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 JPEG_SIGNATURE = b"\xff\xd8\xff"
 
@@ -204,13 +206,15 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
         set(gui)
         != {
             "harness",
+            "headless",
             "browser",
             "steps",
             "api_db_correlated",
             "restart_persistence",
             "screenshots",
         }
-        or gui.get("harness") != "computer-use"
+        or gui.get("harness") != "playwright-test"
+        or gui.get("headless") is not True
         or gui.get("browser") != "chrome"
         or not isinstance(steps, list)
         or not isinstance(screenshots, list)
@@ -222,7 +226,7 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
         "tests": normalized_tests,
         "gui_uat": {
             "status": normalized_tests["gui"]["status"],
-            "harness": gui.get("harness", "computer-use"),
+            "harness": gui.get("harness", "playwright-test"),
             "browser": gui.get("browser", state["environment"]["browser"]),
             "step_count": len(steps),
             "screenshot_count": len(screenshots),
@@ -250,6 +254,10 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         raise SemanticEvidenceError(
             "Semantic three-tier results schema/profile is invalid."
         )
+    try:
+        three_tier_target.validate_startup_receipt(state)
+    except three_tier_target.TargetError as error:
+        raise SemanticEvidenceError(str(error)) from error
     if value.get("verification_id") != state["verification_id"]:
         raise SemanticEvidenceError(
             "Semantic results do not match the active verification ID."
@@ -340,39 +348,52 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         raise SemanticEvidenceError(
             "Semantic results are missing a required passing SDLC phase."
         )
-    gui = value.get("gui_uat")
+    gui_summary = validate_gui_results(state, value.get("gui_uat"))
+    return {
+        "layers": dict(value["layers"]),
+        "tests": {
+            name: {
+                "status": result["status"],
+                "assertions": result["assertions"],
+                "evidence_count": len(result["evidence"]),
+            }
+            for name, result in tests.items()
+        },
+        "gui_uat": gui_summary,
+    }
+
+
+def validate_gui_results(state: dict[str, Any], gui: object) -> dict[str, Any]:
+    """Validate browser evidence only; this does not certify SDLC phase execution."""
+    run_root = Path(state["run_root"])
     if (
         not isinstance(gui, dict)
         or set(gui)
         != {
             "harness",
+            "headless",
             "browser",
             "steps",
             "api_db_correlated",
             "restart_persistence",
             "screenshots",
         }
-        or gui.get("harness") != "computer-use"
+        or gui.get("harness") != "playwright-test"
+        or gui.get("headless") is not True
     ):
-        raise SemanticEvidenceError("GUI UAT requires the computer-use harness.")
+        raise SemanticEvidenceError("GUI UAT requires the headless Playwright Test harness.")
     if gui.get("browser") != state["environment"]["browser"]:
         raise SemanticEvidenceError("GUI UAT browser identity is invalid.")
     steps = gui.get("steps")
-    required_steps = (
-        REQUIRED_GUI_STEPS[:-1] + (KEEP_GUI_STEP,) if keep else REQUIRED_GUI_STEPS
-    )
-    if not isinstance(steps, list) or tuple(steps) != required_steps:
-        raise SemanticEvidenceError(
-            "GUI UAT actions must match the complete required order."
-        )
-    if keep and "close-test-tab" in steps:
-        raise SemanticEvidenceError(
-            "Keep-mode GUI evidence cannot claim the tab was closed."
-        )
-    if not keep and KEEP_GUI_STEP in steps:
-        raise SemanticEvidenceError(
-            "Default create evidence cannot claim the tab was retained."
-        )
+    if not isinstance(steps, list) or tuple(steps) != REQUIRED_GUI_STEPS:
+        raise SemanticEvidenceError("GUI UAT actions must match the complete required order.")
+    try:
+        receipts = three_tier_browser.validate_receipts(state)
+    except three_tier_browser.BrowserOwnershipError as error:
+        raise SemanticEvidenceError(str(error)) from error
+    owned_screenshots = {name for receipt in receipts[2:] for name in receipt["artifacts"] if name.endswith(".png")}
+    if set(gui.get("screenshots", [])) != owned_screenshots:
+        raise SemanticEvidenceError("GUI screenshots must be the exact owned UAT stage artifacts.")
     if (
         gui.get("api_db_correlated") is not True
         or gui.get("restart_persistence") is not True
@@ -383,7 +404,7 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
     screenshots = gui.get("screenshots")
     if not isinstance(screenshots, list) or len(set(screenshots)) < 5:
         raise SemanticEvidenceError("GUI UAT requires five distinct screenshots.")
-    screenshot_digests: set[str] = set()
+    screenshot_digests: dict[str, str] = {}
     for item in screenshots:
         relative = required_string(item, "gui_uat.screenshots")
         if not relative.startswith("evidence/gui-uat/"):
@@ -417,28 +438,19 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
             raise SemanticEvidenceError(
                 f"GUI screenshot is not a recognized PNG or JPEG image: {relative}"
             )
-        screenshot_digests.add(hashlib.sha256(content).hexdigest())
-    if len(screenshot_digests) < 5:
-        raise SemanticEvidenceError(
-            "GUI UAT screenshots must contain five distinct images."
-        )
+        screenshot_digests[relative] = hashlib.sha256(content).hexdigest()
+    before_images = [name for name in receipts[2]["artifacts"] if name.endswith(".png")]
+    after_images = [name for name in receipts[3]["artifacts"] if name.endswith(".png")]
+    if len(before_images) != 4 or len(after_images) != 1 or len({screenshot_digests[name] for name in before_images}) != 4:
+        raise SemanticEvidenceError("GUI UAT requires four distinct pre-restart states and one fresh post-restart capture.")
+    # Persistence may produce exactly the same pixels after restart. Separate
+    # owner-generated stage receipts prove fresh capture without altering the UI.
     return {
-        "layers": dict(value["layers"]),
-        "tests": {
-            name: {
-                "status": result["status"],
-                "assertions": result["assertions"],
-                "evidence_count": len(result["evidence"]),
-            }
-            for name, result in tests.items()
-        },
-        "gui_uat": {
-            "status": "PASS",
-            "harness": gui["harness"],
-            "browser": gui["browser"],
-            "step_count": len(gui["steps"]),
-            "screenshot_count": len(gui["screenshots"]),
-            "api_db_correlated": gui["api_db_correlated"],
-            "restart_persistence": gui["restart_persistence"],
-        },
+        "status": "PASS",
+        "harness": gui["harness"],
+        "browser": gui["browser"],
+        "step_count": len(gui["steps"]),
+        "screenshot_count": len(gui["screenshots"]),
+        "api_db_correlated": gui["api_db_correlated"],
+        "restart_persistence": gui["restart_persistence"],
     }

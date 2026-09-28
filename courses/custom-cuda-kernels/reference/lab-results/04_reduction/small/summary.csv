@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,per_element_atomic_median_seconds,value,6.272e-06,s
+baseline-trial1,warp_block_atomic_median_seconds,value,4.928e-06,s
+baseline-trial1,cub_median_seconds,value,6.144e-06,s
+repeat-trial1,per_element_atomic_median_seconds,value,6.352e-06,s
+repeat-trial1,warp_block_atomic_median_seconds,value,4.928e-06,s
+repeat-trial1,cub_median_seconds,value,6.256000000000001e-06,s

@@ -8,11 +8,12 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 try:
     import triton
@@ -82,7 +83,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     if triton is None or tail_probe is None:
         raise SystemExit(
             "This lab requires the Triton package from the course environment."
@@ -92,7 +93,7 @@ def main() -> None:
     grouped_lanes = lane_work_model([20] * 32 + [4] * 32)
     num_warps = 16
     threads = num_warps * 32
-    work = 256 if args.profile == "smoke" else 2_048
+    work = 256 if args.profile == "small" else 2_048
     probe_output = torch.empty(1, device="cuda", dtype=torch.float32)
     compiled = tail_probe[(1,)](probe_output, work=work, num_warps=num_warps)
     torch.cuda.synchronize()
@@ -190,4 +191,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

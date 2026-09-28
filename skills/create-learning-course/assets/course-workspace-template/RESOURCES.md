@@ -1,8 +1,8 @@
-# Official References
+# Official references
 
 ## {Topic}
 
-- [{Official documentation, standard or primary research title}]({public-url})
+1. [{Official documentation, standard or primary research title}]({public-url})
   — {The claim, mechanism or procedure this source supports.}
 
 {Use current authoritative sources and original explanations. Keep private

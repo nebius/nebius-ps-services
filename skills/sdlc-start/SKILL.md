@@ -147,8 +147,9 @@ $sdlc-start run <prompt-ref-or-file>
   run. New Prompt allocates a fresh ID; do not clone managed prompts. The
   private `new`, `list`, `queue-list`, `queue-cancel`, `queue-next`, and
   `verify` actions are editor/state helpers, not additional public skill commands.
-  Private `refinement-verify` is a requirements lock helper and is likewise not
-  an additional public skill command.
+  Private `refinement-ready` is a read-only requirements lock helper for
+  context/design admission; `refinement-verify` settles full prompt impact
+  after design. Neither is an additional public skill command.
 - For `run`, invoke private `prompt_workspace.py intake` before reading or
   changing phase state. Trust only its validated bound run, revision, digest,
   and snapshot; never use the editable prompt directly after intake.
@@ -185,15 +186,16 @@ $sdlc-start run <prompt-ref-or-file>
   and persist stable clarification IDs privately. Route to
   `sdlc-create-requirements`; block design/planning only for material open or
   reopened questions. Answers may arrive through chat or a later prompt
-  revision, and a contradiction reopens the same question ID. Before leaving
-  requirements, invoke private `prompt_workspace.py refinement-verify` for the
-  exact workspace and run after writing the complete private impact claim; do
-  not route to design unless the shared owner binds the latest accepted
-  identity and intent to the exact current canonical specs and publishes the
-  immutable impact receipt. Publication is per-run locked, compare-checks the
-  ledger, and preserves then skips conflicting crash orphans. An existing
-  execution without a basis receipt must use a distinct safe replan for
-  material impact; never relabel unchanged plan bytes as current evidence.
+  revision, and a contradiction reopens the same question ID. Before the first
+  adapter publication when either canonical document is absent, invoke
+  `maintain-project-specs` to bootstrap the missing draft pair under its
+  ownership. Preserve existing document bytes, use evidence-backed stable IDs,
+  and keep new design records draft and not-started with substantive decisions
+  pending context/design. This bootstrap grants no planning or execution
+  authority. Before leaving requirements, invoke private
+  `prompt_workspace.py refinement-ready` for the exact workspace and run. It
+  checks the latest accepted identity, ready refinement and exact compiled
+  requirements without requiring a ready design or publishing impact evidence.
   Then, when
   `docs/requirements.md` is missing or
   lacks a Live Experiment Environment section, encourage the user to provide a
@@ -206,9 +208,13 @@ $sdlc-start run <prompt-ref-or-file>
 - Use the project ID returned by the validated workspace or intake result and
   read its `active-run.json` before choosing a run. Never recompute prompt
   workspace identity from repository metadata.
-- Acquire or honor the active run lock. If the lock appears stale, report the
-  lock owner and timestamp and recover only when the local evidence clearly
-  shows no active writer.
+- Acquire or honor the active run lock. It is a private JSON ownership record,
+  not an empty file or an OS lock alone: publish the exact workspace project ID,
+  selected project root, active run ID, status, owner session hash and timestamp
+  using the `active.lock` contract in `references/state-schema.md`. Re-observe
+  that hook discovery resolves this same run before dispatching any phase.
+  Preserve the record during checkpoint writes. If it appears stale, report
+  its owner and timestamp and recover only when no prior writer is active.
 - Resume from `checkpoints/latest.json` first. Do not rely on conversation
   memory for current feature, phase, blocker, retry counts, or next skill.
 - Reconcile `current-state.json`, the latest checkpoint, feature queue,
@@ -226,6 +232,19 @@ $sdlc-start run <prompt-ref-or-file>
   adapter before spec-dependent planning. The resulting receipt describes
   project truth but never authorizes auto-steering, execution, cleanup,
   finalization, or Stop.
+- After design is ready, require the design adapter's initial canonical-pair
+  admission when files are new: only the selected pair may be dirty, guarded
+  repo-root staging makes them tracked, and HEAD remains unchanged. Do not
+  advance untracked specs or move the preparation phase's commit earlier.
+- After design is ready and before planning, write the complete private impact claim
+  and invoke private `prompt_workspace.py refinement-verify`. Require the shared
+  owner to bind the latest accepted identity and every extracted statement
+  occurrence to the exact current canonical specs and publish the immutable impact receipt.
+  Publication is per-run locked, compare-checks the ledger, and preserves then
+  skips conflicting crash orphans. An existing execution without a basis receipt
+  must use a distinct safe replan for material impact; never relabel unchanged
+  plan bytes as current evidence. Requirements readiness alone never unlocks
+  planning, steering resolution, execution, integration, or promotion.
 - Read every already-effective `AGENTS.md` in the selected instruction chain.
   Do not create, edit, retire, or reload project instructions automatically.
   A user-invoked project-instruction workflow remains separately responsible

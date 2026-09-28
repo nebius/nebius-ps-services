@@ -145,14 +145,14 @@ def health_verdict(
 def nccl_verdict(output: str, *, gpu_count: int) -> dict[str, Any]:
     starts = re.findall(r"(?m)^# Collective test starting: (\S+)\s*$", output)
     ends = re.findall(r"(?m)^# Collective test concluded: (\S+)\s*$", output)
-    gpus = re.findall(r"(?m)^# nThread \d+ nGpus (\d+) .*\bvalidation: (\d+)\b", output)
+    gpus = re.findall(r"(?m)^# nThread (\d+) nGpus (\d+) .*\bvalidation: (\d+)\b", output)
     bounds = re.findall(r"(?m)^# Out of bounds values\s*:\s*(\d+)\s+(\S+)\s*$", output)
     bandwidth = re.findall(r"(?m)^# Avg bus bandwidth\s*:\s*(\S+)\s*$", output)
     if (
         starts != ["all_reduce_perf"]
         or ends != starts
         or gpu_count <= 0
-        or gpus != [(str(gpu_count), "1")]
+        or gpus != [("1", str(gpu_count), "1")]
         or bounds != [("0", "OK")]
         or len(bandwidth) != 1
     ):
@@ -161,9 +161,16 @@ def nccl_verdict(output: str, *, gpu_count: int) -> dict[str, Any]:
         speed = float(bandwidth[0])
     except ValueError as exc:
         raise RuntimeError("native NCCL diagnostic bandwidth is malformed") from exc
-    if not math.isfinite(speed) or speed <= 0:
+    # NCCL bus bandwidth includes 2 * (nranks - 1) / nranks, so one
+    # local rank has zero bus bandwidth even after successful data validation.
+    if not math.isfinite(speed) or speed < 0 or (gpu_count > 1 and speed == 0):
         raise RuntimeError("native NCCL diagnostic has no successful transfer")
-    return {"kind": "native-nccl", "status": "PASS", "gpus": gpu_count, "outOfBounds": 0}
+    return {
+        "kind": "native-nccl-smoke" if gpu_count == 1 else "native-nccl",
+        "status": "PASS",
+        "gpus": gpu_count,
+        "outOfBounds": 0,
+    }
 
 
 def read_native_verdict(

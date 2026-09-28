@@ -345,6 +345,7 @@ def test_dynamic_provider_checks_cover_custom_tf_module_fields() -> None:
     )
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
     monkeypatch,
 ) -> None:
@@ -716,6 +717,8 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
+            # Synthetic operator versions explicitly opt out of the production set.
+            "compatibility": {"targets": {"mk8s": {"version_set": None}}},
             "version": "v1",
             "client_info": {
                 "client_name": "demo",
@@ -1728,10 +1731,11 @@ def test_wizard_declared_target_observability_path_is_prompted(
     assert payload["deploy"]["targets"][0]["observability"]["enabled"] is True
 
 
+@pytest.mark.usefixtures("remote_observability_choices")
 def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target(
     monkeypatch,
 ) -> None:
-    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
     config_yaml = yaml.safe_dump(
         {
             "version": "v1",
@@ -1884,10 +1888,11 @@ def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target
     )
 
 
+@pytest.mark.usefixtures("remote_observability_choices")
 def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
     monkeypatch,
 ) -> None:
-    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
     config_yaml = yaml.safe_dump(
         {
             "version": "v1",
@@ -2029,10 +2034,11 @@ def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
     assert chart_targets == sorted((app_id, "cluster1") for app_id in app_ids)
 
 
+@pytest.mark.usefixtures("remote_observability_choices")
 def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
     monkeypatch,
 ) -> None:
-    existing_app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    existing_app_ids = ("nebius-observability-agent", "grafana", "gateway-helm", "postgresql")
     gpu_app_ids = ("nvidia-gpu-operator", "nvidia-network-operator")
     config_yaml = yaml.safe_dump(
         {
@@ -5458,6 +5464,8 @@ def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
 def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch) -> None:
     config_yaml = yaml.safe_dump(
         {
+            # Synthetic operator versions explicitly opt out of the production set.
+            "compatibility": {"targets": {"mk8s": {"version_set": None}}},
             "version": "v1",
             "client_info": {
                 "client_name": "demo",
@@ -5607,6 +5615,8 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
 ) -> None:
     config_yaml = yaml.safe_dump(
         {
+            # Synthetic operator versions explicitly opt out of the production set.
+            "compatibility": {"targets": {"mk8s": {"version_set": None}}},
             "version": "v1",
             "client_info": {
                 "client_name": "demo",
@@ -6647,6 +6657,7 @@ def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
     assert "infra.components[0].inputs.infiniband_fabric" not in prompted_paths
 
 
+@pytest.mark.usefixtures("standard_deployment_choice")
 def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
     monkeypatch,
 ) -> None:

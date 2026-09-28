@@ -1,0 +1,71 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "b41006423fc87ccb9edc92e3ff9fd7187d62e0493a410fabee08504b2a7d3963",
+      "sha256": "f1def983d85181ba4c27df6004a05aa4e121627c5bf26d9a0b2a9c965d359e3a",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "c18ce261043017f445dfd77055b15fdfa54d86f2d72d49c88f2a143e9641d376",
+      "sha256": "b301a62f8d2b7816842a168caf7cc17f85ff6fc16ac923883e2a7e6fb55a9709",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "22725611a9c9d4aea1e13cdcf21fc3ee501694390b44a0ac1a0d55ad9f642447",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "b4c8ffde209bd2b4a75dd244eef80a58047a872c549ffd308429046c4432447e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "6b00eb8eb6667650c6ade6473208dc1dbe29d97fd884ad21c7a09817507fb7df",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "9f2bad739874c9b98470e9cce57933e113f8021d569cb015e7b7b551c2cb95cc",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view5.png",
+      "sha256": "31cb883aff7d9fc3e8bf0ea90e8041c9dd8623fd9ddf1ce886516a09e91ec42d",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "781f171d69d94e9b338780d3b21936c33ea0e861f669dd0d9a8bd0cd48a340e4",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "e7d9615258bf0d8dcdc1f479bd9198d6e11b4e586e229c1c7d55a54af1da64ec",
+      "tool": "systems"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "15_streaming_client",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "incomplete-events",
+    "unlocked-gpu-clocks"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "1666389acd5388ba713d53460f570e066d9ce7b30928bfb671e07c972d3b2dc9",
+  "summary_sha256": "644ca3c0c417546d90a234efbc5de58e3adc2f8cd088ef65bbb98f8ed2810561"
+}

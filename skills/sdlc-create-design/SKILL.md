@@ -88,10 +88,16 @@ and feature designs in `docs/design.md`.
   compare-and-set even when this adapter does not change them.
 - Feature blocks using `FEAT-*`.
 - Design decisions, design change log, and local design fingerprint.
+- Initial pre-execution Git admission of the canonical pair, under the exact
+  staged-scope guard below. The preparation phase retains commit ownership.
 
 ## Process
 
 - Use `assets/templates/design.md.template` when creating the file.
+- A shared-owner draft-pair bootstrap may already supply inert mapped draft
+  records. This adapter owns substantive architecture, alternatives, boundaries
+  and validation decisions and the transition to ready; bootstrap is not
+  completed design or authority to plan.
 - For failure-driven reconsideration, first verify that requirements and
   acceptance criteria are stable, the evaluator and environment are valid,
   the failure reproduces at the recorded integration commit, and the diagnosis
@@ -144,6 +150,29 @@ and feature designs in `docs/design.md`.
   change and decision, create a new design fingerprint, identify the affected
   feature closure and invalidations, and require immutable plan vN+1.
 
+## Initial Canonical Pair Admission
+
+After publishing the ready design and before strict pair validation or prompt
+impact settlement, admit newly created canonical files to Git tracking. This
+applies only before execution preparation; subsequent changes follow the current
+integration/replan owner.
+
+1. Inspect the complete repository's staged, unstaged and untracked paths with
+   rename folding disabled. Only the selected project's `docs/requirements.md`
+   and `docs/design.md` may be dirty. Reject unrelated changes, deletion,
+   symlinks, ignored canonical files or paths outside the selected project.
+2. If either canonical file is untracked, run `git add -A` from the repository
+   root only after that guard passes. If both are already tracked, no admission
+   staging is needed.
+3. After admission staging, recheck that the staged set contains only those
+   canonical paths, both are tracked, their index bytes equal the published
+   files, and HEAD is unchanged. When both files were already tracked, preserve
+   their existing staged/unstaged state; preparation owns later staging.
+   Stop on any mismatch; do not commit, reset, stash or absorb unrelated work.
+4. Run strict pair validation and return the ready design to the coordinator
+   for full prompt-impact verification before planning. The later
+   `sdlc-prepare-execution` phase still owns the canonical contract commit.
+
 ## Idempotency
 
 - Same requirements and context must not duplicate features.
@@ -184,12 +213,17 @@ and feature designs in `docs/design.md`.
 
 ## Completion Criteria
 
-- `docs/design.md` exists.
+- `docs/design.md` exists and both canonical files are tracked. Newly created
+  files passed the initial admission guard without an early commit.
 - Every P0 requirement maps to at least one feature.
 - Every ready feature has selected and rejected options, implementation
   boundaries, vertical flow or layer map when applicable, validation, test,
   evaluation, rollout, rollback, and done criteria.
 - Open design questions are explicit.
+- Before planning, return the ready canonical pair to `sdlc-start` for complete
+  statement-impact settlement through `refinement-verify`. Requirements-only
+  readiness cannot replace this receipt. A blocked or draft design remains
+  ineligible for planning.
 - Failure-driven redesign records admission evidence, approval mode, affected
   feature closure, invalidations, rollback, decision/change log, and new design
   fingerprint; reaffirmation returns without changing the fingerprint.

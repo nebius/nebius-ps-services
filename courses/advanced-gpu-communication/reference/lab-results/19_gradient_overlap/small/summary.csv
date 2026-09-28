@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,schedules_ascending_serialized_step_median_seconds,value,0.0014694,s
+baseline-trial1,schedules_ascending_overlapped_step_median_seconds,value,0.0013536,s
+baseline-trial1,schedules_descending_overlapped_step_median_seconds,value,0.0013443,s
+repeat-trial1,schedules_ascending_serialized_step_median_seconds,value,0.0014572,s
+repeat-trial1,schedules_ascending_overlapped_step_median_seconds,value,0.0013394,s
+repeat-trial1,schedules_descending_overlapped_step_median_seconds,value,0.0013656999999999999,s

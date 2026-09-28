@@ -26,7 +26,20 @@ def field(name: str, lesson: str | None = None) -> str:
 
 
 class LessonContract(unittest.TestCase):
-    def test_all_four_sections_and_nested_explanation_are_valid(self):
+    def test_lesson_local_next_steps_are_rejected(self):
+        base = lesson_fixture()
+        self.assertEqual(errors(base), [])
+        for block in (
+            '<div class="lesson-next-steps"><h3>Where to Go Next</h3>'
+            "<ul><li>Explore another process.</li></ul></div>",
+            '<div class="lesson-next-steps"><h4>Further study</h4><p>Explore.</p></div>',
+            "<section><h4><em>Where to Go Next</em></h4><p>Explore.</p></section>",
+        ):
+            for marker in ("</section>", "<h3>How it works</h3>"):
+                with self.subTest(block=block, marker=marker):
+                    self.assertTrue(errors(base.replace(marker, block + marker)))
+
+    def test_canonical_sections_and_nested_explanation_are_valid(self):
         base = lesson_fixture()
         self.assertEqual(errors(base), [])
         self.assertEqual(errors(base + lesson_fixture(2)), [])
@@ -48,7 +61,7 @@ class LessonContract(unittest.TestCase):
             for changed in (base.replace(part, ""), base.replace(part, part + part)):
                 with self.subTest(section=name):
                     self.assertIn(
-                        "Lesson needs the four canonical sections in order",
+                        "Lesson needs canonical sections in order, with References last if present",
                         errors(changed),
                     )
         first, last = field("lesson-outcome"), field("mental-model")
@@ -56,7 +69,8 @@ class LessonContract(unittest.TestCase):
             base.replace(first, "@FIRST@").replace(last, first).replace("@FIRST@", last)
         )
         self.assertIn(
-            "Lesson needs the four canonical sections in order", errors(swapped)
+            "Lesson needs canonical sections in order, with References last if present",
+            errors(swapped),
         )
 
     def test_visible_labels_and_heading_position_must_match(self):
@@ -80,7 +94,10 @@ class LessonContract(unittest.TestCase):
         ):
             self.assertTrue(errors(base.replace("</section>", content + "</section>")))
         old = '<section class="lesson" id="lesson-01"><h2>1. Process</h2><div><h3>Start here</h3><p>Old format.</p></div></section>'
-        self.assertIn("Lesson needs the four canonical sections in order", errors(old))
+        self.assertIn(
+            "Lesson needs canonical sections in order, with References last if present",
+            errors(old),
+        )
 
     def test_each_explanation_needs_its_own_svg_figure(self):
         base = lesson_fixture()
@@ -139,7 +156,14 @@ class LessonContract(unittest.TestCase):
         text = (ROOT / "assets/course-workspace-template/COURSE.md").read_text()
         headings = re.findall(r"^### (.+)$", text, re.M)
         self.assertEqual(
-            headings, ["Objective", "How it works", "Practice", "Mental model"]
+            headings,
+            [
+                "Objective",
+                "How it works",
+                "Practice",
+                "Mental model",
+                "References",
+            ],
         )
 
 

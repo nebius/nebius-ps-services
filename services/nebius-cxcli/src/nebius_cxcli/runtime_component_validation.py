@@ -963,8 +963,8 @@ def _validate_grafana_replicas(
         raise ValueError(
             f"apps.charts[{label or index}].values.replicas > 1 requires a shared "
             "Grafana database configured with grafana.ini.database.type set to "
-            "mysql, postgres, or postgresql. The bundled default uses per-pod "
-            "SQLite/emptyDir storage, so Grafana must stay at one replica."
+            "mysql, postgres, or postgresql. The bundled managed installation "
+            "uses the PostgreSQL component; SQLite cannot be shared by replicas."
         )
 
 

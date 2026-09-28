@@ -1,0 +1,13 @@
+{
+  "correctness": {},
+  "lab": "34_policy_equivalence_client",
+  "measurements": {
+    "variant": "enabled"
+  },
+  "parameters": {
+    "variant": "enabled",
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

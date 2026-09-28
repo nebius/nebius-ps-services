@@ -35,8 +35,8 @@ from .soperator_checks_policy import parse_checks_proposal
 from .soperator_failures import SoperatorMainWorkloadIdentity, SoperatorSafetyPauseError
 from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
 
-SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign.v4"
-SOPERATOR_UPGRADE_CAMPAIGN_RECEIPT_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign-receipt.v3"
+SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign.v8"
+SOPERATOR_UPGRADE_CAMPAIGN_RECEIPT_SCHEMA = "nebius-cxcli.soperator-upgrade-campaign-receipt.v6"
 
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 _SEGMENT_STATUS = frozenset({"pending", "running", "complete", "failed"})
@@ -224,12 +224,16 @@ class SoperatorUpgradeCampaignIntent:
     compatibility_rows: tuple[FrozenCompatibilityRow, ...]
     checks_policy_proposal: str
     checks_release_snapshot_sha256: str
+    jail_protection: str = ""
+    jail_protection_changed: bool = False
+    deployment: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def requires_fresh_checks(self) -> bool:
         proposal = json.loads(self.checks_policy_proposal) if self.checks_policy_proposal else {}
         return (
-            self.source_release != self.target_release
+            self.jail_protection_changed
+            or self.source_release != self.target_release
             or len(self.segments) > 2
             or proposal.get("before") != proposal.get("after")
         )
@@ -249,7 +253,9 @@ class SoperatorUpgradeCampaignIntent:
 
     @property
     def segments(self) -> tuple[str, ...]:
-        segments = ["soperator-release"]
+        segments = ["retire"] if self.deployment.get("retire") else []
+        if not self.deployment or self.deployment.get("release_transition", True):
+            segments.append("soperator-release")
         if any(
             group.source_version != self.source_kubernetes_version for group in self.node_groups
         ):
@@ -273,8 +279,89 @@ class SoperatorUpgradeCampaignIntent:
         ):
             endpoint = self.target_kubernetes_version
             segments.extend((f"node-templates:{endpoint}", f"runtime-readiness:{endpoint}"))
+        if self.deployment.get("grow"):
+            segments.append("grow")
+        if self.deployment:
+            segments.append("final-reconcile")
         segments.append("final-readiness")
         return tuple(segments)
+
+
+def _validate_deployment_topology(deployment: Mapping[str, Any]) -> None:
+    if not deployment:
+        return
+    if not isinstance(deployment, Mapping):
+        raise ValueError("Campaign deployment topology must be an object")
+    if not _SHA256.fullmatch(str(deployment.get("generation", ""))):
+        raise ValueError("Campaign topology must bind its rendered generation")
+    source = _string_tuple(deployment.get("source_group_ids"), label="source inventory")
+    retired = _string_tuple(deployment.get("retired_group_ids"), label="retired inventory")
+    survivors = _string_tuple(deployment.get("remaining_group_ids"), label="remaining inventory")
+    if any(not item for item in source) or len(set(source)) != len(source):
+        raise ValueError("Campaign source inventory is empty or ambiguous")
+    if set(retired) & set(survivors) or set(source) != set(retired) | set(survivors):
+        raise ValueError("Campaign retired/surviving inventory does not partition the source")
+    added = _string_tuple(deployment.get("added_group_keys"), label="added group keys")
+    if any(not item for item in added) or len(set(added)) != len(added):
+        raise ValueError("Campaign added group identities are ambiguous")
+    for name in ("retire", "grow", "final-reconcile"):
+        if name in deployment and deployment[name] is not None:
+            stage = deployment[name]
+            if not isinstance(stage, Mapping) or not _SHA256.fullmatch(
+                str(stage.get("generation", ""))
+            ):
+                raise ValueError("Campaign intermediate generation is not frozen")
+
+
+def assert_campaign_phase_inventory(
+    intent: SoperatorUpgradeCampaignIntent,
+    receipt: SoperatorUpgradeCampaignReceipt | None,
+    live_ids: Sequence[str],
+    *,
+    newly_owned_ids: Mapping[str, str] | None = None,
+) -> None:
+    """Require exact phase inventory, with bounded recovery of interrupted changes.
+
+    A partly completed retirement may only lose explicitly retired IDs. Growth
+    may only add IDs proven by this operation's Terraform-owned resource addresses.
+    Neither phase can lose a surviving group or adopt a matching provider name.
+    """
+    if not intent.deployment:
+        assert_campaign_node_group_inventory(intent, live_ids)
+        return
+    actual = tuple(live_ids)
+    if not all(actual) or len(set(actual)) != len(actual):
+        raise RuntimeError("Campaign provider inventory is empty or ambiguous")
+    topology = intent.deployment
+    source = set(topology["source_group_ids"])
+    survivors = set(topology["remaining_group_ids"])
+    segments = {segment.name: segment for segment in receipt.segments} if receipt else {}
+    retire = segments.get("retire")
+    grow = segments.get("grow")
+    if retire is not None and retire.status in {"executing", "running", "failed"}:
+        if not survivors <= set(actual) <= source:
+            raise RuntimeError("Retirement changed an unadmitted provider group")
+        return
+    expected = source if retire is None or retire.status == "pending" else survivors
+    if grow is not None and grow.status != "pending":
+        owned = dict(newly_owned_ids or {})
+        if not set(owned) <= set(topology["added_group_keys"]):
+            raise RuntimeError("Growth ownership includes an unadmitted group key")
+        if any(not value for value in owned.values()) or len(set(owned.values())) != len(owned):
+            raise RuntimeError("Growth ownership is empty or ambiguous")
+        if set(owned.values()) & survivors:
+            raise RuntimeError("Growth attempted to rebind a surviving group")
+        if grow.status == "complete":
+            bound = grow.evidence.get("added_group_ids")
+            if (
+                not isinstance(bound, Mapping)
+                or dict(bound) != owned
+                or set(owned) != set(topology["added_group_keys"])
+            ):
+                raise RuntimeError("Completed growth differs from its frozen provider ownership")
+        expected = survivors | set(owned.values())
+    if set(actual) != expected:
+        raise RuntimeError("Campaign provider inventory differs from the declared phase")
 
 
 def assert_frozen_compatibility_row_supported(
@@ -479,6 +566,9 @@ def build_campaign_intent(
     compatibility_rows: Sequence[FrozenCompatibilityRow],
     checks_policy_proposal: str,
     checks_release_snapshot_sha256: str,
+    deployment: Mapping[str, Any] | None = None,
+    jail_protection: str = "",
+    jail_protection_changed: bool = False,
 ) -> SoperatorUpgradeCampaignIntent:
     target_version, hops = resolve_kubernetes_upgrade_path(
         selector=requested_kubernetes_selector,
@@ -528,14 +618,26 @@ def build_campaign_intent(
         job_refresh_interval=str(job_refresh_interval).strip(),
         node_groups=tuple(node_groups),
         compatibility_rows=tuple(compatibility_rows),
+        deployment=dict(deployment or {}),
+        jail_protection=jail_protection,
+        jail_protection_changed=jail_protection_changed,
     )
     validate_campaign_intent(intent)
     return intent
 
 
 def validate_campaign_intent(intent: SoperatorUpgradeCampaignIntent) -> None:
+    if not isinstance(intent.jail_protection_changed, bool):
+        raise ValueError("Soperator jail protection change flag must be boolean")
+    if intent.jail_protection_changed and not intent.jail_protection:
+        raise ValueError("Soperator jail protection changes require a frozen plan")
+    if intent.jail_protection:
+        from .soperator_jail_protection import apply_frozen_jail_protection
+
+        apply_frozen_jail_protection({}, intent.jail_protection)
     if intent.schema != SOPERATOR_UPGRADE_CAMPAIGN_SCHEMA:
         raise ValueError("Soperator upgrade campaign intent has an unsupported schema")
+    _validate_deployment_topology(intent.deployment)
     parse_checks_proposal(intent.checks_policy_proposal)
     if not _SHA256.fullmatch(intent.checks_release_snapshot_sha256):
         raise ValueError("Soperator checks require a frozen release snapshot")
@@ -657,6 +759,9 @@ def campaign_intent_from_payload(payload: Mapping[str, Any]) -> SoperatorUpgrade
     try:
         intent = SoperatorUpgradeCampaignIntent(
             schema=str(payload.get("schema", "")),
+            deployment=dict(payload["deployment"]),
+            jail_protection=str(payload["jail_protection"]),
+            jail_protection_changed=payload["jail_protection_changed"],
             checks_policy_proposal=str(payload.get("checks_policy_proposal", "")),
             checks_release_snapshot_sha256=str(payload.get("checks_release_snapshot_sha256", "")),
             target_ref=str(payload.get("target_ref", "")),
@@ -975,7 +1080,15 @@ class CampaignMainWorkloadAuthority:
             or receipt.cluster_id != self.intent.cluster_id
             or receipt.kubernetes_uid != self.intent.kubernetes_uid
             or receipt.status != "active"
-            or receipt.maintenance != "active"
+            or receipt.maintenance not in {"active", "restoring"}
+            or (
+                receipt.maintenance == "restoring"
+                and (
+                    tuple(segment.name for segment in receipt.segments) != self.intent.segments
+                    or any(segment.status != "complete" for segment in receipt.segments)
+                    or "checksMainWorkloadAuthority" not in receipt.maintenance_evidence
+                )
+            )
         ):
             raise SoperatorSafetyPauseError("campaign main-workload authority is unavailable")
         evidence = dict(receipt.maintenance_evidence)
@@ -1044,6 +1157,42 @@ class CampaignControllerSpoolMigrationStore:
             replace(
                 receipt,
                 maintenance_evidence=maintenance_evidence,
+                updated_at=_utc_now(),
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class CampaignNativeTransitionStore:
+    """Native child retirement is durable under the existing campaign owner."""
+
+    path: Path
+    intent: SoperatorUpgradeCampaignIntent
+
+    def _active_receipt(self) -> SoperatorUpgradeCampaignReceipt:
+        receipt = load_campaign_receipt(self.path)
+        if receipt is None or receipt.intent_sha256 != self.intent.digest:
+            raise RuntimeError("Native graph retirement lost its campaign identity")
+        if receipt.status != "active" or receipt.maintenance != "active":
+            raise RuntimeError("Native graph retirement requires active campaign maintenance")
+        return receipt
+
+    def read(self) -> Mapping[str, object] | None:
+        from .soperator_graph_transition import campaign_transition_checkpoint
+
+        payload = campaign_transition_checkpoint(self._active_receipt().maintenance_evidence)
+        return dict(payload) if payload is not None else None
+
+    def write(self, payload: Mapping[str, object]) -> None:
+        receipt = self._active_receipt()
+        _write_receipt(
+            self.path,
+            replace(
+                receipt,
+                maintenance_evidence={
+                    **receipt.maintenance_evidence,
+                    "nativeGraphTransition": dict(payload),
+                },
                 updated_at=_utc_now(),
             ),
         )
@@ -1401,15 +1550,35 @@ def run_campaign(
     if len(events) != len(restoration_events):
         raise RuntimeError("Soperator maintenance restoration event journal is invalid")
 
+    def _current_restoration_receipt() -> SoperatorUpgradeCampaignReceipt:
+        assert_fence()
+        current = load_campaign_receipt(path)
+        if (
+            current is None
+            or current.intent_sha256 != intent.digest
+            or current.target_ref != intent.target_ref
+            or current.cluster_id != intent.cluster_id
+            or current.kubernetes_uid != intent.kubernetes_uid
+            or current.status != "active"
+            or current.maintenance != "restoring"
+            or _sha256([asdict(segment) for segment in current.segments])
+            != _sha256([asdict(segment) for segment in receipt.segments])
+            or _sha256(current.maintenance_evidence.get("summary")) != _sha256(restoration_summary)
+            or _sha256(current.maintenance_evidence.get("events", [])) != _sha256(events)
+        ):
+            raise RuntimeError("Soperator campaign restoration authority changed")
+        return current
+
     def _record_restoration_event(event: Mapping[str, Any]) -> None:
         nonlocal receipt
         if not isinstance(event, Mapping):
             raise RuntimeError("Soperator maintenance restoration event is invalid")
+        receipt = _current_restoration_receipt()
         events.append(dict(event))
         receipt = replace(
             receipt,
             maintenance_evidence={
-                "summary": dict(restoration_summary),
+                **dict(receipt.maintenance_evidence),
                 "events": events,
             },
             updated_at=_utc_now(),
@@ -1422,6 +1591,9 @@ def run_campaign(
     )
     if not isinstance(restore_evidence, Mapping):
         raise RuntimeError("Soperator maintenance restoration returned invalid evidence")
+    # Policy callbacks durably refine authority and configuration during READY.
+    # Complete from those latest bytes, including when no event followed a write.
+    receipt = _current_restoration_receipt()
     receipt = replace(
         receipt,
         status="complete",

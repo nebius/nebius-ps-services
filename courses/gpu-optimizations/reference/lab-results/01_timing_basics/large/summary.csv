@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,host_without_sync_median_seconds,value,1.0500000000000001e-05,s
+baseline-trial1,host_with_sync_median_seconds,value,0.0014804,s
+baseline-trial1,cuda_events_median_seconds,value,0.0015981,s
+repeat-trial1,host_without_sync_median_seconds,value,1.04e-05,s
+repeat-trial1,host_with_sync_median_seconds,value,0.0016335,s
+repeat-trial1,cuda_events_median_seconds,value,0.0016331,s

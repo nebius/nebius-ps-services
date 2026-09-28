@@ -1,0 +1,16 @@
+{
+  "correctness": {
+    "all_reduce": true,
+    "topology": true
+  },
+  "lab": "05_transport_readiness",
+  "measurements": {},
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

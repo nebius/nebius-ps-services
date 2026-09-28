@@ -105,7 +105,10 @@ def _runtime_app_entries(payload: Mapping[str, Any]) -> tuple[ComponentEntry, ..
     if soperator_row is None:
         return entries
     version = str(soperator_row.get("version", "") or "").strip()
-    return (*entries, soperator_install_entry(version))
+    return (
+        *entries,
+        soperator_install_entry(version, chart_repo=str(soperator_row.get("repo") or "")),
+    )
 
 
 def _coalesce(*values: Any) -> Any:
@@ -430,8 +433,7 @@ def _component_binding_report_line(
     if not bindings:
         return ""
     formatted = [
-        f"`{binding.target_path} <- {component_input_binding_ref(binding)}`"
-        for binding in bindings
+        f"`{binding.target_path} <- {component_input_binding_ref(binding)}`" for binding in bindings
     ]
     return f"  - Bindings: {', '.join(formatted)}"
 
@@ -1488,7 +1490,10 @@ def write_inventory(
     )
     observability_app_lines = _enabled_status_report_lines(
         (
-            ("Observability", _coalesce(_lookup(observability_summary, "enabled"), False)),
+            (
+                "Additional observability",
+                _coalesce(_lookup(observability_summary, "enabled"), False),
+            ),
             (
                 "K8s o11y agent",
                 _coalesce(_lookup(observability_summary, "kubernetes_agent"), False),
@@ -1504,6 +1509,14 @@ def write_inventory(
             ),
         )
     )
+    for upstream in _lookup(observability_summary, "soperator_upstream") or []:
+        observability_app_lines.extend(
+            [
+                f"- Soperator telemetry configuration ({upstream['target_ref']}): `{upstream['configuration']}`; release `{upstream['release']}`",
+                "- Soperator visualization: remote Nebius Grafana; bundled Grafana disabled; local Grafana is an optional app.",
+                "- Soperator telemetry live readiness and ingestion: not verified by this configuration summary.",
+            ]
+        )
     dcgm_metric_source = _coalesce(
         _lookup(observability_summary, "gpu_dcgm_metric_source"),
         "disabled",
@@ -1577,9 +1590,7 @@ def write_inventory(
         item for item in payload["infra"].get("mysterybox_sync", []) if isinstance(item, Mapping)
     ]
     if mysterybox_sync:
-        lines.extend(
-            ["", "### SecretStash Kubernetes Sync (`mysterybox` service identifier)", ""]
-        )
+        lines.extend(["", "### SecretStash Kubernetes Sync (`mysterybox` service identifier)", ""])
         lines.extend(_mysterybox_sync_markdown_lines(mysterybox_sync))
     lines.extend(
         [
@@ -1705,7 +1716,9 @@ def write_inventory(
             password_command = (
                 f"printf '%s\\n' \"$(kubectl{kube_context_arg} -n {namespace_arg} "
                 f"get secret {admin_secret_arg} -o jsonpath={password_jsonpath_arg} "
-                "| base64 -d)\""
+                '| base64 -d)"'
+                if kube_context
+                else "Select the target cluster context before reading its admin Secret."
             )
             target_info: list[str] = []
             if cluster_id:

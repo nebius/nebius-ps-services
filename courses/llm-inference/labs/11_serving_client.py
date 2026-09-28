@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from common import require_hf_commit_revision, resolve_run_id, write_json_exclusive
+from course_evidence import begin_experiment
 
 DEFAULT_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
@@ -26,6 +27,7 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
+    begin_experiment(args)
     require_hf_commit_revision(args.revision)
     parsed = urllib.parse.urlparse(args.base_url)
     if parsed.scheme != "http" or parsed.hostname not in {

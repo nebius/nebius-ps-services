@@ -4,7 +4,7 @@ Launch geometry determines how a problem is divided among GPU programs and how m
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 3 for program instances, cooperating warps, ceiling division and masked tails. Lab 01 explains timing and reference checks. The first run studies geometry; revisit after Lesson 6 for residency and occupancy.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/09_triton_launch_geometry.json).
 
 Use one H100 with the course-qualified Triton package. This is Python learner code, distinct from the later CUDA C++ course. Allow first-use compilation to complete before interpreting warmed measurements.
 
@@ -20,31 +20,34 @@ Ceiling division rounds a quotient upward so the launch covers every element. Fo
 
 The kernel computes global element indices from a program ID and a logical offset range, loads valid elements under a mask, performs the expression, and stores valid outputs. The host sweeps supported block sizes and uses ceiling division for program counts. More logical elements can be handled by the same 128 CUDA threads through multiple values per thread.
 
-## Practice
-
-### After Lesson 3
-
 Given 120 available SMs and 200 equal-duration blocks with one resident block per SM, scheduling needs two waves: 120 blocks, then 80. Change the grid to 121 blocks. Expected observation: the second wave contains one block and the kernel can approach two block durations even though average utilization looks high during the first wave.
 
-Use Lab 09 to inspect launch geometry and predict grid size, cooperating warps and the partial final wave. At this stage compare geometric coverage and elapsed time; revisit resource-limited active warps and residency in Lesson 6.
+Given 320 threads per block, 65,536 32-bit registers per SM, and no tighter shared-memory, thread, or block limit. At 128 registers per thread, a block needs 40,960 registers, permitting one block by this resource bound. Change to 96 registers per thread: it needs 30,720, permitting two before allocation-granularity constraints. Expected observation: check the actual compiled kernel with occupancy APIs; these estimates alone do not establish residency. A register cap can add spills and make the two-block case slower.
 
-### Run the supplied experiment
+This sweep changes logical elements per Triton program with four warps per program; it is not a CUDA threads-per-block sweep. For an optional resource investigation, inspect compiled-kernel register/shared-memory reports and a selected Nsight Compute launch/occupancy report for each case. The supplied script does not emit those measurements, so its timing alone cannot establish occupancy.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 The supplied sweep includes its own launch choices and reference checks. Run both profiles separately to see how problem size changes program count and masked tail elements.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile h100
+python3 tools/submit_lab.py --lab 09_triton_launch_geometry slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
+python3 tools/submit_lab.py --lab 09_triton_launch_geometry slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile large
 ```
 
-### After Lesson 6
-
-Given 320 threads per block, 65,536 32-bit registers per SM, and no tighter shared-memory, thread, or block limit. At 128 registers per thread, a block needs 40,960 registers, permitting one block by this resource bound. Change to 96 registers per thread: it needs 30,720, permitting two before allocation-granularity constraints. Expected observation: check the actual compiled kernel with occupancy APIs; these estimates alone do not establish residency. A register cap can add spills and make the two-block case slower.
-
-Return to Lab 11 and run its H100 grid-tail probe now that resident blocks and partial waves have meaning; keep this measurement separate from Lesson 5's lane-mask model. Run Lab 09 as a sweep of logical elements per Triton program with four warps per program; this is not a CUDA threads-per-block sweep. Retain its correctness and timing results. For the resource extension, inspect compiled-kernel register/shared-memory reports and a selected Nsight Compute launch/occupancy report for each case; then compare with the occupancy/resource sweep in Custom CUDA Lab 07. Do not report register or occupancy measurements that Lab 09 itself does not emit.
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 09_triton_launch_geometry --job "$LAB_JOB_ID"
+```
 
 Require the per-case correctness checks. Inspect `programs`, `elements_per_program`, `masked_tail_elements`, `warps_per_program`, and timing distributions. Reported logical GiB/s is a byte-accounting rate, not measured memory transactions.
 
@@ -56,6 +59,25 @@ For the resource/profiler extension, record registers per thread, shared memory 
 
 Enough occupancy hides the relevant latency; more occupancy has no value if the limiting pipeline is already saturated.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Sweeps / 128 / time / median (seconds) | `sweeps.128.time.median_ms` | `s` |
+| Sweeps / 256 / time / median (seconds) | `sweeps.256.time.median_ms` | `s` |
+| Sweeps / 512 / time / median (seconds) | `sweeps.512.time.median_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 09_triton_launch_geometry \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Calculate the program count and final mask for one size by hand. Explain why fewer programs need not mean faster execution: larger logical tiles can change registers, scheduling, and per-program work.
@@ -64,6 +86,26 @@ More threads or warps per block can expose more work but consume more registers 
 
 Larger tiles increase reuse or instruction-level parallelism but consume registers and shared memory. Smaller blocks can raise residency yet reduce coalescing or reuse. The best point is the one that removes the measured latency without creating a larger cost.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 09_triton_launch_geometry --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 09_triton_launch_geometry --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare the existing logical tile sizes at fixed elements. Independently choose the winning tile from duration and tail-mask evidence, then check whether its occupancy explains the choice.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 A tail-only mismatch points first to the load/store masks or index formula. A compiler/import failure blocks this Triton exercise, not every PyTorch lab. Record it as an environment issue without inventing substitute results.
@@ -71,6 +113,8 @@ A tail-only mismatch points first to the load/store masks or index formula. A co
 Maximizing threads per block can increase register pressure or reduce blocks resident per SM.
 
 Avoid treating theoretical occupancy as a target independent of instruction-level parallelism or memory behavior.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

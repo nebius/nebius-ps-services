@@ -1,0 +1,29 @@
+{
+  "correctness": {
+    "finite_mean_loss": true,
+    "parameter_updated": true
+  },
+  "lab": "16_fsdp2_train",
+  "measurements": {
+    "final_mean_loss": 3.40657,
+    "max_rank_peak_allocated_mib": 563.46,
+    "model_shape": {
+      "batch": 8,
+      "hidden": 512,
+      "layers": 6,
+      "sequence": 256,
+      "vocab_size": 4096
+    },
+    "slowest_rank_elapsed_ms": 217.7603,
+    "world_size": 2
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2,
+    "zero_grad_fill": true
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from nebius_cxcli import soperator_install_checks_repair as repair
+from nebius_cxcli import soperator_install_docker_storage_repair as docker_storage_repair
 from nebius_cxcli.soperator_adapter import _MOUNT_GATE_SCRIPT, _REST_JWT_CONFIG_GATE_SCRIPT
 from nebius_cxcli.soperator_rest_contract import materialize_soperator_rest
 
@@ -93,20 +94,40 @@ def test_required_rest_rejects_nonfunctional_replica_count(size):
         materialize_soperator_rest({"slurmNodes": {"rest": {"size": size}}})
 
 
-def test_router_does_not_admit_two_successors_in_one_call(monkeypatch, tmp_path):
+@pytest.mark.parametrize("private_storage_available", [False, True])
+def test_router_does_not_admit_two_successors_in_one_call(
+    monkeypatch, tmp_path, private_storage_available
+):
     calls = []
+
+    def prepare_private_storage(**kwargs):
+        if private_storage_available:
+            calls.append(docker_storage_repair.DOCKER_STORAGE_REPAIR_REASON)
+            return {"previousOperationSpecSha256": "old"}
+        return None
 
     def prepare(**kwargs):
         calls.append(kwargs.get("reason", repair.CHECKS_REPAIR_REASON))
         return {"previousOperationSpecSha256": "old"}
 
+    monkeypatch.setattr(
+        docker_storage_repair, "prepare_install_docker_storage_repair", prepare_private_storage
+    )
     monkeypatch.setattr(repair, "_prepare_install_binding_repair", prepare)
     repair.prepare_install_input_repair(
         paths=SimpleNamespace(reports_dir=tmp_path),
         target_ref="test",
         scheduling_journal={"operationSpecSha256": "old"},
+        local_scheduling_journal=None,
+        env={},
+        kube_context="cluster",
+        assert_authority=lambda: None,
     )
-    assert calls == [repair.CHECKS_REPAIR_REASON]
+    assert calls == [
+        docker_storage_repair.DOCKER_STORAGE_REPAIR_REASON
+        if private_storage_available
+        else repair.CHECKS_REPAIR_REASON
+    ]
 
 
 def test_all_ancestor_seals_and_hash_links_are_required(monkeypatch):

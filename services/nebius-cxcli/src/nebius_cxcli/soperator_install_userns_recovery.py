@@ -6,11 +6,11 @@ import copy
 import json
 import re
 import shlex
-import subprocess
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from . import kubernetes_process
 from .soperator_checks import SoperatorChecksExecution, _identifier
 from .soperator_checks_contract import job_execution_digest
 from .soperator_checks_policy import checks_digest
@@ -209,7 +209,7 @@ def capture_userns_failure(
     failed_at = datetime.fromisoformat(times[0])
     if not start <= failed_at <= end + timedelta(seconds=1):
         raise RuntimeError("Enroot native failure is outside its Slurm execution interval")
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",

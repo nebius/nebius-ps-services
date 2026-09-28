@@ -92,9 +92,7 @@ class _PopulateJailRunner:
                             {
                                 "metadata": {"name": "login", "uid": "service-uid"},
                                 "spec": {"type": "LoadBalancer", "clusterIP": "10.0.0.20"},
-                                "status": {
-                                    "loadBalancer": {"ingress": [{"ip": "192.0.2.10"}]}
-                                },
+                                "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.10"}]}},
                             }
                         ]
                     }
@@ -191,8 +189,7 @@ class _ProgressRunner:
                                 "conditions": [{"type": "Failed", "status": "True"}],
                             }
                             if self.failed_init
-                            else
-                            {
+                            else {
                                 "succeeded": 1,
                                 "startTime": "2099-01-01T00:00:00Z",
                                 "conditions": [{"type": "Complete", "status": "True"}],
@@ -334,15 +331,6 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
                 },
             }
         ],
-        "volumeSources": [
-            {
-                "name": "jail",
-                "persistentVolumeClaim": {
-                    "claimName": "jail-rootfs-slot-a-pvc",
-                    "readOnly": False,
-                },
-            },
-        ],
     }
 
     slots = active_passive_jail_rootfs_slots(values)
@@ -360,14 +348,7 @@ def test_active_passive_slot_selection_and_switch_values() -> None:
     assert switched["nodesets"][0]["slurmd"]["volumes"]["jail"] == {
         "persistentVolumeClaim": {"claimName": "jail-rootfs-slot-b-pvc"}
     }
-    volume_sources = {item["name"]: item for item in switched["volumeSources"]}
-    assert set(volume_sources) == {"controller-spool", "jail"}
-    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
-        "controller-spool-pvc"
-    )
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == (
-        "jail-rootfs-slot-b-pvc"
-    )
+    assert "volumeSources" not in switched
 
 
 def test_active_passive_populate_job_mounts_passive_slot_pvc() -> None:
@@ -407,9 +388,7 @@ def test_active_passive_populate_job_mounts_passive_slot_pvc() -> None:
     container = pod_spec["containers"][0]
     assert container["image"] == "repo/populate-jail:target"
     assert container["env"] == [{"name": "OVERWRITE", "value": "1"}]
-    assert container["securityContext"] == {
-        "capabilities": {"add": ["SYS_ADMIN", "SETFCAP"]}
-    }
+    assert container["securityContext"] == {"capabilities": {"add": ["SYS_ADMIN", "SETFCAP"]}}
     assert container["volumeMounts"] == [{"name": "jail-rootfs", "mountPath": "/mnt/jail"}]
     assert pod_spec["volumes"] == [
         {
@@ -457,9 +436,7 @@ def test_operation_scratch_populate_job_omits_persistent_mount_receipt_gate() ->
     container = pod_spec["containers"][0]
     assert container["name"] == "populate-jail"
     assert container["env"] == [{"name": "OVERWRITE", "value": "1"}]
-    assert container["securityContext"] == {
-        "capabilities": {"add": ["SYS_ADMIN", "SETFCAP"]}
-    }
+    assert container["securityContext"] == {"capabilities": {"add": ["SYS_ADMIN", "SETFCAP"]}}
 
 
 def test_wait_for_active_passive_populate_job_records_completed_image() -> None:
@@ -566,9 +543,7 @@ def test_active_passive_monitor_reports_failed_init_gate_before_waiting_main() -
     )
 
     assert progress.status == "failed"
-    assert progress.reason == (
-        "init container mount-gate-populate-jail failed: Error (exit 1)"
-    )
+    assert progress.reason == ("init container mount-gate-populate-jail failed: Error (exit 1)")
     assert progress.container_state == "waiting"
 
 

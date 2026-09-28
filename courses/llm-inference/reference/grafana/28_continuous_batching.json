@@ -1,0 +1,801 @@
+{
+  "uid": "course-c7ae0b8791e073869732c2fe",
+  "title": "Lab 28: Compare full-prefill and chunked scheduling",
+  "tags": [
+    "gpu-course",
+    "llm-inference",
+    "28_continuous_batching"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "description": "Locate an arrival during a long full-prefill dispatch and calculate its waiting time. How does chunking change the next admission opportunity? Explain which conclusions depend on the model's equal unit-cost assumption. This discrete CPU scheduling model has no GPU server or CUDA kernels. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement. Nsight Systems: This discrete CPU scheduling model has no GPU server or CUDA kernels.",
+  "templating": {
+    "list": [
+      {
+        "name": "workspace",
+        "type": "textbox",
+        "label": "Fixed learner workspace",
+        "current": {
+          "text": "learner-01",
+          "value": "learner-01"
+        }
+      },
+      {
+        "name": "profile",
+        "type": "custom",
+        "query": "small,large",
+        "current": {
+          "text": "small",
+          "value": "small"
+        }
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "label": "Node exporter instance",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(node_memory_MemAvailable_bytes, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Selected comparison generation",
+      "type": "table",
+      "description": "These are explicitly selected completed runs. Submission of another job does not replace them. Summary panels always show the current selected pair, even with a historical time range. Check generation and experiment timestamps.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_publication_generation{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Nonpreemptible full prefill / median first token latency quanta",
+      "type": "barchart",
+      "description": "Analytical or simulated result from measurements.nonpreemptible_full_prefill.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_nonpreemptible_full_prefill_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_nonpreemptible_full_prefill_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Chunked 64 / median first token latency quanta",
+      "type": "barchart",
+      "description": "Analytical or simulated result from measurements.chunked_64.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_chunked_64_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_chunked_64_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Chunked 256 control / median first token latency quanta",
+      "type": "barchart",
+      "description": "Analytical or simulated result from measurements.chunked_256_control.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_chunked_256_control_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_chunked_256_control_median_first_token_latency_quanta{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Correctness of selected results",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_correctness{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Experiment start",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_started_unix_seconds{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Experiment end",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_ended_unix_seconds{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Slurm allocation",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_slurm_job_id{course=\"llm-inference\",lab=\"28_continuous_batching\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Node CPU busy",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\",instance=~\"${node:regex}\"}[5m])))",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Node available memory",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes{instance=~\"${node:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

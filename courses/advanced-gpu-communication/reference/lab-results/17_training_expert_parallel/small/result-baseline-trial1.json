@@ -1,0 +1,50 @@
+{
+  "correctness": {
+    "expert_weight_gradient_matches_reference": true,
+    "grouped_expert_output_matches_loop": true,
+    "optimizer_update_matches_reference": true,
+    "returned_token_gradients_match_reference": true,
+    "routed_outputs_match_reference": true
+  },
+  "lab": "17_training_expert_parallel",
+  "measurements": {
+    "expert_load_max_to_mean": 1.5,
+    "expert_output_width": 256,
+    "expert_weight_gradient": 6.0,
+    "forward_all_to_all_median_ms": 0.0924,
+    "global_expert_token_load": [
+      48,
+      16
+    ],
+    "hidden_size": 1024,
+    "learning_rate": 0.001,
+    "local_expert_token_counts": [
+      24,
+      24
+    ],
+    "local_experts_per_rank": 2,
+    "loop_expert_gemm_median_ms": 0.0841,
+    "output_and_gradient_return_median_ms": 0.1788,
+    "padded_grouped_bmm_median_ms": 0.1146,
+    "tokens_sent_to_experts_per_rank": [
+      24,
+      8
+    ],
+    "training_evidence": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "training_step_slowest_rank_median_ms": 0.5195
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

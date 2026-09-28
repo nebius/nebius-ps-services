@@ -8,6 +8,7 @@ the official release tag; later reads verify the frozen content digests.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -29,6 +30,7 @@ from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
 from .soperator_release import (
     SoperatorReleaseMetadata,
     SoperatorReleaseSnapshot,
+    soperator_documentation_link_blob,
     verify_soperator_source_git_tree,
 )
 
@@ -164,13 +166,18 @@ def extract_soperator_release_archive(
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     seen_exact: set[str] = set()
     seen_casefold: dict[str, str] = {}
+    documentation_links: dict[str, str] = {}
+    regular_paths: set[str] = set()
     expanded_bytes = 0
     member_count = 0
-    with archive.open("rb") as compressed, open_bounded_tar_gz(
-        compressed,
-        max_uncompressed_bytes=effective_limits.max_tar_bytes,
-        label="release archive",
-    ) as bundle:
+    with (
+        archive.open("rb") as compressed,
+        open_bounded_tar_gz(
+            compressed,
+            max_uncompressed_bytes=effective_limits.max_tar_bytes,
+            label="release archive",
+        ) as bundle,
+    ):
         for member in bundle:
             member_count += 1
             if member_count > effective_limits.max_members:
@@ -200,28 +207,46 @@ def extract_soperator_release_archive(
             if member.isdir():
                 output.mkdir(mode=0o700, parents=True, exist_ok=True)
                 continue
-            if not member.isreg():
+            link_blob = None
+            if member.issym():
+                if member.size != 0:
+                    raise ValueError("release documentation link must have an empty tar body")
+                try:
+                    link_blob = soperator_documentation_link_blob(relative, member.linkname)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"release archive member is not a regular file: {relative!r}"
+                    ) from exc
+                documentation_links[relative] = member.linkname
+            elif not member.isreg():
                 raise ValueError(f"release archive member is not a regular file: {relative!r}")
-            if member.size < 0 or member.size > effective_limits.max_file_bytes:
+            else:
+                regular_paths.add(relative)
+            size = len(link_blob) if link_blob is not None else member.size
+            if size < 0 or size > effective_limits.max_file_bytes:
                 raise ValueError(f"release archive member exceeds the per-file limit: {relative!r}")
-            expanded_bytes += member.size
+            expanded_bytes += size
             if expanded_bytes > effective_limits.max_expanded_bytes:
                 raise ValueError("release archive exceeds the expanded-size limit")
             output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            source = bundle.extractfile(member)
+            source = io.BytesIO(link_blob) if link_blob is not None else bundle.extractfile(member)
             if source is None:
                 raise ValueError(f"release archive member could not be read: {relative!r}")
             written = 0
             with source, _open_exclusive_regular_file(output) as target:
                 while chunk := source.read(_BUFFER_SIZE):
                     written += len(chunk)
-                    if written > member.size or written > effective_limits.max_file_bytes:
+                    if written > size or written > effective_limits.max_file_bytes:
                         raise ValueError(
                             f"release archive member expanded beyond its header: {relative!r}"
                         )
                     target.write(chunk)
-            if written != member.size:
+            if written != size:
                 raise ValueError(f"release archive member was truncated: {relative!r}")
+
+    for document_target in documentation_links.values():
+        if document_target not in regular_paths:
+            raise ValueError("release documentation link target must be a regular document")
 
     actual_manifest, _ = normalized_tree_manifest(destination)
     if expected_manifest_sha256 is not None and actual_manifest != expected_manifest_sha256:

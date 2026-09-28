@@ -8,12 +8,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -22,10 +23,10 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 2_048 if args.profile == "smoke" else 8_192
-    batch = 32 if args.profile == "smoke" else 128
+    width = 2_048 if args.profile == "small" else 8_192
+    batch = 32 if args.profile == "small" else 128
     static_input = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
 
@@ -72,4 +73,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

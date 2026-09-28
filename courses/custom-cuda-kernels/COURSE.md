@@ -2,6 +2,18 @@
 
 This CUDA C++20 course teaches when custom kernels are justified and how to prove correctness, safety, hardware behavior, and end-to-end value on one NVIDIA H100.
 
+Hardware routes:
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+This course has no multi-node executable labs. Hopper thread-block clusters in Lab 10 operate inside one GPU and remain in the base route. Use [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html) for cross-GPU practice.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Learn to decide when a custom kernel is warranted and to build,
+validate, sanitize, profile, and accept CUDA C++20 kernels on one full NVIDIA
+H100 without replacing mature libraries by default.
+
 ## 1. Custom kernel decision making
 
 **Objective**
@@ -54,7 +66,9 @@ A custom kernel transfers ownership of indexing, masking, synchronization, launc
 
 For inputs [1, 2, 3] and [4, 5, 6], both a CPU loop and a GPU kernel should produce [5, 7, 9]. For only three elements, launch and transfer overhead can dominate; the example teaches indexing and correctness, not a speedup. For larger arrays, measure the complete path as well as resident kernel time.
 
-**Practice labs**
+**Practice**
+
+Use Lab 01’s operation as a library-first worksheet: identify the maintained baseline and the gap a custom kernel would need to close. Build in Lesson 2 and execute this kernel in Lesson 3.
 
 - [Lab 01: Launch and validate a bounds-safe vector kernel](reference/labs/01_vector_add.md)
 
@@ -86,9 +100,11 @@ A container can package the compiler, headers and libraries under an immutable i
 
 Successful host compilation does not prove device code was generated for SM90, loaded on an H100, or linked against the expected runtime and libraries. Native-only flags also make artifacts irreproducible across build hosts.
 
-**Practice labs**
+**Practice**
 
-- [Lab 00: Build and identify the H100 CUDA execution target](reference/labs/00_h100_preflight.md)
+Complete Lab 13 to build the SM90 program and verify the allocated target before attempting the vector kernel.
+
+- [Lab 13: Build and identify the H100 CUDA execution target](reference/labs/13_h100_preflight.md)
 
 **Mental model**
 
@@ -122,7 +138,9 @@ Most first kernels fail at non-multiple sizes, asynchronous error reporting, ali
 
 `ceil_div(N, B)` means divide N by B and round up to the next whole block. For 1,003 elements and 256 threads per block, four blocks launch 1,024 threads. Indices 0 through 1,002 are valid; the last 21 threads must not access the array. Their output guard must still respect any block-wide synchronization required by the algorithm.
 
-**Practice labs**
+**Practice**
+
+Run Lab 01 and trace the element-to-thread mapping, including a size that requires the final block’s bounds check.
 
 - [Lab 01: Launch and validate a bounds-safe vector kernel](reference/labs/01_vector_add.md)
 
@@ -154,7 +172,9 @@ Once correctness is established, Nsight Systems locates launches, copies, gaps a
 
 A kernel with a race can pass thousands of runs and fail under another schedule or GPU. Profiling incorrect code wastes effort, and profiler overhead must not be mistaken for application timing.
 
-**Practice labs**
+**Practice**
+
+Revisit Lab 01 with its sanitizer and profiling launchers; establish correctness and memory safety before interpreting kernel counters.
 
 - [Lab 01: Launch and validate a bounds-safe vector kernel](reference/labs/01_vector_add.md)
 
@@ -186,7 +206,9 @@ Fusion can also change rounding. A fused multiply-add computes `a*b+c` with one 
 
 Low-intensity elementwise chains often spend more time launching and moving intermediates than computing. Fusion is valuable only when the intermediate has no required external consumer and resource growth does not create a larger limit.
 
-**Practice labs**
+**Practice**
+
+Run Lab 02 to compare separate and fused elementwise work, checking both removed traffic and the complete result.
 
 - [Lab 02: Remove an intermediate with elementwise fusion](reference/labs/02_fused_elementwise.md)
 
@@ -220,7 +242,9 @@ A naive transpose has coalesced reads but strided writes, wasting global-memory 
 
 CUDA constant memory is a device memory space that kernels read through a dedicated cache. When participating lanes request the same address, one value can be broadcast to them; different addresses require separate servicing. This suits read-only, warp-uniform values, while divergent addresses or large working sets can favor another path.
 
-**Practice labs**
+**Practice**
+
+Use Lab 03 to compare global access patterns and shared-memory conflicts on the supplied rectangular edge shapes while preserving the transpose mapping.
 
 - [Lab 03: Coalesce a transpose and reduce shared-memory conflicts](reference/labs/03_tiled_transpose.md)
 
@@ -254,7 +278,9 @@ Having every thread atomically update one value is simple but can serialize. A f
 
 For a four-value reduction, start with [1, 2, 3, 4]. Two independent pairs produce 3 and 7; the next level adds those partials to produce 10. A larger reduction repeats that tree across thread, warp and block scopes. Every parent must wait until its inputs exist. Integer arithmetic makes this small illustration exact; floating-point regrouping can change rounding, so correctness uses the declared tolerance.
 
-**Practice labs**
+**Practice**
+
+Use Lab 04 to compare atomic, hierarchical and maintained-library aggregation with the same reduction and numerical limits.
 
 - [Lab 04: Compare atomic, hierarchical, and CUB reductions](reference/labs/04_reduction.md)
 
@@ -286,7 +312,9 @@ Cooperative staging reduces repeated global requests for overlapping neighborhoo
 
 Neighboring outputs repeatedly read the same inputs. Cooperative staging can reduce repeated global-memory requests and, when those requests miss the caches, HBM traffic, but one incorrect boundary or divergent barrier can deadlock or corrupt rare shapes.
 
-**Practice labs**
+**Practice**
+
+Run Lab 05 and verify interior and boundary values before attributing a change to shared-memory reuse.
 
 - [Lab 05: Reuse neighboring values with a shared-memory halo](reference/labs/05_tiled_stencil.md)
 
@@ -318,7 +346,9 @@ A persisting L2 (level-two cache) access window addresses a separate resource. I
 
 Occupancy is an input to latency hiding, not a score. Forcing more occupancy can spill registers to local memory, shrink tiles, or reduce instruction-level parallelism.
 
-**Practice labs**
+**Practice**
+
+Use Lab 07 to relate block size and compiler resource use to occupancy and spills; accept only an improvement in the measured operation.
 
 - [Lab 07: Relate block size, live state, and occupancy limits](reference/labs/07_resource_sweep.md)
 
@@ -352,7 +382,9 @@ Divergence, irregular work, and tail waves can look similar in average utilizati
 
 Suppose a hypothetical device can keep eight equally sized blocks resident for this kernel and the grid has 18 blocks. Under the simplifying assumption that block durations match, two groups of eight can fill those slots, while the final two blocks occupy only two of the eight. This last group is a tail wave. It is different from divergence inside a block and from one block running longer than its peers; the device need not schedule real blocks in perfectly separated waves.
 
-**Practice labs**
+**Practice**
+
+Run Lab 06 to compare work grouping while preserving output order, then distinguish imbalance from a partial final wave.
 
 - [Lab 06: Group unequal work while preserving output order](reference/labs/06_divergence_tail.md)
 
@@ -386,7 +418,9 @@ An asynchronous copy does not automatically overlap with computation. Correct co
 
 Warp specialization assigns separate warps to data-production and computation roles so their instruction paths can progress independently; producer/consumer barriers still protect shared stages. A Hopper memory-synchronization domain is an identifier assigned to a kernel launch; its writes and fences carry that identifier. A fence orders memory operations rather than acting as a barrier where all threads meet. Separating independent traffic into domains can keep a fence from waiting for unrelated writes. System scope includes participating host and device threads, rather than only threads on the local GPU. Ordering between different domains requires the documented system-scope fencing, including when both domains are on one GPU. Neither is implemented by this lab; both are advanced extensions requiring a separate correctness design and H100 qualification.
 
-**Practice labs**
+**Practice**
+
+Run Lab 08 to test double buffering and explicitly identify when each copied tile becomes safe to consume and reuse.
 
 - [Lab 08: Double-buffer global-to-shared copies](reference/labs/08_async_pipeline.md)
 
@@ -418,7 +452,9 @@ Each leading dimension comes from the actual buffer's storage stride, not automa
 
 Handwritten GEMM is an inappropriate default for a performance course: it must reproduce years of architecture, shape, precision, and numerical tuning. The remaining optimization opportunity is often work adjacent to GEMM.
 
-**Practice labs**
+**Practice**
+
+Use Lab 09 to compare the maintained matrix multiplication plus epilogue with the fused composition, including complete output validation.
 
 - [Lab 09: Compare a library GEMM with a fused epilogue](reference/labs/09_library_epilogue.md)
 
@@ -430,7 +466,7 @@ Vendor and template libraries carry sophisticated Tensor Core, tiling, schedulin
 
 **Objective**
 
-Implement an large language model (LLM)-relevant fused operation with stable reduction and explicit tolerance.
+Implement a large language model (LLM)-relevant fused operation with stable reduction and explicit tolerance.
 
 **How it works**
 
@@ -454,7 +490,9 @@ Precision-specialized paths may change vector width, accumulation, and math inst
 
 The reciprocal-square-root operation is `rsqrt(v) = 1 / sqrt(v)`. It converts the positive mean-square-plus-epsilon value into the shared normalization scale; epsilon prevents division by zero for an all-zero row.
 
-**Practice labs**
+**Practice**
+
+Use Lab 11 to check residual addition and row normalization together before interpreting fusion or reduction savings.
 
 - [Lab 11: Fuse residual addition with row-wise RMS normalization](reference/labs/11_residual_rmsnorm.md)
 
@@ -488,7 +526,9 @@ Kernel speed, application speed, capacity, portability, and maintenance are sepa
 
 Suppose a kernel accounts for 40% of a 10-millisecond application step. Making that kernel twice as fast changes its 4 milliseconds to 2; the other 6 remain, so the step becomes 8 milliseconds and the application speedup is 10 / 8 = 1.25. This is the idea behind Amdahl's law: unchanged work limits the total benefit. Integration overhead can reduce the gain further. A p50 latency is the median; p95 is the 95th percentile, below which approximately 95% of observations fall.
 
-**Practice labs**
+**Practice**
+
+Complete Lab 12’s three independent acceptance trials with counterbalanced order, numerical checks and both kernel and end-to-end timings.
 
 - [Lab 12: Assemble a kernel acceptance report](reference/labs/12_capstone.md)
 
@@ -500,7 +540,7 @@ Acceptance connects operation contract, numerical correctness, memory/synchroniz
 
 **Objective**
 
-Understand TMA, clusters, and distributed shared memory without making them a core portability requirement.
+Distinguish TMA transfers, thread-block clusters and distributed shared memory, and explain which capability the supplied cluster-launch probe actually tests.
 
 **How it works**
 
@@ -520,13 +560,15 @@ That result does not demonstrate TMA transfers or distributed shared-memory coop
 
 TMA and clusters can reduce address-generation work or enable reuse beyond one block, yet unsupported shapes, bad descriptors, cluster occupancy, or missing cluster-wide synchronization can make them incorrect or slower.
 
-**Practice labs**
+**Practice**
+
+Optionally run Lab 10 to qualify its thread-block-cluster launch. Treat TMA transfers and distributed shared-memory cooperation as separate, unsupplied extensions.
 
 - [Lab 10: Qualify an optional thread-block-cluster launch](reference/labs/10_hopper_cluster.md)
 
 **Mental model**
 
-TMA moves described tensor regions with less per-element address work; thread-block clusters provide co-scheduling on one GPC and access to distributed shared memory. Hopper memory-synchronization domains can reduce unnecessary ordering between independent traffic, but incorrect domain reasoning is a correctness bug rather than an unsuccessful optimization.
+TMA moves described tensor regions with less per-element address work; thread-block clusters provide co-scheduling on one GPC and access to distributed shared memory. These mechanisms have separate correctness and qualification requirements; a successful cluster launch alone proves neither TMA transfers nor shared-memory cooperation.
 
 ## 16. Tile-level kernel programming
 
@@ -552,7 +594,9 @@ Application programming interface (API) and compiler support are a separate qual
 
 A newer abstraction can reduce indexing code but does not guarantee a better generated kernel, complete feature coverage, or compatibility with the pinned H100 environment.
 
-**Practice labs**
+**Practice**
+
+Revisit Lab 03’s transpose contract as the design target for an optional, isolated CUDA Tile experiment. The supplied kernel remains the comparison reference; this branch does not change the core toolchain.
 
 - [Lab 03: Coalesce a transpose and reduce shared-memory conflicts](reference/labs/03_tiled_transpose.md)
 

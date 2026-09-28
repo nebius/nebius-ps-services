@@ -1,0 +1,40 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "06_divergence_tail",
+  "measurements": {
+    "blocks": 16,
+    "divergent_median_ms": 0.00544,
+    "divergent_min_ms": 0.004864,
+    "divergent_p90_ms": 0.006272,
+    "divergent_samples": 20,
+    "elements": 4096,
+    "gpu_compute_capability": 9,
+    "grouped_core_only_median_ms": 0.005376,
+    "grouped_core_only_min_ms": 0.004832,
+    "grouped_core_only_p90_ms": 0.005888,
+    "grouped_core_only_samples": 20,
+    "grouped_end_to_end_median_ms": 0.010784,
+    "grouped_end_to_end_min_ms": 0.00992,
+    "grouped_end_to_end_p90_ms": 0.011328,
+    "grouped_end_to_end_samples": 20,
+    "kernel_median_ms": 0.010784,
+    "kernel_min_ms": 0.00992,
+    "kernel_p90_ms": 0.011328,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 0,
+    "modeled_waves_one_block_per_sm": 1,
+    "pack_and_scatter_overhead_median_ms": 0.007984,
+    "pack_and_scatter_overhead_min_ms": 0.00704,
+    "pack_and_scatter_overhead_p90_ms": 0.008384,
+    "pack_and_scatter_overhead_samples": 20,
+    "tail_blocks_one_block_per_sm": 16,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

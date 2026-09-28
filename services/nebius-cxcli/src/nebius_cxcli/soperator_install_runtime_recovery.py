@@ -10,6 +10,7 @@ from typing import Any
 from .soperator_checks import SoperatorChecksExecution, _identifier
 from .soperator_checks_contract import job_execution_digest
 from .soperator_checks_policy import checks_digest
+from .soperator_slurm_fields import slurm_fields
 
 PROBE = "wait-for-soperatorchecks-srun-ready"
 _SUBMIT = "srun --mpi=none --job-name=test-controller-is-ready -n1 -t1 --partition=hidden hostname"
@@ -23,15 +24,6 @@ _JOB_KEYS = (
     "SubmitTime",
     "SubmitLine",
 )
-
-
-def slurm_fields(line: str) -> dict[str, str]:
-    """Retain spaces and full timestamps in native one-line fields."""
-    return dict(
-        re.findall(
-            r"(?:^| +)([A-Za-z][A-Za-z0-9_:]*)=(.*?)(?= +[A-Za-z][A-Za-z0-9_:]*=|$)", line.strip()
-        )
-    )
 
 
 def slurm_jobs(runner: SoperatorChecksExecution) -> list[dict[str, str]]:

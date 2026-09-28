@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,slowest_rank_elapsed_seconds,value,0.2117308,s
+baseline-trial1,final_mean_loss,value,3.40657,none
+baseline-trial1,max_rank_peak_allocated_bytes,value,544399687.68,bytes
+candidate-trial1,slowest_rank_elapsed_seconds,value,0.21776030000000002,s
+candidate-trial1,final_mean_loss,value,3.40657,none
+candidate-trial1,max_rank_peak_allocated_bytes,value,590830632.96,bytes

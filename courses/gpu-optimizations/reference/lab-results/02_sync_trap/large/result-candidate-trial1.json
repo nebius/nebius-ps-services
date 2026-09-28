@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "equivalent_sum": true
+  },
+  "lab": "02_sync_trap",
+  "measurements": {
+    "delayed_item_median_ms": 3.045,
+    "per_step_item_median_ms": 4.4349,
+    "steps": 100
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "steps": 100,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

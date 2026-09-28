@@ -4,6 +4,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -128,6 +129,94 @@ def test_retryable_request_log_filter_suppresses_sdk_retry_traceback() -> None:
 
     assert sdk_auth.retryable_request_log(expected_record)
     assert not sdk_auth.retryable_request_log(unrelated_record)
+
+
+def test_retryable_refresh_log_recognizes_empty_timeout_exception() -> None:
+    error = TimeoutError()
+    record = logging.LogRecord(
+        "nebius.aio.token.renewable",
+        logging.ERROR,
+        __file__,
+        1,
+        f"Failed refresh token, attempt: 1, error: {error}",
+        (),
+        (type(error), error, None),
+    )
+    assert sdk_auth.retryable_refresh_log(record)
+    with sdk_auth.suppress_expected_refresh_logs():
+        assert not logging.getLogger(record.name).filter(record)
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_refresh_diagnostics_preserve_real_sdk_retry_and_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    persistent: bool,
+) -> None:
+    from nebius.aio.token.renewable import Bearer as RenewableBearer
+    from nebius.aio.token.static import Bearer as StaticBearer
+    from nebius.aio.token.static import Receiver as StaticReceiver
+    from nebius.aio.token.token import Token
+    from nebius.sdk import SDK
+
+    calls = 0
+
+    async def fetch(self, timeout=None, options=None):
+        nonlocal calls
+        calls += 1
+        if persistent or calls == 1:
+            raise TimeoutError()
+        return Token("test-only-token")
+
+    monkeypatch.setattr(StaticReceiver, "_fetch", fetch)
+    source = RenewableBearer(
+        StaticBearer("test-only-token"),
+        initial_retry_timeout=timedelta(milliseconds=10),
+    )
+    sdk = SDK(credentials=source, user_agent_prefix="cxcli-refresh-test")
+    logger = logging.getLogger("nebius.aio.token.renewable")
+    before = tuple(logger.filters)
+    with sdk_auth.concise_refresh_logs():
+        try:
+            if persistent:
+                with pytest.raises(TimeoutError):
+                    sdk.get_token_sync(timeout=0.2)
+            else:
+                assert sdk.get_token_sync(timeout=2).token == "test-only-token"
+        finally:
+            sdk.sync_close(timeout=2)
+    assert calls >= 2
+    assert tuple(logger.filters) == before
+    records = [r for r in caplog.records if r.name == logger.name]
+    assert records
+    assert all(r.levelno == logging.WARNING and r.exc_info is None for r in records)
+    assert "token refresh timed out" in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_concise_refresh_logs_preserve_other_errors_and_nested_suppression(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("nebius.aio.token.renewable")
+    before = tuple(logger.filters)
+    with sdk_auth.concise_refresh_logs():
+        with sdk_auth.suppress_expected_refresh_logs():
+            try:
+                raise TimeoutError()
+            except TimeoutError:
+                logger.exception("Failed refresh token, attempt: 1, error: ")
+        assert not caplog.records
+        try:
+            raise ValueError("invalid credentials")
+        except ValueError:
+            logger.exception("Failed refresh token, attempt: 1, error: invalid credentials")
+        try:
+            raise TimeoutError()
+        except TimeoutError:
+            logger.exception("unrelated SDK operation")
+    assert tuple(logger.filters) == before
+    assert len(caplog.records) == 2
+    assert all(r.levelno == logging.ERROR and r.exc_info is not None for r in caplog.records)
 
 
 def test_suppress_expected_sdk_retry_logs_filters_request_logger_only() -> None:

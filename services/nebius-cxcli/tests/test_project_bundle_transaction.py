@@ -91,6 +91,49 @@ def test_crash_after_commit_recovers_forward(tmp_path: Path) -> None:
     assert second.read_bytes() == b"new-b"
 
 
+@pytest.mark.parametrize("status", ["committed", "complete"])
+def test_expected_generation_recovery_preserves_a_foreign_generation(
+    tmp_path: Path, status: str
+) -> None:
+    project = _project(tmp_path)
+    config = project / "config.yaml"
+    manifest = project / "generated" / "manifest.json"
+    config.write_bytes(b"old-config")
+    manifest.parent.mkdir()
+    manifest.write_bytes(b"old-manifest")
+
+    def failpoint(name: str) -> None:
+        if status == "committed" and name == "after-commit":
+            raise OSError("simulated crash")
+
+    transaction = ProjectBundleTransaction(project, failpoint=failpoint)
+    writes = {config: b"new-config", manifest: b"new-manifest"}
+    generation = "sha256:" + "1" * 64
+    if status == "committed":
+        with pytest.raises(OSError, match="simulated crash"):
+            transaction.commit(writes, generation_sha256=generation)
+        assert config.read_bytes() == b"old-config"
+        assert manifest.read_bytes() == b"old-manifest"
+    else:
+        transaction.commit(writes, generation_sha256=generation)
+        assert {path: path.read_bytes() for path in writes} == writes
+
+    journal_before = transaction.journal_path.read_bytes()
+    assert json.loads(journal_before)["status"] == status
+    targets_before = {path: path.read_bytes() for path in writes}
+    recovery = ProjectBundleTransaction(project)
+    other_generation = "sha256:" + "2" * 64
+
+    if status == "committed":
+        with pytest.raises(ProjectBundleSafetyError, match="differs from destroy approval"):
+            recovery.recover_expected_generation(other_generation)
+    else:
+        assert recovery.recover_expected_generation(other_generation) is False
+
+    assert transaction.journal_path.read_bytes() == journal_before
+    assert {path: path.read_bytes() for path in writes} == targets_before
+
+
 def test_current_generation_recovers_a_committed_generation(tmp_path: Path) -> None:
     project = _project(tmp_path)
     target = project / "config.yaml"

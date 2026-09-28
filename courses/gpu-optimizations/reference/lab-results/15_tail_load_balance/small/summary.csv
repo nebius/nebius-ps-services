@@ -1,0 +1,13 @@
+variant,metric,case,value,unit
+baseline-trial1,balanced_makespan_median_seconds,value,0.00019580000000000002,s
+baseline-trial1,skewed_makespan_median_seconds,value,0.0002164,s
+baseline-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,0,1.93e-05,s
+baseline-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,1,1.87e-05,s
+baseline-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,2,1.7500000000000002e-05,s
+baseline-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,3,1.8599999999999998e-05,s
+repeat-trial1,balanced_makespan_median_seconds,value,0.00019769999999999998,s
+repeat-trial1,skewed_makespan_median_seconds,value,0.0002193,s
+repeat-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,0,1.68e-05,s
+repeat-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,1,1.8200000000000002e-05,s
+repeat-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,2,1.8e-05,s
+repeat-trial1,partial_wave_probe_cases_completion_distribution_p50_seconds,3,1.7899999999999998e-05,s

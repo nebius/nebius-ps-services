@@ -67,3 +67,12 @@ conditional diagnostic branch.
 
 Canonical routing cases live in `evals/trigger-prompts.csv`; deterministic
 workflow expectations live in the supplemental `evals/process-cases.md`.
+
+## Web acceptance
+
+Route required browser evaluation through `sdlc-gui-test` using headless
+Playwright Test against the clean registered integration revision. Freeze the
+independent oracle separately from product TDD tests. Each stage owns a fresh
+process/context and closes it after collecting assertions, screenshots and a
+trace. Optional headless isolated Playwright MCP exploration remains separate.
+Native desktop capture and unlocked-screen checks are not web prerequisites.

@@ -1,43 +1,32 @@
 {
   "slug": "llm-inference",
   "title": "LLM Inference",
-  "estimated_guided_hours": 47,
+  "estimated_guided_hours": 52,
   "labs": [
-    {
-      "path": "labs/35_inference_basics.py",
-      "optional": false,
-      "lessons": [
-        1
-      ]
-    },
-    {
-      "path": "labs/00_cluster_preflight.py",
-      "optional": false,
-      "lessons": [
-        14
-      ]
-    },
     {
       "path": "labs/08_kv_cache.py",
       "optional": false,
       "lessons": [
         2,
         4
-      ]
+      ],
+      "dashboard": "reference/grafana/08_kv_cache.json"
     },
     {
       "path": "labs/09_hf_prefill_decode.py",
       "optional": false,
       "lessons": [
         2
-      ]
+      ],
+      "dashboard": "reference/grafana/09_hf_prefill_decode.json"
     },
     {
       "path": "labs/10_vllm_offline.py",
       "optional": false,
       "lessons": [
         6
-      ]
+      ],
+      "dashboard": "reference/grafana/10_vllm_offline.json"
     },
     {
       "path": "labs/11_serving_client.py",
@@ -45,35 +34,32 @@
       "lessons": [
         6,
         7
-      ]
-    },
-    {
-      "path": "labs/12_moe_expert_parallel.py",
-      "optional": false,
-      "lessons": [
-        14
-      ]
+      ],
+      "dashboard": "reference/grafana/11_serving_client.json"
     },
     {
       "path": "labs/15_streaming_client.py",
       "optional": false,
       "lessons": [
         7
-      ]
+      ],
+      "dashboard": "reference/grafana/15_streaming_client.json"
     },
     {
       "path": "labs/16_model_artifact_audit.py",
       "optional": false,
       "lessons": [
         1
-      ]
+      ],
+      "dashboard": "reference/grafana/16_model_artifact_audit.json"
     },
     {
       "path": "labs/17_sampling_semantics.py",
       "optional": false,
       "lessons": [
         3
-      ]
+      ],
+      "dashboard": "reference/grafana/17_sampling_semantics.json"
     },
     {
       "path": "labs/18_padding_bucketing.py",
@@ -81,35 +67,32 @@
       "lessons": [
         5,
         9
-      ]
-    },
-    {
-      "path": "labs/19_tensor_parallel_linear.py",
-      "optional": false,
-      "lessons": [
-        14
-      ]
+      ],
+      "dashboard": "reference/grafana/18_padding_bucketing.json"
     },
     {
       "path": "labs/20_prefix_cache_client.py",
       "optional": false,
       "lessons": [
         10
-      ]
+      ],
+      "dashboard": "reference/grafana/20_prefix_cache_client.json"
     },
     {
       "path": "labs/23_speculative_decoding.py",
       "optional": false,
       "lessons": [
         13
-      ]
+      ],
+      "dashboard": "reference/grafana/23_speculative_decoding.json"
     },
     {
       "path": "labs/24_sdpa_attention.py",
       "optional": false,
       "lessons": [
         11
-      ]
+      ],
+      "dashboard": "reference/grafana/24_sdpa_attention.json"
     },
     {
       "path": "labs/25_workload_metrics.py",
@@ -117,35 +100,40 @@
       "lessons": [
         5,
         7
-      ]
+      ],
+      "dashboard": "reference/grafana/25_workload_metrics.json"
     },
     {
       "path": "labs/26_kv_capacity.py",
       "optional": false,
       "lessons": [
         4
-      ]
+      ],
+      "dashboard": "reference/grafana/26_kv_capacity.json"
     },
     {
       "path": "labs/27_paged_kv.py",
       "optional": false,
       "lessons": [
         8
-      ]
+      ],
+      "dashboard": "reference/grafana/27_paged_kv.json"
     },
     {
       "path": "labs/28_continuous_batching.py",
       "optional": false,
       "lessons": [
         9
-      ]
+      ],
+      "dashboard": "reference/grafana/28_continuous_batching.json"
     },
     {
       "path": "labs/29_quantization.py",
       "optional": false,
       "lessons": [
         12
-      ]
+      ],
+      "dashboard": "reference/grafana/29_quantization.json"
     },
     {
       "path": "labs/30_engine_profile.py",
@@ -153,21 +141,24 @@
       "lessons": [
         6,
         15
-      ]
+      ],
+      "dashboard": "reference/grafana/30_engine_profile.json"
     },
     {
       "path": "labs/32_inference_capstone.py",
       "optional": false,
       "lessons": [
         16
-      ]
+      ],
+      "dashboard": "reference/grafana/32_inference_capstone.json"
     },
     {
       "path": "labs/33_speculative_engine_client.py",
       "optional": true,
       "lessons": [
         13
-      ]
+      ],
+      "dashboard": "reference/grafana/33_speculative_engine_client.json"
     },
     {
       "path": "labs/34_policy_equivalence_client.py",
@@ -175,17 +166,88 @@
       "lessons": [
         9,
         10
-      ]
+      ],
+      "dashboard": "reference/grafana/34_policy_equivalence_client.json"
+    },
+    {
+      "path": "labs/35_inference_basics.py",
+      "optional": false,
+      "lessons": [
+        1
+      ],
+      "dashboard": "reference/grafana/35_inference_basics.json"
     },
     {
       "path": "labs/36_kv_tiering.py",
       "optional": false,
       "lessons": [
         10
-      ]
+      ],
+      "dashboard": "reference/grafana/36_kv_tiering.json"
     }
   ],
   "extensions": [
     "Dynamo disaggregated serving and KV-aware routing"
+  ],
+  "performance_tools": "reference/performance-tools.md",
+  "observability": "reference/observability.json",
+  "advanced_lessons": [],
+  "external_labs": [
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/04_inference_readiness.py",
+      "lessons": [
+        14
+      ],
+      "title": "Lab 04: Verify the two-node inference mechanics platform"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/23_inference_expert_parallel.py",
+      "lessons": [
+        14
+      ],
+      "title": "Lab 23: Route inference tokens to expert owners"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/24_inference_tensor_parallel.py",
+      "lessons": [
+        14
+      ],
+      "title": "Lab 24: Compare inference tensor-partition communication patterns"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/25_fabric_inference.py",
+      "lessons": [
+        17
+      ],
+      "title": "Lab 25: Compare request replicas with tensor-parallel decoding"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/32_dynamo_disaggregation.py",
+      "lessons": [
+        15
+      ],
+      "title": "Lab 32: Compare aggregated and disaggregated Dynamo serving"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/33_dynamo_routing.py",
+      "lessons": [
+        15
+      ],
+      "title": "Lab 33: Test KV-cache-aware request routing"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/34_serving_goodput.py",
+      "lessons": [
+        15
+      ],
+      "title": "Lab 34: Tune serving goodput under latency objectives"
+    }
   ]
 }

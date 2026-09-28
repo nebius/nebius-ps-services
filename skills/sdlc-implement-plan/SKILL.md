@@ -91,8 +91,11 @@ Coordinate isolated task agents to implement one locked feature safely.
 
 1. Reload the checkpoint and coordinator. Re-observe the integration Git root,
    common directory, branch, recorded HEAD, and cleanliness.
-2. Run the private helper `seal-tdd` once. This creates the internal TDD-base
-   commit when needed; do not stage or commit it by hand.
+2. For initial execution, run the private helper `seal-tdd` once. This creates
+   the internal TDD-base commit when needed; do not stage or commit it by hand.
+   A post-wave corrective plan retains that sealed TDD lineage and the existing
+   integration tip. After `replan-future`, prepare its appended wave directly;
+   do not reseal TDD or reopen a completed wave.
 3. For the next logical wave, run `wave-prepare`. Dispatch only the current
    capacity batch. Every `TASK-*` must use its own fresh agent operating from
    its immutable worker cwd; never reuse one agent for multiple parallel tasks.
@@ -153,6 +156,17 @@ Coordinate isolated task agents to implement one locked feature safely.
    check, and then validation plus unit/integration tests. Pass evidence to
    `wave-complete`, which removes only clean, reachable, registered worker
    resources using non-force Git operations.
+   If combined checks fail after integration, preserve the failed tip and use
+   `sdlc-classify-failure` with lifecycle `integrated_wave`. After its proven
+   localized diagnosis and counted repair dispatch, use private `wave-fail`
+   with those exact classification/dispatch identities and failure evidence.
+   This retires clean worker resources while retaining permanent failed-wave
+   status. Create an adjacent locked corrective plan and use `replan-future`;
+   every corrective task must bind that diagnosis and original oracle. Ordinary
+   future work cannot cross an unresolved failure. After combined revalidation
+   passes at the corrected tip, `wave-complete` records a separate resolution.
+   Complete the repair dispatch only after this execution transition, then
+   rerun its invalidated gates. Failed history never becomes a passing wave.
 7. Repeat for dependent waves. Route to downstream validation only after every
    wave is integrated, validated, and cleaned.
 8. Rerun every failed or invalidated evaluation criterion at the new

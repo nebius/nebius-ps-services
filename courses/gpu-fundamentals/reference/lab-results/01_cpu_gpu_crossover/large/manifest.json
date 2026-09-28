@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "00c7ff5f302e078d6d1c50cfdea9309b0e83f4c78369a58657d773e84e1ac495",
+      "sha256": "ac10e49709e1486fd799e17288c0a5169a32816d5415c4c285588d56e0bd256c",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "c734e51a550bb67fd514fda238946495f7b3338f078f32a848d0a6b70504b4a0",
+      "sha256": "3b2d1910932d069650bf814df754e1c3f40db609d1f05398127a10ee6e14b19c",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "289e1669e3b727940eb3108d145e7af89d20bed51f9af1d51ce6b8aa48a2dbdd",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "e1f7c879e4ad19aa38a1ca836443b4ed4000c7bb5a11d3f787822d615aa45db9",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "9e526d8ad97bc19f964b8d215baeaa9b4fdfd8045289dfaa74bce517ecb17c4c",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "ec43147b3b50f9f5d3f94113ba75b532acd1c23b0b72238e59ea19ba000f21fc",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "eacef3f53028bc1c774fb78625f0f02391e4c3f24a60cd034ce985ac09c38a7e",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_cpu_gpu_crossover",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "c5461572f8d56a67eafb4fe551937d758e7255239bd3f93a601d2e5b81f65f16"
+}

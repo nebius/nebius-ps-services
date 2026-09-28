@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "1ae55349c1a27680468e4cd6123c85f6107342a9f968a749a44fe49a3063a384",
+      "sha256": "a0f067de18a2b2b1f37b7574b0a02c1f99a3ad6c9a0008b4a865f0ed9b65e10f",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "ede63bb63bd2d0564b6c857101b5ea6bdf957ab5dc6a7b823077f053d340071e",
+      "sha256": "43ce55bede9ea8bb1e167c1c2e9d32e0e58e127d5e1f4fc96f4a5aedb6c41f06",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "0b501b65f921d52310c87e7e68d14d99a89f1697c6903e596b85292d72121a39",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "8c1073449652d9891a6a775bfdba66e6f3be9437155a10faf8c7f4866945f41e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "6c92b3127296438d9cdf795223c99dbee81f70b4a8d3b017c17b150591ce858f",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "d722473ba16314bd21e0f1a8b1e9442725660b2e5be06e348827b67ad8d9d56c",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "65d54b72fdf3d4b0d7eab2629294e9200c2ad836bb5fbf3f5c43f28d5d755c94",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "07_async_streams",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "753ba48495336a3fe850aeed6cabb7cfdb22856395fb332fd83b88969c5d78f2"
+}

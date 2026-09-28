@@ -1,0 +1,86 @@
+{
+  "correctness": {
+    "allclose": true,
+    "repacked_contiguous_confirmed": true,
+    "strided_view_confirmed": true
+  },
+  "lab": "04_layout_and_coalescing",
+  "measurements": {
+    "element_size_bytes": 4,
+    "layouts": {
+      "contiguous": {
+        "is_contiguous": true,
+        "strides": [
+          4096,
+          1
+        ]
+      },
+      "repacked_contiguous": {
+        "is_contiguous": true,
+        "strides": [
+          4096,
+          1
+        ]
+      },
+      "strided_view": {
+        "is_contiguous": false,
+        "strides": [
+          1,
+          4096
+        ]
+      }
+    },
+    "logical_tensor_bytes": 67108864,
+    "repack": {
+      "break_even_reason": null,
+      "break_even_reuses": 334,
+      "calculation_median_ms": {
+        "contiguous": 0.12510399892926216,
+        "repack_copy": 0.1334719955921173,
+        "repacked_contiguous": 0.1247519999742508,
+        "strided_view": 0.12515199929475784
+      }
+    },
+    "shape": [
+      4096,
+      4096
+    ],
+    "timings": {
+      "contiguous": {
+        "median_ms": 0.1251,
+        "min_ms": 0.1228,
+        "p90_ms": 0.1286
+      },
+      "repack_copy": {
+        "median_ms": 0.1335,
+        "min_ms": 0.1329,
+        "p90_ms": 0.1357
+      },
+      "repacked_contiguous": {
+        "median_ms": 0.1248,
+        "min_ms": 0.1236,
+        "p90_ms": 0.127
+      },
+      "strided_view": {
+        "median_ms": 0.1252,
+        "min_ms": 0.1239,
+        "p90_ms": 0.127
+      }
+    },
+    "useful_bandwidth_gib_per_s": {
+      "contiguous": 999.1687,
+      "repack_copy": 936.526,
+      "repacked_contiguous": 1001.9879,
+      "strided_view": 998.7855
+    },
+    "useful_bytes_per_operation": 134217728
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

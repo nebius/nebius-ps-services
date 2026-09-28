@@ -76,7 +76,7 @@ def test_translate_terraform_failure_summarizes_coalesce_module_bug() -> None:
     assert "coalesce(..., null)" in message
 
 
-def test_translate_terraform_failure_adds_generic_source_module_guidance() -> None:
+def test_translate_terraform_failure_preserves_unclassified_module_diagnostics() -> None:
     stderr = """
 ╷
 │ Error: Invalid function argument
@@ -94,8 +94,111 @@ def test_translate_terraform_failure_adds_generic_source_module_guidance() -> No
         stderr=stderr,
     )
 
-    assert "Terraform error originated inside a source module" in message
-    assert "terraform validate" in message
+    assert stderr in message
+    assert "validate and fix" not in message
+    assert "terraform validate" not in message
+
+
+@pytest.mark.parametrize("colored", [False, True])
+@pytest.mark.parametrize("boxed", [False, True])
+def test_translate_terraform_failure_explains_token_exchange_dns_failure(
+    colored: bool, boxed: bool
+) -> None:
+    stderr = """Error: resource reading failed
+
+  on .terraform/modules/demo/main.tf line 1, in resource "example" "this":
+   1: resource "example" "this" {
+
+resource reading failed: service get: get auth data on the client: exchange
+token: rpc error: code = Unavailable desc = connection error: desc =
+"transport: Error while dialing: dial tcp: lookup
+tokens.example.invalid: no such host"
+""".strip()
+    if boxed:
+        stderr = "╷\n" + "\n".join(f"│ {line}" for line in stderr.splitlines()) + "\n╵"
+    if colored:
+        stderr = "\x1b[31m" + stderr.replace("Error:", "Error:\x1b[0m\x1b[1m") + "\x1b[0m"
+
+    message = _translate_terraform_failure(
+        cmd=["terraform", "plan", "-input=false"], cwd=Path("/tmp/demo"), stderr=stderr
+    )
+
+    assert "DNS resolution failed during provider token exchange" in message
+    assert "Check DNS and network connectivity" in message
+    assert "rerun the same command" in message
+    assert "tokens.example.invalid: no such host" in message
+    assert ".terraform/modules/demo/main.tf" in message
+    assert "terraform validate" not in message
+    assert "validate and fix" not in message
+    assert "\x1b" not in message
+    assert "[31m" not in message
+    assert "[0m" not in message
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "exchange token: rpc error: code = Unauthenticated desc = invalid credentials",
+        "service get: rpc error: code = PermissionDenied desc = access denied",
+        "exchange token: rpc error: code = Unavailable desc = connection reset by peer",
+    ],
+)
+def test_translate_terraform_failure_does_not_infer_dns_or_module_defect(detail: str) -> None:
+    stderr = (
+        "Error: resource reading failed\n"
+        '  on .terraform/modules/demo/main.tf line 1, in resource "example" "this":\n' + detail
+    )
+
+    message = _translate_terraform_failure(
+        cmd=["terraform", "plan"], cwd=Path("/tmp/demo"), stderr=stderr
+    )
+
+    assert detail in message
+    assert "DNS resolution failed" not in message
+    assert "validate and fix" not in message
+
+
+def test_translate_terraform_failure_preserves_independent_json_event_causes() -> None:
+    events = [
+        {
+            "type": "diagnostic",
+            "diagnostic": {
+                "severity": "error",
+                "summary": "resource reading failed",
+                "detail": "exchange token: dial tcp: lookup tokens.example.invalid: no such host",
+            },
+        },
+        {
+            "type": "diagnostic",
+            "diagnostic": {
+                "severity": "error",
+                "summary": "Error in function call",
+                "detail": 'Call to function "coalesce" failed: no non-null, non-empty-string arguments.',
+                "range": {"filename": ".terraform/modules/demo/locals.tf", "start": {"line": 5}},
+            },
+        },
+    ]
+
+    message = _translate_terraform_failure(
+        cmd=["terraform", "apply", "-json"],
+        cwd=Path("/tmp/demo"),
+        stderr=_terraform_failure_text_from_events(events),
+    )
+
+    assert "DNS resolution failed during provider token exchange" in message
+    assert "Terraform source module expression failed" in message
+    assert ".terraform/modules/demo/locals.tf:5" in message
+
+
+def test_translate_terraform_failure_removes_ansi_from_unknown_diagnostics() -> None:
+    message = _translate_terraform_failure(
+        cmd=["terraform", "plan"],
+        cwd=Path("/tmp/demo"),
+        stderr="\x1b[31mError: \x1b[1munknown failure\x1b[0m",
+    )
+
+    assert message.endswith("Error: unknown failure")
+    assert "\x1b" not in message
 
 
 def test_translate_terraform_failure_explains_missing_mk8s_cluster_output_contract() -> None:
@@ -230,7 +333,7 @@ def test_terraform_init_can_disable_backend(tmp_path: Path, monkeypatch) -> None
 
     terraform_init(infra_dir, backend=False)
 
-    assert calls == [("run", ("terraform", "init", "-input=false", "-backend=false"))]
+    assert calls == [("run", ("terraform", "init", "-input=false", "-no-color", "-backend=false"))]
 
 
 def test_terraform_validate_can_skip_init(monkeypatch) -> None:
@@ -431,7 +534,7 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
 
 def test_terraform_destroy_plan_is_target_scoped_and_saved(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, ...]] = []
-    plan_file = tmp_path / ".soperator-destroy-cluster-a.tfplan"
+    plan_file = tmp_path / ".destroy-cluster-a.tfplan"
     monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
     monkeypatch.setattr(
         "nebius_cxcli.terraform_ops._run",
@@ -496,6 +599,31 @@ def test_terraform_plan_quiet_captures_output_without_printing(monkeypatch) -> N
             None,
         )
     ]
+
+
+@pytest.mark.parametrize("command", ["init", "plan", "show"])
+def test_quiet_terraform_reads_capture_all_output_including_implicit_init(
+    tmp_path, monkeypatch, capsys, command
+):
+    from nebius_cxcli import terraform_ops
+
+    seen = []
+    monkeypatch.setattr(terraform_ops, "_require_terraform", lambda: "terraform")
+
+    def capture(cmd, **kwargs):
+        seen.append(cmd[1])
+        return (
+            '{"values": {}}' if cmd[1] == "show" else "RAW_RESOURCE_VALUES",
+            "RAW_WARNING_VALUES",
+        )
+
+    monkeypatch.setattr(terraform_ops, "_run_capture", capture)
+    getattr(terraform_ops, "terraform_" + ("show_json" if command == "show" else command))(
+        tmp_path, quiet=True
+    )
+    assert seen == (["init"] if command == "init" else ["init", command])
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 def test_terraform_saved_plan_is_created_and_applied_without_replanning(
@@ -742,7 +870,33 @@ def test_terraform_apply_passes_abort_check_to_streaming_runner(monkeypatch) -> 
     assert calls["abort_check"] is abort_check
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_terraform_apply_checks_abort_after_init_before_launch(monkeypatch, tmp_path, streaming):
+    held = True
+
+    def initialize(*args, **kwargs):
+        nonlocal held
+        held = False
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr("nebius_cxcli.terraform_ops.terraform_init", initialize)
+    for name in ("_run", "_stream_json_events"):
+        monkeypatch.setattr(
+            f"nebius_cxcli.terraform_ops.{name}",
+            lambda *a, **kw: pytest.fail("Terraform launched after fence loss"),
+        )
+    with pytest.raises(RuntimeError, match="aborted before launch: fence lost"):
+        terraform_apply(
+            tmp_path,
+            event_callback=(lambda _: None) if streaming else None,
+            abort_check=lambda: None if held else "fence lost",
+        )
+
+
 def test_terraform_destroy_passes_abort_check_to_streaming_runner(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.terraform_show_json", lambda *a, **k: {"values": {}}
+    )
     calls: dict[str, Any] = {}
 
     def abort_check() -> None:
@@ -831,3 +985,114 @@ def test_provider_schema_uses_installed_provider_and_runtime_env(monkeypatch, tm
             },
         )
     ]
+
+
+def test_diagnostic_replacements_are_separate_arguments_and_never_destroy(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._run", lambda cmd, **kw: calls.append(cmd))
+    addresses = ('module.cluster.account["system"]', 'module.cluster.account["worker"]')
+    terraform_plan(tmp_path, initialize=False, replace_addresses=addresses)
+    assert [arg for arg in calls[0] if arg.startswith("-replace=")] == [
+        "-replace=" + address for address in addresses
+    ]
+    with pytest.raises(ValueError):
+        terraform_plan(tmp_path, initialize=False, replace_addresses=addresses, destroy=True)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", [None, "reason", "exception"])
+def test_stream_drains_burst_without_per_line_remote_checks_and_checks_final_authority(
+    monkeypatch, tmp_path, failure
+):
+    import io
+    import json
+
+    from nebius_cxcli import terraform_ops
+
+    now = [0.0]
+    received, checks, stopped = [], [], []
+    process = SimpleNamespace(
+        stdout=io.StringIO(
+            "".join(json.dumps({"type": "apply_start", "index": i}) + "\n" for i in range(100))
+        ),
+        stderr=io.StringIO(),
+        wait=lambda timeout=None: 0,
+        poll=lambda: 0,
+        terminate=lambda: stopped.append(True),
+    )
+    monkeypatch.setattr(terraform_ops.subprocess, "Popen", lambda *a, **kw: process)
+    monkeypatch.setattr(terraform_ops.time, "monotonic", lambda: now[0])
+
+    def authority():
+        checks.append(len(received))
+        now[0] += 1  # A remote check costs far more than processing one event.
+        if len(received) == 100:
+            if failure == "exception":
+                raise RuntimeError("lease lost")
+            if failure == "reason":
+                return "lease lost"
+        return None
+
+    def run():
+        _stream_json_events(
+            ["terraform", "apply", "-json"],
+            cwd=tmp_path,
+            timeout=1000,
+            event_callback=received.append,
+            abort_check=authority,
+        )
+
+    if failure:
+        with pytest.raises(RuntimeError, match="lease lost"):
+            run()
+        assert stopped
+    else:
+        run()
+    assert len(received) == 100
+    assert checks == [0, 100]
+
+
+@pytest.mark.parametrize("kind", ["nebius_mk8s_v1_cluster", "nebius_mk8s_v1_node_group"])
+def test_terraform_destroy_rejects_mk8s_in_nested_state(monkeypatch, tmp_path, kind):
+    from nebius_cxcli import terraform_ops
+
+    calls = []
+    monkeypatch.setattr(terraform_ops, "_require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        terraform_ops,
+        "terraform_show_json",
+        lambda *a, **k: {
+            "values": {
+                "root_module": {
+                    "child_modules": [
+                        {
+                            "resources": [
+                                {
+                                    "address": f"module.orphan.{kind}.this",
+                                    "type": kind,
+                                    "mode": "managed",
+                                    "values": {"id": "orphan-id"},
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(terraform_ops, "_run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(terraform_ops, "_stream_json_events", lambda *a, **k: calls.append(a))
+    with pytest.raises(ValueError, match="--target CLUSTER_ID"):
+        terraform_ops.terraform_destroy(tmp_path, initialize=False)
+    assert calls == []
+
+
+def test_terraform_destroy_rejects_malformed_state_without_execution(monkeypatch, tmp_path):
+    from nebius_cxcli import terraform_ops
+
+    monkeypatch.setattr(terraform_ops, "_require_terraform", lambda: "terraform")
+    monkeypatch.setattr(terraform_ops, "terraform_show_json", lambda *a, **k: {"values": []})
+    monkeypatch.setattr(terraform_ops, "_run", lambda *a, **k: pytest.fail("unexpected destroy"))
+    with pytest.raises(RuntimeError, match="state"):
+        terraform_ops.terraform_destroy(tmp_path, initialize=False)

@@ -1,26 +1,26 @@
 # Three-Tier Live Scenario
 
-Use this reference only for the explicit `--create`, `--create --keep`,
+Use this reference only for the explicit `--create-live-test`, `--create-live-test --keep`,
 `--resume`, or `--destroy` modes of `$sdlc-workflow-test`. The ordinary no-flag
 verifier keeps the lightweight resource-validator fixture; full live evidence
-uses the v2 contract.
+uses the v3 contract.
 
-Before installing this hard rename, destroy any retained live environment with
-the currently installed pre-rename skill. This skill recognizes only its new
-ownership markers, labels, and Compose names; it has no migration or cleanup
-path for old-format verifier state.
+The earlier `agentic-sdlc-test` to `sdlc-workflow-test` skill-name migration
+requires destroying retained old-format environments with the old skill first.
+This skill cannot adopt their ownership markers, labels or Compose names. The
+`--create-live-test` action rename leaves current lifecycle ownership unchanged.
 
 ## Public modes
 
 | Invocation | Required result |
 | --- | --- |
 | `$sdlc-workflow-test` | Run the existing lightweight deterministic verifier only. Do not inspect or change Docker or a browser. |
-| `$sdlc-workflow-test --create` | Safely destroy the previous active exactly owned environment, create one fresh owned live project, launch one fresh verifier-owned Chrome profile/process group, run the whole SDLC and three-tier test, write the report, close that exact Chrome process group, then destroy all owned live resources even after a test failure. If prior replacement cleanup cannot be proven, do not create a new stack. Any browser or Docker cleanup ambiguity makes the run FAIL. |
-| `$sdlc-workflow-test --create --keep` | Replace the previous active exactly owned environment, run the same workflow, write the report, and retain only the newly created project, private run state, two containers, network, database volume, built web image, and verifier-owned Chrome instance/profile. |
+| `$sdlc-workflow-test --create-live-test` | Safely destroy the previous active exactly owned environment, create one fresh owned live project, run four fresh owned headless Playwright Test stages, run the whole SDLC and three-tier test, write the report, close that exact Chrome process group, then destroy all owned live resources even after a test failure. If prior replacement cleanup cannot be proven, do not create a new stack. Any browser or Docker cleanup ambiguity makes the run FAIL. |
+| `$sdlc-workflow-test --create-live-test --keep` | Replace the previous active exactly owned environment, run the same workflow, write the report, and retain only the newly created project, private run state, two containers, network, database volume, built web image. Every browser stage closes, including keep mode. |
 | `$sdlc-workflow-test --resume` | Revalidate and continue the one retained KEPT run only when its prior result is FAIL or PARTIAL. |
 | `$sdlc-workflow-test --destroy` | Close only the exact recorded verifier-owned Chrome process group, remove the one active owned application, and archive its lifecycle state while retaining sanitized reports. Existing Chrome instances are never targets. If none exists, return `ALREADY_DESTROYED`. |
 
-Reject `--keep` without `--create`, `--destroy` combined with `--create` or
+Reject `--keep` without `--create-live-test`, `--destroy` combined with `--create-live-test` or
 `--keep`, and unknown lifecycle flags. A repeated create must destroy the prior
 active exactly owned environment before it creates a fresh lifecycle; cleanup
 ambiguity blocks the replacement so two live stacks are never intentionally
@@ -32,9 +32,8 @@ for a lifecycle action.
 
 The scenario is `three-tier-task-board-v1`:
 
-- Frontend tier: semantic HTML/CSS/JavaScript exercised in a newly launched
-  verifier-owned Google Chrome instance with a fresh isolated user-data
-  directory and verification-ID window marker.
+- Frontend tier: semantic HTML/CSS/JavaScript exercised in a fresh verifier-owned
+  headless Chrome process and isolated context with a digest-bound stage receipt.
 - Application tier: Django and Gunicorn serving the GUI plus a versioned REST
   API.
 - Data tier: PostgreSQL with a committed migration.
@@ -51,7 +50,7 @@ health checks and database readiness before the web service starts.
 
 ## Ownership and private state
 
-The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v3` under:
+The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v4` under:
 
 ```text
 <verification-root>/three-tier-live/
@@ -87,22 +86,15 @@ ownership from a name prefix alone.
    state.
 2. Run the unchanged no-flag deterministic verifier. Stop before live mutation
    on any deterministic FAIL.
-3. Confirm Docker Engine, Docker Compose, Git, source-installed skill parity,
-   canonical Google Chrome, and loopback binding support before replacing an
-   active environment. Do not use an existing Chrome window for evidence.
-   After `prepare`, run `launch-browser`; it invokes Chrome directly with a
-   newly created private `--user-data-dir`, `--new-window`, a new process
-   group, and a verification-ID marker page. Then require a successful
-   computer-use `get_app_state` whose accessibility state contains that exact
-   marker before any action. Tool discovery, installation, or process presence
-   alone does not prove that Computer Use captured the dedicated instance.
-   This initial check proves capability discovery only and is not reusable.
-   A missing required live capability is PARTIAL only before an attempted
-   required action; an attempted failure is FAIL.
+3. Confirm Docker, Compose, Git, Node.js 20+, npm, installed Chrome and
+   source-installed parity. After preparation, run the owned headless
+   `capability-discovery` stage. No desktop capture prerequisite applies.
 4. Run `three_tier_lifecycle.py prepare`. It serializes lifecycle mutation,
    destroys the previous active environment through the exact ownership-checked
    standalone cleanup path, and creates a fresh lifecycle only after cleanup
-   succeeds. Orphaned state, a changed project boundary, a Git remote, dirty
+   succeeds. Preparation creates the marker-only Git baseline and its one owned
+   local bare origin before normal prompt intake. Orphaned state, a changed
+   project boundary, an external or extra Git remote, dirty
    kept work, a resource-label mismatch, or incomplete cleanup blocks the new
    lifecycle. Cleanup removes the union of recorded aliases and resources
    discovered by both exact ownership labels, so an interruption after Docker
@@ -168,45 +160,24 @@ ownership from a name prefix alone.
    Seal and revalidate any review repair on a clean integration SHA before GUI
    evaluation; do not leave a reviewed repair uncommitted behind an unrelated
    environment failure.
-8. Run GUI evaluation and UAT through `sdlc-gui-test` with
-   `harness: computer-use`. Immediately before the first GUI navigation in
-   `sdlc-evaluate`, and again immediately before `sdlc-uat-tests`, run a fresh
-   `get_app_state` for Google Chrome. The returned accessibility state must
-   contain the exact lifecycle `window_marker`; absence or ambiguity is an
-   environment defect and no action may be attempted. Unless the current Codex
-   surface explicitly confirms locked Computer Use is enabled for this session,
-   require the console to be unlocked. A normal browser window must be visible,
-   unminimized, foreground, and on the current macOS Space. Any intervening
-   lock/unlock, display, Space, or browser-window change invalidates an earlier
-   check. Refresh the
-   accessibility tree after every successful navigation or action. Use the GUI
-   for actions and independent API and PostgreSQL probes as the objective
-   oracle.
-9. Record capability discovery, evaluate readiness, and UAT readiness with
-   `record-computer-use`. A just-in-time `cgWindowNotFound` or equivalent visibility failure is an
-   `ENVIRONMENT_DEFECT` at `pre-navigation-window-capture`; record explicitly
-   that no GUI navigation or action was attempted. Persist only bounded
-   sanitized diagnostics: browser identity, dedicated-marker match,
-   known/unknown lock and window
-   visibility/frontmost/current-Space state, and returned-error versus timeout.
-   A hung/timed-out call or response loss across browsers marks the shared
-   Computer Use service unhealthy. Stop all further Computer Use calls in the
-   attempt: no `list_apps`, new-window recovery, repeated browser retries,
-   browser restart, or service restart through that path. Lifecycle cleanup may
-   still close the exact owned process group without Computer Use; it fails
-   closed if process identity no longer matches. Fresh-session or service
-   recovery remains a separate explicitly authorized action.
-10. Write the v2 semantic file incrementally so failures retain validated
-    non-GUI progress, then validate `<evidence-root>/three-tier-results.json` against
-   `assets/three-tier-results.schema.json`. The private helper also performs
-   semantic checks and rejects placeholder files, reused generic artifacts,
-   missing phases, stale Git identity, non-computer-use GUI evidence, missing
-   API/database correlation, missing restart persistence, missing migration
-   test evidence, fewer than five screenshots, or screenshot files without a
-   recognized PNG/JPEG signature.
-11. Record the dedicated browser tab with the exact `verification_id` query
-    marker. In default create mode use `close-browser`, then record the tab
-    closed before `finish`; in keep mode leave the exact instance running.
+8. Run `run-browser-stage --stage evaluate` at evaluation, using the clean
+   integration target. Run `uat-before-restart` at UAT against the promoted SHA.
+   Before each of these targets is evaluated, use owned `run-compose -- build web`
+   followed by owned `up --detach` and runtime inventory recording. A clean
+   owned `up --build --detach` also records build proof. The immutable receipt
+   binds the exact checkout and SHA to the built image ID. Browser launch and
+   every API/database checkpoint recheck the running web container image,
+   ownership, absence of web mounts and loopback endpoint bindings. A dirty
+   worker build is useful for development but cannot certify acceptance.
+9. Use generation-locked `run-compose -- restart` to restart both services,
+   retain the same volume, rediscover `port web 8000`, and refresh runtime
+   endpoints. Then run `uat-after-restart` with a new browser. The helper binds
+   it to the pre-restart record and the owned restart receipt.
+10. Write the v3 semantic manifest and validate its exact headless stage,
+    Git identity, API/database, restart and five-screenshot evidence. Preserve
+    partial results and failed receipts; caller booleans never replace them.
+11. Every stage closes its own browser, including keep mode. `close-browser`
+    is the private recovery action for an interrupted owned process.
 12. Finish the lifecycle and present the report path, application layer
     inventory, resolved ports/endpoints, Git SHAs, phase/test/UAT results,
     validation commands, top issues and recommended fixes, owned resources,
@@ -220,25 +191,36 @@ ownership from a name prefix alone.
 
 Use one unique non-secret task title and a clean database volume:
 
-1. Pass the just-in-time Computer Use readiness gate before navigation.
-2. Open the marker-bearing loopback URL in the dedicated verifier-owned Chrome
-   instance only after a fresh marker-confirming capture.
-3. Observe the heading, input, Add button, and empty state.
-4. Submit a blank title and observe inline validation.
-5. Independently prove no database row was created.
-6. Create the unique task and observe its GUI row.
-7. Correlate the same ID, title, and incomplete state through API and database.
-8. Refresh and prove persistence.
-9. Complete the task and correlate the new state through API and database.
-10. Filter Active and prove the task disappears.
-11. Filter Completed and prove the task reappears.
-12. Restart both services without deleting the volume.
-13. Reload and prove the completed task persists.
-14. Capture sanitized empty, validation, created, completed-filter, and
-    post-restart screenshots.
-15. Close the exact verifier-owned Chrome process group for default create;
-    retain it for keep. Never use Quit, `killall`, or another broad browser
-    close that could affect existing Chrome instances.
+Use headless Playwright Test with Chrome for required web acceptance. Run
+four fresh owned stages in order: `capability-discovery`, `evaluate`,
+`uat-before-restart`, and `uat-after-restart`. Each stage starts a new process
+and isolated context, records assertions, screenshots, a trace, actual browser
+version and timestamps, and closes its processes even with `--keep`. Native
+desktop capture, an unlocked screen, display selection, and foreground windows
+are not prerequisites. Optional headless isolated Playwright MCP exploration
+is separate from the acceptance oracle and cannot satisfy a required stage.
+
+The verifier freezes its independent test bundle before product implementation;
+never copy it into product TDD tests or alter it to fit an implementation.
+Run evaluation against the clean registered integration revision and UAT against
+the clean promoted revision. The outer lifecycle owner alone restarts Compose
+between the two UAT stages, retaining the original database volume. Rediscover
+the dynamic loopback port, refresh recorded endpoints, then launch a fresh
+post-restart browser against the same task ID/title/completion state.
+Independent API and PostgreSQL checks accompany blank rejection, creation,
+completion, and post-restart persistence. Use the frozen task-board DOM/API/table
+contract in the generated prompt. Before evaluation and separately before UAT,
+use the declared disposable reset to establish an empty database; resets are
+fixture setup, never part of the product acceptance journey. Never reset between
+UAT stages.
+
+A failed stage remains failed and its artifacts are preserved. Correct the
+proven owner and start a new trial; no later success erases the earlier result.
+Resume retained application work with a fresh browser, never a retained tab.
+Laptops must remain awake with Docker and the agent running. A locked-screen
+certification additionally needs independently observed lock intervals and an
+actual agent launching a new stage and collecting evidence before unlock;
+a standalone browser smoke test does not certify agent continuity.
 
 Screenshots alone never establish PASS.
 
@@ -246,13 +228,20 @@ Screenshots alone never establish PASS.
 
 1. Validate the verification-root marker, active lifecycle schema, exact run
    path, run/project markers, verification ID, and Compose project. A Git
-   project must remain remote-free; a kept project must also be clean so user
+   project must retain exactly its one owned local bare origin, private receipt,
+   frozen baseline/default refs and executable push-rejection guard. Foreign or
+   redirected transports, borrowed objects and unsafe paths fail before any
+   browser or Docker effect. A kept project must also be clean so user
    changes are never silently deleted. Recorded browser instance identity is an
    exact cleanup gate.
 2. Revalidate the recorded Chrome PID, process group, executable path, and
    verifier-owned user-data directory, then signal only that process group.
    Never target existing Chrome processes, profiles, or tabs. Identity
    ambiguity stops cleanup before Docker mutation.
+   If an earlier close exited before its state was saved, fresh proof that
+   both the recorded PID and process group are absent completes browser
+   cleanup without a signal. A remaining group, reused PID, or failed
+   inspection remains a blocker.
 3. Combine every recorded Docker alias with resources discovered through both
    exact ownership labels. Reinspect every present alias, require both labels,
    resolve the canonical Docker identity (`Id`, or volume `Name`), and
@@ -276,7 +265,7 @@ The helper commands are private implementation mechanics:
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> prepare
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
-  --verification-root <root> --expected-verification-id <id> launch-browser
+  --verification-root <root> --expected-verification-id <id> run-browser-stage --stage capability-discovery
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
   --verification-root <root> status
 python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
@@ -289,3 +278,29 @@ python3 sdlc-workflow-test/scripts/three_tier_lifecycle.py \
 Use `--help` for the record and finish subcommands. Every mutating subcommand
 other than prepare and destroy requires `--expected-verification-id`. Do not
 expose these helper subcommands as a replacement for `$sdlc-start`.
+
+The live harness resolves the active feature through the isolated host's validated
+prompt workspace and canonical execution status. Before promotion, Compose and
+execution-phase Git evidence use the exact registered integration worktree, with
+matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
+active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
+run validation on uncommitted integration work before coordinator sealing.
+Shipping and UAT always require a clean promoted checkout. After completed promotion,
+Compose uses the exact promoted primary checkout and requires integration
+resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Pre-commit runtime testing may select a worker only through the private helper's
+`run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
+Both identifiers are required. The resolver admits only the sole task in the
+active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+unchanged assignment base, and an `ACTIVE` result from the execution owner's
+live scope guard. Uncommitted changes must stay inside its write claims. This
+selection never changes phase evidence or UAT targeting; after integration, rerun
+the original oracle using the normal integration target. The shared runtime must
+not serve concurrent worker tests.
+
+Five screenshots mean five independently captured artifacts: four different
+pre-restart UI states and one capture from the fresh post-restart stage. The
+post-restart pixels may match the completed state when persistence works.
+Require separate owned stage receipts and capture observations; never fabricate
+visual changes, copy an earlier screenshot, or weaken the four-state check.

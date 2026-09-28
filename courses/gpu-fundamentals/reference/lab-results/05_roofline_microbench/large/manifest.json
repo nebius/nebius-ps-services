@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "e3d5e09201cf42c29bee5457ef0a85a8d0f06cf63af75a72967cedc702e43bdc",
+      "sha256": "8b8da0686bd546d956917b1428396c2b86bd5b46acae49369497ffeab54d02fb",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "f2e7df333b831b1aeb2f448693510368cceeb7a89b56624e689ec2e2e7a2e33c",
+      "sha256": "17e584474b7e63d072ecdf26d87fe7db52218e00b673416c0549e39b3b74167b",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "a879dbdf5d97bc735c9e9ef76a8ca21bfa590231d1273a44a4fefc639cf10c60",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "d4d22625c538554f0d3cf60844529f65cbb6511cfcfbaddf541eac02b51c953e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "7e3e589c85881c20db03f126f5a5ae66dd532a09cd7a38916e8174d3fea5a8e4",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "8766e74585233976109f6e19bac6c8d401fa7777d524da1ea6c5dd54149f4a31",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "d9cfa5925cccb68e25242b2e5689b3a7fb4c5b706175fdf04e4bb130e78d2920",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "05_roofline_microbench",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "b91861a5d0c58e00391b7dad16c72bfcc2401cba1ead0c347b599a55237798f0"
+}

@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "read_only": true,
+    "single_full_gpu": true
+  },
+  "lab": "12_read_only_health",
+  "measurements": {
+    "configuration_changed": false,
+    "sharing_evidence": {},
+    "snapshot": {}
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

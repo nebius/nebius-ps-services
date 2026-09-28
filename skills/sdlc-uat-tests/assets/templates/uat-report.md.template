@@ -20,8 +20,12 @@
 
 | Field | Value |
 | --- | --- |
-| Required Harness | <computer-use, browser, playwright, none> |
-| Actual Harness | <computer-use, browser, playwright, none> |
+| Required Harness | <playwright-test, native-desktop, api, tui, none> |
+| Headless | <true/false/not-applicable> |
+| Browser Version | <observed version> |
+| Target SHA / Receipt | <revision and owned receipt> |
+| Trace / Cleanup | <trace path and outcome> |
+| Actual Harness | <playwright-test, native-desktop, api, tui, none> |
 | Browser | <edge, chrome, other, none> |
 | Accessibility Refreshed After Each Action | <yes, no, not-applicable> |
 | Independent Oracle | <api, database, service, none> |

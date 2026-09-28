@@ -58,6 +58,7 @@ CONFIDENCE = {"proven", "high_confidence", "probable", "unknown"}
 EXECUTION_LIFECYCLES = {
     "unprepared",
     "active_task",
+    "integrated_wave",
     "waves_completed",
     "sealed",
     "promoted",
@@ -155,7 +156,7 @@ REVALIDATION_ROUTES = {
     "tests": "sdlc-unit-tests",
     "evaluation": "sdlc-evaluate",
     "documentation": "sdlc-update-documents",
-    "alignment": "sdlc-align-specs",
+    "alignment": "align",
     "commit": "sdlc-commit",
 }
 
@@ -1752,6 +1753,60 @@ def _load_classification(
     return record
 
 
+def integrated_wave_authority(
+    run_dir: Path, feature_id: str, classification_id: str, dispatch_id: str,
+    *, require_active: bool = True,
+) -> dict[str, Any]:
+    """Read canonical authority for retiring/correcting a failed integrated wave."""
+    feature_id = _feature_id(feature_id)
+    for value in (classification_id, dispatch_id):
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "repair identity is invalid")
+    classification = _load_classification(run_dir, feature_id, classification_id)
+    event = _load_event(run_dir, feature_id, classification["event_id"])
+    diagnosis_id = classification.get("diagnosis_id")
+    if (
+        classification.get("classification") != "IMPLEMENTATION_DEFECT"
+        or classification.get("status") != "routed"
+        or classification.get("feature_id") != feature_id
+        or event.get("feature_id") != feature_id
+        or event.get("execution_lifecycle") != "integrated_wave"
+        or not diagnosis_id
+    ):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "integrated repair is not classified")
+    diagnosis = _load_diagnosis(run_dir, feature_id, diagnosis_id, event)
+    if diagnosis.get("result") != "localized_implementation_defect" or diagnosis.get(
+        "confidence"
+    ) not in {"proven", "high_confidence"}:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "localized diagnosis is not proven")
+    receipt = _read_json(_repair_root(run_dir, feature_id) / "dispatches" / f"{dispatch_id}.json")
+    identity = {name: receipt.get(name) for name in (
+        "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
+    )}
+    if (
+        _digest(identity) != dispatch_id or receipt.get("dispatch_id") != dispatch_id
+        or receipt.get("classification_id") != classification_id
+        or receipt.get("event_id") != event["event_id"]
+        or receipt.get("diagnosis_id") != diagnosis_id
+        or receipt.get("remedy_scale") != "localized"
+    ):
+        raise RepairControlError("STATE_TAMPERED", "repair dispatch receipt is invalid")
+    if require_active:
+        control = _load_control(run_dir, feature_id)
+        if (
+            control.get("current_classification_id") != classification_id
+            or control.get("status") != "remediating"
+            or receipt not in control["active_blocker"]["attempts"]
+        ):
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "repair dispatch is not active")
+    return {
+        "event_id": event["event_id"], "classification_id": classification_id,
+        "dispatch_id": dispatch_id, "diagnosis_id": diagnosis_id,
+        "integration_commit": event["integration_commit"],
+        "blocker_key": event["blocker_key"], "oracle": diagnosis["regression_oracle"],
+    }
+
+
 def _budget_stop(blocker: dict[str, Any], trigger: str) -> None:
     blocker["status"] = "exhausted"
     blocker["stop_trigger"] = trigger
@@ -1846,6 +1901,11 @@ def _begin_remediation_unlocked(
         None,
     )
     if duplicate is not None:
+        _store_immutable(
+            _repair_root(run_dir, feature_id) / "dispatches" / f"{duplicate['dispatch_id']}.json",
+            {**duplicate, "status": "dispatched", "result": None, "verification_reference": None},
+            "repair dispatch",
+        )
         transition_id = _digest(
             {"action": "dispatch", "dispatch_id": duplicate["dispatch_id"]}
         )
@@ -1956,6 +2016,10 @@ def _begin_remediation_unlocked(
     control["feature_dispatches"] += 1
     control["status"] = "remediating"
     _write_json_atomic(_control_path(run_dir, feature_id), control)
+    _store_immutable(
+        _repair_root(run_dir, feature_id) / "dispatches" / f"{dispatch_id}.json",
+        attempt, "repair dispatch",
+    )
     _append_journal(
         run_dir,
         feature_id,
@@ -2396,6 +2460,245 @@ def record_revalidation(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any
         return _record_revalidation_unlocked(run_dir, payload)
 
 
+def record_environment_recovery(
+    run_dir: Path, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve a pre-promotion environment block after its unchanged gate passes."""
+    feature_id = _feature_id(payload.get("feature_id"))
+    with _transition_lock(run_dir, feature_id):
+        control = _load_control(run_dir, feature_id)
+        classification = _load_classification(
+            run_dir, feature_id, control["current_classification_id"]
+        )
+        event = _load_event(run_dir, feature_id, control["current_event_id"])
+        surface = event["phase"]
+        invalidations = [
+            {
+                "event_id": event["event_id"],
+                "classification_id": classification["classification_id"],
+                "surface": surface,
+            }
+        ]
+        if (
+            payload.get("schema") != "agentic-sdlc/environment-recovery-v1"
+            or payload.get("event_id") != event["event_id"]
+            or payload.get("classification_id") != classification["classification_id"]
+            or classification["event_id"] != event["event_id"]
+            or classification["blocker_key"] != control["active_blocker"]["blocker_key"]
+            or classification["classification"] != "ENVIRONMENT_DEFECT"
+            or classification["corrective_mode"] != "rerun_gate_same_commit"
+            or classification["status"] != "blocked"
+            or classification["invalidates"] != [surface]
+            or surface not in REVALIDATION_ROUTES
+            or event["execution_lifecycle"] != "waves_completed"
+            or control["status"] not in {"blocked", "resolved"}
+            or control.get("revalidation") is not None
+            or control.get("invalidations")
+            != ([] if control["status"] == "resolved" else invalidations)
+            or control["active_blocker"]["attempts"]
+            or control["active_blocker"]["stop_trigger"] is not None
+            or payload.get("surface") != surface
+            or payload.get("integration_commit") != event["integration_commit"]
+            or payload.get("fingerprints") != event["fingerprints"]
+        ):
+            raise RepairControlError(
+                "ENVIRONMENT_RECOVERY_INVALID",
+                "recovery is not the active unchanged environment gate",
+            )
+        record = {
+            "schema": "agentic-sdlc/environment-recovery-v1",
+            "feature_id": feature_id,
+            "event_id": event["event_id"],
+            "classification_id": classification["classification_id"],
+            "surface": surface,
+            "next_recommended_skill": REVALIDATION_ROUTES[surface],
+            "integration_commit": event["integration_commit"],
+            "fingerprints": event["fingerprints"],
+            "invalidations": invalidations,
+            "evidence_reference": _bounded_string(
+                payload.get("evidence_reference"), "evidence_reference", maximum=1024
+            ),
+            "evidence_digest": _bounded_string(
+                payload.get("evidence_digest"), "evidence_digest", maximum=80
+            ),
+            "recorded_at": _now(payload.get("recorded_at")),
+        }
+        if DIGEST_RE.fullmatch(record["evidence_digest"]) is None:
+            raise RepairControlError(
+                "ENVIRONMENT_RECOVERY_INVALID", "invalid evidence digest"
+            )
+        _reject_sensitive(record)
+        _verify_revalidation_evidence_source(run_dir, record)
+        coordinator = _load_private_state_json(
+            run_dir / "execution" / feature_id / "coordinator.json",
+            "execution coordinator",
+        )
+        head = _current_revalidation_commit(run_dir, feature_id, surface)
+        worktree = Path(coordinator["integration_worktree"])
+        if (
+            coordinator.get("status") != "integrated"
+            or coordinator.get("active_wave") is not None
+            or coordinator.get("cleanup_retained") != []
+            or coordinator.get("integration_head") != head
+            or head != record["integration_commit"]
+            or _git_output(
+                worktree, ["symbolic-ref", "--short", "HEAD"], "integration branch"
+            )
+            != coordinator.get("integration_branch")
+            or _git_output(worktree, ["status", "--porcelain"], "integration status")
+            or _current_fingerprints(run_dir) != record["fingerprints"]
+        ):
+            raise RepairControlError(
+                "ENVIRONMENT_RECOVERY_INVALID",
+                "recovery requires the clean unchanged integrated checkpoint",
+            )
+        record["recovery_id"] = _digest(_identity_payload(record, "recovery_id"))
+        recovery_id = record["recovery_id"]
+        if (
+            control["status"] == "resolved"
+            and control.get("environment_recovery_id") != recovery_id
+        ):
+            raise RepairControlError(
+                "STATE_TAMPERED", "resolved environment recovery changed"
+            )
+        path = (
+            _control_path(run_dir, feature_id).parent
+            / "environment-recoveries"
+            / f"{recovery_id}.json"
+        )
+        created = _store_immutable(path, record, "environment recovery")
+        control["status"] = "resolved"
+        control["active_blocker"]["status"] = "resolved"
+        control["environment_recovery_id"] = recovery_id
+        # The sole invalidated gate has passed. Preserve its history in the
+        # immutable recovery above, leaving no pending gate in the projection.
+        control["invalidations"] = []
+        _write_json_atomic(_control_path(run_dir, feature_id), control)
+        _append_journal(
+            run_dir,
+            feature_id,
+            "environment-recovery-recorded",
+            recovery_id,
+            recovery_id=recovery_id,
+            event_id=event["event_id"],
+        )
+        _write_failure_log(run_dir, feature_id, control)
+        return {"created": created, "recovery": record, "control": control}
+
+
+def refresh_revalidation_routes(
+    run_dir: Path, feature_id: str, expected_cursor: str, evidence_reference: str
+) -> dict[str, Any]:
+    """Invalidate pending gate progress after an owner-route policy repair."""
+    feature_id = _feature_id(feature_id)
+    if re.fullmatch(r"[0-9a-f]{64}", expected_cursor) is None:
+        raise RepairControlError("STATE_INVALID", "expected cursor is invalid")
+    evidence_reference = _bounded_string(
+        evidence_reference, "evidence_reference", maximum=1024
+    )
+    _reject_sensitive(evidence_reference)
+    with _transition_lock(run_dir, feature_id):
+        control = _load_control(run_dir, feature_id)
+        previous = control.get("revalidation")
+        if not isinstance(previous, dict):
+            raise RepairControlError("STATE_INVALID", "no revalidation cursor")
+        classification = _load_classification(
+            run_dir, feature_id, previous["classification_id"]
+        )
+        fresh = _new_revalidation(classification, previous["repair_dispatch_id"])
+        if fresh is None:
+            raise RepairControlError("STATE_INVALID", "no invalidated gates")
+        # Validate the immutable repair authority independently of the old route
+        # names. Old routes are never accepted as executable gate owners.
+        _verify_revalidation_authority(
+            run_dir,
+            {**control, "revalidation": fresh},
+            fresh,
+            require_current_gate=False,
+        )
+        if classification["classification_id"] != control["current_classification_id"]:
+            raise RepairControlError("STATE_TAMPERED", "classification changed")
+        archive_path = (
+            _repair_root(run_dir, feature_id)
+            / "route-refreshes"
+            / f"{expected_cursor}.json"
+        )
+        transition_id = _digest(
+            {
+                "action": "refresh-revalidation-routes",
+                "previous_cursor": expected_cursor,
+                "next_cursor": fresh["cursor_id"],
+            }
+        )
+        if previous["cursor_id"] != expected_cursor:
+            archive = _read_json(archive_path)
+            if (
+                previous["cursor_id"] != fresh["cursor_id"]
+                or archive.get("next_cursor_id") != fresh["cursor_id"]
+                or archive.get("evidence_reference") != evidence_reference
+                or archive.get("previous", {}).get("cursor_id") != expected_cursor
+            ):
+                raise RepairControlError("STATE_TAMPERED", "cursor refresh changed")
+            changed = False
+        else:
+            projection = {
+                key: previous.get(key)
+                for key in (
+                    "schema",
+                    "classification_id",
+                    "repair_dispatch_id",
+                    "required",
+                )
+            }
+            required = previous.get("required")
+            completed = previous.get("completed_revalidation_ids")
+            cursor = previous.get("cursor")
+            if (
+                control["status"] != "revalidation_required"
+                or previous.get("status") != "pending"
+                or _digest(projection) != expected_cursor
+                or not isinstance(required, list)
+                or any(not isinstance(item, dict) for item in required)
+                or [item.get("surface") for item in required]
+                != [item["surface"] for item in fresh["required"]]
+                or required == fresh["required"]
+                or not isinstance(completed, list)
+                or type(cursor) is not int
+                or cursor != len(completed)
+                or not 0 <= cursor < len(required)
+            ):
+                raise RepairControlError(
+                    "STATE_INVALID", "only pending route-policy drift can be refreshed"
+                )
+            for index, record_id in enumerate(completed):
+                if (
+                    not isinstance(record_id, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", record_id) is None
+                ):
+                    raise RepairControlError("STATE_TAMPERED", "invalid gate identity")
+                record = _read_json(_revalidation_path(run_dir, feature_id, record_id))
+                if (
+                    _digest(_identity_payload(record, "revalidation_id")) != record_id
+                    or record.get("cursor_id") != expected_cursor
+                    or record.get("surface") != required[index]["surface"]
+                ):
+                    raise RepairControlError("STATE_TAMPERED", "prior gate changed")
+            archive = {
+                "schema": "agentic-sdlc/revalidation-route-refresh-v1",
+                "previous": previous,
+                "next_cursor_id": fresh["cursor_id"],
+                "evidence_reference": evidence_reference,
+            }
+            _store_immutable(archive_path, archive, "route refresh")
+            _append_journal(run_dir, feature_id, "route-refresh-intent", transition_id)
+            control["revalidation"] = fresh
+            _write_json_atomic(_control_path(run_dir, feature_id), control)
+            changed = True
+        _append_journal(run_dir, feature_id, "route-refresh-committed", transition_id)
+        _write_failure_log(run_dir, feature_id, control)
+        return {"updated": changed, "control": control}
+
+
 def _write_failure_log(run_dir: Path, feature_id: str, control: dict[str, Any]) -> None:
     path = run_dir.resolve() / "evidence" / feature_id / "failure-log.md"
     blocker = control["active_blocker"]
@@ -2501,10 +2804,16 @@ def _parser() -> argparse.ArgumentParser:
         "record-diagnosis",
         "record-approval",
         "record-revalidation",
+        "record-environment-recovery",
     ):
         command = subparsers.add_parser(name)
         command.add_argument("--run-dir", type=Path, required=True)
         command.add_argument("--input", type=Path, required=True)
+    refresh = subparsers.add_parser("refresh-revalidation-routes")
+    refresh.add_argument("--run-dir", type=Path, required=True)
+    refresh.add_argument("--feature", required=True)
+    refresh.add_argument("--expected-cursor", required=True)
+    refresh.add_argument("--evidence-reference", required=True)
     classify = subparsers.add_parser("classify")
     classify.add_argument("--run-dir", type=Path, required=True)
     classify.add_argument("--feature", required=True)
@@ -2543,6 +2852,15 @@ def main() -> int:
             result = record_design_approval(args.run_dir, _load_input(args.input))
         elif args.command == "record-revalidation":
             result = record_revalidation(args.run_dir, _load_input(args.input))
+        elif args.command == "record-environment-recovery":
+            result = record_environment_recovery(args.run_dir, _load_input(args.input))
+        elif args.command == "refresh-revalidation-routes":
+            result = refresh_revalidation_routes(
+                args.run_dir,
+                args.feature,
+                args.expected_cursor,
+                args.evidence_reference,
+            )
         elif args.command == "classify":
             result = classify_failure(
                 args.run_dir, args.feature, args.event, args.diagnosis

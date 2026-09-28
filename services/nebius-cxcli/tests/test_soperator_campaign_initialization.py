@@ -1,7 +1,9 @@
 """The real CLI campaign callback establishes durability before loading checks."""
 
 import ast
+import copy
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -35,6 +37,16 @@ def test_source_checks_compile_native_login_scripts_with_cluster_identity(
     monkeypatch.setattr(
         "nebius_cxcli.soperator_checks_policy._render_execution_specs",
         lambda _chart, _overrides: {name: {"schedule": "0 */6 * * *"} for name in values["checks"]},
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_acceptance_hooks.verify_policy_hooks", lambda *a: None
+    )
+
+    from passive_scheduler_fakes import DESIRED_SCHEDULER
+
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_passive_policy._rendered_scheduler",
+        lambda *_args: copy.deepcopy(DESIRED_SCHEDULER),
     )
 
     def no_live_calls(*_args):
@@ -76,7 +88,7 @@ def test_parent_check_factory_runs_after_receipt_creation(tmp_path):
 
     # Execute the production closure with bounded dependencies; do not replace
     # run_campaign or its receipt creation and maintenance ordering.
-    tree = ast.parse(inspect.getsource(cli.soperator_upgrade_command))
+    tree = ast.parse(inspect.getsource(cli._run_soperator_upgrade_campaign).replace("cli.", ""))
     function = next(
         node
         for node in ast.walk(tree)
@@ -103,6 +115,72 @@ def test_parent_check_factory_runs_after_receipt_creation(tmp_path):
     result = environment["_run_parent_campaign_once"]()
     assert result.status == "complete"
     assert observations
+
+
+def test_interrupted_campaign_reports_stop_and_resumes_completed_prefix(tmp_path):
+    from collections import Counter
+
+    from nebius_cxcli.soperator_full_stack_upgrade import campaign_receipt_path
+    from nebius_cxcli.soperator_status import read_soperator_operation_status
+    from nebius_cxcli.soperator_upgrade_supervisor import execute_committed_soperator_upgrade
+    from test_soperator_status import _paths
+
+    paths, intent = _paths(tmp_path), _intent()
+    path = campaign_receipt_path(paths.project_dir, target_ref=intent.target_ref)
+    interruption = KeyboardInterrupt()
+    interrupted = False
+    effects, restorations = [], []
+
+    def segment(name):
+        nonlocal interrupted
+        if name == intent.segments[1] and not interrupted:
+            interrupted = True
+            raise interruption
+        effects.append(name)
+        return CampaignSegmentResult(evidence={"ready": True})
+
+    def restore(record, existing):
+        restorations.append(True)
+        return {"restored": True}
+
+    def run():
+        return run_campaign(
+            path=path,
+            intent=intent,
+            segment_executors={name: lambda name=name: segment(name) for name in intent.segments},
+            enter_maintenance=lambda record, existing: {"active": True},
+            restore_maintenance=restore,
+            assert_fence=lambda: None,
+        )
+
+    # Exercise the actual CLI callback so status priority and preserved evidence
+    # cannot drift behind a test-only stop-report implementation.
+    tree = ast.parse(inspect.getsource(cli._run_soperator_upgrade_campaign))
+    callback = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_record_parent_stop"
+    )
+    module = ast.fix_missing_locations(ast.Module(body=[callback], type_ignores=[]))
+    environment = {"cli": cli, "receipt_path": path, "intent": intent}
+    exec(compile(module, "<production-campaign-stop>", "exec"), environment)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        execute_committed_soperator_upgrade(run, on_stop=environment["_record_parent_stop"])
+    assert caught.value is interruption
+    receipt = load_campaign_receipt(path)
+    assert receipt.intent_sha256 == intent.digest
+    assert receipt.maintenance == "active"
+    assert not restorations
+    completed_prefix = tuple(effects)
+    assert completed_prefix
+    status = read_soperator_operation_status(paths=paths, target_ref=intent.target_ref)
+    assert status.status == "recovery-required"
+
+    assert execute_committed_soperator_upgrade(run).status == "complete"
+    assert restorations == [True]
+    counts = Counter(effects)
+    assert all(counts[name] == 1 for name in completed_prefix)
+    assert read_soperator_operation_status(paths=paths, target_ref=intent.target_ref) is None
 
 
 @pytest.mark.parametrize("recovery", [False, True])
@@ -134,8 +212,10 @@ def test_campaign_policy_paths_freeze_main_before_staged_readiness(tmp_path, mon
     )
 
     context = ChecksPhaseContext(ChecksPhase.MAINTENANCE, "reserve")
+    native_transition = object()
 
     def stage(*args, **kwargs):
+        assert kwargs["native_transition"] is native_transition
         if not recovery:
             assert kwargs["checks_context"] is context
         flux_ops._wait_for_soperator_release_stage(
@@ -151,7 +231,9 @@ def test_campaign_policy_paths_freeze_main_before_staged_readiness(tmp_path, mon
 
     monkeypatch.setattr(soperator_checks_catchup_flux, "recover_staged_checks", stage)
     name = "_recover_target_checks" if recovery else "_apply_target"
-    tree = ast.parse(inspect.getsource(cli.soperator_upgrade_command))
+    tree = ast.parse(
+        Path(cli.__file__).with_name("soperator_campaign_cli.py").read_text().replace("cli.", "")
+    )
     function = next(
         node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name
     )
@@ -165,6 +247,7 @@ def test_campaign_policy_paths_freeze_main_before_staged_readiness(tmp_path, mon
         "kube_context": "test",
         "frozen": SimpleNamespace(source=SimpleNamespace(source_dir=str(tmp_path))),
         "apply_staged_soperator_release": stage,
+        "_native_checks_transition": lambda: native_transition,
     }
     exec(compile(module, "<production-policy-callback>", "exec"), environment)
     if recovery:
@@ -176,6 +259,80 @@ def test_campaign_policy_paths_freeze_main_before_staged_readiness(tmp_path, mon
         receipt.maintenance_evidence["checksMainWorkloadAuthority"]["identity"]["uid"] == "main-uid"
     )
     assert lease_reads
+
+
+def test_campaign_checks_reload_current_retirement_after_later_publication(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from nebius_cxcli import flux_ops, soperator_release_order
+    from nebius_cxcli.soperator_failures import SoperatorSafetyPauseError
+    from nebius_cxcli.soperator_full_stack_upgrade import CampaignNativeTransitionStore
+    from nebius_cxcli.soperator_operation import soperator_sha256
+    from test_soperator_graph_transition import Cluster, desired, transition
+
+    intent, path = _intent(), tmp_path / "campaign.json"
+    _write_receipt(path, replace(_new_receipt(intent), maintenance="active"))
+    store = CampaignNativeTransitionStore(path, intent)
+    cluster = Cluster()
+    graph = {"releases": [{"releaseName": "retained"}]}
+    operation = transition(cluster, store.write)
+    operation.state["admission"].update(
+        target={"targetRef": intent.target_ref, "clusterId": "cluster", "kubernetesUid": "kube"},
+        desiredGraphSha256=soperator_sha256(graph),
+    )
+    operation.state["admissionSha256"] = soperator_sha256(operation.admission)
+    _write_receipt(
+        path,
+        replace(
+            load_campaign_receipt(path),
+            maintenance_evidence={
+                "events": [{"action": "native-graph-admitted", "transition": operation.state}]
+            },
+        ),
+    )
+    operation.fence()
+    operation.publish(desired(cluster))
+    operation.wait_absent(timeout=0, interval=0)
+    monkeypatch.setattr(flux_ops, "_rendered_soperator_graph_contract", lambda _path: graph)
+    monkeypatch.setattr(soperator_release_order, "execution_release_graph", lambda value: value)
+    tree = ast.parse(Path(cli.__file__).with_name("soperator_campaign_cli.py").read_text())
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_native_checks_transition"
+    )
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    environment = {
+        "__package__": "nebius_cxcli",
+        "cli": SimpleNamespace(
+            Any=Any,
+            Path=Path,
+            _run_soperator_upgrade_process=lambda args, **kwargs: cluster.run(
+                args, input_text=kwargs.get("input_text")
+            ),
+        ),
+        "_assert_campaign_authority": lambda: None,
+        "target_paths": SimpleNamespace(flux_dir=tmp_path),
+        "intent": intent,
+        "cluster_id": "cluster",
+        "kubernetes_uid": "kube",
+        "kube_env": {},
+        "campaign_native_store": store,
+        "frozen": SimpleNamespace(snapshot=object(), source=SimpleNamespace(source_dir=tmp_path)),
+    }
+    exec(compile(module, "<production-native-checks-callback>", "exec"), environment)
+    load = environment["_native_checks_transition"]
+    checks = load()
+    checks.suspend_parent(True)
+    checks.publish_parent({**cluster.parent, "spec": {"suspend": True, "values": {"checks": True}}})
+    replay = load()
+    assert replay.state["parentPublication"] == checks.state["parentPublication"]
+    replay.suspend_parent(False)
+    cluster.parent["metadata"]["uid"] = "replacement"
+    before = len(cluster.events)
+    with pytest.raises(SoperatorSafetyPauseError, match="replaced"):
+        load()
+    assert len(cluster.events) == before
 
 
 def test_campaign_main_authority_survives_resume_and_generation_refinement(tmp_path):
@@ -293,3 +450,87 @@ def test_campaign_main_authority_requires_active_exact_campaign(tmp_path, change
     with pytest.raises(cli.SoperatorSafetyPauseError, match="authority is unavailable"):
         CampaignMainWorkloadAuthority(path, intent, lambda: None).freeze(_main_identity())
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("converged", [True, False])
+def test_final_desired_proof_runs_after_checks_restore_and_before_job_restore(
+    tmp_path, monkeypatch, converged
+):
+    from contextlib import nullcontext
+
+    intent = _intent()
+    assert intent.requires_fresh_checks
+    receipt_path = tmp_path / "campaign.json"
+    events = []
+    tree = ast.parse(inspect.getsource(cli._run_soperator_upgrade_campaign))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_final_readiness"
+    )
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    monkeypatch.setattr(cli, "_paths_for_target_flux_dir", lambda *a: tmp_path)
+    monkeypatch.setattr(
+        cli, "run_final_runtime_validation_boundary", lambda **kw: ([], ([], (), (), (), {}), {})
+    )
+    monkeypatch.setattr(cli, "final_node_group_capacity_snapshot", lambda **kw: {})
+    monkeypatch.setattr(
+        cli,
+        "wait_for_soperator_release_graph",
+        lambda *a, **kw: events.append("graph-after-policy"),
+    )
+
+    def proof(**kw):
+        assert events[-2:] == ["restore-checks-policy", "graph-after-policy"]
+        events.append("desired-proof")
+        if not converged:
+            raise RuntimeError("desired settings drift")
+        return {"ready": True}
+
+    environment = {
+        "cli": cli,
+        "deployment_hooks": SimpleNamespace(final_intent=lambda x: x, verify_desired=proof),
+        "intent": intent,
+        "paths": tmp_path,
+        "selected_target": {},
+        "kube_env": {},
+        "config_path": tmp_path / "config.yaml",
+        "cluster_id": intent.cluster_id,
+        "receipt_path": receipt_path,
+        "_runtime_readiness": lambda *a: CampaignSegmentResult({"ready": True}),
+        "_fast_campaign_smoke": lambda **kw: events.append(("smoke", kw)) or {"status": "passed"},
+        "_campaign_checks": lambda: SimpleNamespace(
+            documents_projection=lambda: None,
+            readiness_exemptions=lambda: {},
+            finalize=lambda **kw: events.append("restore-checks-policy") or {"restored": True},
+        ),
+        "upgrade_progress": SimpleNamespace(phase=lambda *a, **kw: nullcontext()),
+        "executor": SimpleNamespace(list_node_groups=lambda _: []),
+        "_assert_campaign_authority": lambda: None,
+    }
+    exec(compile(module, "production-final-readiness", "exec"), environment)
+    executors = {name: lambda: CampaignSegmentResult({"ready": True}) for name in intent.segments}
+    executors["final-readiness"] = environment["_final_readiness"]
+
+    def run():
+        return run_campaign(
+            path=receipt_path,
+            intent=intent,
+            segment_executors=executors,
+            enter_maintenance=lambda *a: {"active": True},
+            restore_maintenance=lambda *a: events.append("restore-jobs") or {"restored": True},
+            assert_fence=lambda: None,
+        )
+
+    if converged:
+        assert run().status == "complete"
+        assert events[-2:] == ["desired-proof", "restore-jobs"]
+        assert not any(isinstance(event, tuple) for event in events)
+        assert run().status == "complete"
+        assert events[-1] == ("smoke", {"verify_only": True})
+        assert events.count("restore-jobs") == 1
+    else:
+        with pytest.raises(RuntimeError, match="desired settings drift"):
+            run()
+        assert "restore-jobs" not in events
+        assert load_campaign_receipt(receipt_path).status != "complete"

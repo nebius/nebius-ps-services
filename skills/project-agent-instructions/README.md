@@ -2,17 +2,37 @@
 
 Execution supports Codex and Claude through the selected native host context.
 See `SKILL.md` for invocation, required setup and evidence boundaries.
-Claude discovery uses an existing `CLAUDE.md` import of canonical `AGENTS.md`;
+Managed-generation Claude discovery uses an existing `CLAUDE.md` import of
+canonical `AGENTS.md`;
 see [native discovery](references/claude-discovery.md).
 
 `project-agent-instructions` is an explicit-only mutation skill that may be
-routed by `maintain-project-specs`. After the shared owner validates
-the current requirements and design, the skill decides whether the exact
+routed by `maintain-project-specs`. For managed generation, after the shared
+owner validates current requirements and design, the skill decides whether the exact
 selected project needs a concise `AGENTS.md` that should apply in every future
 agent session. `not-needed` is a valid result; specifications do not
 automatically require a project instruction file.
 
+## Explicit Human-Rule Repair
+
+An explicit request to repair restrictive project instructions authorizes a
+focused native patch to the affected human-owned clauses. Read the active
+instruction chain, recheck the preimage, preserve unrelated bytes and intact
+managed regions, review the diff and reread the result. Repair the source
+owner too when a template would restore the obsolete rule. Existing overrides
+or fallbacks are active sources; never create a dormant alternative.
+
+This human-rule path needs no spec receipt solely to edit prose and returns
+`human-rules-repaired`, with the target digest and exact file effect, without
+invented helper receipts. Managed generation and refresh still use the
+receipt-bound workflow below. Ownership, recovery, concurrent-change and
+higher-priority policy checks remain binding. Routine project work cannot
+invoke instruction repair; an explicit repair request already supplies the
+mutation authority and does not need another confirmation.
+
 ## What It Does
+
+For managed generation, the workflow:
 
 - Replays the shared owner's specification receipt before trusting project
   requirements, design, or traceability.
@@ -38,16 +58,12 @@ automatically require a project instruction file.
 ## Coordinator Flow
 
 ```text
-explicit user request or maintain-project-specs route
-                         |
-                         v
-      canonical requirements/design receipt
-                         |
-                         v
-inspect context -> decide -> render -> implement -> apply safely -> verify
-                         |
-                         v
-finish this mutation workflow or report its own blocker
+explicit human-rule repair request
+    -> inspect active clauses -> focused native patch -> diff review -> reread
+
+explicit managed-generation request or authorized spec-owner route
+    -> canonical requirements/design receipt
+    -> inspect context -> decide -> render -> apply safely -> verify
 ```
 
 Task Implementer and Agentic SDLC do not invoke, wait for, or seal this
@@ -64,11 +80,13 @@ new rules. That recommendation never halts Task Implementer or Agentic SDLC.
 
 ## Decision And Ownership Model
 
-The selected project may be a subproject rather than the Git root. For
-nonempty effective markers, discovery uses the nearest matching directory from
+For managed generation, the selected project may be a subproject rather than
+the Git root. For nonempty effective markers, discovery uses the nearest matching directory from
 the selected project through the enclosing Git root and scans down from there;
-an empty marker list uses only the selected directory. The target is always the
-selected-project root `AGENTS.md`.
+an empty marker list uses only the selected directory. The generated target is
+always the selected-project root `AGENTS.md`. Human-rule repair instead targets
+the active native instruction source, including an existing override or
+`CLAUDE.md`, without creating a dormant alternative.
 
 When the canonical specs say existing users depend on behavior that future
 changes must not break, the default protected surface is supported public APIs
@@ -79,6 +97,8 @@ remain free to use one canonical implementation path.
 
 Possible results are:
 
+- `human-rules-repaired`: explicitly selected human-owned clauses were patched
+  and reread; managed-region receipts do not apply to that native repair.
 - `created`: a missing project file was needed and created.
 - `attached`: needed rules were appended as a managed tail while all existing
   human bytes were preserved.
@@ -144,8 +164,8 @@ workflow command ordering mechanism.
 - Do not generate generic advice, temporary task rules, prompts, architecture
   prose, handoffs, troubleshooting history, or repeatable procedures.
 - Do not create `AGENTS.override.md` or recursively generate instruction files.
-- Do not write or delete the selected-project target outside the guarded
-  helper.
+- Do not write or delete a managed region outside the guarded helper. Explicit
+  human-rule repair uses a focused native patch and preserves managed bytes.
 - Do not commit private receipts, decisions, ownership evidence, or workflow
   state.
 - Do not copy personal global instructions, secrets, endpoints, environment

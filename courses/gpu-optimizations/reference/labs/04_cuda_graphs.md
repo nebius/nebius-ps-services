@@ -4,7 +4,7 @@ A CUDA Graph is a reusable plan of device operations and their dependencies. Cap
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 4–5 for compilation versus graph capture, stable storage and replay. Apply Lesson 2's timing and completion checks. The matrix-multiplication and SiLU workload is explained below.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/04_cuda_graphs.json).
 
 Use one H100 and the approved environment. Review stream ordering and tensor lifetime. The supplied experiment has one input shape and does not implement shape buckets, dynamic routing, or an eager fallback service.
 
@@ -12,23 +12,32 @@ Fast repeated H100 inference or training steps can become CPU-launch limited, ma
 
 ## Concepts and code path
 
-The program warms and captures a fixed-shape matrix multiplication followed by SiLU. Replay uses the captured input and output storage. Rebinding a Python variable does not change those addresses. The supplied check compares replay with eager execution for the original input. Copying new values into the static input is the explicit extension in Practice; the baseline does not test changing inputs, graph updates or shape routing.
-
-## Practice
+The program warms and captures a fixed-shape matrix multiplication followed by SiLU. Replay uses the captured input and output storage. Rebinding a Python variable does not change those addresses. The supplied check compares replay with eager execution for the original input. Copying new values into the static input is the optional extension at the end of this guide; the baseline does not test changing inputs, graph updates or shape routing.
 
 Given one fixed-shape step with 60 microseconds of kernels and 40 microseconds of launch overhead, graph replay can remove much of the 40. Change the service to eight shape buckets. Expected observation: warmed hits improve while first-use capture and graph-pool memory grow; an unseen shape must execute the declared fallback rather than silently pad without accounting.
 
-First run Lab 04's implemented fixed-shape eager-versus-graph baseline. It captures one input buffer and does not implement buckets or fallback routing. Extension: create a second input of the same shape, copy it into the captured static buffer before replay on the correctly ordered stream, and compare the replay output with an eager reference for that new input. Then add an explicit shape check: an unsupported shape runs eagerly rather than reusing an incompatible graph. Create separate captures only for deliberately supported buckets.
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Run the baseline without edits first. Each profile starts a separate process and capture; selecting a second profile is not replaying a new shape through the original graph.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile h100
+python3 tools/submit_lab.py --lab 04_cuda_graphs slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile small
+python3 tools/submit_lab.py --lab 04_cuda_graphs slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile large
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 04_cuda_graphs --job "$LAB_JOB_ID"
+```
 
 Require `allclose` and `fixed_shape`. Compare the `eager` and `cuda_graph` distributions with the recorded shape. Do not infer capture startup amortization or dynamic-input correctness from this fixed-input gate.
 
@@ -36,11 +45,49 @@ For the supplied baseline, record capture success, eager/replay correctness, and
 
 Graphs trade flexibility for lower recurring dispatch overhead.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Eager / median (seconds) | `eager.median_ms` | `s` |
+| Cuda graph / median (seconds) | `cuda_graph.median_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 04_cuda_graphs \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Identify which buffers must remain alive across replay. Explain why replacing a Python variable with a new allocation does not update the captured pointer. Use a timeline to check whether launch gaps shrink.
 
 Graph pools and per-bucket captures consume memory. Many buckets reduce fallback but increase warm-up and retained state. Replay improves steady state while potentially worsening startup, debuggability, and rare-shape behavior.
+
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 04_cuda_graphs --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The launcher selects one matching kernel inside `course_measure`, the configured NVTX range for this lab. Its launch-count limit applies after the range and kernel-name filters. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 04_cuda_graphs --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare eager launches with CUDA graph replay at fixed buffers and shape. Independently inspect launch gaps, then decide whether saved launch time justifies graph memory and shape constraints.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 
@@ -48,10 +95,14 @@ A capture error may indicate unsupported operations or synchronization inside ca
 
 Avoid comparing replay against a cold eager path or silently reusing stale input storage.
 
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
+
 ## Takeaways and next step
 
-Use the changed-input and shape-routing extension in Practice to test which capture assumptions your workload can preserve.
+Use the changed-input and shape-routing extension below to test which capture assumptions your workload can preserve.
 
 A successful fixed-input replay does not prove that a changing workload is safe. The extension must update stable input storage, order copies before replay, validate new outputs, and route incompatible shapes explicitly.
 
 List the shape, allocation, and control-flow assumptions in the captured region.
+
+First run Lab 04's implemented fixed-shape eager-versus-graph baseline. It captures one input buffer and does not implement buckets or fallback routing. Extension: create a second input of the same shape, copy it into the captured static buffer before replay on the correctly ordered stream, and compare the replay output with an eager reference for that new input. Then add an explicit shape check: an unsupported shape runs eagerly rather than reusing an incompatible graph. Create separate captures only for deliberately supported buckets.

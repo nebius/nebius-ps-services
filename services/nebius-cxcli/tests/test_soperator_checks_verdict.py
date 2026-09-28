@@ -205,6 +205,41 @@ def test_completed_nccl_validates_gpu_count_and_results(nccl):
     assert nccl_verdict(nccl, gpu_count=8)["status"] == "PASS"
 
 
+def test_single_gpu_nccl_zero_bus_bandwidth_is_only_smoke(nccl):
+    output = nccl.replace("nGpus 8", "nGpus 1").replace("48.4017", "0")
+    verdict = nccl_verdict(output, gpu_count=1)
+    assert verdict["status"] == "PASS"
+    assert verdict["kind"] == "native-nccl-smoke"
+
+
+def test_multi_gpu_nccl_preserves_verified_receipt_identity(nccl):
+    assert nccl_verdict(nccl, gpu_count=8) == {
+        "kind": "native-nccl",
+        "status": "PASS",
+        "gpus": 8,
+        "outOfBounds": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("nThread 1", "nThread 2"),
+        ("nGpus 1", "nGpus 8"),
+        ("validation: 1", "validation: 0"),
+        ("0 OK", "1 FAILED"),
+        ("48.4017", "-1"),
+        ("48.4017", "nan"),
+        ("48.4017", "inf"),
+        ("Collective test concluded:", "incomplete:"),
+    ],
+)
+def test_invalid_single_gpu_nccl_rejected(nccl, before, after):
+    output = nccl.replace("nGpus 8", "nGpus 1").replace(before, after)
+    with pytest.raises(RuntimeError, match="native NCCL diagnostic"):
+        nccl_verdict(output, gpu_count=1)
+
+
 @pytest.mark.parametrize(
     ("before", "after"),
     [

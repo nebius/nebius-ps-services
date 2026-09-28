@@ -1,0 +1,21 @@
+{
+  "correctness": {
+    "rc_operations_completed": true,
+    "requested_memory_and_transport_reported": true
+  },
+  "lab": "27_rdma_latency",
+  "measurements": {
+    "mean_us": 7.9,
+    "median_us": 7.87,
+    "p99_us": 8.58,
+    "payload_bytes": 64
+  },
+  "parameters": {
+    "iterations": 1000,
+    "seed": 17,
+    "warmup": 0,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

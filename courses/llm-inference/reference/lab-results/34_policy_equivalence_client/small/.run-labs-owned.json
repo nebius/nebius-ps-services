@@ -1,0 +1,29 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair3-view1.png",
+    "manifest.json",
+    "result-trials-trial1-1.json",
+    "result-trials-trial1-2.json",
+    "result-trials-trial1-3.json",
+    "result-trials-trial1-4.json",
+    "result-trials-trial1-5.json",
+    "result-trials-trial1-6.json",
+    "summary.csv",
+    "systems-trials-probe-disabled-trial1-rank-0.png",
+    "systems-trials-probe-disabled-trial2-rank-0.png",
+    "systems-trials-probe-disabled-trial3-rank-0.png",
+    "systems-trials-probe-enabled-trial1-rank-0.png",
+    "systems-trials-probe-enabled-trial2-rank-0.png",
+    "systems-trials-probe-enabled-trial3-rank-0.png",
+    "systems-trials-profile-disabled-trial1-rank-0.png",
+    "systems-trials-profile-disabled-trial2-rank-0.png",
+    "systems-trials-profile-disabled-trial3-rank-0.png",
+    "systems-trials-profile-enabled-trial1-rank-0.png",
+    "systems-trials-profile-enabled-trial2-rank-0.png",
+    "systems-trials-profile-enabled-trial3-rank-0.png"
+  ],
+  "identity": "4dc40d63f41039de",
+  "schema": "run-labs-owned/v1"
+}

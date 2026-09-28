@@ -1,0 +1,85 @@
+{
+  "correctness": {
+    "all_cases_close": true,
+    "bf16_rtol_atol": [
+      0.01,
+      0.01
+    ]
+  },
+  "lab": "24_sdpa_attention",
+  "measurements": {
+    "cases": [
+      {
+        "causal": true,
+        "dispatch_keys": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "incremental_peak_bytes": {
+          "materialized": 272629760,
+          "sdpa": 4195840
+        },
+        "key_value_length": 2048,
+        "max_abs_error": 0.015625,
+        "query_length": 2048,
+        "timing": {
+          "materialized": {
+            "median_ms": 0.629,
+            "min_ms": 0.6241,
+            "p90_ms": 0.64
+          },
+          "sdpa": {
+            "median_ms": 0.0662,
+            "min_ms": 0.0616,
+            "p90_ms": 0.0782
+          }
+        }
+      },
+      {
+        "causal": false,
+        "dispatch_keys": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "incremental_peak_bytes": {
+          "materialized": 133120,
+          "sdpa": 71168
+        },
+        "key_value_length": 2048,
+        "max_abs_error": 0.000977,
+        "query_length": 1,
+        "timing": {
+          "materialized": {
+            "median_ms": 0.1001,
+            "min_ms": 0.0923,
+            "p90_ms": 0.1226
+          },
+          "sdpa": {
+            "median_ms": 0.0446,
+            "min_ms": 0.042,
+            "p90_ms": 0.0463
+          }
+        }
+      }
+    ],
+    "shape": [
+      2,
+      8,
+      2048,
+      64
+    ]
+  },
+  "parameters": {
+    "external_only": false,
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

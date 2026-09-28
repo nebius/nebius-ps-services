@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "deba3e88c5f8e832e484f37ecae44ada93f4c325e545fa08a4ac5e4273887ba2",
+      "sha256": "4bce85ac61710e4c5ef330e707ae5bdc78feb78c33a85ee489f38dd627aa15a2",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "65513cb46787b60f794dfdde87c59ace53769b4755f93b081707a20cd292de32",
+      "sha256": "ff77b795835b5c9d0aa5604b1643f86abb0d517d6b47a9cf008d0a369f3a3076",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "cd8d46cb41fd4a449db2a0952e20266b2ad00b36816f228be338c4b9329f4b1a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "66c42c96ffd45ea9a711faeead988311f86d98f2c1a4825489a4e62faa6a5e22",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "35a0479538ab32b396e3b41102e81085d3842adbbebcc24f7729fd3e65a389c6",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "005420847673a583779631c0a9448ced4bcfb341cc32a6703f93dfaf37d93644",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "d32fa595557da390f724e729bed37fae8ae53c7e5001fec75e59d88974f9434a",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "03_compile_fusion",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a9250a8c5f62518225ab966445945257d3c022014ef8c8d7188a962f8e12f3ad",
+  "summary_sha256": "54805b35cf8e4c5c5d32f4c641f70ce12c947d1f7ce4866dec2cc6a736a85766"
+}

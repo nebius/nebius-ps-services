@@ -1,0 +1,15 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair2-view1.png",
+    "manifest.json",
+    "result-openai-repeat-trial1.json",
+    "result-openai-trial1.json",
+    "result-triton-repeat-trial1.json",
+    "result-triton-trial1.json",
+    "summary.csv"
+  ],
+  "identity": "73fd410a31a8152b",
+  "schema": "run-labs-owned/v1"
+}

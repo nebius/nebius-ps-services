@@ -1,0 +1,59 @@
+{
+  "artifacts": [
+    {
+      "file": "result-openai-repeat-trial1.json",
+      "original_sha256": "b991f49390600a9405f8d0358bf6d79a367490b64389e5fbe69154f713be958f",
+      "sha256": "e351e78af2080e8a2b1a175f9a2d763e403b96f97747bc8c918a0852e2284c7b",
+      "variant": "openai-repeat-trial1"
+    },
+    {
+      "file": "result-openai-trial1.json",
+      "original_sha256": "2a9b4031edb3d8d4b808637e0f82c6bae2528a653bf8522e5c47dcfd677b2a0c",
+      "sha256": "14a294c8180307d064a1e8346c5e96768f761b3b2e3ae13d276390ba0c608d41",
+      "variant": "openai-trial1"
+    },
+    {
+      "file": "result-triton-repeat-trial1.json",
+      "original_sha256": "26ebfc62d913a4924782ddab791e1c937843bcdf368893bc09c56173d8f48a61",
+      "sha256": "4a2b4b7a4d2293ddec66a434192d15c093c42225008dc9632470574a6fc1d01c",
+      "variant": "triton-repeat-trial1"
+    },
+    {
+      "file": "result-triton-trial1.json",
+      "original_sha256": "e0c4c49da7d1b3d4c704aa5be946accb23d20e1233c1b2642f4ea26210ee36a0",
+      "sha256": "bfa5b0297e0ed314e6256a8809255d8f79b96c2e68ea7e80f509f99471dad8ee",
+      "variant": "triton-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "91b07f608e39ed7881c73014b3823de8935eac810ed8f23ba13907655cf2aa88",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "56e10cdabb571cf0f33788d44e2c087f919d70d6d49f2e153f0f39837ad27380",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "704cd6584981ed553e452f5c7b8c87b6a26d389decce4dad3df53e681a696656",
+      "tool": "grafana"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "30_engine_profile",
+  "limitations": [],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "9e6bb406368d2f92679bb91bc974482d286a70d48edae11203db33e24b0e5f08",
+  "summary_sha256": "dcae8ef9786f639f0293a4208c426a9596c7f9d7322394cb8fecccf5edac5a57"
+}

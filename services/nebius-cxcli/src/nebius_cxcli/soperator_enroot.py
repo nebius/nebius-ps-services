@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
-import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from . import kubernetes_process
 
 ENROOT_PROFILE_NAME = "cxcli-soperator-enroot-v1"
 ENROOT_PROFILE_API = "security-profiles-operator.x-k8s.io/v1alpha1"
@@ -122,7 +123,7 @@ def apply_enroot_profile(
     base = ["kubectl", "--cache-dir", str(cache_dir)]
 
     def read(args: list[str]) -> Mapping[str, Any]:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             [*base, "get", *args, "-o", "json"],
             env=dict(env),
             capture_output=True,
@@ -155,7 +156,7 @@ def apply_enroot_profile(
             )
         ):
             raise RuntimeError("Soperator Enroot profile collides with existing configuration")
-    subprocess.run(
+    kubernetes_process.run(
         [*base, "apply", "-f", "-"],
         env=dict(env),
         input=yaml.safe_dump_all(copy.deepcopy(validated), sort_keys=False),

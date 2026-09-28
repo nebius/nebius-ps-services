@@ -1,11 +1,11 @@
 """Current-edition publication, accessible light palette and content integrity."""
 
+from course_builder import metadata as cb_metadata
 import json
 import re
 
 import pytest
-
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -45,14 +45,18 @@ def test_neutral_metadata_preserves_core_and_optional_lab_scope(course: str) -> 
         "estimated_guided_hours",
         "labs",
         "extensions",
+        "performance_tools",
+        "observability",
+        "advanced_lessons",
+        "external_labs",
     }
     assert isinstance(metadata["estimated_guided_hours"], int)
-    builder = load_builder()
     assert {item["path"] for item in metadata["labs"]} == {
-        str(path.relative_to(root)) for path in builder.executable_sources(root)
+        str(path.relative_to(root)) for path in cb_metadata.executable_sources(root)
     }
     assert all(
-        set(item) == {"path", "optional", "lessons"} for item in metadata["labs"]
+        set(item) == {"path", "optional", "lessons", "dashboard"}
+        for item in metadata["labs"]
     )
     manifest = json.loads((root / "reference/visual-manifest.json").read_text())
     assert set(manifest) == {"diagrams"}
@@ -91,22 +95,22 @@ def test_light_palette_contrast_and_responsive_reading_rules() -> None:
 
 
 def test_all_course_lessons_labs_and_diagrams_remain_published() -> None:
-    builder = load_builder()
     counts = {
-        "gpu-fundamentals": (12, 13, 27),
-        "gpu-optimizations": (13, 19, 28),
-        "llm-training": (16, 24, 22),
-        "llm-inference": (16, 25, 28),
+        "gpu-fundamentals": (12, 11, 31),
+        "gpu-optimizations": (16, 14, 29),
+        "llm-training": (17, 16, 23),
+        "llm-inference": (17, 22, 29),
         "custom-cuda-kernels": (16, 13, 17),
     }
     for course, expected in counts.items():
         root = ROOT / course
         page = (root / "index.html").read_text()
         assert (
-            len(builder.parse_course(root / "COURSE.md")[2]),
-            len(builder.executable_sources(root)),
-            len(re.findall(r"<svg\b", page)),
+            len(cb_metadata.parse_course(root / "COURSE.md")[2]),
+            len(cb_metadata.executable_sources(root)),
+            len(re.findall(r"<svg\b", page)) - 1,
         ) == expected
+        assert page.count('class="performance-workflow"') == 1
 
 
 def test_tooling_preflight_has_only_current_general_gpu_tools() -> None:

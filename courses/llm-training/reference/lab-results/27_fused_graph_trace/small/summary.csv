@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,eager_training_step_median_seconds,value,0.0003543,s
+baseline-trial1,cuda_graph_training_step_median_seconds,value,3.87e-05,s
+baseline-trial1,compiled_first_call_seconds,value,9.2340303,s
+repeat-trial1,eager_training_step_median_seconds,value,0.00034649999999999997,s
+repeat-trial1,cuda_graph_training_step_median_seconds,value,3.86e-05,s
+repeat-trial1,compiled_first_call_seconds,value,9.0263968,s

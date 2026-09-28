@@ -193,6 +193,8 @@ def test_snapshot_collects_cluster_wide_workload_inventory_for_destroy(
                         "metadata": {
                             "name": "customer-api",
                             "namespace": "default",
+                            "uid": "uid-api",
+                            "generation": 2,
                         },
                         "spec": {"replicas": 2},
                         "status": {"availableReplicas": 2},
@@ -233,7 +235,14 @@ def test_snapshot_collects_cluster_wide_workload_inventory_for_destroy(
         {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
-            "metadata": {"labels": {}, "name": "customer-api", "namespace": "default"},
+            "metadata": {
+                "labels": {},
+                "name": "customer-api",
+                "namespace": "default",
+                "uid": "uid-api",
+                "generation": 2,
+                "ownerReferences": [],
+            },
             "spec": {"replicas": 2},
             "status": {"availableReplicas": 2},
         }
@@ -370,8 +379,10 @@ def test_snapshot_collects_optional_kruise_workloads_without_poisoning_required_
     }
 
 
+@pytest.mark.parametrize("include_cluster_inventory", [False, True])
 def test_snapshot_marks_kruise_collection_failure_in_workload_lane(
     monkeypatch: pytest.MonkeyPatch,
+    include_cluster_inventory: bool,
 ) -> None:
     def _kubectl_json(args, *_args, **_kwargs):
         command = tuple(args)
@@ -415,12 +426,16 @@ def test_snapshot_marks_kruise_collection_failure_in_workload_lane(
     snapshot = collect_kubectl_soperator_snapshot(
         kube_context="ctx-a",
         require_complete_identity=False,
+        include_cluster_inventory=include_cluster_inventory,
     )
 
     lanes = {lane["name"]: lane for lane in snapshot["collection_lanes"]}
     assert lanes["soperator-workloads"]["status"] == "failed"
     assert lanes["soperator-workloads"]["item_count"] is None
     assert any(error.get("collector") == "kubectl" for error in snapshot["collection_errors"])
+    assert sum(error.get("collector") == "kubectl" for error in snapshot["collection_errors"]) == (
+        2 if include_cluster_inventory else 1
+    )
 
 
 def test_snapshot_projects_ready_flux_owned_soperator_release(
@@ -1067,7 +1082,7 @@ def test_live_provenance_uses_exact_helm_render_and_live_object_uids(
             stderr="",
         )
 
-    monkeypatch.setattr("nebius_cxcli.soperator_registration.subprocess.run", _run)
+    monkeypatch.setattr("nebius_cxcli.soperator_registration.kubernetes_process.run", _run)
 
     evidence = verify_live_soperator_release_provenance(
         kube_context="ctx",
@@ -1148,7 +1163,7 @@ def test_live_provenance_rejects_live_object_spec_drift(
             stderr="",
         )
 
-    monkeypatch.setattr("nebius_cxcli.soperator_registration.subprocess.run", _run)
+    monkeypatch.setattr("nebius_cxcli.soperator_registration.kubernetes_process.run", _run)
 
     with pytest.raises(RuntimeError, match="live object content differs"):
         verify_live_soperator_release_provenance(

@@ -1,0 +1,87 @@
+{
+  "correctness": {
+    "all_batches_pinned": true,
+    "checksum": true
+  },
+  "lab": "05_input_pipeline",
+  "measurements": {
+    "batches": 50,
+    "variants": {
+      "num_workers_0": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 0,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.2162,
+            "min_ms": 0.2036,
+            "p90_ms": 0.2454,
+            "sample_count": 50
+          },
+          "device_consumption": {
+            "median_ms": 0.0348,
+            "min_ms": 0.03,
+            "p90_ms": 0.0445,
+            "sample_count": 50
+          },
+          "end_to_end": {
+            "median_ms": 0.3016,
+            "min_ms": 0.2759,
+            "p90_ms": 0.3401,
+            "sample_count": 50
+          },
+          "h2d": {
+            "median_ms": 0.0176,
+            "min_ms": 0.0158,
+            "p90_ms": 0.0218,
+            "sample_count": 50
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": null
+      },
+      "num_workers_4": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 4,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.2208,
+            "min_ms": 0.0381,
+            "p90_ms": 0.434,
+            "sample_count": 50
+          },
+          "device_consumption": {
+            "median_ms": 0.1597,
+            "min_ms": 0.0443,
+            "p90_ms": 0.2802,
+            "sample_count": 50
+          },
+          "end_to_end": {
+            "median_ms": 0.6644,
+            "min_ms": 0.1633,
+            "p90_ms": 0.9021,
+            "sample_count": 50
+          },
+          "h2d": {
+            "median_ms": 0.0806,
+            "min_ms": 0.0357,
+            "p90_ms": 0.1284,
+            "sample_count": 50
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": 2
+      }
+    }
+  },
+  "parameters": {
+    "batches": 50,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

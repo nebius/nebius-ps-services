@@ -153,6 +153,31 @@ def test_soperator_child_chart_warnings_flag_activechecks_training_impact() -> N
     assert "Unreviewed passive checks remain enabled" in warnings[0]
 
 
+def test_fast_warning_keeps_controller_distinct_from_diagnostic_coverage() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "deploymentProfile": "fast-dev-test",
+                        "soperator-activechecks": {"enabled": True},
+                    },
+                }
+            ]
+        }
+    }
+    warning = " ".join(soperator_child_chart_warnings(payload))
+    assert "controller is enabled" in warning
+    assert "keeps reviewed active and passive diagnostics disabled" in warning
+    assert "operational hooks are retained" in warning
+    assert "Passive checks resume" not in warning
+    payload["apps"]["charts"][0]["id"] = "grafana"
+    assert not soperator_child_chart_warnings(payload)
+
+
 def test_soperator_child_chart_warnings_flag_checks_controller_without_activechecks() -> None:
     payload = {
         "apps": {
@@ -203,7 +228,7 @@ def test_soperator_child_chart_warnings_flag_rebooter_host_maintenance() -> None
     assert "actual host reboot happens only after SlurmNodeReboot" in warnings[0]
 
 
-def test_soperator_child_chart_warnings_flag_soperator_dcgm_exporter() -> None:
+def test_soperator_upstream_dcgm_does_not_warn_about_duplicate_exporters() -> None:
     payload = {
         "apps": {
             "charts": [
@@ -213,7 +238,7 @@ def test_soperator_child_chart_warnings_flag_soperator_dcgm_exporter() -> None:
                     "target_ref": "cluster1",
                     "enabled": True,
                     "values": {
-                        "soperator-dcgm-exporter": {"enabled": True},
+                        "observability": {"dcgmExporter": {"enabled": True}},
                     },
                 },
             ]
@@ -222,9 +247,7 @@ def test_soperator_child_chart_warnings_flag_soperator_dcgm_exporter() -> None:
 
     warnings = soperator_child_chart_warnings(payload)
 
-    assert len(warnings) == 1
-    assert "Soperator DCGM job-mapping exporter is enabled for target cluster1" in warnings[0]
-    assert "NVIDIA GPU Operator DCGM exporter plus the Nebius Observability Agent" in warnings[0]
+    assert warnings == ()
 
 
 def test_soperator_null_chart_values_are_pruned_before_render() -> None:

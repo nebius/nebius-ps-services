@@ -3,21 +3,21 @@
 These are layout-budget regressions, not browser or font-rendering proof.
 """
 
+from course_builder import metadata as cb_metadata, visuals as cb_visuals
 import re
 import xml.etree.ElementTree as ET
 
 import pytest
 
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_overviews_keep_readable_scale_in_a_narrow_article(course: str) -> None:
-    builder = load_builder()
     for index, row in enumerate(
-        builder.parse_visuals(ROOT / course / "reference/visual-plan.md"), 1
+        cb_metadata.parse_visuals(ROOT / course / "reference/visual-plan.md"), 1
     ):
-        markup = builder.diagram(row, index)
+        markup = cb_visuals.diagram(row, index)
         svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
         width = float(svg.get("viewBox").split()[2])
         # At a 320px figure width, 18-unit labels retain at least 12px type.
@@ -26,10 +26,9 @@ def test_overviews_keep_readable_scale_in_a_narrow_article(course: str) -> None:
 
 
 def test_pipeline_copy_completion_precedes_dependent_compute() -> None:
-    builder = load_builder()
-    rows = builder.parse_visuals(ROOT / "custom-cuda-kernels/reference/visual-plan.md")
+    rows = cb_metadata.parse_visuals(ROOT / "custom-cuda-kernels/reference/visual-plan.md")
     row = next(row for row in rows if row.layout == "pipeline")
-    markup = builder.diagram(row, 1)
+    markup = cb_visuals.diagram(row, 1)
     svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
     completion = next(
         node
@@ -47,9 +46,8 @@ def test_pipeline_copy_completion_precedes_dependent_compute() -> None:
 
 
 def test_multiline_overview_label_is_centered_in_its_slot() -> None:
-    builder = load_builder()
     label = ET.fromstring(
-        builder.svg_label(
+        cb_visuals.svg_label(
             "Correctness and scoped performance report", 480, 225, width=24
         )
     )
@@ -65,12 +63,12 @@ def test_multiline_overview_label_is_centered_in_its_slot() -> None:
 @pytest.mark.parametrize("value", ["word " * 30, "unbroken" * 20])
 def test_overview_label_rejects_content_that_cannot_fit(value: str) -> None:
     with pytest.raises(ValueError, match="diagram label"):
-        load_builder().svg_label(value, 165, 130)
+        cb_visuals.svg_label(value, 165, 130)
 
 
 def test_shallow_slots_reject_three_line_labels() -> None:
     with pytest.raises(ValueError, match="diagram label"):
-        load_builder().svg_label("first second third", 480, 85, width=6, max_lines=2)
+        cb_visuals.svg_label("first second third", 480, 85, width=6, max_lines=2)
 
 
 def test_copy_ready_labels_are_beside_dependency_arrows() -> None:

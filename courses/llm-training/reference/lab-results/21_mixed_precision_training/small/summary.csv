@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,modes_fp32_warmed_timing_median_end_to_end_step_seconds,value,0.0040225999999999994,s
+baseline-trial1,modes_bf16_warmed_timing_median_end_to_end_step_seconds,value,0.0043561,s
+baseline-trial1,modes_fp16_warmed_timing_median_end_to_end_step_seconds,value,0.0046989,s
+repeat-trial1,modes_fp32_warmed_timing_median_end_to_end_step_seconds,value,0.0035118000000000003,s
+repeat-trial1,modes_bf16_warmed_timing_median_end_to_end_step_seconds,value,0.0041266,s
+repeat-trial1,modes_fp16_warmed_timing_median_end_to_end_step_seconds,value,0.0042461,s

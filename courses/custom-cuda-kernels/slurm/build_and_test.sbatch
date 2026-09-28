@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: CUDA_IMAGE_DIGEST=... CUTLASS_ROOT=... COURSE_CONTAINER_RUNNER=... sbatch %s\n' "$0"
+  printf 'Usage: CUDA_IMAGE_DIGEST=... CUTLASS_ROOT=... COURSE_CONTAINER_RUNNER=... python3 tools/submit_lab.py --lab LAB_ID %s\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi
@@ -18,7 +18,7 @@ if [[ -z ${SLURM_JOB_ID:-} ]]; then printf 'ERROR: submit with sbatch.\n' >&2; e
 : "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
 if [[ ${CUDA_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then printf 'ERROR: immutable image and executable runner required.\n' >&2; exit 2; fi
 if [[ ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then printf 'ERROR: SLURM_JOB_ID must be numeric.\n' >&2; exit 2; fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit from the custom-cuda-kernels course root.}
+course_dir=$PWD
 if [[ ! -f ${course_dir}/CMakeLists.txt ]]; then printf 'ERROR: CMakeLists.txt is unavailable.\n' >&2; exit 2; fi
 if [[ ! -f ${CUTLASS_ROOT}/include/cutlass/version.h ]]; then printf 'ERROR: CUTLASS_ROOT does not contain include/cutlass/version.h.\n' >&2; exit 2; fi
 cd "${course_dir}"
@@ -30,3 +30,5 @@ srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIG
   cmake --build "${build_dir}" --parallel
 srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" \
   ctest --test-dir "${build_dir}" --output-on-failure
+
+printf 'Completed build directory: %s/%s\n' "${course_dir}" "${build_dir}"

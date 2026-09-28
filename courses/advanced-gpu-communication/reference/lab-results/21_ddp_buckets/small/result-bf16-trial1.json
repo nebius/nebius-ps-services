@@ -1,0 +1,396 @@
+{
+  "correctness": {
+    "candidate_and_reference_sgd_checked": true,
+    "finite_gradients_parameters_and_losses": true
+  },
+  "lab": "21_ddp_buckets",
+  "measurements": {
+    "bucket_cap_mb": 0.1,
+    "hook": "bf16",
+    "power_rank": 1,
+    "power_start": 2,
+    "slowest_rank_step_samples_ms": [
+      1.9166110432706773,
+      2.0306800142861903,
+      1.8826349987648427,
+      1.91650097258389,
+      1.897416019346565,
+      1.8705700058490038,
+      1.8472439842298627,
+      2.207780024036765,
+      1.8700389773584902,
+      1.8520820303820074
+    ],
+    "step": {
+      "median_ms": 1.89,
+      "min_ms": 1.8472,
+      "p90_ms": 2.0307
+    },
+    "trajectory": [
+      {
+        "candidate_global_loss": 0.044725775718688965,
+        "gradient_trajectory_relative_l2": 0.002408195641426928,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 1052672
+          }
+        ],
+        "parameter_trajectory_relative_l2": 1.726142901014137e-07,
+        "reference_global_loss": 0.044725775718688965,
+        "step": 0,
+        "warmup": true
+      },
+      {
+        "candidate_global_loss": 0.04469172656536102,
+        "gradient_trajectory_relative_l2": 0.002409151492393221,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 2.9297719141326017e-07,
+        "reference_global_loss": 0.04469172656536102,
+        "step": 1,
+        "warmup": true
+      },
+      {
+        "candidate_global_loss": 0.04465774446725845,
+        "gradient_trajectory_relative_l2": 0.0024103350269310464,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 3.8597923351286266e-07,
+        "reference_global_loss": 0.04465774446725845,
+        "step": 2,
+        "warmup": true
+      },
+      {
+        "candidate_global_loss": 0.044623833149671555,
+        "gradient_trajectory_relative_l2": 0.002405718762117541,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 4.6003156672483774e-07,
+        "reference_global_loss": 0.044623829424381256,
+        "step": 3,
+        "warmup": true
+      },
+      {
+        "candidate_global_loss": 0.04458998888731003,
+        "gradient_trajectory_relative_l2": 0.0023868778133992554,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 5.200979189987981e-07,
+        "reference_global_loss": 0.04458998888731003,
+        "step": 4,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.044556211680173874,
+        "gradient_trajectory_relative_l2": 0.002409997789811769,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 5.719767983738925e-07,
+        "reference_global_loss": 0.044556207954883575,
+        "step": 5,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.04452250152826309,
+        "gradient_trajectory_relative_l2": 0.0024186312594530047,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 6.167543209762767e-07,
+        "reference_global_loss": 0.04452250152826309,
+        "step": 6,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.04448886215686798,
+        "gradient_trajectory_relative_l2": 0.002408917329393505,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 6.57645448037838e-07,
+        "reference_global_loss": 0.044488854706287384,
+        "step": 7,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.044455282390117645,
+        "gradient_trajectory_relative_l2": 0.002416322504035335,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 6.952563466595585e-07,
+        "reference_global_loss": 0.044455282390117645,
+        "step": 8,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.04442177712917328,
+        "gradient_trajectory_relative_l2": 0.002400569820236539,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 7.318226841195347e-07,
+        "reference_global_loss": 0.04442177340388298,
+        "step": 9,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.04438833147287369,
+        "gradient_trajectory_relative_l2": 0.002393508067272239,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 7.665350161019873e-07,
+        "reference_global_loss": 0.04438833147287369,
+        "step": 10,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.044354960322380066,
+        "gradient_trajectory_relative_l2": 0.002399717506491973,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 8.000909652076755e-07,
+        "reference_global_loss": 0.04435495287179947,
+        "step": 11,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.04432164877653122,
+        "gradient_trajectory_relative_l2": 0.002401079210980531,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 8.324871256225704e-07,
+        "reference_global_loss": 0.04432164505124092,
+        "step": 12,
+        "warmup": false
+      },
+      {
+        "candidate_global_loss": 0.044288408011198044,
+        "gradient_trajectory_relative_l2": 0.0023925367461108023,
+        "observed_buckets": [
+          {
+            "index": 0,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 1,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 2,
+            "uncompressed_bytes": 263168
+          },
+          {
+            "index": 3,
+            "uncompressed_bytes": 263168
+          }
+        ],
+        "parameter_trajectory_relative_l2": 8.631644884518524e-07,
+        "reference_global_loss": 0.044288404285907745,
+        "step": 13,
+        "warmup": false
+      }
+    ]
+  },
+  "parameters": {
+    "bucket_cap_mb": 0.1,
+    "hook": "bf16",
+    "iterations": 10,
+    "power_rank": 1,
+    "power_start": 2,
+    "seed": 17,
+    "warmup": 4,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

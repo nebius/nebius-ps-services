@@ -26,6 +26,10 @@ exact-SHA publication-only mode and findings-and-readiness-only review. Any
 required branch change returns through failure classification and the
 coordinator.
 
+Startup also publishes the private JSON `active.lock` ownership record and
+verifies that hook discovery resolves the exact selected project and run. An
+empty file or advisory lock alone does not register a workflow.
+
 Gate failures use one private, deterministic repair-control contract.
 Already-proven mechanical causes take the shortest route to their owning
 phase. Ambiguous or persistent failures enter `troubleshoot` as a conditional
@@ -78,11 +82,16 @@ fresh session requires its own exact init or run command before later capture.
 Secrets and capture failures do not persist or block the direct request. Manual
 prompt-file edits and captured prompt updates still require explicit `run`.
 
-Before design or planning, the requirements adapter records the compiled
-`docs/requirements.md` digest in private refinement state and supplies a
-complete statement-occurrence impact claim. The shared spec owner validates
-that claim against current requirements and design, derives retain/replan, and
-publishes append-only private impact evidence. Matching bytes or a bare
+Fresh projects first receive an inert draft-pair bootstrap through
+`maintain-project-specs`; existing document bytes are preserved and no design
+readiness is claimed. The requirements adapter records the compiled
+`docs/requirements.md` digest in private refinement state. The read-only
+`refinement-ready` helper checks that binding before context/design without
+publishing impact evidence. After ready design and before planning, the
+coordinator supplies a complete statement-occurrence impact claim to
+`refinement-verify`. The shared spec owner validates that claim against current
+requirements and design, derives retain/replan, and publishes append-only
+private impact evidence. Matching bytes or a bare
 `no_effect` classification cannot unlock execution. Each feature execution
 plan has a separate basis settlement; later no-effect revisions may retain it,
 while contract or execution effects and later spec drift block new progression

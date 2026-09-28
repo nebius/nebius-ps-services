@@ -1,0 +1,6 @@
+interface:
+  display_name: "Run Course Labs"
+  short_description: "Run course labs and refresh verified student evidence"
+  default_prompt: "Use $run-labs to execute selected course labs on the prepared cluster and refresh their verified evidence."
+policy:
+  allow_implicit_invocation: true

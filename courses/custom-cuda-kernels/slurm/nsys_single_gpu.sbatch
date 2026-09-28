@@ -7,8 +7,10 @@
 
 set -euo pipefail
 umask 077
+export COURSE_CAPTURE=1
+export COURSE_PROFILE_TOOL=nsys
 if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 2 ]]; then
-  printf 'Usage: sbatch [site options] %s OUTPUT_PREFIX EXECUTABLE [arguments]\n' "$0" >&2
+  printf 'Usage: python3 tools/submit_lab.py --lab 03_tiled_transpose [Slurm --name=value options] %s OUTPUT_PREFIX EXECUTABLE [arguments]\n' "$0" >&2
   exit 2
 fi
 : "${CUDA_IMAGE_DIGEST:?set the exact qualified CUDA development image digest}"
@@ -17,4 +19,4 @@ if [[ ${CUDA_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; 
 output="$1"
 executable="$2"
 shift 2
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" nsys profile --force-overwrite=false --output="${output}" "${executable}" "$@"
+srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" env -u DEBUGINFOD_URLS nsys profile --force-overwrite=false --discard-environment=true --output="${output}" "${executable}" "$@"

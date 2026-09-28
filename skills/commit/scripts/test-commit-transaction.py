@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 COMMIT_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,8 @@ class CommitTransactionTest(unittest.TestCase):
         git(self.root, "add", "-A")
         git(self.root, "commit", "-qm", "baseline")
         git(self.root, "switch", "-qc", "feature/test")
+        self.request_assertions = {}
+        self.turn_counter = 0
         self.previous_home = os.environ.get("CODEX_HOME")
         os.environ["CODEX_HOME"] = str(self.codex_home)
 
@@ -83,8 +86,10 @@ class CommitTransactionTest(unittest.TestCase):
         prompt: str = "$commit Test complete repository change",
         *,
         session_id: str = "session-1",
-        turn_id: str = "turn-1",
+        turn_id: str | None = None,
     ) -> Path:
+        self.turn_counter += 1
+        turn_id = turn_id or f"turn-{self.turn_counter}"
         result = intent.evaluate(
             {
                 "hook_event_name": "UserPromptSubmit",
@@ -96,10 +101,21 @@ class CommitTransactionTest(unittest.TestCase):
             }
         )
         context = result["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("Explicit commit transaction authorization", context)
-        return transaction.expected_authorization_path(self.root, session_id)
+        self.assertIn("Commit intent receipt only", context)
+        path = transaction.expected_authorization_path(self.root, session_id)
+        receipt = json.loads(path.with_name("intent.json").read_text())
+        self.request_assertions[session_id] = (
+            "--requested-action", "commit",
+            "--intent-sha256", transaction._digest_bytes(transaction._stable_json(receipt)),
+        )
+        return path
 
-    def run_helper(self, *arguments: str, expected: int = 0) -> dict[str, object]:
+    def run_helper(
+        self, *arguments: str, expected: int = 0, classify: bool = True
+    ) -> dict[str, object]:
+        if arguments[0] == "prepare" and classify and "--requested-action" not in arguments:
+            session = arguments[arguments.index("--session-id") + 1]
+            arguments = (*arguments, *self.request_assertions.get(session, ()))
         environment = os.environ.copy()
         environment["CODEX_HOME"] = str(self.codex_home)
         completed = subprocess.run(
@@ -143,116 +159,172 @@ class CommitTransactionTest(unittest.TestCase):
             "untracked\n", encoding="utf-8"
         )
 
-    def test_only_bounded_root_user_commit_turn_mints_authorization(self) -> None:
+    def test_root_turn_receipts_are_nonauthorizing_and_exclude_generated_origins(self) -> None:
         base = {
-            "hook_event_name": "UserPromptSubmit",
-            "cwd": str(self.root),
-            "session_id": "session-1",
-            "turn_id": "turn-1",
-            "agent_type": "root",
+            "hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+            "session_id": "session-1", "turn_id": "turn-1", "agent_type": "root",
         }
         for prompt in (
-            "$commit",
-            "$commit Fix docs",
-            "run $commit",
-            "run $commit Fix docs",
-            "apply $commit Fix docs",
-            "execute $commit Fix docs",
-            "invoke $commit Fix docs",
-            "Use $commit Fix docs",
-            "please run $commit Fix docs",
-            "please $commit Fix docs",
-            "$commit-push",
-            "$commit-push Fix docs",
-            "run $commit-push",
-            "please use $commit-push Fix docs",
+            "$commit-push", "commit and push using $commit-push",
+            "please commit and push", "Could you commit everything and push this branch?",
+            "Please use /skills:commit-push now", "run `$commit`",
+            "Do not commit or push", "Can you discuss `$commit`?",
+            "Fix the $commit-push skill; the agent told me to send $commit-push",
+            "Example: run $commit", "$commit --help", "run $commit-push --help",
         ):
             with self.subTest(prompt=prompt):
                 result = intent.evaluate({**base, "prompt": prompt})
-                self.assertIn("hookSpecificOutput", result)
-        primary_without_agent_type = {**base, "prompt": "run $commit"}
-        primary_without_agent_type.pop("agent_type")
-        self.assertIn("hookSpecificOutput", intent.evaluate(primary_without_agent_type))
-        for prompt in (
-            "please use commit",
-            "Can you discuss `$commit`?",
-            "Can you run $commit?",
-            "Example: run $commit",
-            "If needed, run $commit",
-            "Do not run $commit",
-            'run "$commit"',
-            "run `$commit`",
-            "$commit --help",
-            "run $commit --help",
-            "apply $commit -h",
-            "run $commit-push --help",
-            "$commitment",
+                self.assertIn("Commit intent receipt only", result["hookSpecificOutput"]["additionalContext"])
+                path = transaction.expected_authorization_path(self.root, "session-1")
+                receipt = json.loads(path.with_name("intent.json").read_text())
+                self.assertNotIn(prompt, json.dumps(receipt))
+                self.assertFalse(path.exists())
+                self.assertFalse(transaction.expected_claim_path(self.root).exists())
+                self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        for excluded in (
+            {"is_subagent": True}, {"stop_hook_active": True},
+            {"prompt_source": "stop"}, {"prompt_source": "continuation"},
+            {"prompt_source": "compaction"}, {"prompt_source": "subagent"},
+            {"prompt_source": "system"}, {"prompt_source": "user", "source": "subagent"},
+            {"agent_type": "worker"}, {"hook_event_name": "PreToolUse"},
         ):
-            with self.subTest(prompt=prompt):
-                self.assertEqual(intent.evaluate({**base, "prompt": prompt}), {})
-        excluded_payloads = (
-            {"is_subagent": True},
-            {"stop_hook_active": True},
-            {"prompt_source": "stop"},
-            {"prompt_source": "continuation"},
-            {"prompt_source": "compaction"},
-            {"prompt_source": "subagent"},
-            {"prompt_source": "system"},
-            {"prompt_source": "user", "source": "subagent"},
-            {"agent_type": "worker"},
-            {"hook_event_name": "PreToolUse"},
-        )
-        for excluded in excluded_payloads:
             with self.subTest(excluded=excluded):
-                self.assertEqual(
-                    intent.evaluate({**base, "prompt": "run $commit now", **excluded}),
-                    {},
-                )
-        self.assertEqual(intent.evaluate({**base, "prompt": None}), {})
-        for missing_identity in (
-            {"session_id": None},
-            {"session_id": ""},
-            {"turn_id": None},
-            {"turn_id": ""},
-        ):
-            with self.subTest(missing_identity=missing_identity):
-                with self.assertRaises(intent.IntentError):
-                    intent.evaluate(
-                        {
-                            **base,
-                            "prompt": "run $commit now",
-                            **missing_identity,
-                        }
-                    )
-        self.assertFalse(
-            intent._default_branch_authorized("$commit Fix docs", "refs/heads/main")
+                self.assertEqual(intent.evaluate({**base, "prompt": "please commit", **excluded}), {})
+        result = intent.evaluate({**base, "prompt": "hello", "cwd": str(self.base)})
+        self.assert_capture_unavailable(result, "REPOSITORY_UNAVAILABLE")
+
+    def assert_capture_unavailable(self, result, reason):
+        self.assertIs(result.get("continue"), True)
+        output = result["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "UserPromptSubmit")
+        self.assertIn(f"Commit intent receipt unavailable ({reason})", output["additionalContext"])
+        self.assertNotIn("--intent-sha256", output["additionalContext"])
+        self.assertNotIn("Canonical authorization path:", output["additionalContext"])
+
+    def test_root_capture_failures_report_reason_without_replacing_old_receipt(self):
+        authorization = self.authorize()
+        receipt = authorization.with_name("intent.json")
+        before = receipt.read_bytes()
+        payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+                   "session_id": "session-1", "turn_id": "new-turn", "prompt": "please commit"}
+        for key in ("session_id", "turn_id", "prompt"):
+            for value in (None, "", "  ", [], True):
+                with self.subTest(key=key, value=value):
+                    result = intent.evaluate({**payload, key: value})
+                    self.assert_capture_unavailable(result, "PROMPT_UNAVAILABLE" if key == "prompt"
+                                                    else "NATIVE_IDENTITY_UNAVAILABLE")
+                    self.assertEqual(receipt.read_bytes(), before)
+                    self.assertFalse(authorization.exists())
+                    self.assertFalse(transaction.expected_claim_path(self.root).exists())
+                    self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_capture_git_failure_withholds_details_and_preserves_active_claim(self):
+        self.seed_multi_project_diff()
+        self.prepare()
+        paths = (transaction.expected_authorization_path(self.root, "session-1"),
+                 transaction.expected_claim_path(self.root))
+        before = {path: path.read_bytes() for path in (*paths, paths[0].with_name("intent.json"))}
+        status = git(self.root, "status", "--porcelain")
+        payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+                   "session_id": "session-1", "turn_id": "new-turn", "prompt": "private-prompt-marker"}
+        with mock.patch.object(intent, "_identity", side_effect=intent.IntentError("private-error-marker")):
+            result = intent.evaluate(payload)
+        self.assert_capture_unavailable(result, "REPOSITORY_UNAVAILABLE")
+        self.assertNotIn("private-", json.dumps(result))
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertEqual(git(self.root, "status", "--porcelain"), status)
+
+    def test_capture_write_failure_withholds_details_and_preserves_old_receipt(self):
+        authorization = self.authorize()
+        receipt = authorization.with_name("intent.json")
+        before = receipt.read_bytes()
+        payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+                   "session_id": "session-1", "turn_id": "new-turn", "prompt": "private-prompt-marker"}
+        with mock.patch.object(intent, "_write", side_effect=intent.IntentError("private-error-marker")):
+            result = intent.evaluate(payload)
+        self.assert_capture_unavailable(result, "RECEIPT_WRITE_FAILED")
+        self.assertNotIn("private-", json.dumps(result))
+        self.assertEqual(receipt.read_bytes(), before)
+        self.assertFalse(authorization.exists())
+        self.assertFalse(transaction.expected_claim_path(self.root).exists())
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_capture_sync_failure_emits_no_context_even_after_receipt_replacement(self):
+        authorization = self.authorize()
+        receipt = authorization.with_name("intent.json")
+        payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(self.root),
+                   "session_id": "session-1", "turn_id": "new-turn", "prompt": "private-prompt-marker"}
+        with mock.patch.object(intent, "_fsync_directory", side_effect=OSError("private-error-marker")):
+            result = intent.evaluate(payload)
+        self.assert_capture_unavailable(result, "RECEIPT_WRITE_FAILED")
+        self.assertNotIn("private-", json.dumps(result))
+        self.assertEqual(json.loads(receipt.read_text())["turn_sha256"], intent._digest("new-turn"))
+        self.assertFalse(authorization.exists())
+        self.assertFalse(transaction.expected_claim_path(self.root).exists())
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_direct_prepare_requires_matching_assertion_and_rejects_receipt_replay(self) -> None:
+        self.seed_multi_project_diff()
+        authorization = self.authorize("commit and push using $commit-push")
+        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)))
+        before = git(self.root, "write-tree")
+        self.run_helper(*args, expected=2, classify=False)
+        self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", "f" * 64, expected=2)
+        self.assertFalse(authorization.exists())
+        self.assertEqual(git(self.root, "write-tree"), before)
+        digest = self.request_assertions["session-1"][-1]
+        explicit = (*args, "--requested-action", "commit-push", "--intent-sha256", digest)
+        self.assertEqual(self.run_helper(*explicit)["status"], "prepared")
+        blocked = self.run_helper(*explicit, expected=2)
+        self.assertIn("already consumed", blocked["reason"])
+
+    def test_receipt_identity_and_default_branch_publication_are_enforced(self) -> None:
+        self.seed_multi_project_diff()
+        authorization = self.authorize("please commit and push")
+        receipt_path = authorization.with_name("intent.json")
+        receipt = json.loads(receipt_path.read_text())
+        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)),
+                "--requested-action", "commit-push")
+        before = git(self.root, "write-tree")
+        for field in ("session_sha256", "repo_root", "base_head", "schema"):
+            with self.subTest(field=field):
+                changed = {**receipt, field: "f" * 64}
+                receipt_path.write_bytes(transaction._stable_json(changed))
+                self.run_helper(*args, "--intent-sha256", transaction._digest_bytes(transaction._stable_json(changed)), expected=2)
+                self.assertFalse(authorization.exists())
+        receipt_path.write_bytes(transaction._stable_json(receipt))
+        digest = transaction._digest_bytes(transaction._stable_json(receipt))
+        blocked = self.run_helper(*args, "--intent-sha256", digest, "--allow-default-branch", expected=2)
+        self.assertIn("never authorizes default-branch", blocked["reason"])
+        receipt_path.chmod(0o644)
+        self.run_helper(*args, "--intent-sha256", digest, expected=2)
+        self.assertFalse(authorization.exists())
+        self.assertEqual(git(self.root, "write-tree"), before)
+
+    def test_new_semantic_turn_after_consumption_and_unrelated_turn_preserves_claim(self) -> None:
+        self.seed_multi_project_diff()
+        prepared = self.prepare()
+        authorization = transaction.expected_authorization_path(self.root, "session-1")
+        consumed = authorization.read_bytes()
+        self.authorize("What changed?")  # Receipt only; no helper action requested.
+        self.assertEqual(authorization.read_bytes(), consumed)
+        result = self.run_helper(
+            "execute", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--claim", str(prepared["claim"]), "--token", str(prepared["token"]),
+            "--reviewed-tree", str(prepared["candidate_tree"]), "--message", "First change",
         )
-        self.assertTrue(
-            intent._default_branch_authorized(
-                "$commit on main Fix docs", "refs/heads/main"
-            )
-        )
-        self.assertTrue(
-            intent._default_branch_authorized(
-                "run $commit on main Fix docs", "refs/heads/main"
-            )
-        )
-        self.assertTrue(
-            intent._default_branch_authorized(
-                "please execute $commit on the default branch Fix docs",
-                "refs/heads/main",
-            )
-        )
-        self.assertFalse(
-            intent._default_branch_authorized(
-                "$commit on mainframe Fix docs", "refs/heads/main"
-            )
-        )
-        self.assertFalse(
-            intent._default_branch_authorized(
-                "$commit-push on main Fix docs", "refs/heads/main"
-            )
-        )
+        self.assertEqual(result["status"], "committed")
+        (self.root / "next.txt").write_text("next change\n")
+        self.authorize("please commit and push")
+        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)))
+        old_digest = self.request_assertions["session-1"][-1]
+        self.authorize("Could you commit everything and push this branch?")
+        self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", old_digest, expected=2)
+        fresh = self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", self.request_assertions["session-1"][-1])
+        self.assertEqual(fresh["status"], "prepared")
 
     def test_default_branch_requires_explicit_prompt_binding(self) -> None:
         self.seed_multi_project_diff()
@@ -312,8 +384,8 @@ class CommitTransactionTest(unittest.TestCase):
         previous_index = os.environ.get("GIT_INDEX_FILE")
         os.environ["GIT_INDEX_FILE"] = str(alternate_index)
         try:
-            with self.assertRaises(intent.IntentError):
-                intent.evaluate(
+            receipt = authorization.with_name("intent.json").read_bytes()
+            self.assert_capture_unavailable(intent.evaluate(
                     {
                         "hook_event_name": "UserPromptSubmit",
                         "cwd": str(self.root),
@@ -322,7 +394,8 @@ class CommitTransactionTest(unittest.TestCase):
                         "agent_type": "root",
                         "prompt": "run $commit",
                     }
-                )
+                ), "REPOSITORY_UNAVAILABLE")
+            self.assertEqual(authorization.with_name("intent.json").read_bytes(), receipt)
             blocked = self.run_helper(
                 "prepare",
                 "--repo-root",
@@ -652,7 +725,7 @@ class CommitTransactionTest(unittest.TestCase):
             "Hook rejects commit",
             expected=2,
         )
-        self.assertIn("fresh explicit $commit", str(blocked["reason"]))
+        self.assertIn("request a fresh commit", str(blocked["reason"]))
         claim = json.loads(Path(str(prepared["claim"])).read_text(encoding="utf-8"))
         self.assertEqual(claim["state"], "STALE")
 
@@ -779,7 +852,7 @@ class CommitTransactionTest(unittest.TestCase):
             "Must not duplicate outside history",
             expected=2,
         )
-        self.assertIn("fresh explicit $commit", str(blocked["reason"]))
+        self.assertIn("request a fresh commit", str(blocked["reason"]))
         claim = json.loads(Path(str(prepared["claim"])).read_text(encoding="utf-8"))
         self.assertEqual(claim["state"], "STALE")
 
@@ -815,7 +888,7 @@ class CommitTransactionTest(unittest.TestCase):
             "Must reject merge history",
             expected=2,
         )
-        self.assertIn("fresh explicit $commit", str(blocked["reason"]))
+        self.assertIn("request a fresh commit", str(blocked["reason"]))
         claim = json.loads(Path(str(prepared["claim"])).read_text(encoding="utf-8"))
         self.assertEqual(claim["state"], "STALE")
 
@@ -932,8 +1005,13 @@ class CommitTransactionTest(unittest.TestCase):
                 "agent_type": "root",
             }
         )
-        self.assertIn("Explicit commit transaction authorization", str(result))
+        self.assertIn("Commit intent receipt only", str(result))
         authorization = transaction.expected_authorization_path(child, "session-1")
+        receipt = json.loads(authorization.with_name("intent.json").read_text())
+        self.request_assertions["session-1"] = (
+            "--requested-action", "commit", "--intent-sha256",
+            transaction._digest_bytes(transaction._stable_json(receipt)),
+        )
         claim = transaction.expected_claim_path(child)
         blocked = self.run_helper(
             "prepare",

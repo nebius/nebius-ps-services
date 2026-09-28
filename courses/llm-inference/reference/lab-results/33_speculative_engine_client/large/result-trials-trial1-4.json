@@ -1,0 +1,17 @@
+{
+  "correctness": {
+    "greedy_equivalence_requires_launcher_pair_comparison": true
+  },
+  "lab": "33_speculative_engine_client",
+  "measurements": {
+    "requests": 4,
+    "variant": "speculative"
+  },
+  "parameters": {
+    "requests": 4,
+    "variant": "speculative",
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

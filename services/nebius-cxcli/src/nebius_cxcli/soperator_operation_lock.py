@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from . import kubernetes_process
+
 
 @dataclass(frozen=True)
 class SoperatorLeaseAuthority:
@@ -177,7 +179,7 @@ class SoperatorOperationLease:
         else:
             env["KUBECONFIG"] = self._kubeconfig_env
         try:
-            return subprocess.run(
+            return kubernetes_process.run(
                 command,
                 input=input_text,
                 check=False,

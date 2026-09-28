@@ -1,0 +1,12 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "manifest.json",
+    "result-baseline-trial1.json",
+    "result-candidate-trial1.json",
+    "summary.csv"
+  ],
+  "identity": "120646a30c9ba407",
+  "schema": "run-labs-owned/v1"
+}

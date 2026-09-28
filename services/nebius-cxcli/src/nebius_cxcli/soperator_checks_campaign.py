@@ -96,6 +96,27 @@ class SoperatorCampaignChecks:
         target = self._execution(policy, "target")
         target.require_lifecycle().authorize_admission()
 
+    def documents_projection(self) -> Callable[..., list[dict[str, Any]]]:
+        """Freeze the exact current policy projection for independent observation."""
+        from .flux_ops import _staged_soperator_outer_release
+        from .soperator_checks_policy import operation_checks_documents
+
+        policy, _, _ = self.load_target()
+        context = self._execution(policy, "target").require_lifecycle().context()
+
+        def project(documents: list[dict[str, Any]], releases: Any) -> list[dict[str, Any]]:
+            outer = _staged_soperator_outer_release(documents, releases)
+            return operation_checks_documents(
+                documents,
+                policy,
+                installing=False,
+                outer_namespace=outer["metadata"]["namespace"],
+                outer_name=outer["metadata"]["name"],
+                context=context,
+            )
+
+        return project
+
     def finish_admission(self) -> None:
         policy, _, _ = self.load_target()
         target = self._execution(policy, "target")
@@ -212,6 +233,10 @@ class SoperatorCampaignChecks:
             raise RuntimeError("campaign checks policy restoration is incomplete")
         target.verify_acceptance()
         self.verify_barrier()
+
+    def readiness_exemptions(self) -> dict[str, Any]:
+        policy, _workers, _gpu_workers = self.load_target()
+        return self._execution(policy, "target").readiness_exemptions()
 
     def verify_barrier(self) -> None:
         policy, _workers, _gpu_workers = self.load_target()

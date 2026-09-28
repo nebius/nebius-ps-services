@@ -1,0 +1,27 @@
+{
+  "correctness": {
+    "allclose": true
+  },
+  "lab": "07_async_streams",
+  "measurements": {
+    "independent_streams_device": {
+      "median_ms": 0.0618,
+      "min_ms": 0.0587,
+      "p90_ms": 0.0727
+    },
+    "matrix_width": 1024,
+    "sequential_device": {
+      "median_ms": 0.0277,
+      "min_ms": 0.026,
+      "p90_ms": 0.0292
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

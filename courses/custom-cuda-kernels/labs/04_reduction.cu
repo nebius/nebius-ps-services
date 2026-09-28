@@ -31,10 +31,10 @@ __global__ void block_atomic_sum(const float* input, float* output, std::size_t 
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 04_reduction [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 04_reduction [--profile small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
-    require_h100();
+    require_course_gpu();
     std::vector<float> input(count, 1.0F);
     DeviceBuffer<float> device_input(count), atomic_output(1), block_output(1), cub_output(1);
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
@@ -67,6 +67,7 @@ int main(int argc, char** argv) {
     print_timing("warp_block_atomic", block_timing);
     print_timing("cub", cub_timing);
     std::cout << "per_element_atomic_operations=" << count << "\nblock_atomic_operations=" << blocks << "\ncub_temporary_bytes=" << temporary_bytes << '\n';
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,ranks,value,16,none
+baseline-trial1,nvlink_peers_per_gpu,value,7,none
+baseline-trial1,active_ib_ports_per_node_min,value,8,none
+baseline-trial1,all_reduce_median_seconds,value,8.59085121192038e-05,s
+repeat-trial1,ranks,value,16,none
+repeat-trial1,nvlink_peers_per_gpu,value,7,none
+repeat-trial1,active_ib_ports_per_node_min,value,8,none
+repeat-trial1,all_reduce_median_seconds,value,7.322701276279986e-05,s

@@ -59,8 +59,11 @@ not a hook, performs semantic classification and repository writes.
   is never automatically rendered, applied, verified, reloaded, or sealed by
   this skill or its hooks.
 - Existing applicable `AGENTS.md` files remain authoritative instructions for
-  the current session. This skill never weakens them and never writes
-  `AGENTS.override.md`.
+  the current session subject to higher-priority instructions and explicit
+  user revisions of user-owned policy. This skill does not write instruction
+  files; route an explicit repair request to `project-agent-instructions`.
+  Do not require repeated approval for the same requested rule change, and
+  never create `AGENTS.override.md`.
 - Hooks are intake and observation guardrails only, never project
   authorization or repository writers.
 - Personal global instructions are conflict context only and are never copied
@@ -127,6 +130,28 @@ not a hook, performs semantic classification and repository writes.
 - Never project instructions, lifecycle phases, workflow state, or
   `AGENTS.override.md`.
 
+## Missing-Spec Bootstrap
+
+When an active workflow needs a first paired publication and either canonical
+document is absent, the coordinator invokes this owner before an authoring
+adapter. Use the owner templates to create only the missing documents, replace
+placeholders from accepted intent and inspected facts, and preserve each
+existing counterpart byte for byte. Never replace malformed or legacy specs as
+though they were absent; use their existing repair or migration path.
+
+Allocate stable evidence-backed requirement identities and at least one mapped
+draft feature where design is missing; an empty managed region is invalid. New
+design records use `status=draft` and `delivery=not-started`. State explicitly
+that context, architecture, selected/rejected options, implementation boundaries
+and validation decisions await substantive design authoring. Do not invent a
+selected design or mark it ready to satisfy a workflow gate.
+
+Publish through the paired transaction with exact current HEAD and both prior
+digests; use `absent` only for genuinely absent files. The draft pair remains
+`pending` and grants no prompt-impact, planning or execution authority. Return
+to the requirements adapter, which changes only requirements; the design
+adapter owns substantive design and readiness.
+
 ## Public Helper Surface
 
 `scripts/project_specs.py` exposes:
@@ -174,6 +199,12 @@ recover  --project-root <path>
 - Interpret compatibility intent semantically even without `GA`, `backward
   compatibility`, or another prescribed phrase; record explicit supported-user
   promises in requirements and design before changing the contract.
+- Treat an authorized task's necessary new credential or secret creation as
+  covered for its identified target and intended access scope. Specs may
+  describe that authority and secure storage, never secret values. Do not
+  invent a separate credential-approval gate. Uncovered access expansion,
+  credential replacement/revocation, destructive actions and disclosure retain
+  their own authority boundaries; these receipts grant none of them.
 
 ## Process
 
@@ -201,7 +232,10 @@ recover  --project-root <path>
    current or pending findings plus exact files changed and focused proof.
 8. If an explicit project-instruction mutation is separately requested, hand
    off to `project-agent-instructions`; it owns its own decision, provenance,
-   conflict, apply, verify, and reload safety.
+   conflict, apply, verify, and reload safety. A current request to repair
+   restrictive instructions is sufficient routing authority; do not ask for
+   another invocation. Its human-rule repair path does not require a receipt
+   solely to edit prose; managed generation still requires the canonical pair.
 
 ## Hook Contract
 

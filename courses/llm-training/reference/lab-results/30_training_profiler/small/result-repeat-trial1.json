@@ -1,0 +1,59 @@
+{
+  "correctness": {
+    "finite_loss": true
+  },
+  "lab": "30_training_profiler",
+  "measurements": {
+    "loss": 6.447497844696045,
+    "raw_trace_published": false,
+    "top_operators": [
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 69739.738
+      },
+      {
+        "cpu_time_us": 110787.644,
+        "cuda_time_us": 239.366
+      },
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 51.106
+      },
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 50.528
+      },
+      {
+        "cpu_time_us": 11536.043,
+        "cuda_time_us": 42.178
+      },
+      {
+        "cpu_time_us": 22532.368,
+        "cuda_time_us": 49.248
+      },
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 39.809
+      },
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 39.201
+      },
+      {
+        "cpu_time_us": 0,
+        "cuda_time_us": 31.585
+      },
+      {
+        "cpu_time_us": 84.558,
+        "cuda_time_us": 30.624
+      }
+    ]
+  },
+  "parameters": {
+    "external_only": false,
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

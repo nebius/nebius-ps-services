@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,bidirectional_Gbps,value,660.87,Gbits
+baseline-trial1,validated_bytes_min,value,58720256,bytes
+candidate-trial1,bidirectional_Gbps,value,250.1,Gbits
+candidate-trial1,validated_bytes_min,value,58720256,bytes
+depth64-trial1,bidirectional_Gbps,value,245.23,Gbits
+depth64-trial1,validated_bytes_min,value,62914560,bytes

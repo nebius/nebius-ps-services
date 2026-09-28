@@ -33,6 +33,8 @@ LESSON_FIELDS = {
     "practice-links": "Practice",
     "mental-model": "Mental model",
 }
+OPTIONAL_LESSON_FIELDS = {"lesson-references": "References"}
+LESSON_LABELS = LESSON_FIELDS | OPTIONAL_LESSON_FIELDS
 
 
 def safe_file(root: Path, relative: str) -> Path:
@@ -51,8 +53,9 @@ def safe_file(root: Path, relative: str) -> Path:
 
 
 class CoursePage(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, local_links: set[str] | None = None) -> None:
         super().__init__(convert_charrefs=True)
+        self.local_links = local_links or set()
         self.errors: list[str] = []
         self.ids: set[str] = set()
         self.fragments: list[str] = []
@@ -81,6 +84,138 @@ class CoursePage(HTMLParser):
         self.field_children = 0
         self.heading_depth: int | None = None
         self.heading_text: list[str] = []
+        self.glossary_section_depth: int | None = None
+        self.glossary_lists = 0
+        self.glossary_depth: int | None = None
+        self.glossary_entry_depth: int | None = None
+        self.glossary_entries: list[tuple[str, str]] = []
+        self.glossary_text: list[str] = []
+        self.presentation_headings: list[dict] = []
+        self.presentation_lists: list[dict] = []
+        self.course_section: dict | None = None
+        self.course_sections: list[tuple[str, str]] = []
+        self.nav_fragments: set[str] = set()
+
+    def start_presentation_list(self, expected: str, depth: int) -> None:
+        self.presentation_lists.append(
+            {
+                "depth": depth,
+                "tag": expected,
+                "items": 0,
+                "list_depth": None,
+                "item_depth": None,
+                "item_text": [],
+            }
+        )
+
+    def start_presentation_element(self, tag: str, attributes: dict[str, str]) -> None:
+        classes = attributes.get("class", "").split()
+        identity = attributes.get("id", "")
+        is_teaching = bool({"lesson", "lab"}.intersection(classes))
+        if is_teaching:
+            if self.course_sections:
+                self.errors.append(
+                    "Lessons and practical guides must precede course appendices"
+                )
+            if self.course_section:
+                self.course_section["teaching"] = True
+                if self.course_section.get("appendix"):
+                    self.errors.append(
+                        "Course appendices cannot contain lessons or practical guides"
+                    )
+        if tag == "section" and self.stack[-1:] == ["main"]:
+            self.course_section = {
+                "depth": len(self.stack) + 1,
+                "id": identity,
+                "teaching": is_teaching,
+            }
+        if tag == "a" and "nav" in self.stack:
+            target = attributes.get("href", "")
+            if target.startswith("#"):
+                self.nav_fragments.add(unquote(target[1:]))
+        if "lesson-references" in classes:
+            self.start_presentation_list("ol", len(self.stack) + 1)
+        for scope in self.presentation_lists:
+            if tag in {"ul", "ol"} and scope["list_depth"] is None:
+                scope["list_depth"] = len(self.stack) + 1
+                if tag != scope["tag"]:
+                    self.errors.append(
+                        "Next steps need bullets; references need numbers"
+                    )
+            if tag == "li" and len(self.stack) == scope["list_depth"]:
+                scope["item_depth"] = len(self.stack) + 1
+                scope["item_text"] = []
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} or (
+            tag == "a" and "nav" in self.stack
+        ):
+            self.presentation_headings.append(
+                {
+                    "depth": len(self.stack) + 1,
+                    "tag": tag,
+                    "text": [],
+                    "course_section": self.course_section
+                    if self.course_section
+                    and len(self.stack) == self.course_section["depth"]
+                    and not self.course_section["teaching"]
+                    else None,
+                }
+            )
+
+    def end_presentation_element(self) -> None:
+        for scope in self.presentation_lists:
+            if scope["item_depth"] == len(self.stack):
+                if "".join(scope["item_text"]).strip():
+                    scope["items"] += 1
+                else:
+                    self.errors.append(
+                        "Next-step and reference list items must not be empty"
+                    )
+                scope["item_depth"] = None
+            if scope["list_depth"] == len(self.stack):
+                scope["list_depth"] = None
+        if self.presentation_headings and self.presentation_headings[-1][
+            "depth"
+        ] == len(self.stack):
+            heading = self.presentation_headings.pop()
+            label = " ".join("".join(heading["text"]).split()).casefold()
+            if label in {"course mission", "syllabus"}:
+                self.errors.append(
+                    "Keep mission and syllabus out of course headings and navigation"
+                )
+            section = heading["course_section"]
+            if (
+                heading["tag"] == "h2"
+                and section
+                and label in {"glossary", "where to go next", "official references"}
+            ):
+                self.course_sections.append((label, section["id"]))
+                section["appendix"] = True
+                if label == "glossary":
+                    self.glossary_section_depth = section["depth"]
+                    self.glossary_lists = 0
+                    self.glossary_entries = []
+                else:
+                    self.start_presentation_list(
+                        "ul" if label == "where to go next" else "ol", section["depth"]
+                    )
+            if (
+                label in {"glossary", "where to go next"}
+                and heading["tag"] != "a"
+                and not (heading["tag"] == "h2" and section)
+            ):
+                self.errors.append(
+                    "Glossary and Where to Go Next must each be one independent course section"
+                )
+        if self.course_section and self.course_section["depth"] == len(self.stack):
+            self.course_section = None
+        if self.presentation_lists and self.presentation_lists[-1]["depth"] == len(
+            self.stack
+        ):
+            scope = self.presentation_lists.pop()
+            if not scope["items"]:
+                self.errors.append(
+                    "Next steps and references need nonempty semantic lists"
+                )
 
     def start_lesson_element(self, tag: str, attributes: dict[str, str]) -> None:
         """Track ownership by depth, so nested containers cannot end a field."""
@@ -99,7 +234,7 @@ class CoursePage(HTMLParser):
         if self.lesson_depth is None:
             return
         if len(self.stack) == self.lesson_depth:
-            fields = [name for name in classes if name in LESSON_FIELDS]
+            fields = [name for name in classes if name in LESSON_LABELS]
             if tag == "h2" and not self.lesson_fields:
                 self.lesson_titles += 1
             elif tag == "div" and len(fields) == 1:
@@ -110,9 +245,7 @@ class CoursePage(HTMLParser):
                 self.field_has_text = False
                 self.field_children = 0
             else:
-                self.errors.append(
-                    "Lesson content must use the four canonical sections"
-                )
+                self.errors.append("Lesson content must use canonical sections")
         elif self.field_depth is not None and len(self.stack) == self.field_depth:
             self.field_children += 1
             if self.field_children == 1 and tag != "h3":
@@ -126,12 +259,59 @@ class CoursePage(HTMLParser):
         if tag == "figure" and self.field != "how-it-works":
             self.errors.append("Lesson figures must be inside How it works")
 
+    def start_glossary_element(self, tag: str) -> None:
+        if tag == "dl":
+            self.glossary_lists += 1
+            if len(self.stack) != self.glossary_section_depth:
+                self.errors.append("Glossary needs one direct definition list")
+            else:
+                self.glossary_depth = len(self.stack) + 1
+        elif tag in {"dt", "dd"}:
+            if len(self.stack) != self.glossary_depth:
+                self.errors.append("Glossary entries must be direct dt/dd pairs")
+            else:
+                self.glossary_entry_depth = len(self.stack) + 1
+                self.glossary_text = []
+        elif len(self.stack) == self.glossary_depth:
+            self.errors.append("Glossary entries must be direct dt/dd pairs")
+        elif len(self.stack) == self.glossary_section_depth:
+            self.errors.append("Glossary needs one direct definition list")
+
+    def check_glossary(self) -> None:
+        if self.glossary_lists != 1:
+            self.errors.append("Glossary needs one direct definition list")
+        entries = self.glossary_entries
+        if (
+            not entries
+            or len(entries) % 2
+            or any(
+                tag != ("dt" if index % 2 == 0 else "dd") or not value
+                for index, (tag, value) in enumerate(entries)
+            )
+        ):
+            self.errors.append("Glossary needs nonempty term/definition pairs")
+        keys = [value.casefold() for tag, value in entries if tag == "dt"]
+        if keys != sorted(set(keys)):
+            self.errors.append("Glossary keys must be unique and sorted A-Z")
+
+    def end_glossary_element(self) -> None:
+        if self.glossary_entry_depth == len(self.stack):
+            self.glossary_entries.append(
+                (self.stack[-1], " ".join("".join(self.glossary_text).split()))
+            )
+            self.glossary_entry_depth = None
+        if self.glossary_depth == len(self.stack):
+            self.glossary_depth = None
+        if self.glossary_section_depth == len(self.stack):
+            self.check_glossary()
+            self.glossary_section_depth = None
+
     def end_lesson_element(self) -> None:
         if self.heading_depth == len(self.stack):
             self.field_headings.append(" ".join("".join(self.heading_text).split()))
             self.heading_depth = None
         if self.field_depth == len(self.stack):
-            if self.field_headings != [LESSON_FIELDS[self.field]]:
+            if self.field_headings != [LESSON_LABELS[self.field]]:
                 self.errors.append("Lesson section needs its matching visible heading")
             if not self.field_has_text:
                 self.errors.append(
@@ -139,8 +319,11 @@ class CoursePage(HTMLParser):
                 )
             self.field = self.field_depth = None
         if self.lesson_depth == len(self.stack):
-            if self.lesson_fields != list(LESSON_FIELDS):
-                self.errors.append("Lesson needs the four canonical sections in order")
+            required = list(LESSON_FIELDS)
+            if self.lesson_fields not in (required, required + ["lesson-references"]):
+                self.errors.append(
+                    "Lesson needs canonical sections in order, with References last if present"
+                )
             if self.lesson_titles != 1:
                 self.errors.append("Lesson needs exactly one opening h2 title")
             if not self.lesson_diagrams:
@@ -151,7 +334,16 @@ class CoursePage(HTMLParser):
         # HTMLParser uses None for attributes without a value. Normalize at
         # the input boundary; required-value checks still reject empty values.
         attributes = {key: value or "" for key, value in attrs}
+        self.start_presentation_element(tag, attributes)
         self.start_lesson_element(tag, attributes)
+        if {"lesson-glossary", "tools-glossary", "lesson-next-steps"} & set(
+            attributes.get("class", "").split()
+        ):
+            self.errors.append(
+                "Local glossary and next-step containers are not allowed"
+            )
+        if self.glossary_section_depth is not None:
+            self.start_glossary_element(tag)
         self.reject_source_markup()
         self.tags[tag] = self.tags.get(tag, 0) + 1
         if len(attributes) != len(attrs):
@@ -184,7 +376,9 @@ class CoursePage(HTMLParser):
                     except ValueError:
                         self.errors.append("Invalid reference URL")
                     else:
-                        if tag == "a" and reference.scheme == "https":
+                        if tag == "a" and key == "href" and value in self.local_links:
+                            pass
+                        elif tag == "a" and reference.scheme == "https":
                             if not reference.hostname or reference.username:
                                 self.errors.append("Invalid reference URL")
                         else:
@@ -287,6 +481,8 @@ class CoursePage(HTMLParser):
         if not self.stack or self.stack[-1] != tag:
             self.errors.append("Unbalanced HTML structure")
             return
+        self.end_presentation_element()
+        self.end_glossary_element()
         self.end_lesson_element()
         if tag == "code":
             self.source = None
@@ -302,6 +498,15 @@ class CoursePage(HTMLParser):
         self.stack.pop()
 
     def handle_data(self, data: str) -> None:
+        for heading in self.presentation_headings:
+            heading["text"].append(data)
+        for scope in self.presentation_lists:
+            if scope["item_depth"] is not None:
+                scope["item_text"].append(data)
+        if self.glossary_entry_depth is not None:
+            self.glossary_text.append(data)
+        elif self.glossary_section_depth is not None and data.strip():
+            self.errors.append("Glossary text must be inside a term/definition pair")
         if self.heading_depth is not None:
             self.heading_text.append(data)
         elif self.field is not None and data.strip():
@@ -344,6 +549,22 @@ class CoursePage(HTMLParser):
                 self.fragments.append(value.strip()[1:])
 
     def finish(self) -> list[str]:
+        labels = [label for label, _ in self.course_sections]
+        targets = {target for _, target in self.course_sections}
+        if (
+            labels != ["where to go next", "glossary", "official references"]
+            or len(targets) != 3
+        ):
+            self.errors.append(
+                "Course needs independent next steps, Glossary and Official references sections"
+            )
+        if any(
+            not target or target not in self.nav_fragments
+            for _, target in self.course_sections
+        ):
+            self.errors.append(
+                "Course navigation must link to each actual supporting section"
+            )
         if not self.lesson_count:
             self.errors.append("Expected at least one lesson")
         if self.stack:
@@ -375,8 +596,74 @@ class CoursePage(HTMLParser):
         return self.errors
 
 
-def check(page: Path, root: Path, manifest: Path) -> list[str]:
-    if root.is_symlink() or not root.is_dir():
+def approved_links(
+    page: Path, root: Path, manifest: Path | None, publication_root: Path | None
+) -> set[str]:
+    publication_root = (publication_root or root).absolute()
+    if (
+        not publication_root.is_dir()
+        or any(p.is_symlink() for p in (publication_root, *publication_root.parents))
+        or not root.is_relative_to(publication_root.resolve())
+    ):
+        raise ValueError("Invalid publication root")
+    if manifest is None:
+        return set()
+    manifest = safe_file(root, str(manifest.absolute().relative_to(root)))
+    values = json.loads(manifest.read_text(encoding="utf-8"))
+    if (
+        not isinstance(values, list)
+        or any(not isinstance(v, str) for v in values)
+        or len(values) != len(set(values))
+    ):
+        raise ValueError("Links manifest must contain unique local href strings")
+    for value in values:
+        link = urlsplit(value)
+        path = unquote(link.path)
+        if (
+            not path
+            or link.scheme
+            or link.netloc
+            or link.query
+            or path.startswith("/")
+            or "\\" in path
+            or ":" in path
+            or any(ord(c) < 32 for c in value + path)
+        ):
+            raise ValueError("Links manifest accepts only ordinary relative file links")
+        target = page.parent / path
+        if (
+            any(p.is_symlink() for p in (target, *target.parents))
+            or not target.resolve().is_relative_to(publication_root.resolve())
+            or not target.is_file()
+        ):
+            raise ValueError("Missing, linked or out-of-publication companion")
+        if link.fragment:
+            if target.suffix.lower() not in {".html", ".htm"}:
+                raise ValueError("Fragment destination must be HTML")
+
+            class Targets(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.ids = set()
+
+                def handle_starttag(self, tag, attrs):
+                    self.ids.add(dict(attrs).get("id"))
+
+            targets = Targets()
+            targets.feed(target.read_text(encoding="utf-8"))
+            if unquote(link.fragment) not in targets.ids:
+                raise ValueError("Missing companion HTML fragment")
+    return set(values)
+
+
+def check(
+    page: Path,
+    root: Path,
+    manifest: Path,
+    links_manifest: Path | None = None,
+    publication_root: Path | None = None,
+) -> list[str]:
+    if any(p.is_symlink() for p in (root, *root.parents)) or not root.is_dir():
         raise ValueError("Course root must be a real directory")
     root = root.resolve()
     page = safe_file(root, str(page.absolute().relative_to(root)))
@@ -387,7 +674,7 @@ def check(page: Path, root: Path, manifest: Path) -> list[str]:
     if len(expected) != len(set(expected)):
         raise ValueError("Duplicate source allowlist entry")
     contents = {p: safe_file(root, p).read_bytes().decode("utf-8") for p in expected}
-    parser = CoursePage()
+    parser = CoursePage(approved_links(page, root, links_manifest, publication_root))
     parser.feed(page.read_bytes().decode("utf-8"))
     parser.close()
     errors = parser.finish()
@@ -404,9 +691,25 @@ def main() -> int:
     parser.add_argument("page", type=Path, help="Rendered self-contained HTML file")
     parser.add_argument("--course-root", type=Path, required=True)
     parser.add_argument("--sources-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--links-manifest",
+        type=Path,
+        help="JSON array of explicitly allowed local hrefs",
+    )
+    parser.add_argument(
+        "--publication-root",
+        type=Path,
+        help="Contained companion-file root; defaults to course root",
+    )
     args = parser.parse_args()
     try:
-        errors = check(args.page, args.course_root, args.sources_manifest)
+        errors = check(
+            args.page,
+            args.course_root,
+            args.sources_manifest,
+            args.links_manifest,
+            args.publication_root,
+        )
     except (OSError, ValueError, UnicodeError):
         parser.exit(2, "Invalid or unreadable course input; inspect paths and JSON.\n")
     if errors:

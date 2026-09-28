@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,steps,value,3,none
+baseline-trial1,train_runtime_seconds,value,7.0924,s
+baseline-trial1,train_loss,value,0.0,none
+baseline-trial1,adapter_max_parameter_delta,value,2.0020977444801247e-06,none
+repeat-trial1,steps,value,3,none
+repeat-trial1,train_runtime_seconds,value,5.4856,s
+repeat-trial1,train_loss,value,0.0,none
+repeat-trial1,adapter_max_parameter_delta,value,2.0020977444801247e-06,none

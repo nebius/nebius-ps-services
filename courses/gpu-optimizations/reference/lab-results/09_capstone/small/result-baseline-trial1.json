@@ -1,0 +1,102 @@
+{
+  "correctness": {
+    "all_three_trials_match_with_bf16_tolerance": true,
+    "same_dtype_residency_shape_and_work": true
+  },
+  "lab": "09_capstone",
+  "measurements": {
+    "controlled_factors": {
+      "dtype": "bfloat16",
+      "shape": [
+        2048,
+        2048
+      ]
+    },
+    "median_observed_ratio_across_trials": 0.7281,
+    "trials": [
+      {
+        "compiled": {
+          "cuda_median_ms": 0.0805,
+          "cuda_min_ms": 0.0745,
+          "cuda_p90_ms": 0.0876,
+          "wall_median_ms": 0.0782,
+          "wall_min_ms": 0.0758,
+          "wall_p90_ms": 0.0896
+        },
+        "eager": {
+          "cuda_median_ms": 0.0575,
+          "cuda_min_ms": 0.0554,
+          "cuda_p90_ms": 0.0639,
+          "wall_median_ms": 0.0599,
+          "wall_min_ms": 0.0588,
+          "wall_p90_ms": 0.0641
+        },
+        "execution_order": [
+          null,
+          null
+        ],
+        "observed_baseline_to_compiled_ratio": 0.7143,
+        "outputs_match": true,
+        "trial": 1
+      },
+      {
+        "compiled": {
+          "cuda_median_ms": 0.0773,
+          "cuda_min_ms": 0.0715,
+          "cuda_p90_ms": 0.0909,
+          "wall_median_ms": 0.0761,
+          "wall_min_ms": 0.0729,
+          "wall_p90_ms": 0.0872
+        },
+        "eager": {
+          "cuda_median_ms": 0.0578,
+          "cuda_min_ms": 0.056,
+          "cuda_p90_ms": 0.0628,
+          "wall_median_ms": 0.0599,
+          "wall_min_ms": 0.0586,
+          "wall_p90_ms": 0.0642
+        },
+        "execution_order": [
+          null,
+          null
+        ],
+        "observed_baseline_to_compiled_ratio": 0.7477,
+        "outputs_match": true,
+        "trial": 2
+      },
+      {
+        "compiled": {
+          "cuda_median_ms": 0.0798,
+          "cuda_min_ms": 0.0757,
+          "cuda_p90_ms": 0.0894,
+          "wall_median_ms": 0.0799,
+          "wall_min_ms": 0.0741,
+          "wall_p90_ms": 0.0943
+        },
+        "eager": {
+          "cuda_median_ms": 0.0581,
+          "cuda_min_ms": 0.0566,
+          "cuda_p90_ms": 0.0627,
+          "wall_median_ms": 0.0601,
+          "wall_min_ms": 0.0592,
+          "wall_p90_ms": 0.0619
+        },
+        "execution_order": [
+          null,
+          null
+        ],
+        "observed_baseline_to_compiled_ratio": 0.7281,
+        "outputs_match": true,
+        "trial": 3
+      }
+    ]
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

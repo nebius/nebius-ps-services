@@ -13,7 +13,7 @@ def test_crossover_evidence_allows_no_winner_for_either_gpu_measurement():
 
 
 def test_dispatch_example_counts_ten_costs_without_assuming_graph_replay():
-    example = lab_section("gpu-optimizations", 3, "Practice")
+    example = lab_section("gpu-optimizations", 3, "Concepts and code path")
     assert "each preceded by" in example
     assert "warmed execution" in example
     assert 10 * (4 + 8) == 120

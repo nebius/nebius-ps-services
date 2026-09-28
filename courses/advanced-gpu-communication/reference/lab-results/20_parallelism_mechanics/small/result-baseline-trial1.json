@@ -1,0 +1,49 @@
+{
+  "correctness": {
+    "context_partition_and_gradient_match_reference": true,
+    "fp32_atol": 1e-06,
+    "fp32_rtol": 1e-05,
+    "pipeline_forward_backward_gradients_match_reference": true
+  },
+  "lab": "20_parallelism_mechanics",
+  "measurements": {
+    "companion_training_labs": {},
+    "context_parallel": {
+      "collectives": [
+        null,
+        null
+      ],
+      "global_shape": [
+        2,
+        32,
+        64
+      ],
+      "global_square_sum": 1364.833251953125,
+      "local_gradient_matches_unpartitioned_autograd_reference": true,
+      "local_shape": [
+        2,
+        16,
+        64
+      ],
+      "sequence_fraction_per_rank": 0.5
+    },
+    "pipeline_parallel": {
+      "activation_gradient_return_bytes": 1024,
+      "activation_send_bytes": 1024,
+      "activation_shape": [
+        4,
+        64
+      ],
+      "all_stage_weight_input_and_activation_gradients_match_reference": true,
+      "loss": 0.021150855347514153,
+      "microbatches": 1,
+      "stages": 2
+    }
+  },
+  "parameters": {
+    "seed": 17,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

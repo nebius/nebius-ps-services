@@ -90,7 +90,7 @@ def _runtime(
             command, 1 if failure else 0, output, "SENSITIVE echoed manifest"
         )
 
-    monkeypatch.setattr("nebius_cxcli.soperator_runtime_objects.subprocess.run", run)
+    monkeypatch.setattr("nebius_cxcli.soperator_runtime_objects.kubernetes_process.run", run)
     runtime = RuntimeObjects(
         extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "bound-target"}, assert_authority=authority
     )

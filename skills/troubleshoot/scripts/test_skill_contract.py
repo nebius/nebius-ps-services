@@ -341,7 +341,10 @@ class TroubleshootContractTest(unittest.TestCase):
             "A design change counts only after it is implemented and deployed",
             reference,
         )
-        self.assertIn("action-specific approval in every environment", reference)
+        self.assertIn("do not request separate approval solely for that creation", " ".join(reference.split()))
+        self.assertIn("intended secret store or protected runtime file", " ".join(reference.split()))
+        self.assertIn("access expansion", reference)
+        self.assertIn("already covered by the user's authorization", reference)
         self.assertIn(
             "must precede the earliest product divergence or the first "
             "contaminated boundary, whichever came first",

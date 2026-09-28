@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
 from nebius_cxcli.capacity_dashboard import CapacityAdviceAvailability, CapacityResourceAdvice
@@ -1017,6 +1018,31 @@ def test_resolve_component_ids_prints_interactive_selection_summary(monkeypatch)
 
     assert selected == {"mk8s"}
     assert any("Selected infra components: mk8s" in message for message in rendered_messages)
+
+
+@pytest.mark.parametrize(
+    "default,answer,proceed,prompt_count",
+    [
+        (True, "\n", True, 1),
+        (None, "\nn\n", False, 2),
+        (None, "invalid\ny\n", True, 2),
+    ],
+)
+def test_wizard_continue_phase_preserves_prompt_defaults(
+    default, answer, proceed, prompt_count
+) -> None:
+    probe = cli.typer.Typer()
+    decisions = []
+
+    @probe.command()
+    def main():
+        decisions.append(cli._wizard_continue_phase("Configure component?", default=default))
+
+    result = CliRunner().invoke(probe, [], input=answer)
+    assert result.exit_code == 0
+    assert len(decisions) == 1
+    assert decisions[0].proceed is proceed
+    assert result.output.count("Configure component?") == prompt_count
 
 
 def test_wizard_continue_phase_q_backs_when_enabled(monkeypatch) -> None:

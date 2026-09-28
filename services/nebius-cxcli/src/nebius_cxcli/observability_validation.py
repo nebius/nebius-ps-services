@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+from . import kubernetes_process
 
 OBSERVABILITY_INGESTION_VALIDATION_KIND = "mk8s_observability_ingestion"
 
@@ -36,7 +37,10 @@ def _kubectl_json(args: list[str], *, extra_env: dict[str, str] | None) -> dict[
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
+    from .app_mutation import assert_app_mutation_authority
+
+    assert_app_mutation_authority()
+    result = kubernetes_process.run(
         ["kubectl", *args],
         check=False,
         capture_output=True,
@@ -156,7 +160,9 @@ def _required_positive_int(spec: Mapping[str, Any], key: str) -> int:
             f"Observability validation spec field '{key}' must be a positive integer"
         ) from exc
     if value < 1:
-        raise RuntimeError(f"Observability validation spec field '{key}' must be a positive integer")
+        raise RuntimeError(
+            f"Observability validation spec field '{key}' must be a positive integer"
+        )
     return value
 
 
@@ -191,7 +197,9 @@ def _chart_signal_config_check(
             len(additional_targets) if isinstance(additional_targets, list) else 0
         )
         if not isinstance(additional_targets, list) or not additional_targets:
-            failures.append("cluster metrics enabled but no metrics.additionalTargets are configured")
+            failures.append(
+                "cluster metrics enabled but no metrics.additionalTargets are configured"
+            )
     if failures:
         return _check(
             "Agent signal config",
@@ -199,7 +207,9 @@ def _chart_signal_config_check(
             summary="; ".join(failures),
             details=details,
         )
-    enabled = [signal for signal in ("logs", "metrics", "traces") if _bool(expected_signals.get(signal))]
+    enabled = [
+        signal for signal in ("logs", "metrics", "traces") if _bool(expected_signals.get(signal))
+    ]
     summary = "Enabled signals: " + (", ".join(enabled) if enabled else "none")
     if _bool(expected_signals.get("collect_k8s_cluster_metrics")):
         summary += f"; cluster metric targets {details['actual'].get('metrics_additional_target_count', 0)}"
@@ -352,8 +362,7 @@ def _otlp_service_check(
     grpc_ports = [
         port
         for port in ports
-        if isinstance(port, Mapping)
-        and int(port.get("port", 0) or 0) == service_port
+        if isinstance(port, Mapping) and int(port.get("port", 0) or 0) == service_port
     ]
     slices = _kubectl_raw_json(
         _discovery_namespace_api_path(
@@ -385,7 +394,11 @@ def _otlp_service_check(
     if not grpc_ports:
         summary = f"Service {service_name} has no expected port {service_port}"
     else:
-        summary = "OTLP/gRPC ready endpoint found" if ready_endpoint_found else "No ready OTLP/gRPC endpoint found"
+        summary = (
+            "OTLP/gRPC ready endpoint found"
+            if ready_endpoint_found
+            else "No ready OTLP/gRPC endpoint found"
+        )
     return _check(
         "Trace OTLP Service Ready",
         passed=passed,

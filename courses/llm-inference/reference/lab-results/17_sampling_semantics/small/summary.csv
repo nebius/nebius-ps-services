@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,greedy_seconds,value,0.3778,s
+baseline-trial1,seeded_sample_seconds,value,0.4693,s
+baseline-trial1,greedy_output_tokens,value,32,none
+baseline-trial1,seeded_sample_output_tokens,value,32,none
+repeat-trial1,greedy_seconds,value,0.3814,s
+repeat-trial1,seeded_sample_seconds,value,0.4733,s
+repeat-trial1,greedy_output_tokens,value,32,none
+repeat-trial1,seeded_sample_output_tokens,value,32,none

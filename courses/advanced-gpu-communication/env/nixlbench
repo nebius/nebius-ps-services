@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${COURSE_TOOLS:?source Lab 00 environment}"
+: "${UCX_PREFIX:?prepared standalone UCX prefix}"
+# Scope standalone transport libraries to this child, never Dynamo's environment.
+export LD_LIBRARY_PATH="$COURSE_TOOLS/vendor-candidates/nixl/lib:$COURSE_TOOLS/vendor-candidates/nixl/lib/plugins:$UCX_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$COURSE_TOOLS/vendor-candidates/nixlbench/bin/nixlbench" "$@"

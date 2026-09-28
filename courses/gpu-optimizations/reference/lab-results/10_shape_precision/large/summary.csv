@@ -1,0 +1,13 @@
+variant,metric,case,value,unit
+baseline-trial1,cases_timing_median_seconds,0,0.00018840000000000003,s
+baseline-trial1,cases_timing_median_seconds,1,0.0009533,s
+baseline-trial1,cases_timing_median_seconds,2,0.0026866,s
+baseline-trial1,cases_effective_tflops,0,729506000000000.0,FLOPS
+baseline-trial1,cases_effective_tflops,1,143434000000000.0,FLOPS
+baseline-trial1,cases_effective_tflops,2,51157000000000.0,FLOPS
+repeat-trial1,cases_timing_median_seconds,0,0.0001854,s
+repeat-trial1,cases_timing_median_seconds,1,0.0009559,s
+repeat-trial1,cases_timing_median_seconds,2,0.0026897,s
+repeat-trial1,cases_effective_tflops,0,741310000000000.0,FLOPS
+repeat-trial1,cases_effective_tflops,1,143044000000000.0,FLOPS
+repeat-trial1,cases_effective_tflops,2,51098000000000.0,FLOPS

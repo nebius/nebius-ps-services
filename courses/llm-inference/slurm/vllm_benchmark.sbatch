@@ -12,9 +12,10 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  sbatch [site options] %s [MODEL] [CONCURRENCY] [REVISION]\n' "$0"
+  printf 'Usage:\n  python3 tools/submit_lab.py --lab 11_serving_client [Slurm --name=value options] %s [MODEL] [CONCURRENCY] [REVISION]\n' "$0"
   printf '\nStarts a loopback-only vLLM server, runs the course client, and stops the server.\n'
 }
 
@@ -35,7 +36,7 @@ if [[ ! ${revision} =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 if [[ ! ${concurrency} =~ ^[1-9][0-9]*$ ]]; then printf 'ERROR: concurrency must be positive.\n' >&2; exit 2; fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 if [[ ! -f "${course_dir}/labs/11_serving_client.py" ]]; then
   printf 'ERROR: submit from the course root containing labs/11_serving_client.py.\n' >&2
   exit 2
@@ -50,11 +51,11 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
   exit 2
 fi
 export COURSE_RUN_ID
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/11_serving_client/logs" "${course_dir}/results"
 port=$((20000 + SLURM_JOB_ID % 20000))
-server_log="${course_dir}/logs/vllm-server-run-${COURSE_RUN_ID}.log"
+server_log="${course_dir}/results/11_serving_client/logs/vllm-server-run-${COURSE_RUN_ID}.log"
 
-"${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" vllm serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+"${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" python3 tools/profile_lab.py --lab 11_serving_client --server -- vllm serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
   --max-model-len 2048 >"${server_log}" 2>&1 &
 server_pid=$!
@@ -63,7 +64,9 @@ cleanup() {
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
   kill "${pid}" 2>/dev/null || true
-  for _ in {1..50}; do
+  local stop_attempts=50
+  if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
     if ! kill -0 "${pid}" 2>/dev/null; then
       wait "${pid}" 2>/dev/null || true
       return
@@ -97,6 +100,7 @@ for _ in $(seq 1 120); do
 done
 if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 240 seconds.\n' >&2; exit 2; fi
 
+"${course_python}" tools/server_capture.py start "${port}"
 "${course_python}" "${course_dir}/labs/11_serving_client.py" \
   --base-url "http://127.0.0.1:${port}" --model "${model}" \
   --revision "${revision}" \
@@ -105,3 +109,5 @@ if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 24
 "${course_python}" -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${port}/metrics', timeout=10).read().decode(), end='')" \
   >"${course_dir}/results/vllm-metrics-run-${COURSE_RUN_ID}.prom"
+
+"${course_python}" tools/server_capture.py stop "${port}"

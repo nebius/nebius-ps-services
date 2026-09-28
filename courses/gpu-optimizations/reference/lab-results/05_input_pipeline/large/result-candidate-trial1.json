@@ -1,0 +1,87 @@
+{
+  "correctness": {
+    "all_batches_pinned": true,
+    "checksum": true
+  },
+  "lab": "05_input_pipeline",
+  "measurements": {
+    "batches": 100,
+    "variants": {
+      "num_workers_0": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 0,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.2208,
+            "min_ms": 0.2044,
+            "p90_ms": 0.2555,
+            "sample_count": 100
+          },
+          "device_consumption": {
+            "median_ms": 0.0341,
+            "min_ms": 0.0291,
+            "p90_ms": 0.0444,
+            "sample_count": 100
+          },
+          "end_to_end": {
+            "median_ms": 0.3054,
+            "min_ms": 0.2781,
+            "p90_ms": 0.3492,
+            "sample_count": 100
+          },
+          "h2d": {
+            "median_ms": 0.0174,
+            "min_ms": 0.0157,
+            "p90_ms": 0.0214,
+            "sample_count": 100
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": null
+      },
+      "num_workers_4": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 4,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.1855,
+            "min_ms": 0.0427,
+            "p90_ms": 0.345,
+            "sample_count": 100
+          },
+          "device_consumption": {
+            "median_ms": 0.1652,
+            "min_ms": 0.0464,
+            "p90_ms": 0.2492,
+            "sample_count": 100
+          },
+          "end_to_end": {
+            "median_ms": 0.5977,
+            "min_ms": 0.2033,
+            "p90_ms": 0.776,
+            "sample_count": 100
+          },
+          "h2d": {
+            "median_ms": 0.0667,
+            "min_ms": 0.0251,
+            "p90_ms": 0.1283,
+            "sample_count": 100
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": 2
+      }
+    }
+  },
+  "parameters": {
+    "batches": 100,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -1,0 +1,1105 @@
+{
+  "uid": "course-90feb340a74035617c7ad546",
+  "title": "Lab 10: Measure batched offline generation with vLLM",
+  "tags": [
+    "gpu-course",
+    "llm-inference",
+    "10_vllm_offline"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "description": "Why can actual output length be less than the maximum token budget? Explain why comparing runs with different stopping behavior can change throughput without improving the engine. Which startup costs are excluded from this measurement? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the single-GPU engine in-process for diagnostics; clean timing retains its default engine process mode.",
+  "templating": {
+    "list": [
+      {
+        "name": "workspace",
+        "type": "textbox",
+        "label": "Fixed learner workspace",
+        "current": {
+          "text": "learner-01",
+          "value": "learner-01"
+        }
+      },
+      {
+        "name": "profile",
+        "type": "custom",
+        "query": "small,large",
+        "current": {
+          "text": "small",
+          "value": "small"
+        }
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "label": "Node exporter instance",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(node_memory_MemAvailable_bytes, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      },
+      {
+        "name": "gpu_node",
+        "type": "query",
+        "label": "GPU worker",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_UTIL, Hostname)",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "gpu",
+        "type": "query",
+        "label": "GPU index on selected workers",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_UTIL{Hostname=~\"${gpu_node:regex}\"}, gpu)",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Selected comparison generation",
+      "type": "table",
+      "description": "These are explicitly selected completed runs. Submission of another job does not replace them. Summary panels always show the current selected pair, even with a historical time range. Check generation and experiment timestamps.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_publication_generation{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Elapsed seconds",
+      "type": "barchart",
+      "description": "Measured artifact field measurements.elapsed_seconds. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_elapsed_seconds{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_elapsed_seconds{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Output tokens per second",
+      "type": "barchart",
+      "description": "Measured artifact field measurements.output_tokens_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_output_tokens_per_second{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_output_tokens_per_second{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "count:tokens/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "count:tokens/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Prompt tokens total",
+      "type": "barchart",
+      "description": "Measured artifact field measurements.prompt_tokens_total. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_prompt_tokens_total{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_prompt_tokens_total{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Output tokens total",
+      "type": "barchart",
+      "description": "Measured artifact field measurements.output_tokens_total. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_output_tokens_total{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_output_tokens_total{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Correctness of selected results",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_correctness{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Experiment start",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_started_unix_seconds{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Experiment end",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_ended_unix_seconds{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Slurm allocation",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_slurm_job_id{course=\"llm-inference\",lab=\"10_vllm_offline\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "GPU activity during the selected window",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Framebuffer memory used",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_FB_USED{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"} * 1048576",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "GPU power",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 77,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "GPU temperature",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 84,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Node CPU busy",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 91,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\",instance=~\"${node:regex}\"}[5m])))",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Node available memory",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 98,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes{instance=~\"${node:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

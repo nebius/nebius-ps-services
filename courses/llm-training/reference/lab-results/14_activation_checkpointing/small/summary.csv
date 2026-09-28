@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,eager_step_time_median_seconds,value,0.0049801,s
+baseline-trial1,selective_step_time_median_seconds,value,0.0084496,s
+baseline-trial1,full_step_time_median_seconds,value,0.009940899999999999,s
+baseline-trial1,eager_median_incremental_peak_bytes,value,88292352,bytes
+baseline-trial1,full_median_incremental_peak_bytes,value,49874944,bytes
+repeat-trial1,eager_step_time_median_seconds,value,0.0054032,s
+repeat-trial1,selective_step_time_median_seconds,value,0.0094505,s
+repeat-trial1,full_step_time_median_seconds,value,0.0119156,s
+repeat-trial1,eager_median_incremental_peak_bytes,value,88292352,bytes
+repeat-trial1,full_median_incremental_peak_bytes,value,49874944,bytes

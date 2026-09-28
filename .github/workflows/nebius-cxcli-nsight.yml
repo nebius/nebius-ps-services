@@ -1,0 +1,85 @@
+name: nebius-cxcli-nsight
+
+on:
+  pull_request:
+    paths:
+      - "services/nebius-cxcli/src/nebius_cxcli/nsight*.py"
+      - "services/nebius-cxcli/src/nebius_cxcli/flux_render.py"
+      - "services/nebius-cxcli/scripts/verify_nsight*.py"
+      - "services/nebius-cxcli/tests/test_nsight*.py"
+      - ".github/workflows/nebius-cxcli-nsight.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/nebius-cxcli/src/nebius_cxcli/nsight*.py"
+      - "services/nebius-cxcli/src/nebius_cxcli/flux_render.py"
+      - "services/nebius-cxcli/scripts/verify_nsight*.py"
+      - "services/nebius-cxcli/tests/test_nsight*.py"
+      - ".github/workflows/nebius-cxcli-nsight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebius-cxcli-nsight-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: services/nebius-cxcli
+
+jobs:
+  native-packages:
+    name: Nsight Ubuntu ${{ matrix.ubuntu }} native ${{ matrix.host.arch }}
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+        host:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.9"
+      - name: Verify native packages with offline execution after admission
+        env:
+          NSIGHT_UBUNTU: ${{ matrix.ubuntu }}
+          NSIGHT_ARCH: ${{ matrix.host.arch }}
+        run: |
+          set -euo pipefail
+          uv sync --locked
+          uv run --locked --no-sync python scripts/verify_nsight_native.py \
+            --ubuntu "$NSIGHT_UBUNTU" --arch "$NSIGHT_ARCH" --output nsight-native.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nsight-native-${{ matrix.ubuntu }}-${{ matrix.host.arch }}
+          path: services/nebius-cxcli/nsight-native.json
+          if-no-files-found: error
+
+  official-chart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.9"
+      - uses: azure/setup-helm@v5
+      - name: Verify pinned official chart and production postrenderers
+        run: |
+          set -euo pipefail
+          command -v kubectl
+          uv sync --locked
+          uv run --locked --no-sync python scripts/verify_nsight_chart.py

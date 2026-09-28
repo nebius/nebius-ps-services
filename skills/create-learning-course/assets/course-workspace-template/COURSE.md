@@ -36,8 +36,13 @@ here without inventing an unrequested package.}
 
 ### Mental model
 
-{End with a concise synthesis of concepts and relationships already explained.
+{Close teaching with a concise synthesis of concepts and relationships already explained.
 Keep essential qualifications; introduce no new terms or mechanisms.}
 
-{Repeat the same four-section structure in prerequisite order for every
+### References
+
+{Optional: include public sources used by this lesson, after Mental model and
+always last. Omit this heading if references live only at course level.}
+
+{Repeat the same lesson structure in prerequisite order for every
 lesson. Do not ship these authoring placeholders.}

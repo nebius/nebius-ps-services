@@ -53,7 +53,7 @@ after feature evaluation or UAT.
 - `sdlc-auto-steering` classified an entry as `docs-update`.
 - UAT or final run review found README, changelog, examples, or usage docs that
   must be refreshed before final source integration or PR creation.
-- `sdlc-start` routes a documentation phase before `sdlc-align-specs`.
+- `sdlc-start` routes a documentation phase before `align`.
 
 ## When Not To Use
 
@@ -119,7 +119,7 @@ after feature evaluation or UAT.
 - Route requirements or design drift back to `sdlc-create-requirements` or
   `sdlc-create-design` instead of editing product-truth docs here.
 - Return to `sdlc-start` so the coordinator can continue to
-  `sdlc-align-specs`, UAT, managed source integration, or unmanaged PR handoff.
+  `align`, UAT, managed source integration, or unmanaged PR handoff.
 
 ## Idempotency
 
@@ -164,7 +164,7 @@ after feature evaluation or UAT.
   documentation contract changed and a changelog exists.
 - Documentation evidence is written under the active private run directory.
 - Consumed steering entries are resolved or left with a clear blocker.
-- `sdlc-start` can route to `sdlc-align-specs`, UAT, or PR handoff.
+- `sdlc-start` can route to `align`, UAT, or PR handoff.
 
 ## SDLC Invariants
 

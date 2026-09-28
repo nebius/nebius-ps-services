@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,median_step_seconds,value,0.0469844,s
+baseline-trial1,tokens_per_second,value,87239.8,count:tokens/s
+baseline-trial1,initial_loss,value,3.24703,none
+baseline-trial1,final_loss,value,0.00917,none
+baseline-trial1,memory_peak_allocated_bytes,value,12646915072,bytes
+candidate-trial1,median_step_seconds,value,0.0495902,s
+candidate-trial1,tokens_per_second,value,82768.9,count:tokens/s
+candidate-trial1,initial_loss,value,3.247,none
+candidate-trial1,final_loss,value,0.00917,none
+candidate-trial1,memory_peak_allocated_bytes,value,15138741248,bytes

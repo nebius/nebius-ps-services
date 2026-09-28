@@ -1,0 +1,18 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair3-view1.png",
+    "manifest.json",
+    "result-cpu-one-token-repeat-trial1.json",
+    "result-cpu-one-token-trial1.json",
+    "result-cpu-repeat-trial1.json",
+    "result-cpu-trial1.json",
+    "result-cuda-repeat-trial1.json",
+    "result-cuda-trial1.json",
+    "summary.csv",
+    "systems-cuda-rank-0.png"
+  ],
+  "identity": "1abb1c4c3b97e350",
+  "schema": "run-labs-owned/v1"
+}

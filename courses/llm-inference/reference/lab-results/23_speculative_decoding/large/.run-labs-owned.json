@@ -1,0 +1,18 @@
+{
+  "files": [
+    "compute-baseline-rank-0.png",
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair1-view3.png",
+    "grafana-pair1-view4.png",
+    "grafana-pair1-view5.png",
+    "manifest.json",
+    "result-baseline-trial1.json",
+    "result-candidate-trial1.json",
+    "summary.csv",
+    "systems-baseline-rank-0.png",
+    "systems-candidate-rank-0.png"
+  ],
+  "identity": "3a888a5e3908be2b",
+  "schema": "run-labs-owned/v1"
+}

@@ -341,7 +341,12 @@ def test_starter_payload_uses_dedicated_upstream_soperator_entry() -> None:
     infra_entries = component_entries("infra", source_profile=SourceProfile.LOCAL)
     generic_app_entries = component_entries("apps", source_profile=SourceProfile.LOCAL)
     assert "soperator" not in {entry.id for entry in generic_app_entries}
-    app_entries = (*generic_app_entries, soperator_install_entry("4.1.7"))
+    app_entries = (
+        *generic_app_entries,
+        soperator_install_entry(
+            "4.1.7", chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"
+        ),
+    )
     app_entry_by_id = {entry.id: entry for entry in app_entries}
     payload = yaml.safe_load(
         starter_config_yaml(

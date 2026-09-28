@@ -34,6 +34,24 @@ def render_delta():
         },
         "patch": "owned dashboard wiring",
     }
+    labels_patch = {
+        "target": {**child_patch["target"], "name": repair.DASHBOARD_RELEASE},
+        "patch": yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {
+                    "name": repair.DASHBOARD_RELEASE,
+                    "labels": {
+                        "soperator.nebius.ai/release-graph": "nebius-cxcli",
+                        "soperator.nebius.ai/release-stage": "1",
+                        "app.kubernetes.io/version": "4.1.5",
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+    }
     outer = {
         "kind": "HelmRelease",
         "spec": {
@@ -41,7 +59,11 @@ def render_delta():
             "postRenderers": [
                 {
                     "kustomize": {
-                        "patches": [child_patch, {"target": {"name": "keep"}, "patch": "keep"}]
+                        "patches": [
+                            child_patch,
+                            labels_patch,
+                            {"target": {"name": "keep"}, "patch": "keep"},
+                        ]
                     }
                 }
             ],
@@ -57,6 +79,7 @@ def render_delta():
         "revision": DIGEST,
         "sourceName": repair.DASHBOARD_SOURCE,
         "isMain": False,
+        "stage": 1,
         "dependencies": ["namespace"],
     }
     contract = {
@@ -85,6 +108,7 @@ def render_delta():
     values["soperator"]["monitoringDashboards"] = {"enabled": False}
     cm["data"]["values.yaml"] = yaml.safe_dump(values)
     outer["spec"]["postRenderers"][0]["kustomize"]["patches"].remove(child_patch)
+    outer["spec"]["postRenderers"][0]["kustomize"]["patches"].remove(labels_patch)
     contract["releases"].remove(row)
     graph["data"]["graph.json"] = json.dumps(contract, sort_keys=True, separators=(",", ":"))
     after = {
@@ -105,6 +129,117 @@ def validate(before, after, dashboards):
 
 def test_closed_dashboard_delta_preserves_all_other_values_and_apps(render_delta):
     validate(*render_delta)
+
+
+@pytest.fixture
+def failed_apply_frontier():
+    return {
+        "status": "recovery-required",
+        "transitions": [
+            {"phase": "resolve-immutable-sources", "status": "complete"},
+            {"phase": "establish-boot-storage-barrier", "status": "complete"},
+            {
+                "id": "apply",
+                "phase": "apply-declarative-release",
+                "status": "failed",
+                "failureType": "operation-error",
+                "failureAttempts": 1,
+                "receiptSha256": None,
+            },
+        ],
+        "irreversibleFrontier": None,
+        "irreversibleIntent": {
+            "transitionId": "apply",
+            "phase": "apply-declarative-release",
+            "disposition": "pending-forward-only",
+        },
+    }
+
+
+@pytest.mark.parametrize("with_intent", [False, True])
+def test_dashboard_failed_apply_frontier_accepts_canonical_failure(
+    failed_apply_frontier, with_intent
+):
+    if not with_intent:
+        failed_apply_frontier["irreversibleIntent"] = None
+    repair._validate_dashboard_pre_main_frontier(failed_apply_frontier)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "mixed-running",
+        "mixed-failed",
+        "later",
+        "failure-type",
+        "attempts",
+        "receipt",
+        "intent",
+        "crossed",
+    ],
+)
+def test_dashboard_failed_apply_frontier_rejects_changed_evidence(failed_apply_frontier, mutation):
+    applied = failed_apply_frontier["transitions"][-1]
+    if mutation == "mixed-running":
+        failed_apply_frontier["status"] = "running"
+    elif mutation == "mixed-failed":
+        applied["status"] = "running"
+    elif mutation == "later":
+        failed_apply_frontier["transitions"].append(
+            {"phase": "wait-flux-graph", "status": "failed"}
+        )
+    elif mutation == "failure-type":
+        applied["failureType"] = "foreign"
+    elif mutation == "attempts":
+        applied["failureAttempts"] = True
+    elif mutation == "receipt":
+        applied["receiptSha256"] = DIGEST
+    elif mutation == "intent":
+        failed_apply_frontier["irreversibleIntent"]["transitionId"] = "foreign"
+    else:
+        failed_apply_frontier["irreversibleFrontier"] = {"phase": "apply-declarative-release"}
+    with pytest.raises(RuntimeError):
+        repair._validate_dashboard_pre_main_frontier(failed_apply_frontier)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "duplicate", "selector", "labels", "spec", "stage", "retained"]
+)
+def test_dashboard_repair_requires_exact_patch_pair(render_delta, mutation):
+    before, after, dashboards = copy.deepcopy(render_delta)
+    outer = yaml.safe_load(before[repair.OUTER_FILE])
+    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    label_patch = patches[1]
+    if mutation == "missing":
+        patches.remove(label_patch)
+    elif mutation == "duplicate":
+        patches.append(copy.deepcopy(label_patch))
+    elif mutation == "selector":
+        label_patch["target"]["namespace"] = "foreign"
+    elif mutation in {"labels", "spec", "stage"}:
+        doc = yaml.safe_load(label_patch["patch"])
+        if mutation == "spec":
+            doc["spec"] = {"suspend": False}
+        else:
+            key = (
+                "app.kubernetes.io/version"
+                if mutation == "labels"
+                else "soperator.nebius.ai/release-stage"
+            )
+            doc["metadata"]["labels"][key] = "foreign"
+        label_patch["patch"] = yaml.safe_dump(doc)
+    else:
+        updated = yaml.safe_load(after[repair.OUTER_FILE])
+        updated["spec"]["postRenderers"][0]["kustomize"]["patches"].append(label_patch)
+        after[repair.OUTER_FILE] = encode(updated)
+    before[repair.OUTER_FILE] = encode(outer)
+    with pytest.raises(RuntimeError):
+        validate(before, after, dashboards)
+    if mutation != "retained":
+        with pytest.raises(RuntimeError):
+            repair.dashboard_repair_candidate(
+                before, release="4.1.5", chart_digest=DIGEST, dashboards=dashboards
+            )
 
 
 @pytest.mark.parametrize(
@@ -289,7 +424,7 @@ def test_saved_repair_requires_cluster_bound_admission(monkeypatch, tmp_path, mu
         authority = object()
     monkeypatch.setattr(repair, "_kube_get", lambda *a, **kw: {"data": data})
     monkeypatch.setattr(
-        repair.subprocess, "run", lambda *a, **kw: pytest.fail("reload must not mutate")
+        repair.kubernetes_process, "run", lambda *a, **kw: pytest.fail("reload must not mutate")
     )
     args = dict(env={}, kube_context="explicit", assert_authority=lambda: authority, create=False)
     if mutation is None:

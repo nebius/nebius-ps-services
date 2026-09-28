@@ -293,3 +293,26 @@ def test_current_environment_matches_the_locked_project() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_make_integration_collects_marked_tests_across_the_full_suite(tmp_path: Path) -> None:
+    fake_uv, environment = _fake_uv_environment(tmp_path)
+    result = subprocess.run(
+        [
+            "make",
+            "--no-print-directory",
+            "test-integration",
+            f"VENV={tmp_path / 'venv'}",
+            f"UV={fake_uv}",
+            f"PYTHON={sys.executable}",
+        ],
+        cwd=_project_root(),
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = Path(environment["FAKE_UV_LOG"]).read_text().splitlines()
+    assert any(call.endswith("pytest -m integration tests") for call in calls)

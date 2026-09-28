@@ -1,0 +1,19 @@
+{
+  "correctness": {
+    "finite_loss": true
+  },
+  "lab": "07_profile_workload",
+  "measurements": {
+    "trace_exported": true
+  },
+  "parameters": {
+    "export_trace": true,
+    "external_only": false,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -13,10 +13,16 @@
         "The page embeds full prose, CSS, contextual accessible SVG and complete escaped lab source; the course builder has a stale/parity check.",
         "No GPU, Slurm, cloud, private identifiers or unrequested installation is introduced.",
         "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
-        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order, followed only by optional References; no lesson-local Glossary or Where to Go Next is created.",
         "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
         "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
-        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
+        "Mental model closes teaching by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
+        "When full-course browser verification is permitted and available, use owned headless Playwright Test with Chrome and isolated state, preserving desktop, 390px and 320px coverage plus keyboard, zoom/reflow, mobile TOC, local scroller and diagram checks.",
+        "Browser evidence names the inspected artifact, actual browser/version, headless mode, viewports, assertions, screenshots/traces, visual findings and cleanup after success or failure; optional headless isolated MCP exploration remains separate from repeatable acceptance.",
+        "If browser execution is unavailable or denied, continue permitted authoring with the required browser gate pending; do not require screen unlock, foreground windows or monitor selection, bypass a denial, install dependencies without authority, or claim publication readiness.",
+        "Each complete course has exactly one shared Glossary after its single Where to Go Next and before final Official references. Collect all taught terms and abbreviations with concise definitions and full expansions where applicable, merge duplicates without losing distinct meanings, and sort unique displayed keys A-Z ignoring case. No lesson or guide has its own glossary.",
+        "Each complete course has exactly one Where to Go Next shared by all lessons and guides, before its single Glossary. Concrete bulleted options relate to completed competencies and introduce no required prerequisites, installations, dependencies or completion gates.",
+        "Uses shared typography, numbered Official references, bulleted Where to Go Next options and an independent course Glossary; omits visible Course mission and Syllabus while preserving unique learner context in orientation or owning lessons."
       ]
     },
     {
@@ -31,10 +37,17 @@
         "The light layout, side TOC and contextual diagram pattern are preserved.",
         "Runtime lanes are marked not applicable with reasons; semantic/browser gates are not automatically approved.",
         "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
-        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order, followed only by optional References; no lesson-local Glossary or Where to Go Next is created.",
         "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
         "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
-        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
+        "Mental model closes teaching by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
+        "When full-course browser verification is permitted and available, use owned headless Playwright Test with Chrome and isolated state, preserving desktop, 390px and 320px coverage plus keyboard, zoom/reflow, mobile TOC, local scroller and diagram checks.",
+        "Browser evidence names the inspected artifact, actual browser/version, headless mode, viewports, assertions, screenshots/traces, visual findings and cleanup after success or failure; optional headless isolated MCP exploration remains separate from repeatable acceptance.",
+        "If browser execution is unavailable or denied, continue permitted authoring with the required browser gate pending; do not require screen unlock, foreground windows or monitor selection, bypass a denial, install dependencies without authority, or claim publication readiness.",
+        "Each complete course has exactly one shared Glossary after its single Where to Go Next and before final Official references. Collect all taught terms and abbreviations with concise definitions and full expansions where applicable, merge duplicates without losing distinct meanings, and sort unique displayed keys A-Z ignoring case. No lesson or guide has its own glossary.",
+        "The course Glossary includes ordinary key terms without inventing abbreviations.",
+        "Each complete course has exactly one Where to Go Next shared by all lessons and guides, before its single Glossary. Concrete bulleted options relate to completed competencies and introduce no required prerequisites, installations, dependencies or completion gates.",
+        "Uses shared typography, numbered Official references, bulleted Where to Go Next options and an independent course Glossary; omits visible Course mission and Syllabus while preserving unique learner context in orientation or owning lessons."
       ]
     },
     {
@@ -42,7 +55,7 @@
       "prompt": "Use $create-learning-course to redesign the supplied course. It has the same caching definition twice, a useful later refresher on invalidation, and a lab claiming size sweeps although its code accepts only a fixed size. Preserve useful explanations, correct the lab claim and use the standard HTML format.",
       "expected_output": "A preservation-aware revision that removes only exact redundancy, keeps the purposeful refresher and aligns the lab with its actual implementation.",
       "files": [
-        "fixtures/revision-case.md"
+        "evals/fixtures/revision-case.md"
       ],
       "assertions": [
         "One primary caching explanation remains and the useful invalidation refresher is retained with an explicit purpose.",
@@ -51,10 +64,16 @@
         "No learner-facing history, source-coverage table, time formula or research-reviewed date appears.",
         "A change in source is reflected in rebuilt HTML and a stale/parity test.",
         "Every lesson title names a concept or relationship rather than listing technologies; syllabus, TOC and body titles match.",
-        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order, followed only by optional References; no lesson-local Glossary or Where to Go Next is created.",
         "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
         "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
-        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism."
+        "Mental model closes teaching by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
+        "When full-course browser verification is permitted and available, use owned headless Playwright Test with Chrome and isolated state, preserving desktop, 390px and 320px coverage plus keyboard, zoom/reflow, mobile TOC, local scroller and diagram checks.",
+        "Browser evidence names the inspected artifact, actual browser/version, headless mode, viewports, assertions, screenshots/traces, visual findings and cleanup after success or failure; optional headless isolated MCP exploration remains separate from repeatable acceptance.",
+        "If browser execution is unavailable or denied, continue permitted authoring with the required browser gate pending; do not require screen unlock, foreground windows or monitor selection, bypass a denial, install dependencies without authority, or claim publication readiness.",
+        "Each complete course has exactly one shared Glossary after its single Where to Go Next and before final Official references. Collect all taught terms and abbreviations with concise definitions and full expansions where applicable, merge duplicates without losing distinct meanings, and sort unique displayed keys A-Z ignoring case. No lesson or guide has its own glossary.",
+        "Each complete course has exactly one Where to Go Next shared by all lessons and guides, before its single Glossary. Concrete bulleted options relate to completed competencies and introduce no required prerequisites, installations, dependencies or completion gates.",
+        "Uses shared typography, numbered Official references, bulleted Where to Go Next options and an independent course Glossary; omits visible Course mission and Syllabus while preserving unique learner context in orientation or owning lessons."
       ]
     },
     {
@@ -62,13 +81,14 @@
       "prompt": "Use $create-learning-course to review the supplied caching lesson for teaching clarity and whether its practical claims match the supplied code. Report findings only; do not edit files, generate an HTML textbook or run the example.",
       "expected_output": "A read-only teaching review that identifies actual duplication and unsupported lab claims while preserving the purposeful refresher.",
       "files": [
-        "fixtures/revision-case.md"
+        "evals/fixtures/revision-case.md"
       ],
       "assertions": [
         "The report distinguishes the duplicated caching definition from the useful invalidation refresher.",
         "The fixed-size code is identified as insufficient evidence for a supported size-sweep capability.",
         "The response proposes focused improvements without claiming an executed lab or validated course outcome.",
-        "No course files, HTML publication, skill sources or learner-code execution are produced by the review."
+        "No course files, HTML publication, skill sources or learner-code execution are produced by the review.",
+        "The browser default adds no implicit browser execution, dependency installation, publication or live-lab work to this restricted request."
       ]
     },
     {
@@ -78,13 +98,39 @@
       "files": [],
       "assertions": [
         "Every lesson title names a concept or relationship rather than listing technologies; no unrequested syllabus or TOC is added for this lesson-only scope.",
-        "Every lesson uses Objective, How it works, Practice and Mental model in that order; removed authoring labels are integrated rather than reproduced as standalone sections.",
+        "Every lesson uses Objective, How it works, Practice and Mental model in that order, followed only by optional References; no lesson-local Glossary or Where to Go Next is created.",
         "How it works defines each needed concept and unfamiliar abbreviation before relying on it, connects the causal steps and includes a concrete worked example; common audience vocabulary is not mechanically expanded.",
         "Each How it works includes its own meaningful diagram with connectors, caption and adjacent explanation that agree; a diagram elsewhere does not satisfy the lesson.",
-        "Mental model ends the lesson by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
+        "Mental model closes teaching by synthesizing already-taught concepts without introducing a new prerequisite, term or mechanism.",
         "FIFO and WIP are expanded and explained in the lesson that uses them; waiting work is distinguished from all unfinished work.",
         "The numerical example distinguishes actual departures from service capacity and explains backlog growth of one job per minute when arrivals exceed capacity.",
-        "Practice includes guided non-code work and reasoned feedback; no files, dependencies, full course package or external services are required."
+        "Practice includes guided non-code work and reasoned feedback; no files, dependencies, full course package or external services are required.",
+        "The browser default adds no implicit browser execution, dependency installation, publication or live-lab work to this restricted request.",
+        "FIFO and WIP have correct expansions and definitions in the lesson before the Mental model uses them; a standalone lesson has no Glossary or Where to Go Next section, and puts any onward suggestion in the handoff. If an owning course is supplied, update its shared appendices without creating local copies."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $create-learning-course to revise a course with bulky result downloads, complete runtime files already supplied by checkout, and a shared setup guide. Preserve content and style. Work locally without installing or publishing.",
+      "expected_output": "Complete reading stays embedded; combined results use an external descriptive ZIP; configured build/check and scoped companion links work.",
+      "files": [],
+      "assertions": [
+        "No result ZIP payload is embedded in HTML and no redundant runtime kit is added.",
+        "Content, style and complete source listings are preserved.",
+        "The build checks complete publication inventory and exact-byte budgets before writes.",
+        "Approved local links resolve within the selected publication root."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use $create-learning-course to scaffold a nontechnical course build using the bundled templates. Keep the established format, declare the renderer adapter and show repeatable build/check behavior without installing dependencies or publishing.",
+      "expected_output": "Subject-neutral copied build scaffold with configured renderer or explicit incomplete-adapter evidence; no GPU stack or invented results.",
+      "files": [],
+      "assertions": [
+        "Copied build tools and presentation assets do not depend on the installed skill directory.",
+        "The scaffold never reports a finished course before the adapter and authored inputs are complete.",
+        "No unnecessary downloads, lab kits or runtime dependencies are invented.",
+        "Build, check and failure evidence are reported separately from teaching and browser quality."
       ]
     }
   ]

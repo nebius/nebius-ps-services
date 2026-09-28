@@ -1,56 +1,81 @@
 # Glossary
 
-- **CPU/GPU pipeline:** dependent host preparation, transfer, device computation and output stages; optimizing only a kernel may leave the end-to-end bottleneck unchanged.
-- **Host-to-device transfer:** copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
-- **Benchmark configuration:** the workload, correctness tolerance, timed operations and success metric held fixed during a comparison.
-
-- **Amdahl bound:** the maximum end-to-end gain possible when only one fraction of the critical path is accelerated.
-- **Arithmetic intensity (AI):** work divided by data movement for the same boundary, expressed in FLOP/byte. An algorithmic estimate and a profiler's measured traffic are different quantities and must be labeled.
-- **Baseline:** the frozen, correct workload and environment against which one controlled change is compared.
-- **Critical path:** the dependency chain that determines completion time.
-- **CUDA event:** a stream-ordered marker used to track completion or enforce dependencies; timing-enabled events can measure elapsed intervals.
-- **CUDA Graph:** a reusable graph of operations and dependencies, created explicitly or through stream capture and instantiated for launch. This course's PyTorch capture retains compatible shapes and referenced storage.
-- **DCGM:** NVIDIA Data Center GPU Manager, which provides health, job, and interval telemetry; its averages do not identify a source operator or kernel.
-- **DCGM Exporter:** an operator-owned service that exposes selected DCGM fields for Prometheus; it provides time-series telemetry, not source-level attribution.
-- **Distribution:** multiple measurements summarized with median and tail or dispersion information rather than a single sample.
-- **Effective workload TFLOP/s:** declared useful floating-point operations divided by elapsed time. It is an application estimate, not hardware peak throughput or a count of all issued instructions.
-- **Exposed communication:** collective time that remains on the critical path after any useful overlap.
-- **Fusion:** combining operations so intermediate traffic or launch overhead is reduced.
-- **Good benchmark:** equivalent work measured with explicit correctness checks and specified timed operations.
-- **Graph break:** a point where PyTorch cannot represent code in one compiler graph and resumes Python execution. This is distinct from CUDA stream capture, although it can reduce optimization opportunities.
-- **Graph-private pool:** memory retained at stable virtual addresses for CUDA Graph capture and replay.
-- **Inactive split bytes:** allocator-reserved bytes in split blocks that are not currently serving a live allocation; useful fragmentation evidence only in context.
-- **Inductor:** PyTorch's default compiler backend for many `torch.compile` workflows.
-- **Kernel launch-bound:** dominated by dispatch overhead rather than device execution.
-- **Limiter:** the resource or dependency most constraining the declared workload boundary under the measured conditions.
-- **MLPerf:** MLCommons benchmark suites with defined scenarios, quality targets, rules, and result checks; an informal course run is not an MLPerf result.
-- **NCCL Tests:** NVIDIA collective microbenchmarks used to sweep operations and message sizes independently of framework scheduling.
-- **Nsight Compute:** a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
-- **Nsight Systems:** a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
-- **`nvbandwidth`:** NVIDIA's copy-path utility for measuring declared host/device and device/device bandwidth or latency cases.
-- **NVTX:** semantic ranges and markers added by an application so profiler timelines can be connected to phases such as input, forward, backward, prefill, or decode.
-- **Occupancy:** active warps relative to the SM limit; one diagnostic dimension, not an optimization target by itself.
-- **PyTorch Profiler:** the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
-- **Reserved bytes:** CUDA memory held by the framework allocator, including both live allocations and eligible cached space retained for reuse.
-- **Roofline model:** a plot of achieved FLOP/s against arithmetic intensity with memory-bandwidth and compute ceilings. It classifies a measured kernel or boundary; it does not prove the end-to-end bottleneck.
-- **Speedup:** baseline time divided by candidate time for an equivalent declared boundary.
-- **Strong scaling:** adding ranks while total useful work remains fixed.
-- **Unnecessary synchronization:** a wait that delays submission or prevents useful overlap without being required at that point.
-- **Tail wave:** a final scheduling wave with fewer blocks than available execution slots.
-- **Throughput:** completed useful work per unit time, defined only after the unit and boundary are declared.
-- **Warm-up:** untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
-- **Weak scaling:** adding ranks while useful work per rank remains fixed, increasing total work.
-- **NCCL transport:** the selected communication path, such as Socket or the IB transport that can use InfiniBand or RoCE.
-- **Algorithmic bandwidth:** logical collective payload divided by operation time, using a declared unit convention.
-- **Normalized bus bandwidth:** NCCL Tests' collective-specific scaling of algorithmic bandwidth, not measured NIC wire traffic.
-- **In-place / out-of-place:** whether the collective result reuses input storage or uses distinct output storage.
-- **Queue pair (QP):** adapter send/receive work queues; changing their count can affect flow distribution and overhead.
-- **GPUDirect RDMA:** qualified NIC access to GPU memory without a host staging copy for the payload.
-- **GID:** global identifier used in RDMA addressing; modern NCCL selects RoCE GIDs dynamically.
-- **MPI / PMIx:** a process-communication interface and a process-management integration interface respectively; the site must qualify MPI launch compatibility with Slurm.
-- **Rank skew:** different participants arriving at a collective at different times, exposing waiting that is not cable-transfer time.
-
-- **Egress stream:** a CUDA stream dedicated here to copying completed GPU outputs toward the CPU.
-- **Backpressure:** a producer wait imposed when bounded slots are still owned by transfers or consumers.
-- **Drain:** completion of all required asynchronous work and consumers before a loop is declared complete.
-- **Pinned buffer:** page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.
+- **Algorithmic bandwidth** — logical collective payload divided by operation time, using a declared unit convention.
+- **Aliasing** — two pointers or tensor views referring to overlapping storage; it changes safe read/write ordering.
+- **Amdahl bound** — the maximum end-to-end gain possible when only one fraction of the critical path is accelerated.
+- **Arithmetic intensity (AI)** — work divided by data movement for the same boundary, expressed in FLOP/byte. An algorithmic estimate and a profiler's measured traffic are different quantities and must be labeled.
+- **Backpressure** — a producer wait imposed when bounded slots are still owned by transfers or consumers.
+- **Baseline** — the frozen, correct workload and environment against which one controlled change is compared.
+- **Benchmark configuration** — the workload, correctness tolerance, timed operations and success metric held fixed during a comparison.
+- **Collation** — Combining individual examples into the batch structure consumed by the model.
+- **Copy engine** — Dedicated transfer hardware that moves bytes without executing the copy as a kernel on streaming multiprocessors.
+- **CPU timer** — a host-side clock used to measure elapsed time; GPU completion must be established before stopping it when timing a complete GPU request.
+- **CPU/GPU pipeline** — dependent host preparation, transfer, device computation and output stages; optimizing only a kernel may leave the end-to-end bottleneck unchanged.
+- **Critical path** — the dependency chain that determines completion time.
+- **CUDA event** — a stream-ordered marker used to track completion or enforce dependencies; timing-enabled events can measure elapsed intervals.
+- **CUDA Graph** — a reusable graph of operations and dependencies, created explicitly or through stream capture and instantiated for launch. This course's PyTorch capture retains compatible shapes and referenced storage.
+- **CUDA stream** — an ordered sequence of device operations; callers must respect dependencies across streams and buffer lifetimes until completion.
+- **DCGM** — NVIDIA Data Center GPU Manager, which provides health, job, and interval telemetry; its averages do not identify a source operator or kernel.
+- **DCGM Exporter** — an operator-owned service that exposes selected DCGM fields for Prometheus; it provides time-series telemetry, not source-level attribution.
+- **Distribution** — multiple measurements summarized with median and tail or dispersion information rather than a single sample.
+- **Drain** — completion of all required asynchronous work and consumers before a loop is declared complete.
+- **Effective workload TFLOP/s** — declared useful floating-point operations divided by elapsed time. It is an application estimate, not hardware peak throughput or a count of all issued instructions.
+- **Egress stream** — a CUDA stream dedicated here to copying completed GPU outputs toward the CPU.
+- **Epilogue** — work applied to matrix-accumulation results before final storage.
+- **Exposed communication** — collective time that remains on the critical path after any useful overlap.
+- **Fabric** — the connected links and switches carrying traffic among endpoints.
+- **Fusion** — combining operations so intermediate traffic or launch overhead is reduced.
+- **GEMM** — general matrix multiplication, often expressed as C = alpha × A × B + beta × C.
+- **GID** — global identifier used in RDMA addressing; modern NCCL selects RoCE GIDs dynamically.
+- **Good benchmark** — equivalent work measured with explicit correctness checks and specified timed operations.
+- **GPUDirect RDMA** — qualified NIC access to GPU memory without a host staging copy for the payload.
+- **Graph break** — a point where PyTorch cannot represent code in one compiler graph and resumes Python execution. This is distinct from CUDA stream capture, although it can reduce optimization opportunities.
+- **Graph-private pool** — memory retained at stable virtual addresses for CUDA Graph capture and replay.
+- **Host-to-device transfer** — copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
+- **In-place / out-of-place** — whether the collective result reuses input storage or uses distinct output storage.
+- **Inactive split bytes** — allocator-reserved bytes in split blocks that are not currently serving a live allocation; useful fragmentation evidence only in context.
+- **Inductor** — PyTorch's default compiler backend for many `torch.compile` workflows.
+- **InfiniBand** — a switched network architecture supporting RDMA with compatible adapters, links and a subnet manager.
+- **Kernel launch-bound** — dominated by dispatch overhead rather than device execution.
+- **Layout** — The mapping from logical tensor indices to storage addresses.
+- **Limiter** — the resource or dependency most constraining the declared workload boundary under the measured conditions.
+- **Maintained library** — a supported implementation such as cuBLAS, cuDNN, CUB/CCCL or CUTLASS that should be evaluated before owning a custom implementation.
+- **Materialization** — Writing an intermediate result into storage rather than keeping it within an executing kernel.
+- **MLPerf** — MLCommons benchmark suites with defined scenarios, quality targets, rules, and result checks; an informal course run is not an MLPerf result.
+- **MPI / PMIx** — a process-communication interface and a process-management integration interface respectively; the site must qualify MPI launch compatibility with Slurm.
+- **NCCL** — NVIDIA Collective Communications Library, software implementing GPU collectives and point-to-point communication using available topology-aware paths.
+- **NCCL Tests** — NVIDIA collective microbenchmarks used to sweep operations and message sizes independently of framework scheduling.
+- **NCCL transport** — the selected communication path, such as Socket or the IB transport that can use InfiniBand or RoCE.
+- **NIC** — network interface controller connecting a host to a network.
+- **Normalized bus bandwidth** — NCCL Tests' collective-specific scaling of algorithmic bandwidth, not measured NIC wire traffic.
+- **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **`nvbandwidth`** — NVIDIA's copy-path utility for measuring declared host/device and device/device bandwidth or latency cases.
+- **NVLink** — a high-bandwidth interconnect between supported GPU endpoints; not a generic server-network configuration switch.
+- **NVSwitch** — switching hardware connecting endpoints within a supported NVLink fabric; different from an InfiniBand switch.
+- **NVTX** — NVIDIA Tools Extension Library, an annotation API for semantic markers and ranges that connect profiler timelines to application phases such as input, forward, backward, prefill, or decode. It does not synchronize or time GPU work by itself.
+- **Occupancy** — active warps relative to the SM limit; one diagnostic dimension, not an optimization target by itself.
+- **Padding** — Adding unused or neutral values to reach a selected shape while preserving the intended result.
+- **Pinned buffer** — page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.
+- **Prefetch** — Preparing future batches before the consumer requests them.
+- **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Queue depth** — The number of prepared batches waiting for consumption.
+- **Queue pair (QP)** — adapter send/receive work queues; changing their count can affect flow distribution and overhead.
+- **Rank** — The index identifying one process in a distributed application.
+- **Rank skew** — different participants arriving at a collective at different times, exposing waiting that is not cable-transfer time.
+- **RDMA** — remote direct memory access using supported network hardware and registered memory; not assumed by this course.
+- **Registration** — establishing the memory region, permissions and mapping that an adapter may use for data transfer.
+- **Reserved bytes** — CUDA memory held by the framework allocator, including both live allocations and eligible cached space retained for reuse.
+- **Roofline model** — a plot of achieved FLOP/s against arithmetic intensity with memory-bandwidth and compute ceilings. It classifies a measured kernel or boundary; it does not prove the end-to-end bottleneck.
+- **SM** — streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
+- **Speedup** — baseline time divided by candidate time for an equivalent declared boundary.
+- **Starvation** — A wait caused by the next required input batch not being ready.
+- **Strong scaling** — adding ranks while total useful work remains fixed.
+- **Synchronization** — A dependency or wait that ensures required work has completed before dependent work proceeds.
+- **Tail wave** — a final scheduling wave with fewer blocks than available execution slots.
+- **Tensor Core** — specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
+- **Throughput** — completed useful work per unit time, defined only after the unit and boundary are declared.
+- **Tile** — A smaller region of data handled cooperatively by an implementation.
+- **Unnecessary synchronization** — a wait that delays submission or prevents useful overlap without being required at that point.
+- **Warm-up** — untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
+- **Weak scaling** — adding ranks while useful work per rank remains fixed, increasing total work.

@@ -1,0 +1,27 @@
+{
+  "correctness": {
+    "framework_kernel_executed": true,
+    "h100_contract": true
+  },
+  "lab": "10_compatibility_stack",
+  "measurements": {
+    "layers": {
+      "framework_compiled_arches": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

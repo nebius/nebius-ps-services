@@ -149,11 +149,10 @@ wizard:
       from: soperator_node_groups
       args:
         role: worker
-  values.soperator-dcgm-exporter.enabled: &disabled-component
+  values.soperator-notifier.enabled: &disabled-component
     default: false
     write_default_to_config: true
     type_hint: bool
-  values.soperator-notifier.enabled: *disabled-component
   values.soperator-backup-config.enabled: *disabled-component
   values.sssd.enabled: *disabled-component
 defaults:
@@ -175,9 +174,6 @@ defaults:
   values.soperator-backup-config.secret.keys.accessKeyID: aws-access-key-id
   values.soperator-backup-config.secret.keys.secretAccessKey: aws-access-secret-key
   values.soperator-backup-config.secret.keys.backupPassword: backup-password
-  values.soperator-dcgm-exporter.enabled: false
-  values.soperator-dcgm-exporter.fullnameOverride: soperator-dcgm-exporter
-  values.soperator-dcgm-exporter.serviceMonitor.enabled: false
 cli:
   mk8s_gpu_policy:
     install_after:
@@ -309,7 +305,7 @@ cli:
             jail: true
             total_nodes_input: soperator.worker_cpu_total_nodes
             nodes_per_group_input: soperator.worker_cpu_nodes_per_group
-            default_total_nodes: 1
+            default_total_nodes: 2
             default_nodes_per_group: 100
             max_nodes_per_group: 100
         sfs:
@@ -437,7 +433,7 @@ cli:
                 ib-gpu-perf:
                   enabled: false
                 ensure-healthy-nodes:
-                  enabled: false
+                  runAfterCreation: true
                 extensive-check:
                   enabled: false
                 mem-perf:
@@ -467,11 +463,8 @@ cli:
               nodeConfig:
                 features:
                 - cpu
-                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
               slurmd:
                 resources:
-                  cpu: '4'
-                  memory: 16Gi
                   ephemeralStorage: 10Gi
                 volumes:
                   spool:
@@ -495,6 +488,9 @@ cli:
                   limitsConfig: ''
                   procMount: Default
               sssd:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
                 enabled: false
               priorityClass: soperator-worker-high-priority
               nodeSelector:
@@ -696,7 +692,7 @@ cli:
             jail: true
             total_nodes_input: soperator.worker_cpu_total_nodes
             nodes_per_group_input: soperator.worker_cpu_nodes_per_group
-            default_total_nodes: 1
+            default_total_nodes: 2
             default_nodes_per_group: 100
             max_nodes_per_group: 100
           - name: worker-gpu
@@ -707,7 +703,7 @@ cli:
             jail: true
             total_nodes_input: soperator.worker_gpu_total_nodes
             nodes_per_group_input: soperator.worker_gpu_nodes_per_group
-            default_total_nodes: 1
+            default_total_nodes: 2
             default_nodes_per_group: 100
             max_nodes_per_group: 100
             node_group:
@@ -749,7 +745,7 @@ cli:
             soperator-activechecks:
               checks:
                 ensure-healthy-nodes:
-                  runAfterCreation: false
+                  runAfterCreation: true
                 wait-for-topology:
                   runAfterCreation: false
             partitionConfiguration:
@@ -781,11 +777,8 @@ cli:
               nodeConfig:
                 features:
                 - cpu
-                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
               slurmd:
                 resources:
-                  cpu: '4'
-                  memory: 16Gi
                   ephemeralStorage: 10Gi
                 volumes:
                   spool:
@@ -809,6 +802,9 @@ cli:
                   limitsConfig: ''
                   procMount: Default
               sssd:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
                 enabled: false
               priorityClass: soperator-worker-high-priority
               nodeSelector:
@@ -827,16 +823,11 @@ cli:
                 features:
                 - gpu
                 - cuda
-                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
-                gresConfig:
-                - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
               slurmd:
                 customEnv:
                 - name: NVIDIA_DRIVER_CAPABILITIES
                   value: compute,graphics,utility,video
                 resources:
-                  cpu: '32'
-                  memory: 16Gi
                   ephemeralStorage: 55Gi
                   gpu: 8
                 volumes:
@@ -861,6 +852,9 @@ cli:
                   limitsConfig: ''
                   procMount: Default
               sssd:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
                 enabled: false
               priorityClass: soperator-worker-high-priority
               nodeSelector:
@@ -1232,7 +1226,7 @@ cli:
             jail: true
             total_nodes_input: soperator.worker_gpu_total_nodes
             nodes_per_group_input: soperator.worker_gpu_nodes_per_group
-            default_total_nodes: 1
+            default_total_nodes: 2
             default_nodes_per_group: 100
             max_nodes_per_group: 100
             node_group:
@@ -1258,7 +1252,7 @@ cli:
             soperator-activechecks:
               checks:
                 ensure-healthy-nodes:
-                  runAfterCreation: false
+                  runAfterCreation: true
                 wait-for-topology:
                   runAfterCreation: false
             partitionConfiguration:
@@ -1285,16 +1279,11 @@ cli:
                 features:
                 - gpu
                 - cuda
-                static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
-                gresConfig:
-                - AutoDetect=off Name=gpu File=/dev/nvidia[0-7]
               slurmd:
                 customEnv:
                 - name: NVIDIA_DRIVER_CAPABILITIES
                   value: compute,graphics,utility,video
                 resources:
-                  cpu: '32'
-                  memory: 16Gi
                   ephemeralStorage: 55Gi
                   gpu: 8
                 volumes:
@@ -1319,6 +1308,9 @@ cli:
                   limitsConfig: ''
                   procMount: Default
               sssd:
+                resources:
+                  cpu: 200m
+                  memory: 512Mi
                 enabled: false
               priorityClass: soperator-worker-high-priority
               nodeSelector:

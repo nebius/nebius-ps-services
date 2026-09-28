@@ -111,9 +111,15 @@ Stop decisions. Their root coordinators use the canonical parser, paired
 publisher, and exact receipt for project truth without treating that receipt
 as workflow authority.
 
-Already-effective repository instructions remain authoritative. Automatic
-workflow phases do not create, update, retire, apply, verify, or reload project
-instructions.
+Already-effective repository instructions remain authoritative subject to
+higher-priority policy and explicit user revisions of user-owned rules. Route
+an explicit restrictive-instruction repair request to project-agent-instructions
+without asking for the same authorization again. Its human-rule path may patch
+prose without a spec receipt; managed generation still requires that receipt.
+Automatic workflow phases do not create, update, retire, apply, verify, or
+reload project instructions. Necessary new credential creation for an authorized
+task does not introduce a separate lifecycle approval gate or permit storing
+secret values in specifications or lifecycle state.
 
 ## Historical State
 

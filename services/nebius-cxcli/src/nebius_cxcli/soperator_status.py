@@ -13,9 +13,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .destroy import DESTROY_SCHEMA
 from .paths import ProjectPaths
 from .sdk_auth import acquire_operator_access_token
-from .soperator_destroy import SOPERATOR_DESTROY_SCHEMA
 from .soperator_full_stack_upgrade import campaign_receipt_path, load_campaign_receipt
 from .soperator_operation import SOPERATOR_RELEASE_INTENT_SCHEMA
 from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
@@ -151,22 +151,38 @@ def run_soperator_observability_verification(
             pod_uid=workload.pod_uid,
             container_name=workload.container_name,
         )
-        try:
-            token = token_acquirer(
-                interactive=interactive,
-                context="Soperator observability verification",
+        import yaml
+
+        from .observability_routing import target_settings
+        from .observability_runtime import verify_native_telemetry
+
+        config = yaml.safe_load(paths.config_path.read_text()) or {}
+        if target_settings(config, target_ref):
+            receipt = verify_native_telemetry(
+                config,
+                scope,
+                verification_id=verification_id,
+                extra_env=live_context.extra_env,
+                emit=emit,
+                verifier=verifier,
             )
-        except Exception as exc:
-            raise SoperatorObservabilityFailure(
-                "authentication-unavailable",
-                "Operator IAM authentication is unavailable for observability verification",
-            ) from exc
-        receipt = verifier(
-            scope,
-            verification_id=verification_id,
-            token=token,
-            emit=emit,
-        )
+        else:
+            try:
+                token = token_acquirer(
+                    interactive=interactive,
+                    context="Soperator observability verification",
+                )
+            except Exception as exc:
+                raise SoperatorObservabilityFailure(
+                    "authentication-unavailable",
+                    "Operator IAM authentication is unavailable for observability verification",
+                ) from exc
+            receipt = verifier(
+                scope,
+                verification_id=verification_id,
+                token=token,
+                emit=emit,
+            )
     except SoperatorObservabilityFailure as exc:
         receipt = failed_soperator_observability_receipt(
             verification_id=verification_id,
@@ -206,6 +222,15 @@ def _read_owner_only_json(path: Path) -> Mapping[str, object]:
 
 def _command(*items: object) -> str:
     return " ".join(shlex.quote(str(item)) for item in items)
+
+
+def _deploy_recovery_detail(config_path: Path) -> str:
+    return (
+        f"Resume with {_command('nebius-cxcli', 'deploy', config_path)} and the "
+        "original deploy options, including target selection, validation selection, "
+        "and Slurm job controls. This local receipt does not record all frozen "
+        "deployment controls, so a complete recovery command cannot be reconstructed."
+    )
 
 
 def _target_matches(payload: Mapping[str, object], target_ref: str) -> bool:
@@ -255,7 +280,9 @@ def _reconcile_phase(payload: Mapping[str, object]) -> str:
     return "operation-admission"
 
 
-_SUPERVISOR_CLASSIFICATIONS = frozenset({"retrying", "safety-paused", "terminal-failed"})
+_SUPERVISOR_CLASSIFICATIONS = frozenset(
+    {"retrying", "safety-paused", "terminal-failed", "recovery-required"}
+)
 _TRANSITION_CLASSIFICATIONS = frozenset({"operation-error"})
 
 
@@ -313,9 +340,9 @@ def read_soperator_operation_status(
     if include_destroy:
         destroy = _latest_matching_receipt(
             paths,
-            pattern="soperator-destroy-*.json",
+            pattern="destroy-*.json",
             target_ref=normalized_target,
-            schema=SOPERATOR_DESTROY_SCHEMA,
+            schema=DESTROY_SCHEMA,
         )
         if destroy is not None:
             path, payload = destroy
@@ -347,11 +374,20 @@ def read_soperator_operation_status(
                     receipt_path=path,
                     resume_command=_command(
                         "nebius-cxcli",
-                        "soperator",
                         "destroy",
                         config_path,
                         "--target",
-                        normalized_target,
+                        str(payload.get("cluster_id") or ""),
+                        *(
+                            ["--delete-sfs"]
+                            if payload.get("approved", {}).get("delete_sfs")
+                            else []
+                        ),
+                        *(
+                            ["--preserve-pvc-disks"]
+                            if payload.get("approved", {}).get("preserve_pvc_disks")
+                            else []
+                        ),
                     ),
                     classification=classification,
                     detail=detail,
@@ -368,7 +404,15 @@ def read_soperator_operation_status(
         status = (
             supervisor_state
             if supervisor_state
-            in {"active", "pending", "running", "retrying", "safety-paused", "terminal-failed"}
+            in {
+                "active",
+                "pending",
+                "running",
+                "retrying",
+                "safety-paused",
+                "terminal-failed",
+                "recovery-required",
+            }
             else "active"
         )
         phase = str(supervisor.get("current_segment") or "").strip()
@@ -391,35 +435,8 @@ def read_soperator_operation_status(
             else ""
         )
         campaign_intent = campaign.intent
-        resume_items: list[object] = [
-            "nebius-cxcli",
-            "soperator",
-            "upgrade",
-            config_path,
-            "--target",
-            normalized_target,
-        ]
-        requested_release = str(campaign_intent.get("requested_release_selector") or "").strip()
-        requested_kubernetes = str(
-            campaign_intent.get("requested_kubernetes_selector") or ""
-        ).strip()
-        if requested_release:
-            resume_items.extend(("--to-release", requested_release))
-        if requested_kubernetes:
-            resume_items.extend(("--to-k8s-version", requested_kubernetes))
-        resume_items.extend(("--execute", "--approve", "--no-interactive"))
         ownership = str(campaign_intent.get("ownership") or "unknown").strip()
         backend = str(campaign_intent.get("backend") or "unknown").strip()
-        raw_compatibility = campaign_intent.get("compatibility_rows")
-        compatibility_rows = raw_compatibility if isinstance(raw_compatibility, list) else []
-        compatibility_summary = ", ".join(
-            f"{str(item.get('group_key') or 'unknown')}@"
-            f"{str(item.get('kubernetes_version') or 'unknown')}="
-            f"{str(item.get('os') or 'unknown')}/"
-            f"{str(item.get('drivers_preset') or 'driverless/operator-managed')}"
-            for item in compatibility_rows
-            if isinstance(item, Mapping)
-        )
         final_readiness = next(
             (segment for segment in campaign.segments if segment.name == "final-readiness"),
             None,
@@ -445,17 +462,32 @@ def read_soperator_operation_status(
                 f"Backend: {ownership}/{backend}.",
             ]
         )
-        if compatibility_summary:
-            detail_parts.append(f"Frozen provider compatibility: {compatibility_summary}.")
         if runtime_summary:
             detail_parts.append(f"GPU runtime evidence: {runtime_summary}.")
+        detail_parts.append(_deploy_recovery_detail(config_path))
+        job_options: list[object] = []
+        for field, flag in (
+            ("job_policy", "--job-policy"),
+            ("job_wait_timeout", "--job-wait-timeout"),
+            ("job_refresh_interval", "--job-refresh-interval"),
+        ):
+            if campaign_intent.get(field) is not None:
+                job_options.extend((flag, campaign_intent[field]))
+        for field, flag in (
+            ("cancel_job_ids", "--cancel-job"),
+            ("requeue_job_ids", "--requeue-job"),
+        ):
+            for job_id in campaign_intent.get(field, ()):
+                job_options.extend((flag, job_id))
+        if job_options:
+            detail_parts.append(f"Known frozen Slurm options: {_command(*job_options)}.")
         detail = " ".join(detail_parts)
         return SoperatorOperationStatus(
             operation="upgrade",
             status=status,
             phase=phase,
             receipt_path=campaign_path,
-            resume_command=_command(*resume_items),
+            resume_command="",
             classification=classification,
             detail=detail,
         )
@@ -480,20 +512,7 @@ def read_soperator_operation_status(
         path, payload = reconcile
         status = str(payload.get("status") or "unknown").strip()
         if status != "complete":
-            selector = str((intent or {}).get("requested_selector") or "").strip()
-            resume = _command(
-                "nebius-cxcli",
-                "soperator",
-                "upgrade",
-                config_path,
-                "--target",
-                normalized_target,
-                "--to-release",
-                selector or "<frozen-release>",
-                "--execute",
-                "--approve",
-            )
-            detail = (
+            safety_detail = (
                 "Mutation is safety-paused; re-prove authority and immutable identity before resuming."
                 if status in {"safety-paused", "recovery-required"}
                 else ""
@@ -503,12 +522,13 @@ def read_soperator_operation_status(
                 status=status,
                 phase=_reconcile_phase(payload),
                 receipt_path=path,
-                resume_command=resume,
+                resume_command="",
                 classification=_reconcile_classification(payload, status=status),
-                detail=detail,
+                detail=" ".join(
+                    filter(None, (safety_detail, _deploy_recovery_detail(config_path)))
+                ),
             )
     if intent is not None and intent_path is not None and intent.get("status") == "active":
-        selector = str(intent.get("requested_selector") or "").strip()
         return SoperatorOperationStatus(
             operation="upgrade",
             status="active",
@@ -518,44 +538,10 @@ def read_soperator_operation_status(
                 else "intent-frozen"
             ),
             receipt_path=intent_path,
-            resume_command=_command(
-                "nebius-cxcli",
-                "soperator",
-                "upgrade",
-                config_path,
-                "--target",
-                normalized_target,
-                "--to-release",
-                selector,
-                "--execute",
-                "--approve",
-            ),
+            resume_command="",
+            detail=_deploy_recovery_detail(config_path),
         )
 
-    install_path = paths.reports_dir / "soperator-install-plan.json"
-    if install_path.is_file():
-        payload = _read_owner_only_json(install_path)
-        if payload.get("schema") == "nebius-cxcli.soperator-install-plan.v1" and _target_matches(
-            payload, normalized_target
-        ):
-            status = str(payload.get("status") or "unknown").strip()
-            if status != "complete":
-                return SoperatorOperationStatus(
-                    operation="install",
-                    status=status,
-                    phase="saved-plan",
-                    receipt_path=install_path,
-                    resume_command=_command(
-                        "nebius-cxcli",
-                        "soperator",
-                        "install",
-                        config_path,
-                        "--resume",
-                        "--dry-run",
-                    ),
-                    classification=("operation-error" if status == "failed" else ""),
-                    detail="Review the saved approval fingerprint before execution.",
-                )
     return None
 
 
