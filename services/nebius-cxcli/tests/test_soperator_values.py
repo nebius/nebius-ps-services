@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -226,8 +227,9 @@ def test_deploy_rejects_values_file_before_reading_it(tmp_path):
         ],
     )
     assert result.exit_code != 0
-    assert "No such option" in result.output
-    assert "--values-file" in result.output
+    rendered = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
+    assert "No such option" in rendered
+    assert "--values-file" in rendered
 
 
 def test_real_wizard_prefills_file_and_records_confirmed_default(monkeypatch):

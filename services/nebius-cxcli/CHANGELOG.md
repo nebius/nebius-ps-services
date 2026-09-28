@@ -6,6 +6,11 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Invalidate a Terraform root's cached initialization and validation before
+  reinitializing it, including when a recreated directory reuses its inode or
+  an initializer fails with different settings. Preserve other roots' reuse.
+- Normalize ANSI styling in CLI flag assertions so the same checks work on
+  color-enabled CI runners.
 - Align workflow validation with the setup-uv v10.2.0 action pin from the base
   branch.
 - Isolate mocked interactive progress consoles from the runner's terminal type

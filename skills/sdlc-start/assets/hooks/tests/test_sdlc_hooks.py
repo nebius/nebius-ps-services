@@ -1038,7 +1038,9 @@ class HookTestCase(unittest.TestCase):
     def test_pretool_denies_direct_commit_transaction_during_active_sdlc(self) -> None:
         self.switch_feature()
         self.active_run()
-        for action in ("prepare", "execute", "review"):
+        for action in ("prepare", "execute", "review",
+                       "prepare --requested-action create-pr --pr-base main",
+                       "review --complete-pr"):
             command = (
                 "python3 /Users/example/.agents/skills/commit/scripts/"
                 f"commit_transaction.py {action} --private canonical"

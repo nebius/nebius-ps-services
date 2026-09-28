@@ -105,7 +105,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | --- | --- | --- |
 | `commit` | Implicit allowed | Create one claim-bound local commit for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
-| `create-pr` | Explicit only | Create or reuse GitHub pull requests with branch-safe generic preparation or exact-SHA publication-only behavior for active Agentic SDLC runs. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated stage/commit/push repairs under one scoped task; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
@@ -1313,6 +1313,12 @@ instead of bypassing hidden project effects, and never pulls, rebases, merges,
 force-pushes, or opens a PR.
 
 ### `create-pr`
+
+An authorized unmanaged PR task can call the shared `commit` transaction for
+successive reviewed repairs until checks finish, without renewed commit prompts.
+Its private continuation grant binds the session, branch, origin and base; each
+commit retains exact-tree review and normal hooks. Ordinary standalone commits
+remain single-use.
 
 `create-pr` turns local work or named branches into GitHub pull requests
 without leaving new work on the default branch. It can prepare conflict-free

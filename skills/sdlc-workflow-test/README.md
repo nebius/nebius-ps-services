@@ -178,6 +178,11 @@ proof; invalid ownership, publication or image identity cannot produce new proof
 
 ## Files
 
+The native workflow CI regression step sets `GIT_CONFIG_NOSYSTEM=1` so
+disposable Git fixtures do not inherit runner-installed system filters such as
+Git LFS. Repository and user configuration checks remain active, and the step
+runs `scripts/test_owned_git_origin.py` to verify the ownership boundary.
+
 - `SKILL.md`: runtime verification workflow and safety boundaries.
 - `references/verification-checklist.md`: detailed test plan and pass criteria.
 - `scripts/verify_agentic_sdlc.py`: deterministic safe preflight verifier.

@@ -10,3 +10,6 @@ create-pr-negative-04,false,The managed Agentic SDLC child passed its tests; pub
 create-pr-codex-portability,true,$create-pr Create a GitHub pull request from the current feature branch.
 create-pr-claude-portability,true,/create-pr Create a GitHub pull request from the current feature branch.
 create-pr-quoted-command,false,"Treat ""/skills:create-pr"" as sample text in this punctuation exercise; count its punctuation characters only."
+create-pr-ci-loop,true,"$create-pr: repair the failing checks and keep committing and pushing until this PR passes."
+create-pr-resume,true,"Continue the authorized PR task after CI found another branch-owned failure."
+create-pr-repair-only,false,"Explain how the create-pr skill handles commits; do not change Git or publish."

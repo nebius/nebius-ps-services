@@ -543,14 +543,24 @@ def terraform_init(
     from .deployment_preparation import current_preparation, initialized_identity, terraform_inputs
 
     prepared = current_preparation()
+    root = str(infra_dir.resolve())
     key = (
         prepared.key(infra_dir, terraform_bin, extra_env, backend=backend, initialization=True)
         if prepared
         else ""
     )
     identity = initialized_identity(infra_dir)
-    if prepared is not None and identity is not None and prepared.initialized.get(key) == identity:
+    if (
+        prepared is not None
+        and identity is not None
+        and prepared.initialized.get(root, {}).get(key) == identity
+    ):
         return
+    if prepared is not None:
+        # A new initializer invalidates this root's prior proof even if it
+        # fails or recreates a directory with the same filesystem identity.
+        prepared.initialized.pop(root, None)
+        prepared.validated.pop(root, None)
     cmd = [terraform_bin, "init", "-input=false", "-no-color"]
     if not backend:
         cmd.append("-backend=false")
@@ -567,7 +577,7 @@ def terraform_init(
         key = prepared.key(
             infra_dir, terraform_bin, extra_env, backend=backend, initialization=True
         )
-        prepared.initialized[key] = identity
+        prepared.initialized[root] = {key: identity}
 
 
 def terraform_plan(
@@ -646,9 +656,10 @@ def terraform_validate(
     from .deployment_preparation import current_preparation, initialized_identity
 
     prepared = current_preparation()
+    root = str(infra_dir.resolve())
     identity = initialized_identity(infra_dir)
     key = prepared.key(infra_dir, terraform_bin, extra_env) + str(identity) if prepared else ""
-    if prepared is not None and identity is not None and key in prepared.validated:
+    if prepared is not None and identity is not None and key in prepared.validated.get(root, set()):
         return
     _run(
         [terraform_bin, "validate", "-no-color"],
@@ -658,7 +669,7 @@ def terraform_validate(
     )
 
     if prepared is not None and identity is not None:
-        prepared.validated.add(key)
+        prepared.validated.setdefault(root, set()).add(key)
 
 
 def terraform_state_list(

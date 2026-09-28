@@ -13,3 +13,5 @@ commit-help-natural,false,Explain how the $commit skill works without running it
 commit-negated,false,Do not run $commit yet.
 commit-polite,true,Could you commit all current changes without pushing?
 commit-trailing,true,Please save these changes in a commit using $commit
+commit-parent-call,true,"The authorized PR workflow calls commit for its next reviewed CI repair."
+commit-parent-discussion,false,"Describe how another skill could call commit; do not commit anything."

@@ -47,6 +47,16 @@ Do not invent identifiers or derive them from transcripts. Installation and
 fixture tests do not prove active-session dispatch: verify native hook trust
 and observe a real prompt produce fresh receipt context before publication.
 
+## Calls From Other Skills
+
+The parent task's authorization can cover a call to this shared skill; users
+need not repeat a standalone commit phrase. Existing Worktree and Task
+Implementer delegation stays exact. An authorized unmanaged `create-pr` task
+uses its own private continuation grant for successive independently reviewed
+commits and safe failed-hook retries. The PR skill owns pushes and checks;
+ordinary direct commit and commit-push requests remain one-shot. See
+[PR continuation](../create-pr/references/commit-continuation.md).
+
 ## What It Does
 
 - Resolves the Git repository root and runs Git commands from there.

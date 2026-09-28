@@ -147,6 +147,197 @@ class CommitTransactionTest(unittest.TestCase):
             str(claim),
         )
 
+    def pr_prepare(self, *, fresh=False, expected=0):
+        if fresh:
+            git(self.root, "remote", "add", "origin", "https://example.com/team/repo.git")
+            git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
+            git(self.root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+            self.authorize("$create-pr; repair checks and commit/push until complete")
+        authorization = transaction.expected_authorization_path(self.root, "session-1")
+        return self.run_helper(
+            "prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--authorization", str(authorization),
+            "--claim", str(transaction.expected_claim_path(self.root)),
+            "--requested-action", "create-pr", "--pr-base", "main",
+            "--intent-sha256", self.request_assertions["session-1"][-1], expected=expected,
+        )
+
+    def pr_execute(self, prepared, *, expected=0):
+        return self.run_helper(
+            "execute", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--claim", prepared["claim"], "--token", prepared["token"],
+            "--reviewed-tree", prepared["candidate_tree"], "--message", "Repair checks",
+            expected=expected,
+        )
+
+    def test_pr_two_commits_and_close_without_new_user_turn(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        result = self.pr_execute(first)
+        self.assertEqual(self.pr_execute(first), result)
+        (self.root / "repair.txt").write_text("second repair\n")
+        second = self.pr_prepare()
+        final = self.pr_execute(second)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD^"), result["commit"])
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        self.run_helper(
+            "review", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--claim", second["claim"], "--token", second["token"],
+            "--reviewed-commit", final["commit"], "--reviewed-tree", final["tree"],
+            "--complete-pr",
+        )
+        (self.root / "repair.txt").write_text("third repair\n")
+        self.assertIn("closed", self.pr_prepare(expected=2)["reason"])
+
+    def test_pr_failed_hook_can_retry_same_base(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o700)
+        self.pr_execute(first, expected=2)
+        hook.unlink()
+        (self.root / "correction.txt").write_text("corrected\n")
+        retry = self.pr_prepare()
+        self.assertEqual(self.pr_execute(retry)["status"], "committed")
+
+    def test_pr_origin_drift_blocks_execute_and_continuation(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        before = git(self.root, "write-tree")
+        git(self.root, "remote", "set-url", "--push", "origin", "https://example.com/other/repo.git")
+        self.pr_execute(first, expected=2)
+        self.pr_prepare(expected=2)
+        self.assertEqual(git(self.root, "write-tree"), before)
+
+    def test_pr_rejects_untracked_history_and_unreviewed_commit(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        self.pr_execute(first)
+        (self.root / "outside.txt").write_text("outside transaction\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "outside")
+        (self.root / "repair.txt").write_text("repair\n")
+        self.pr_prepare(expected=2)
+
+    def test_pr_allows_forward_base_merge_then_followup(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        self.pr_execute(first)
+        tree = git(self.root, "rev-parse", "refs/remotes/origin/main^{tree}")
+        base = git(self.root, "commit-tree", tree, "-p", "refs/remotes/origin/main", "-m", "Base update")
+        git(self.root, "update-ref", "refs/remotes/origin/main", base)
+        git(self.root, "merge", "--no-edit", "refs/remotes/origin/main")
+        (self.root / "repair.txt").write_text("repair after merge\n")
+        self.pr_execute(self.pr_prepare())
+
+    def test_pr_review_required_cannot_be_skipped(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\necho hook > hook.txt\ngit add hook.txt\n")
+        hook.chmod(0o700)
+        result = self.pr_execute(first, expected=2)
+        self.assertIn("review", result["reason"])
+        authorization = transaction.expected_authorization_path(self.root, "session-1")
+        before = authorization.read_bytes()
+        self.pr_prepare(expected=2)
+        self.assertEqual(before, authorization.read_bytes())
+        claim = json.loads(Path(first["claim"]).read_text())
+        self.run_helper(
+            "review", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--claim", first["claim"], "--token", first["token"],
+            "--reviewed-commit", claim["commit_head"], "--reviewed-tree", claim["commit_tree"],
+        )
+        hook.unlink()
+        (self.root / "repair.txt").write_text("reviewed followup\n")
+        self.pr_execute(self.pr_prepare())
+
+    def test_pr_preparation_authorization_crash_is_recoverable(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        self.pr_execute(first)
+        (self.root / "repair.txt").write_text("repair\n")
+        auth = transaction.expected_authorization_path(self.root, "session-1")
+        args = transaction._parser().parse_args([
+            "prepare", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--authorization", str(auth), "--claim", first["claim"],
+            "--requested-action", "create-pr", "--pr-base", "main",
+            "--intent-sha256", self.request_assertions["session-1"][-1],
+        ])
+        atomic = transaction._atomic_json
+        def crash(path, value):
+            atomic(path, value)
+            if path == auth and value["state"] == "AUTHORIZED":
+                raise RuntimeError("simulated crash")
+        with mock.patch.object(transaction, "_atomic_json", side_effect=crash):
+            with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+                transaction.prepare(args)
+        self.pr_execute(self.pr_prepare())
+
+    def test_pr_exact_commit_crash_recovery_allows_next_commit(self):
+        self.seed_multi_project_diff()
+        self.pr_prepare(fresh=True)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "interrupted")
+        recovered = self.pr_prepare()
+        self.assertEqual(recovered["status"], "committed")
+        (self.root / "repair.txt").write_text("next repair\n")
+        self.pr_execute(self.pr_prepare())
+
+    def test_pr_completion_preserves_fresh_ordinary_commit(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        result = self.pr_execute(first)
+        self.run_helper(
+            "review", "--repo-root", str(self.root), "--session-id", "session-1",
+            "--claim", first["claim"], "--token", first["token"],
+            "--reviewed-commit", result["commit"], "--reviewed-tree", result["tree"],
+            "--complete-pr",
+        )
+        (self.root / "local.txt").write_text("ordinary commit\n")
+        prepared = self.prepare()
+        self.pr_execute(prepared)
+
+    def test_pr_scope_and_predecessor_drift_fail_before_staging(self):
+        for mutation in ("session", "branch", "base", "default", "claim-owner", "rewritten-base"):
+            with self.subTest(mutation=mutation):
+                # Each case starts from its own fully owned first commit.
+                if mutation != "session":
+                    self.tearDown()
+                    self.setUp()
+                self.seed_multi_project_diff()
+                first = self.pr_prepare(fresh=True)
+                self.pr_execute(first)
+                (self.root / "repair.txt").write_text("repair\n")
+                before = git(self.root, "write-tree")
+                if mutation == "session":
+                    auth = transaction.expected_authorization_path(self.root, "other-session")
+                    self.run_helper("prepare", "--repo-root", str(self.root),
+                        "--session-id", "other-session", "--authorization", str(auth),
+                        "--claim", first["claim"], "--requested-action", "create-pr",
+                        "--pr-base", "main", "--intent-sha256", self.request_assertions["session-1"][-1], expected=2)
+                else:
+                    if mutation == "branch":
+                        git(self.root, "switch", "-qc", "feature/other")
+                    elif mutation == "base":
+                        grant = json.loads(Path(first["claim"]).read_text())["owner_evidence_path"]
+                        value = json.loads(Path(grant).read_text())
+                        value["base_ref"] = "refs/remotes/origin/other"
+                        Path(grant).write_text(json.dumps(value))
+                    elif mutation == "default":
+                        git(self.root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/other")
+                    elif mutation == "claim-owner":
+                        value = json.loads(Path(first["claim"]).read_text())
+                        value.update(authorization_owner="direct", owner_evidence_path=None, owner_evidence_sha256=None)
+                        Path(first["claim"]).write_text(json.dumps(value))
+                    else:
+                        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+                        replacement = git(self.root, "commit-tree", tree, "-m", "unrelated root")
+                        git(self.root, "update-ref", "refs/remotes/origin/main", replacement)
+                    self.pr_prepare(expected=2)
+                self.assertEqual(git(self.root, "write-tree"), before)
+
     def seed_multi_project_diff(self) -> None:
         (self.root / "project-a" / "tracked.txt").write_text(
             "staged\n", encoding="utf-8"

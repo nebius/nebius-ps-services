@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import shlex
 from types import SimpleNamespace
 
@@ -325,7 +326,8 @@ def test_upgrade_recovery_refuses_promotion_or_ambiguous_frontier(boundary):
 def test_recovery_cli_is_registered_and_requires_exact_selection():
     result = CliRunner().invoke(cli.app, ["soperator", "profiling", "recover", "--help"])
     assert result.exit_code == 0
-    assert all(flag in result.output for flag in ("--target", "--stage", "--job-uid", "--dry-run"))
+    rendered = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
+    assert all(flag in rendered for flag in ("--target", "--stage", "--job-uid", "--dry-run"))
 
 
 def test_large_package_inventory_and_max_attempts_fit_linux_and_configmap(tmp_path):

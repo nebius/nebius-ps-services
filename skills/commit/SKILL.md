@@ -220,13 +220,28 @@ Agentic SDLC checkpoints.
      child, stop with `REVIEW_REQUIRED` intact.
    - A failed hook that did not create a commit and any pre-commit drift make
      the claim `STALE`; preserve the real index and worktree and require a fresh
-     user commit request after the blocker is resolved.
+     user commit request after the blocker is resolved, unless the calling PR
+     workflow has an active scoped continuation grant.
    - Exact crash recovery accepts only the same branch and either the unchanged
      base or one direct-child commit with the reviewed tree. A fresh authorized
      user request may rebind an otherwise unchanged prepared claim; it never uses
      a TTL, process identity, or guessed ownership.
    - Report the branch name, commit hash and message when a commit was created,
      the validation performed, and whether the worktree is clean.
+
+## Calls From Other Skills
+
+A calling skill may use this shared transaction when the root user's authorized
+task includes the commit. Interpret the parent task semantically; do not demand
+another standalone `$commit` phrase. Skill invocation alone is not authority.
+Use the existing delegated Worktree or Task Implementer route for their commits.
+For an unmanaged `create-pr` task, read
+`../create-pr/references/commit-continuation.md`: its private grant permits
+successive reviewed commits and corrected no-commit retries until that PR task
+finishes. The parent PR skill owns repairs, checks and pushes. Ordinary direct
+commit and commit-push receipts remain single-use; active SDLC still owns its
+commits. This exception does not grant arbitrary sibling skills indefinite
+commit authority or permit raw Git fallback.
 
 ## Recommended Commands
 

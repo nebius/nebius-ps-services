@@ -100,8 +100,8 @@ class PreparedRelease:
 
 @dataclass
 class PreparedDeployment:
-    initialized: dict[str, str] = field(default_factory=dict)
-    validated: set[str] = field(default_factory=set)
+    initialized: dict[str, dict[str, str]] = field(default_factory=dict)
+    validated: dict[str, set[str]] = field(default_factory=dict)
     notices: set[str] = field(default_factory=set)
 
     def key(

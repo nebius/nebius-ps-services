@@ -36,6 +36,17 @@ and GitHub steps.
   summary in run evidence.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
 
+## Commit Continuation
+
+One explicit PR task covers successive validated stage/commit/push repairs.
+The shared `commit` helper binds a private grant to the selected repository,
+feature branch, native session, origin and base. Each attempt still requires
+whole-repository candidate review and normal hooks. The grant permits corrected
+no-commit retries and closes when the PR task finishes. It does not change
+ordinary one-commit requests or active SDLC publication-only mode.
+See [commit continuation](references/commit-continuation.md) for the private
+protocol and recovery boundaries.
+
 ## Architecture
 
 ```text

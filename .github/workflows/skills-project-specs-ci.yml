@@ -200,6 +200,8 @@ jobs:
       - name: Run workflow adapter tests
         run: |
           set -euo pipefail
+          python -B commit/scripts/test-commit-contract.py
+          python -B commit/scripts/test-commit-transaction.py
           python -B task-implementer/scripts/test-task-specs.py
           python -B task-implementer/scripts/test-task-implementer-contract.py
           python -B task-implementer/scripts/test-task-waves.py
@@ -219,11 +221,14 @@ jobs:
       - name: Run native workflow harness regressions
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          # Disposable Git fixtures must not inherit runner-installed LFS filters.
+          GIT_CONFIG_NOSYSTEM: "1"
         run: |
           set -euo pipefail
           python -B task-implementer-test/scripts/test_task_implementer_lifecycle.py
           python -B task-implementer-test/scripts/test_verify_task_implementer.py
           python -B sdlc-workflow-test/scripts/test_three_tier_browser.py
+          python -B sdlc-workflow-test/scripts/test_owned_git_origin.py
           python -B sdlc-workflow-test/scripts/test_three_tier_target.py
           python -B sdlc-workflow-test/scripts/test_collect_live_evidence.py
           python -B sdlc-workflow-test/scripts/test_three_tier_lifecycle.py

@@ -358,11 +358,11 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
                 "Commit intent receipt only; no Git action is authorized by this hook. "
-                "Interpret the root user's request semantically: commit or commit-push may "
+                "Interpret the root user's request semantically: commit, commit-push or create-pr may "
                 "be requested in natural language or with a skill name anywhere. Discussion, "
                 "help, quotations, negation and skill repair are not action requests. "
                 "Only for an authorized action, use the canonical commit transaction prepare "
-                f"with --requested-action commit|commit-push and --intent-sha256 {receipt_digest}. "
+                f"with --requested-action commit|commit-push|create-pr and --intent-sha256 {receipt_digest}. "
                 f"Canonical authorization path: {path}. Canonical claim path: {claim_path}. "
                 "Never ask for a repeated magic phrase or create authorization files manually."
             ),

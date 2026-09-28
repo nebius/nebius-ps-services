@@ -1,3 +1,7 @@
+<!-- Staging and commits in this cookbook are effects owned by the canonical
+shared commit helper; never run them as raw agent Git commands. Read
+commit-continuation.md before preparing local commits. -->
+
 # Create PR Command Reference
 
 Read this file when `create-pr` needs exact Git or GitHub CLI commands for

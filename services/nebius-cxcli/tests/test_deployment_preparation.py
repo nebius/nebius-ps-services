@@ -77,6 +77,55 @@ def test_failed_preparation_is_never_cached(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize("failed_reinitialization", [False, True])
+def test_reinitialization_invalidates_only_its_root_even_if_identity_is_recycled(
+    tmp_path, monkeypatch, failed_reinitialization
+):
+    from nebius_cxcli import deployment_preparation
+
+    roots = [tmp_path / name for name in ("first", "second")]
+    for root in roots:
+        root.mkdir()
+        (root / "main.tf").write_text("# fixture")
+    calls = []
+    fail_next_init = False
+    monkeypatch.setattr(terraform_ops, "_require_terraform", lambda: "terraform")
+    # Linux can recycle the removed directory's inode. Model equal pre/post
+    # fingerprints without depending on the test host's allocation behavior.
+    monkeypatch.setattr(
+        deployment_preparation,
+        "initialized_identity",
+        lambda root: "recycled-identity" if (root / ".terraform").is_dir() else None,
+    )
+
+    def run(command, *, cwd, **kwargs):
+        nonlocal fail_next_init
+        calls.append((cwd.name, command[1]))
+        (cwd / ".terraform").mkdir(exist_ok=True)
+        if command[1] == "init" and fail_next_init:
+            fail_next_init = False
+            raise RuntimeError("initialization interrupted")
+
+    monkeypatch.setattr(terraform_ops, "_run", run)
+    with prepared_deployment():
+        for root in roots:
+            terraform_ops.terraform_validate(root)
+        (roots[0] / ".terraform").rmdir()
+        if failed_reinitialization:
+            fail_next_init = True
+            with pytest.raises(RuntimeError, match="initialization interrupted"):
+                terraform_ops.terraform_validate(roots[0], extra_env={"TF_WORKSPACE": "alternate"})
+        terraform_ops.terraform_validate(roots[0])
+        terraform_ops.terraform_validate(roots[1])
+        terraform_ops.terraform_validate(roots[0])
+    first = [command for root, command in calls if root == "first"]
+    expected = ["init", "validate", "init"]
+    if failed_reinitialization:
+        expected.append("init")
+    assert first == [*expected, "validate"]
+    assert [command for root, command in calls if root == "second"] == ["init", "validate"]
+
+
 @pytest.mark.parametrize("changed", ["backend", "tool", "environment", "provider-lock", "module"])
 def test_preparation_repeats_after_execution_dependency_changes(tmp_path, monkeypatch, changed):
     import json

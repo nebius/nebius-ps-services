@@ -1816,7 +1816,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=6 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -1927,6 +1927,21 @@ ordering-only rejection is recoverable only when the failed task plane remains
 bound to the same immutable result digest and direct-child commit and no other
 task in the wave is failed.
 
+For unmanaged PR preparation, the same helper additionally owns an immutable
+`create-pr` grant in private transaction state. It binds the original receipt,
+selected feature ref, native session, canonical repository, effective origin
+fetch/push URL digests, default ref and selected base lineage. A fresh semantic
+PR action creates the grant; continuation derives a new single-use commit
+claim only from that grant's exact predecessor. Completed direct children and
+unchanged-base failed attempts may advance; interrupted direct children use
+existing recovery and uncertain commits require explicit review. Intervening
+history must consist solely of two-parent base merges with correct first-parent
+orientation and a forward-moving recorded base lineage. Every execute/review
+revalidates grant identity. Private completion closes the grant permanently for
+that receipt. Grant metadata never contains prompt bodies, remote URLs or tokens.
+The PR skill owns validation, explicit-ref pushes and terminal GitHub checks;
+ordinary commit/commit-push and active SDLC authority are unchanged.
+
 #### Selected Option
 
 Use one hidden claim-bound transaction behind a bounded explicit `$commit`
@@ -1988,6 +2003,13 @@ their existing owners.
   before staging, while raw session IDs remain absent from persisted run state.
 - TDD-006: Active Agentic SDLC denies ordinary helper execution while its
   existing authorized sealing and released outer Worktree handoff continue.
+
+- TDD-008: One PR receipt supports two independently reviewed commits, repeated
+  execution stays idempotent, a failed no-commit hook permits a corrected retry,
+  and completion rejects replay. Origin/session/ref/base drift, unrelated
+  commits, reversed merges, different owner claims and unreviewed hook commits
+  cannot acquire continuation. Correct base merges and crash recovery preserve
+  the existing exact-tree boundary. Ordinary consumed receipts still fail.
 
 #### Validation Plan
 

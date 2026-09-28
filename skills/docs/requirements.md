@@ -1002,6 +1002,17 @@ Agentic SDLC, or transaction-owned safety.
   commit, ref movement, or identity drift become stale without reset, amend,
   unstage, or duplicate commit.
 
+- AC-007: An explicitly authorized unmanaged `create-pr` task may prepare,
+  stage, commit and push successive validated branch-owned repairs until its
+  GitHub checks finish, without another user turn for each commit. Its private
+  continuation grant binds the native session, repository, feature ref,
+  effective fetch/push origin, base lineage and original root receipt. Every
+  commit retains a fresh exact-tree claim and normal hooks. Completed claims
+  or unchanged-base failed attempts may advance; uncertain commits require
+  explicit review. Only correctly oriented base merges may intervene.
+  Ordinary commit and commit-push requests remain single-use. Closing the PR
+  task prevents receipt replay; active SDLC stays publication-only.
+
 #### Negative Criteria
 
 - NC-001: Raw `git add`, path-scoped staging, `git add .`, composed or wrapped
@@ -1019,8 +1030,9 @@ Agentic SDLC, or transaction-owned safety.
 - NC-004: Discussion, quoted examples, help, negation, and skill repair requests
   must not authorize Git mutation. Polite action questions may authorize it.
   Root-turn receipts alone never authorize effects, and subagent, Stop, system,
-  or compaction events never create root receipts. Replaying a consumed receipt
-  cannot mint another authorization; unrelated turns preserve active claims.
+  or compaction events never create root receipts. Replaying a consumed ordinary commit receipt
+  cannot mint another authorization; a scoped active PR grant is the only
+  repeated-commit path; unrelated turns preserve active claims.
 
 #### Validation Method
 

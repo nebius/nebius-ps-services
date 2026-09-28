@@ -218,6 +218,9 @@ Successful initialization and static validation are reused only within the same
 invocation and unchanged concrete Terraform root. Live authority, quota, source
 integrity, readiness and acceptance checks remain fresh. An internal admission
 assessment is not a user-requested dry run.
+Reinitializing a root discards its previous initialization and validation results
+before execution, including after an interrupted initializer or a recreated
+`.terraform` directory. Other unchanged roots retain their invocation-local reuse.
 
 Permanent or unknown errors stop the command with a nonzero exit status. Safe
 reads retry only recognized temporary transport errors, at most three attempts;

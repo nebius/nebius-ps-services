@@ -4,7 +4,17 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Changed
+
+- Let authorized unmanaged PR workflows call the shared commit transaction for
+  successive reviewed repairs without renewed commit prompts. Scope private
+  continuation to one session, branch, origin and base; retain exact-tree
+  claims, normal hooks, managed/SDLC boundaries and explicit completion.
+
 ### Fixed
+
+- Isolate native workflow CI fixtures from runner-installed system Git filters
+  and run the owned-origin safety regressions in the same test step.
 
 - Synchronize the Codex plugin's commit-intent status message with its owning
   hook template so packaged plugin validation passes.
