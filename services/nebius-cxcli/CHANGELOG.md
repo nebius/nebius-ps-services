@@ -6,6 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Align workflow validation with the setup-uv v10.2.0 action pin from the base
+  branch.
 - Isolate mocked interactive progress consoles from the runner's terminal type
   so deployment, destroy, Grafana and Nsight tests also run under `TERM=dumb`.
   Align application-publication mocks with the current signature and returned

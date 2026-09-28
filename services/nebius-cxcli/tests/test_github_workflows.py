@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-_SETUP_UV_ACTION = "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+_SETUP_UV_ACTION = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
 _SETUP_UV_INPUTS = {
     "version": "0.12.9",
     "enable-cache": "true",
