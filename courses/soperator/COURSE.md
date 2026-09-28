@@ -114,8 +114,10 @@ check both Slurm's advertised capacity and the effective worker limits when
 investigating a resource mismatch.
 
 Supporting components make that environment usable. Shared storage supplies the
-**jail**, the common Linux filesystem seen by users on login and worker Pods.
-It helps keep programs and libraries consistent; special paths such as `/tmp`
+**jail**, a common Linux filesystem mounted by the login, controller and worker
+Pods. Users see this environment in login sessions and jobs running on workers;
+the controller also accesses shared user information and Slurm configuration.
+The jail helps keep programs and libraries consistent; special paths such as `/tmp`
 and device/process mounts remain node-local. A populate-jail job initializes
 that filesystem. Persistent storage also holds configuration-dependent state.
 **MUNGE** authenticates Slurm messages between trusted components; it does not

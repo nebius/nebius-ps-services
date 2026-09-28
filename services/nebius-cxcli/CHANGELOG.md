@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Wait for authenticated PostgreSQL queries after restart and volume reuse in
+  the disposable Grafana persistence check, avoiding stale Grafana health-cache
+  results without replaying imports or renewing the saved login session.
 - Invalidate a Terraform root's cached initialization and validation before
   reinitializing it, including when a recreated directory reuses its inode or
   an initializer fails with different settings. Preserve other roots' reuse.

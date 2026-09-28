@@ -1,6 +1,34 @@
 # Publication review
 
-## Results naming and build budgets — current local verification
+## Shared jail wording — current source verification
+
+Current `index.html` SHA-256: `e59ceaa3f692ab2fc98dc2e4bc03ac4cddb64f3017b43301395a40b53cee5c0e`.
+
+Lesson 2 now names login, controller and worker Pods as mounting the shared
+jail. It distinguishes the login-session and worker-job environment from the
+controller's use of shared user information and Slurm configuration. The
+node-local special-path caveat is retained. Versioned public Soperator 4.1.8
+controller sources independently support the clarification and are included in
+Official references. No deployment-specific evidence enters the course.
+
+Source/static: the native text-only validator and selected-page build/parity
+check pass. A task-start comparison confirms that only the intended paragraph
+changed in COURSE.md and that all other course pages and the catalog are
+byte-identical. Changed-scope content and security review found no new issue.
+Course Markdown and whitespace checks pass. The design document retains its
+pre-existing MD012 finding outside the changed feature. The generic course
+checker reports the same six text-profile/shared-markup findings as before;
+it is not claimed passing. The focused pytest suite could not run because
+pytest is unavailable in the local Python environment; no dependencies were
+installed.
+
+Browser/visual: not rerun for this paragraph-only revision; earlier browser
+evidence applies only to its recorded artifacts. Installed-environment,
+runtime-activation and live-target verification are not required for this
+text-only editorial change. No command examples were executed, no live target
+was changed and no external publication occurred.
+
+## Historical results naming and build budgets verification
 
 Current HTML SHA-256: `d3fbb2cce7403d04519f11ee8119246d85a5c8bc30e418d545b55454563f1321`. All seven pages are byte-identical to the
 preceding revision except the approved download names and results wording.

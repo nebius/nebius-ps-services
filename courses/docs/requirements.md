@@ -903,7 +903,10 @@ on Kubernetes, and the client commands used to request and inspect work.
   no executable labs, setup guide, diagrams, runtime kit or dashboards.
 - AC-002: Define Slurm using SchedMD sources, then explain login, controller and
   worker roles before Soperator's SlurmCluster, SlurmNodes services and worker
-  NodeSets. Distinguish Kubernetes pod placement from Slurm job scheduling.
+  NodeSets. Distinguish Kubernetes pod placement from Slurm job scheduling. Explain
+  that login, controller and worker Pods mount the shared jail, while login
+  sessions and worker jobs use it as their user environment and the controller
+  accesses shared user information and Slurm configuration.
 - AC-003: Most teaching covers practical client use: allocations, steps, tasks,
   resource requests, files and logs, sbatch/salloc/srun, GPU visibility,
   distributed launcher arithmetic, queue inspection, accounting and cancellation.

@@ -27,13 +27,44 @@ from nebius_cxcli.grafana_import import execute_imports, prepare_imports, requir
 POSTGRES = "postgres:18.6@sha256:86c951e05bf56c93d95d397747fb8820ac76cc3bedb78f43abd83eedbe3666ae"
 
 
-def docker(*args: str, stdin: str | None = None) -> str:
+def docker(*args: str, stdin: str | None = None, timeout: float = 180) -> str:
     result = subprocess.run(
-        ["docker", *args], input=stdin, capture_output=True, text=True, timeout=180
+        ["docker", *args], input=stdin, capture_output=True, text=True, timeout=timeout
     )
     if result.returncode:
         raise RuntimeError(f"Disposable Docker {args[0]} failed (output withheld)")
     return result.stdout.strip()
+
+
+def postgres_ready(name: str, password: str) -> None:
+    """Wait for authenticated TCP queries, independent of Grafana's health cache."""
+    deadline = time.monotonic() + 90
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            result = docker(
+                "exec",
+                "--env-file",
+                "/dev/stdin",
+                name,
+                "psql",
+                "-w",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "grafana",
+                "-d",
+                "grafana",
+                "-Atqc",
+                "SELECT 1",
+                stdin=f"PGPASSWORD={password}\n",
+                timeout=min(5, remaining),
+            )
+            if result == "1":
+                return
+        except (RuntimeError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+    raise RuntimeError("PostgreSQL authenticated readiness timed out")
 
 
 def ready(url: str) -> None:
@@ -87,23 +118,7 @@ def main() -> None:
                 stdin=f"POSTGRES_USER=postgres\nPOSTGRES_PASSWORD={pg_admin}\nCUSTOM_PASSWORD={password}\nPOSTGRES_INITDB_ARGS=--auth-host=scram-sha-256\n",
             )
             containers.append(pg)
-            deadline = time.monotonic() + 90
-            while True:
-                try:
-                    result = docker(
-                        "exec",
-                        pg,
-                        "/bin/sh",
-                        "-ec",
-                        'PGPASSWORD="$CUSTOM_PASSWORD" psql -h 127.0.0.1 -U grafana -d grafana -Atqc "SELECT 1"',
-                    )
-                    if result == "1":
-                        break
-                except RuntimeError:
-                    pass
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("PostgreSQL authenticated readiness timed out")
-                time.sleep(0.5)
+            postgres_ready(pg, password)
             urls = []
             for name in gf:
                 docker(
@@ -178,6 +193,7 @@ def main() -> None:
                 observe()
             print("Checking PostgreSQL restart persistence", flush=True)
             docker("restart", pg)
+            postgres_ready(pg, password)
             observe()
             # Recreate PostgreSQL against the same persistent volume, not just the process.
             print("Checking PostgreSQL volume reuse", flush=True)
@@ -196,6 +212,7 @@ def main() -> None:
                 POSTGRES,
             )
             containers.append(pg)
+            postgres_ready(pg, password)
             observe()
             print(
                 "Verified two Grafana instances, shared sessions, editable API dashboards, Grafana restarts and PostgreSQL volume reuse without replay."

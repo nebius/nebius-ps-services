@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Clarify that the Soperator course's shared jail is mounted by login, controller
+  and worker Pods, including the controller's shared user information and Slurm
+  configuration, with versioned public references.
+
 - Preserve generated course summary CSV bytes in Git and recognize their CRLF
   records without relaxing other whitespace checks or changing evidence hashes.
 

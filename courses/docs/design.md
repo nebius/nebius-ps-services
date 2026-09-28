@@ -3710,7 +3710,7 @@ performed. Delivery is implemented, not verified; REQ-018 remains active.
 
 <!-- /FEATURE: FEAT-028 -->
 
-<!-- FEATURE: FEAT-029 reqs=REQ-019 status=ready delivery=verified priority=P1 version=4 -->
+<!-- FEATURE: FEAT-029 reqs=REQ-019 status=ready delivery=verified priority=P1 version=5 -->
 ### FEAT-029: Text-only Slurm and Soperator introduction
 
 #### Requirements Covered
@@ -3752,6 +3752,11 @@ The architecture explanation uses versioned Soperator 4.1.8 API and chart source
 for service roles, NodeSets and optional components. Slurm and PyTorch command
 semantics come from their public owning documentation. Re-author source topics;
 private operational details never enter public course files or review reports.
+
+Clarify that login, controller and worker Pods mount the shared jail. Distinguish
+login sessions and worker jobs using this environment from controller access to
+shared user information and Slurm configuration. Retain the node-local special
+path caveat and add versioned public controller sources to Official references.
 
 #### Selected Option
 
@@ -3808,6 +3813,12 @@ and locally validated with scoped publication evidence and no added labs.
 
 #### Implementation Evidence
 
+Jail wording clarification: lesson 2 now names login, controller and worker
+Pods and explains their different uses of the shared jail. Preserved the
+node-local special-path caveat, added versioned public controller references
+and regenerated the Soperator page. README, changelog and publication review
+record the focused correction.
+
 Overview revision: consolidated the canonical preamble from 287 to 101 words
 in three paragraphs and rebuilt Soperator HTML. Kept the six lesson bodies
 unchanged; version context and detailed readiness checks remain in their
@@ -3820,6 +3831,17 @@ retain their runtime assets, validators, lessons and lab implementations.
 Publication evidence is in [Soperator course validation](soperator-course-validation.md).
 
 #### Verification Evidence
+
+Jail wording clarification: public Soperator 4.1.8 controller mount and entrypoint
+sources independently support the revised claim. Native text-only validation
+and selected-page build/parity checks pass; task-start comparison confirms only
+the intended lesson paragraph changed and all other course/catalog pages are
+byte-identical. Changed-scope content/security review and course Markdown and
+whitespace checks pass. The design file retains one pre-existing MD012 finding
+outside this feature; the generic checker retains its six baseline findings.
+Pytest is unavailable locally, so its focused suite was not run. Browser checks
+were not rerun for this paragraph-only change; no live examples or publication
+were executed. See the course publication review for the exact artifact hash.
 
 Overview revision: independent read-only editorial review found no lost
 essential context. Text-only validation, selected-page generation/parity, 30

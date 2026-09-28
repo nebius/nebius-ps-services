@@ -5559,6 +5559,13 @@ Developer workflow targets:
 - `make coverage`: alias of `make coverage-check`.
 - `make test`: alias of `make test-unit`.
 
+CI also runs `scripts/verify_grafana_persistence.py` against disposable, pinned
+Docker images. It checks a saved dashboard edit and an existing login session
+across two Grafana instances, Grafana/PostgreSQL restarts, and PostgreSQL volume
+reuse. After each database transition, it waits for an authenticated TCP query
+before observing Grafana; the cached health endpoint alone is insufficient.
+It does not replay imports or renew the session during persistence checks.
+
 Useful checks:
 
 ```bash

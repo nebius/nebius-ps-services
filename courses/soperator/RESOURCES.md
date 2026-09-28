@@ -34,4 +34,6 @@
 6. [Nebius: Worker NodeSet type, 4.1.8](https://github.com/nebius/soperator/blob/4.1.8/api/v1alpha1/nodeset_types.go)
 7. [Nebius: Slurm service chart configuration, 4.1.8](https://github.com/nebius/soperator/blob/4.1.8/helm/slurm-cluster/values.yaml)
 8. [Nebius: Worker NodeSet chart configuration, 4.1.8](https://github.com/nebius/soperator/blob/4.1.8/helm/nodesets/values.yaml)
-9. [PyTorch: torchrun documentation and implementation](https://github.com/pytorch/pytorch/blob/main/torch/distributed/run.py)
+9. [Nebius: Controller jail mount, 4.1.8](https://github.com/nebius/soperator/blob/4.1.8/internal/render/controller/container.go)
+10. [Nebius: Controller shared users and Slurm configuration, 4.1.8](https://github.com/nebius/soperator/blob/4.1.8/images/controller/slurmctld_entrypoint.sh)
+11. [PyTorch: torchrun documentation and implementation](https://github.com/pytorch/pytorch/blob/main/torch/distributed/run.py)

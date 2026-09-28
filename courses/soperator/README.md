@@ -5,6 +5,8 @@ the job commands used throughout the GPU courses. There are six lessons,
 worked command examples and reading checks with answers; no labs or setup tasks.
 The resource lessons distinguish host capacity, worker container limits and
 per-job Slurm requests.
+The architecture lesson explains how login, controller and worker Pods share
+the jail and how each role uses it.
 
 Open [the complete course](index.html), or read [the canonical lessons](COURSE.md).
 Basic Linux shell knowledge is sufficient. No cluster or prior GPU course is
