@@ -1,11 +1,11 @@
 """Guard prerequisite-first progression and its learner-facing route."""
 
+from course_builder import markdown as cb_markdown, metadata as cb_metadata
 import html
 import re
 
 import pytest
-
-from test_course_content_contract import lab_section, COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT, lab_section
 
 EXPECTED_ORDER = {
     "gpu-fundamentals": [
@@ -36,6 +36,9 @@ EXPECTED_ORDER = {
         "GPU communication paths and performance",
         "Distributed scaling and communication overlap",
         "Choosing an optimization layer",
+        "GPU fabric topology and peer traffic",
+        "GPU memory over InfiniBand",
+        "Communication ownership and rank timelines",
     ],
     "llm-training": [
         "Model learning and training objectives",
@@ -54,6 +57,7 @@ EXPECTED_ORDER = {
         "Parameter-efficient adaptation",
         "Reward-guided policy optimization",
         "Evidence-based training optimization",
+        "Scaling a fixed training workload",
     ],
     "llm-inference": [
         "Model inference and artifact preparation",
@@ -72,6 +76,7 @@ EXPECTED_ORDER = {
         "Distributed inference placement",
         "Serving workloads and phase separation",
         "Evidence-based inference optimization",
+        "Parallel generation and serving placement",
     ],
     "custom-cuda-kernels": [
         "Custom kernel decision making",
@@ -96,11 +101,10 @@ EXPECTED_ORDER = {
 
 @pytest.mark.parametrize("course", COURSES)
 def test_course_has_reviewed_competency_order(course):
-    builder = load_builder()
     document = (ROOT / course / "COURSE.md").read_text()
-    lessons = builder.parse_course(ROOT / course / "COURSE.md")[2]
+    lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
     assert [lesson["title"] for lesson in lessons] == EXPECTED_ORDER[course]
-    assert [int(n) for n in re.findall(r"^## (\d+)\.", document, re.M)] == list(
+    assert [int(n) for n in re.findall(r"^## (\d+)\.", document, re.MULTILINE)] == list(
         range(1, len(lessons) + 1)
     )
 
@@ -108,11 +112,17 @@ def test_course_has_reviewed_competency_order(course):
 @pytest.mark.parametrize("course", COURSES)
 def test_syllabus_names_every_lesson_in_reading_order(course):
     text = (ROOT / course / "SYLLABUS.md").read_text()
-    rows = re.findall(r"^\| (\d+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$", text, re.M)
-    assert [int(row[0]) for row in rows] == list(
-        range(1, len(EXPECTED_ORDER[course]) + 1)
+    rows = re.findall(
+        r"^\| (\d+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$", text, re.MULTILINE
     )
-    assert [row[1].strip() for row in rows] == EXPECTED_ORDER[course]
+    advanced = cb_metadata.course_metadata(ROOT / course)["advanced_lessons"]
+    order = [
+        n for n in range(1, len(EXPECTED_ORDER[course]) + 1) if n not in advanced
+    ] + advanced
+    assert [int(row[0]) for row in rows] == order
+    assert [row[1].strip() for row in rows] == [
+        EXPECTED_ORDER[course][n - 1] for n in order
+    ]
     assert all(len(row[2].split()) >= 5 and row[3].strip() for row in rows)
     assert "Lab numbers are identifiers, not the execution order" in text
 
@@ -120,24 +130,33 @@ def test_syllabus_names_every_lesson_in_reading_order(course):
 @pytest.mark.parametrize("course", COURSES)
 def test_rendered_lesson_toc_follows_reviewed_order(course):
     document = (ROOT / course / "index.html").read_text()
-    builder = load_builder()
     for title in EXPECTED_ORDER[course]:
-        assert f'id="{builder.slug(title)}"' in document
+        assert f'id="{cb_markdown.slug(title)}"' in document
+    advanced = cb_metadata.course_metadata(ROOT / course)["advanced_lessons"]
+    order = [
+        n for n in range(1, len(EXPECTED_ORDER[course]) + 1) if n not in advanced
+    ] + advanced
+    expected = [EXPECTED_ORDER[course][n - 1] for n in order]
     positions = [
-        document.index(f'<section class="lesson" id="{builder.slug(title)}">')
-        for title in EXPECTED_ORDER[course]
+        document.index(f'<section class="lesson" id="{cb_markdown.slug(title)}"')
+        for title in expected
     ]
     assert positions == sorted(positions)
-    toc = document.split("<h2>Lessons</h2><ol>", 1)[1].split("</ol>", 1)[0]
-    assert [
-        html.unescape(x) for x in re.findall(r'<a href="#[^"]+">([^<]+)</a>', toc)
-    ] == EXPECTED_ORDER[course]
+    lesson_navigation = document.split("<h2>Lessons</h2>", 1)[1]
+    introductory, numbered = lesson_navigation.split("<ol>", 1)
+    assert introductory.count('href="#using-gpu-performance-tools"') == 1
+    toc = numbered.split("</ol>", 1)[0]
+    links = re.findall(r'<li value="([0-9]+)"><a href="#[^"]+">([^<]+)</a></li>', toc)
+    assert [(int(n), html.unescape(title)) for n, title in links] == [
+        (n, EXPECTED_ORDER[course][n - 1]) for n in order
+    ]
+    assert "Base route" not in toc
 
 
 def lesson(course, title):
     return next(
         item
-        for item in load_builder().parse_course(ROOT / course / "COURSE.md")[2]
+        for item in cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
         if item["title"] == title
     )
 
@@ -148,31 +167,38 @@ def test_foundations_teaches_basic_timing_before_first_benchmark():
     assert "cpu timer" in explanation and "cuda events" in explanation
     concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
     assert "warm-up" in concepts and "cuda events" in concepts
-    assert "preflight" in lab_section("gpu-fundamentals", 1, "Practice").lower()
-    assert "Lesson 10" in lab_section("gpu-fundamentals", 4, "Practice")
-    assert "defer" in lab_section("gpu-fundamentals", 4, "Practice").lower()
+    practice = lab_section("gpu-fundamentals", 1, "Practice")
+    assert "--profile small" in practice and "--profile large" in practice
+    assert "README" not in practice and "Lesson" not in practice
+    assert "repack timing" in lab_section("gpu-fundamentals", 4, "Practice")
 
 
 def test_training_previews_do_not_require_advanced_execution():
     practice = lab_section("llm-training", 32, "Practice")
-    assert "CPU example first" in practice
-    assert "leave SFT/LoRA and GRPO for Lessons 14–15" in practice
+    assert "CPU example" in practice
+    assert "optional CUDA alternative" in practice
     batching = lesson("llm-training", EXPECTED_ORDER["llm-training"][1])
     assert "logits" in batching["How it works"]
-    assert "Lesson 4" in lab_section("llm-training", 25, "Practice")
-    assert "Lab 25's packing-plan and causal-mask checks now" in lab_section(
-        "llm-training", 25, "Practice"
-    )
     assert "does not execute transformer training" in lab_section(
-        "llm-training", 25, "Practice"
+        "llm-training", 25, "Concepts and code path"
     )
     local = lesson("llm-training", "Training execution optimization")
     assert "Communication overlap shortens" not in local["How it works"]
 
 
 def test_inference_starts_with_basic_engine_then_advanced_work():
-    assert "single-GPU" in lab_section("llm-inference", 30, "Practice")
-    assert "advanced" in lab_section("llm-inference", 30, "Practice").lower()
+    prerequisites = lab_section("llm-inference", 30, "Before you start")
+    assert "prepared qualified engines" in prerequisites
+    assert "loopback server and client in one Slurm allocation" in prerequisites
+    practice = lab_section("llm-inference", 30, "Practice")
+    for launcher in ("openai_engine", "trtllm_triton"):
+        assert (
+            f"python3 tools/submit_lab.py --lab 30_engine_profile slurm/{launcher}.sbatch"
+            in practice
+        )
+    concepts = lab_section("llm-inference", 30, "Concepts and code path")
+    assert "Both launchers own startup, bounded readiness and cleanup" in concepts
+    assert "paper exercise" in concepts
     metrics = lesson("llm-inference", EXPECTED_ORDER["llm-inference"][6])
     # Both metrics belong here; the explanation should distinguish them.
     assert all(term in metrics["How it works"] for term in ("ITL", "TPOT"))
@@ -182,9 +208,8 @@ def test_inference_starts_with_basic_engine_then_advanced_work():
 
 def test_cuda_safety_practice_uses_completed_vector_lab():
     course = ROOT / "custom-cuda-kernels"
-    builder = load_builder()
-    lessons = builder.parse_course(course / "COURSE.md")[2]
-    data = builder.course_metadata(course)
+    lessons = cb_metadata.parse_course(course / "COURSE.md")[2]
+    data = cb_metadata.course_metadata(course)
     safety = next(
         i
         for i, row in enumerate(lessons, 1)
@@ -210,18 +235,16 @@ def test_cuda_safety_practice_uses_completed_vector_lab():
 def test_two_node_preflight_is_assigned_only_after_local_foundations(
     course, distributed_lesson
 ):
-    metadata = load_builder().course_metadata(ROOT / course)
+    metadata = cb_metadata.course_metadata(ROOT / course)
     preflight = next(
         item
-        for item in metadata["labs"]
-        if item["path"] == "labs/00_cluster_preflight.py"
+        for item in metadata["external_labs"]
+        if item["path"].endswith("_readiness.py")
     )
     assert preflight["lessons"] == [distributed_lesson]
     if course == "gpu-optimizations":
-        assert "topology preview" in lab_section("gpu-optimizations", 1, "Practice")
-        assert "run that two-node preflight in Lesson 11" in lab_section(
-            "gpu-optimizations", 1, "Practice"
-        )
+        assert "two_node" not in lab_section("gpu-optimizations", 1, "Practice")
+    assert "setup_guide" not in metadata
 
 
 @pytest.mark.parametrize(
@@ -272,12 +295,11 @@ def test_two_node_preflight_is_assigned_only_after_local_foundations(
     ),
 )
 def test_reordered_labs_keep_their_semantic_lesson(course, lab, title):
-    builder = load_builder()
-    lessons = builder.parse_course(ROOT / course / "COURSE.md")[2]
-    metadata = builder.course_metadata(ROOT / course)
+    lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
+    metadata = cb_metadata.course_metadata(ROOT / course)
     item = next(
         item
-        for item in metadata["labs"]
+        for item in metadata["labs"] + metadata["external_labs"]
         if item["path"].split("/")[-1].rsplit(".", 1)[0] == lab
     )
     assert title in [lessons[number - 1]["title"] for number in item["lessons"]]

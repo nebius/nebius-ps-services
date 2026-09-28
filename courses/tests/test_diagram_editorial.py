@@ -1,11 +1,12 @@
 """Navigation and diagrams preserve explicit, accurate teaching relationships."""
 
+from course_builder import metadata as cb_metadata, visuals as cb_visuals
 import re
 import xml.etree.ElementTree as ET
 
 import pytest
 
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -22,11 +23,10 @@ def test_no_redundant_return_or_diagram_disclosure_controls(course: str) -> None
 
 @pytest.mark.parametrize("course", COURSES)
 def test_overview_layout_is_declared_and_accessible(course: str) -> None:
-    builder = load_builder()
-    rows = builder.parse_visuals(ROOT / course / "reference/visual-plan.md")
+    rows = cb_metadata.parse_visuals(ROOT / course / "reference/visual-plan.md")
     for index, row in enumerate(rows, 1):
-        assert row.layout in builder.DIAGRAM_LAYOUTS
-        markup = builder.diagram(row, index)
+        assert row.layout in cb_metadata.DIAGRAM_LAYOUTS
+        markup = cb_visuals.diagram(row, index)
         assert f'data-diagram-kind="{row.layout}"' in markup
         svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
         ids = {element.get("id") for element in svg.iter()}
@@ -39,21 +39,19 @@ def test_overview_layout_is_declared_and_accessible(course: str) -> None:
 
 
 def test_invalid_layout_is_rejected(tmp_path) -> None:
-    builder = load_builder()
     plan = tmp_path / "visual-plan.md"
     plan.write_text(
         "| Title | First stage | Second stage | Third stage | Explanation | Lesson | After | Layout | Home |\n"
         "| Example | A | B | C | Explanation | 1 | Mechanism | invented | lesson |\n"
     )
     with pytest.raises(ValueError, match="layout|placement"):
-        builder.parse_visuals(plan)
+        cb_metadata.parse_visuals(plan)
 
 
 def test_workload_matrix_has_two_axes_and_all_four_cases() -> None:
-    builder = load_builder()
-    rows = builder.parse_visuals(ROOT / "llm-inference/reference/visual-plan.md")
+    rows = cb_metadata.parse_visuals(ROOT / "llm-inference/reference/visual-plan.md")
     row = next(row for row in rows if row.layout == "matrix")
-    markup = builder.diagram(row, 1)
+    markup = cb_visuals.diagram(row, 1)
     svg = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup, re.S).group())
     labels = [" ".join(node.itertext()) for node in svg.findall(".//text")]
     assert {"Short OSL", "Long OSL", "Short ISL", "Long ISL"} <= set(labels)

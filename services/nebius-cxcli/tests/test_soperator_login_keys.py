@@ -3,9 +3,11 @@ from __future__ import annotations
 import copy
 
 import pytest
+import yaml
 
 from nebius_cxcli import cli, soperator_login_keys
 from nebius_cxcli.soperator_values import explicit_values, seed_soperator_values
+from soperator_fixtures import sample_snapshot
 from test_ssh_public_keys import _VALID_ED25519_PUBLIC_KEY, _VALID_RSA_PUBLIC_KEY
 
 
@@ -68,6 +70,47 @@ def test_fresh_wizard_enter_selects_preferred_local_key(tmp_path, monkeypatch):
         type_hint="list(string)",
     )
     assert not stopped and value == [_VALID_ED25519_PUBLIC_KEY]
+
+
+@pytest.mark.parametrize("unowned_keys", [None, [], [_VALID_RSA_PUBLIC_KEY]])
+@pytest.mark.usefixtures("standard_deployment_choice")
+def test_install_wizard_requires_explicit_choice_even_with_unowned_keys(
+    tmp_path, monkeypatch, unowned_keys
+):
+    from nebius_cxcli.soperator_install_policy import validate_soperator_install_configuration
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519.pub").write_text(_VALID_ED25519_PUBLIC_KEY)
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **kwargs: kwargs["default"])
+    payload = _payload()
+    release = sample_snapshot()
+    row = payload["apps"]["charts"][0]
+    row.update(instance_id="cluster", version=release.release)
+    if unowned_keys is not None:
+        row["values"] = {"slurmNodes": {"login": {"sshRootPublicKeys": unowned_keys}}}
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload),
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=(),
+        app_entries=(
+            cli.soperator_install_entry(
+                release.release,
+                chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd",
+            ),
+        ),
+        soperator_install=True,
+    )
+    assert completed
+    updated = yaml.safe_load(updated_yaml)
+    validate_soperator_install_configuration(updated, release)
+    assert soperator_login_keys.explicit_root_keys(updated["apps"]["charts"][0]) == [
+        _VALID_ED25519_PUBLIC_KEY
+    ]
 
 
 @pytest.mark.parametrize("keys", [[], [_VALID_RSA_PUBLIC_KEY, _VALID_ED25519_PUBLIC_KEY]])

@@ -1,0 +1,87 @@
+{
+  "artifacts": [
+    {
+      "file": "result-cpu-one-token-repeat-trial1.json",
+      "original_sha256": "1fa3292bf8777d4565ad8d6522648e915dac451ed5843e6a54e7b605ad505be1",
+      "sha256": "ac545f756a6af1f501b46a6c2d34f9ba02f65caf6bd34bf6500d3e109f74a75f",
+      "variant": "cpu-one-token-repeat-trial1"
+    },
+    {
+      "file": "result-cpu-one-token-trial1.json",
+      "original_sha256": "967768a8817b6e2bd499346f77f9c300f261f4ace6587837003f1db465871a54",
+      "sha256": "ac545f756a6af1f501b46a6c2d34f9ba02f65caf6bd34bf6500d3e109f74a75f",
+      "variant": "cpu-one-token-trial1"
+    },
+    {
+      "file": "result-cpu-repeat-trial1.json",
+      "original_sha256": "e7a2b0c8a4793d1c5a0d2177bd16579cd1959fb3ce085fc8baacaa81446c3166",
+      "sha256": "499a404cafa3c6ce6ebc65f6132c2c48583bb7360a9e34f38006bd0fd02b70c8",
+      "variant": "cpu-repeat-trial1"
+    },
+    {
+      "file": "result-cpu-trial1.json",
+      "original_sha256": "b026138d3dfd46a885e974d8106c08c2d9e04521a7b24b746e84d830d131669c",
+      "sha256": "499a404cafa3c6ce6ebc65f6132c2c48583bb7360a9e34f38006bd0fd02b70c8",
+      "variant": "cpu-trial1"
+    },
+    {
+      "file": "result-cuda-repeat-trial1.json",
+      "original_sha256": "e177676cf99eb44646c5be0c691574bd47cb69c43163930ffdcf14139e7e00c0",
+      "sha256": "3d534d7aa920a8f6a624a7ad54b70ea90b181fcb14b427ec35089230780f4868",
+      "variant": "cuda-repeat-trial1"
+    },
+    {
+      "file": "result-cuda-trial1.json",
+      "original_sha256": "b826e24e1b5cbfa929f28c4f13fe9f7f190bf87648cb2664a514601060cbfc8d",
+      "sha256": "3d534d7aa920a8f6a624a7ad54b70ea90b181fcb14b427ec35089230780f4868",
+      "variant": "cuda-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "43d0de2a0089cc9319dde4372b7558a68370129f372b882688fd0932523f96e4",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "c85ec4fed77e468f06d14611f41e5e568b99f8b0005832d26f0515240c7866c8",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view1.png",
+      "sha256": "0bab54c67825f713c92bb5953e4f304847de05ba3282db2cfb8e9a875f003aad",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-cuda-rank-0.png",
+      "sha256": "0d9567bd8acd6aadc3154a4907fba6aa2ed699441d8fc906b6e7c7d7583e1343",
+      "tool": "systems"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "35_inference_basics",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "239b7c229a6f21677bb5e65031a1ddbe8f280f4a1b08ae398fc679d5239b6109",
+  "summary_sha256": "78f7dd96ae4eaaa4013e95977ca72dc9c3d703d9223a5486176a8e703e54a465"
+}

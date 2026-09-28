@@ -1,0 +1,33 @@
+{
+  "correctness": {
+    "adapter_is_parameter_efficient": true,
+    "bounded_held_out_evaluation_recorded": true,
+    "finite_loss": true,
+    "nonzero_adapter_parameter_update": true,
+    "nonzero_finite_adapter_gradients": true
+  },
+  "lab": "05_lora_sft",
+  "measurements": {
+    "adapter_max_parameter_delta": 0.002665979787707329,
+    "elapsed_ms": 640.2964,
+    "final_loss": 3.34621,
+    "gradient_norm_max": 5.358144,
+    "gradient_norm_min": 3.439803,
+    "held_out_next_token_after": 2014,
+    "held_out_next_token_before": 758,
+    "initial_loss": 4.51977,
+    "peak_allocated_mib": 1361.91,
+    "total_parameters": 494573440,
+    "trainable_parameters": 540672,
+    "trainable_percent": 0.1093
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1,
+    "zero_grad_fill": true
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

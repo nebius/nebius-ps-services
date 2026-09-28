@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -27,6 +27,7 @@ from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
 import nebius_cxcli.flux_ops as flux_ops
+import nebius_cxcli.soperator_wizard_deployment as wizard_deployment
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     SourceProfile,
@@ -56,6 +57,8 @@ from nebius_cxcli.quota_checks import (
     RegionalQuotaAvailability,
 )
 
+pytestmark = pytest.mark.usefixtures("offline_shared_lease")
+
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m")
@@ -77,6 +80,24 @@ _RUNTIME_AUTH_ENV_KEYS = (
 _REAL_ENSURE_RUNTIME_AUTH_MATERIAL = cli._ensure_runtime_auth_material
 _REAL_LOAD_SOURCE_PAYLOAD = cli._load_source_payload
 _REAL_LOAD_CONFIG_PAYLOAD = cli._load_config_payload
+
+
+def _stub_compatibility_for_orchestration_test(monkeypatch):
+    """Isolate orchestration fixtures which deliberately use opaque configs/manifests.
+
+    Real registry, frozen-input, native-artifact and admission contracts are
+    exercised in test_compatibility_*.py; these tests stub their peer boundaries.
+    """
+    from contextlib import nullcontext
+
+    monkeypatch.setattr("nebius_cxcli.frozen_catalog.use_frozen_catalog", lambda *_a: nullcontext())
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_execution.validate_frozen_compatibility", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        cli, "admit_compatibility", lambda *_a, **_k: {"admitted": True, "rows": []}
+    )
+    monkeypatch.setattr(cli, "assess_config", lambda *_a, **_k: {"rows": []})
 
 
 def _deliver_test_credentials(delivery: Any, value: Any) -> Any:
@@ -132,43 +153,335 @@ def _assert_not_copy_paste_command_styled(rendered: str, text: str) -> None:
     assert text not in styled_texts
 
 
-def test_action_confirmations_never_default_to_no() -> None:
-    source = inspect.getsource(cli)
-    tree = ast.parse(source)
-    direct_confirm_defaults: list[object] = []
-    default_no_wizard_lines: list[int] = []
-    raw_no_prompt_lines: list[int] = []
+def _confirmation_sources() -> dict[str, str]:
+    return {
+        "cli": inspect.getsource(cli),
+        "wizard_deployment": inspect.getsource(wizard_deployment),
+    }
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+
+def _confirmation_policy_violations(sources: Mapping[str, str]) -> list[str]:
+    configurable_owner = "wizard_deployment._prompt_fast_deploy_profile"
+    expected_defaults = {
+        "cli._confirm_explicit_action": None,
+        configurable_owner: True,
+    }
+    seen: set[str] = set()
+    violations: list[str] = []
+
+    class PolicyVisitor(ast.NodeVisitor):
+        def __init__(self, module: str) -> None:
+            self.owners: list[str] = [module]
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.owners.append(node.name)
+            if ".".join(self.owners) == configurable_owner:
+                defaults = dict(
+                    zip(
+                        [arg.arg for arg in node.args.args][-len(node.args.defaults) :],
+                        node.args.defaults,
+                        strict=False,
+                    )
+                )
+                default = defaults.get("default")
+                if not isinstance(default, ast.Constant) or default.value is not True:
+                    violations.append(f"{configurable_owner}: expected parameter default=True")
+            self.generic_visit(node)
+            self.owners.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_ClassDef = visit_FunctionDef
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "typer"
+                and node.func.attr == "confirm"
+            ):
+                owner = ".".join(self.owners) or "<module>"
+                location = f"{owner}:{node.lineno}"
+                if owner not in expected_defaults:
+                    violations.append(f"{location}: unclassified direct confirmation")
+                else:
+                    seen.add(owner)
+                    default = next((kw.value for kw in node.keywords if kw.arg == "default"), None)
+                    if owner == configurable_owner:
+                        if not isinstance(default, ast.Name) or default.id != "default":
+                            violations.append(f"{location}: expected forwarded default parameter")
+                    elif (
+                        not isinstance(default, ast.Constant)
+                        or default.value is not expected_defaults[owner]
+                    ):
+                        violations.append(
+                            f"{location}: expected literal default={expected_defaults[owner]!r}"
+                        )
+            self.generic_visit(node)
+
+    for module, source in sources.items():
+        PolicyVisitor(module).visit(ast.parse(source))
+    violations.extend(
+        f"{owner}: missing confirmation boundary"
+        for owner in sorted(expected_defaults.keys() - seen)
+    )
+    return violations
+
+
+def test_confirmation_calls_use_declared_policy_owners() -> None:
+    assert _confirmation_policy_violations(_confirmation_sources()) == []
+
+
+@pytest.mark.parametrize("default", [None, True, False])
+def test_confirmation_policy_rejects_unclassified_calls(default) -> None:
+    sources = _confirmation_sources()
+    sources["cli"] += (
+        f'\ndef unsafe_action():\n    return typer.confirm("Proceed?", default={default!r})\n'
+    )
+    violations = _confirmation_policy_violations(sources)
+    assert any("unsafe_action:" in item and "unclassified" in item for item in violations)
+
+
+@pytest.mark.parametrize("default", ["True", "False", "value", "missing"])
+def test_confirmation_policy_rejects_action_defaults(default) -> None:
+    sources = _confirmation_sources()
+    original = inspect.getsource(cli._confirm_explicit_action)
+    replacement = original.replace(
+        "default=None,", "" if default == "missing" else f"default={default},"
+    )
+    sources["cli"] = sources["cli"].replace(original, replacement)
+    violations = _confirmation_policy_violations(sources)
+    assert any(
+        "_confirm_explicit_action:" in item and "expected literal default=None" in item
+        for item in violations
+    )
+
+
+@pytest.mark.parametrize("default", ["None", "False"])
+def test_confirmation_policy_preserves_generic_wizard_default(default) -> None:
+    sources = _confirmation_sources()
+    sources["wizard_deployment"] = sources["wizard_deployment"].replace(
+        "default: bool | None = True", f"default: bool | None = {default}"
+    )
+    assert any(
+        "expected parameter default=True" in item
+        for item in _confirmation_policy_violations(sources)
+    )
+
+
+@pytest.mark.parametrize("default", ["None", "True", "False", "other"])
+def test_confirmation_policy_requires_forwarded_wizard_default(default) -> None:
+    sources = _confirmation_sources()
+    sources["wizard_deployment"] = sources["wizard_deployment"].replace(
+        "default=default", f"default={default}"
+    )
+    assert any(
+        "expected forwarded default parameter" in item
+        for item in _confirmation_policy_violations(sources)
+    )
+
+
+@pytest.mark.parametrize(
+    "function_name,forbidden_default",
+    [
+        ("_wizard_continue_phase", False),
+        ("typer.prompt", "n"),
+    ],
+)
+def test_legacy_action_prompt_forms_do_not_default_to_no(function_name, forbidden_default) -> None:
+    violations = []
+    for node in ast.walk(ast.parse(inspect.getsource(cli))):
+        if not isinstance(node, ast.Call) or ast.unparse(node.func) != function_name:
             continue
-        function_name = ""
-        if isinstance(node.func, ast.Name):
-            function_name = node.func.id
-        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-            function_name = f"{node.func.value.id}.{node.func.attr}"
-        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
-        default = keywords.get("default")
-        if function_name == "typer.confirm":
-            direct_confirm_defaults.append(
-                default.value if isinstance(default, ast.Constant) else "<missing-or-dynamic>"
-            )
-        elif (
-            function_name == "_wizard_continue_phase"
-            and isinstance(default, ast.Constant)
-            and default.value is False
-        ):
-            default_no_wizard_lines.append(node.lineno)
-        elif (
-            function_name == "typer.prompt"
-            and isinstance(default, ast.Constant)
-            and default.value == "n"
-        ):
-            raw_no_prompt_lines.append(node.lineno)
+        default = next((kw.value for kw in node.keywords if kw.arg == "default"), None)
+        if isinstance(default, ast.Constant) and default.value == forbidden_default:
+            violations.append(node.lineno)
+    assert violations == []
 
-    assert direct_confirm_defaults == [None]
-    assert default_no_wizard_lines == []
-    assert raw_no_prompt_lines == []
+
+@pytest.mark.parametrize(
+    "answer,expected,prompt_count",
+    [
+        ("\n\nn\n", False, 3),
+        ("\ny\n", True, 2),
+    ],
+)
+def test_explicit_action_prompt_requires_an_answer(answer, expected, prompt_count) -> None:
+    probe = cli.typer.Typer()
+    answers = []
+
+    @probe.command()
+    def main():
+        answers.append(cli._confirm_explicit_action("Proceed?"))
+
+    result = runner.invoke(probe, [], input=answer)
+    assert result.exit_code == 0
+    assert answers == [expected]
+    assert result.output.count("Proceed? [y/n]") == prompt_count
+
+
+@pytest.mark.parametrize("helper_name", ["_confirm_explicit_action", "_prompt_fast_deploy_profile"])
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_confirmation_prompt_cancellation_never_reaches_action(
+    monkeypatch, helper_name, interrupt
+) -> None:
+    probe = cli.typer.Typer()
+    reached = []
+    if interrupt:
+        import click.termui
+
+        def interrupted(_prompt):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(click.termui, "visible_prompt_func", interrupted)
+
+    @probe.command()
+    def main():
+        helper = getattr(cli, helper_name)
+        if helper_name == "_confirm_explicit_action":
+            helper("Proceed?")
+        else:
+            helper()
+        reached.append(True)
+
+    result = runner.invoke(probe, [], input="")
+    assert result.exit_code == 1
+    assert reached == []
+    assert "Aborted" in result.output
+
+
+@pytest.mark.parametrize(
+    "answer,profile",
+    [
+        ("\n", "fast-dev-test"),
+        ("y\n", "fast-dev-test"),
+        ("n\n", "standard"),
+    ],
+)
+def test_fast_deploy_prompt_preserves_configuration_default(answer, profile) -> None:
+    probe = cli.typer.Typer()
+    results = []
+
+    @probe.command()
+    def main():
+        results.append(cli._prompt_fast_deploy_profile())
+
+    result = runner.invoke(probe, [], input=answer)
+    assert result.exit_code == 0
+    assert results == [profile == "fast-dev-test"]
+    assert "Use fast deploy (Dev/Test only)? [Y/n]" in result.output
+
+
+@pytest.mark.parametrize("answer,profile", [(True, "fast-dev-test"), (False, "standard")])
+def test_soperator_create_uses_shared_profile_prompt(
+    monkeypatch, tmp_path, answer, profile
+) -> None:
+    choices = []
+    resolved = []
+    real_resolve = cli.resolve_create_profile
+
+    def choose(seed):
+        choices.append(seed)
+        return answer
+
+    def resolve(values, *, fast_deploy, choose):
+        assert choose is cli._prompt_fast_deploy_profile
+        result = real_resolve(values, fast_deploy=fast_deploy, choose=choose)
+        resolved.append(result)
+        return result
+
+    def stop_before_setup(*_args, **_kwargs):
+        raise RuntimeError("end-of-profile-probe")
+
+    monkeypatch.setattr(cli, "_prompt_fast_deploy_profile", choose)
+    monkeypatch.setattr(cli, "resolve_create_profile", resolve)
+    monkeypatch.setattr(cli, "_soperator_install_profile_id", stop_before_setup)
+    target = tmp_path / "not-created"
+    result = runner.invoke(cli.app, ["soperator", "create", str(target), "--profile", "cpu"])
+    assert result.exit_code == 1
+    assert "end-of-profile-probe" in result.output
+    assert choices == [None]
+    assert resolved == [{"deploymentProfile": profile}]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "flag,file,interactive,answer,profile,prompt,count",
+    [
+        (None, None, True, "\n\nn\n", "standard", "[y/n]", 3),
+        (None, None, True, "\ny\n", "fast-dev-test", "[y/n]", 2),
+        ("--fast-deploy", None, True, "\n", "fast-dev-test", "[Y/n]", 1),
+        ("--no-fast-deploy", None, True, "\n", "standard", "[y/N]", 1),
+        ("--fast-deploy", None, True, "n\n", "standard", "[Y/n]", 1),
+        ("--no-fast-deploy", None, True, "y\n", "fast-dev-test", "[y/N]", 1),
+        (None, "standard", True, "y\n", "fast-dev-test", "[y/N]", 1),
+        (None, "fast-dev-test", True, "n\n", "standard", "[Y/n]", 1),
+        ("--fast-deploy", "standard", True, "\n", "fast-dev-test", "[Y/n]", 1),
+        ("--no-fast-deploy", "fast-dev-test", True, "\n", "standard", "[y/N]", 1),
+        (None, None, False, "", "standard", "", 0),
+        (None, "fast-dev-test", False, "", "fast-dev-test", "", 0),
+        (None, "standard", False, "", "standard", "", 0),
+        ("--fast-deploy", "standard", False, "", "fast-dev-test", "", 0),
+        ("--no-fast-deploy", "fast-dev-test", False, "", "standard", "", 0),
+    ],
+)
+def test_soperator_create_mode_selection_at_cli_boundary(
+    monkeypatch, tmp_path, flag, file, interactive, answer, profile, prompt, count
+) -> None:
+    resolved = []
+    real_resolve = cli.resolve_create_profile
+
+    def resolve(*args, **kwargs):
+        result = real_resolve(*args, **kwargs)
+        resolved.append(result)
+        return result
+
+    def stop_before_setup(*_args, **_kwargs):
+        raise RuntimeError("end-of-profile-probe")
+
+    monkeypatch.setattr(cli, "resolve_create_profile", resolve)
+    monkeypatch.setattr(cli, "_soperator_install_profile_id", stop_before_setup)
+    target = tmp_path / "not-created"
+    args = ["soperator", "create", str(target), "--profile", "cpu"]
+    if flag is not None:
+        args.append(flag)
+    if file is not None:
+        values_file = tmp_path / "values.yaml"
+        values_file.write_text(yaml.safe_dump({"deploymentProfile": file}))
+        args.extend(["--values-file", str(values_file)])
+    if not interactive:
+        args.append("--no-interactive")
+    result = runner.invoke(cli.app, args, input=answer)
+    assert result.exit_code == 1
+    assert "end-of-profile-probe" in result.output
+    assert resolved == [{"deploymentProfile": profile}]
+    question = "Use fast deploy (Dev/Test only)?"
+    assert result.output.count(question) == count
+    if prompt:
+        assert f"{question} {prompt}" in result.output
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_soperator_create_mode_cancellation_precedes_setup(monkeypatch, tmp_path, interrupt):
+    if interrupt:
+        import click.termui
+
+        def interrupted(_prompt):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(click.termui, "visible_prompt_func", interrupted)
+    monkeypatch.setattr(
+        cli,
+        "_soperator_install_profile_id",
+        lambda *a, **kw: pytest.fail("setup after cancellation"),
+    )
+    target = tmp_path / "not-created"
+    result = runner.invoke(
+        cli.app, ["soperator", "create", str(target), "--profile", "cpu"], input=""
+    )
+    assert result.exit_code == 130
+    assert "Cancelled by user" in result.output
+    assert not target.exists()
 
 
 def _bundled_flux_install_manifest_url() -> str:
@@ -215,6 +528,15 @@ def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> 
 
 @pytest.fixture(autouse=True)
 def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Orchestration tests use opaque configs; snapshot cutoff has dedicated fixtures.
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_generation.require_current_active_soperator_snapshots",
+        lambda *a, **kw: None,
+    )
+    # Live ownership inventory has its own target-bound regression fixtures.
+    monkeypatch.setattr(
+        "nebius_cxcli.deployment_app_inventory.assert_live_release_inventory", lambda *a, **kw: None
+    )
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", lambda *_args, **_kwargs: None)
@@ -257,6 +579,30 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
+
+
+def _compatibility_output_report(*, admission: bool = True) -> dict[str, Any]:
+    outcomes = ["pass", "warn", "recommendation", "not_run"]
+    if not admission:
+        outcomes.append("pending")
+    return {
+        "admitted": admission,
+        "rows": [
+            {
+                "subject": {"instance_id": "cluster", "component_id": "mk8s"},
+                "axis": "documented_support",
+                "check_id": "fixture-check",
+                "outcome": outcome,
+                "reason": "fixture-detail",
+            }
+            for outcome in outcomes
+        ],
+    }
+
+
+def _assert_compatibility_details_hidden(output: str) -> None:
+    for detail in ("Component compatibility", "fixture-check", "fixture-detail"):
+        assert detail not in output
 
 
 def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
@@ -586,7 +932,8 @@ def test_upgrade_readonly_context_does_not_materialize_terraform_tfvars(
     (generated_dir / "nebius-cxcli-manifest.json").write_text(
         json.dumps(
             {
-                "schema": "nebius-cxcli-generated/v1",
+                "schema": "nebius-cxcli-generated/v2",
+                "execution": {"backend": {}},
                 "runtime_config": {
                     "client_info": {
                         "client_name": "client-a",
@@ -691,6 +1038,15 @@ def test_managed_mk8s_handoff_uses_preferred_kube_context_without_terraform_outp
             {
                 "apiVersion": "v1",
                 "kind": "Config",
+                "clusters": [
+                    {
+                        "name": "cluster",
+                        "cluster": {
+                            "server": "https://selected.invalid",
+                            "certificate-authority-data": "Y2E=",
+                        },
+                    }
+                ],
                 "contexts": [
                     {
                         "name": context_name,
@@ -710,7 +1066,7 @@ def test_managed_mk8s_handoff_uses_preferred_kube_context_without_terraform_outp
     monkeypatch.setattr(
         cli,
         "_mk8s_cluster_handoff_spec",
-        lambda *_args, **_kwargs: pytest.fail("existing kube context should be reused"),
+        lambda *_args, **_kwargs: SimpleNamespace(server="https://selected.invalid", ca_pem="ca"),
     )
 
     with ExitStack() as stack:
@@ -921,6 +1277,10 @@ def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_value
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -1160,6 +1520,10 @@ def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -1394,6 +1758,10 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -1665,9 +2033,8 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
     assert "not per node:" in output
     assert "1 control-plane stage(s)" in output
     assert "2 node-group template stage(s)" in output
-    assert "- compatibility matrix:" in output
-    assert "  - gpu-platform:" in output
-    assert "    - ubuntu24.04: cuda13.0" in output
+    assert "- compatibility matrix:" not in output
+    assert "Compatibility assessed" not in output
     compact_output = " ".join(output.split())
     assert "control-plane upgrade to Kubernetes 1.33" in compact_output
     assert (
@@ -1709,6 +2076,10 @@ def test_upgrade_node_template_safe_surge_quota_blocks_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -2183,6 +2554,10 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -2472,6 +2847,10 @@ def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_cxcli.compatibility_transitions.assess_node_template_plan",
+        lambda *_args, **_kwargs: {"states": []},
+    )
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
@@ -2736,7 +3115,7 @@ def test_node_template_version_choices_explain_sequential_minor_policy() -> None
     ]
 
 
-def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
+def test_upgrade_helm_chart_delegates_before_mutating_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2800,25 +3179,19 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         lambda *_args, **_kwargs: calls.append("helm-ready"),
     )
 
-    cli.upgrade_helm_chart_command(
-        paths.config_path,
-        "apps:cert-manager@mk8s",
-        to_version="0.26.0",
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert payload["apps"]["charts"][0]["version"] == "0.26.0"
-    assert calls == [
-        ("validate", "Helm chart upgrade preflight"),
-        "render",
-        ("validate", "Validate rendered Helm chart upgrade to 0.26.0"),
-        (
-            "flux-apply",
-            (paths.generated_dir,),
-            {"target_ref": "mk8s", "all_targets": False},
+    delegated = []
+    monkeypatch.setattr(
+        "nebius_cxcli.application_upgrade.run_chart_upgrade",
+        lambda _cli, source, preimage, config, paths, manifest, plan, *, dry_run: delegated.append(
+            (source, preimage, plan, dry_run)
         ),
-        "helm-ready",
-    ]
+    )
+    cli.upgrade_helm_chart_command(paths.config_path, "apps:cert-manager@mk8s", to_version="0.26.0")
+    assert delegated[0][2].target_version == "0.26.0"
+    assert delegated[0][2].target.target_ref == "mk8s"
+    assert delegated[0][3] is False
+    assert delegated[0][1] == paths.config_path.read_bytes()
+    assert calls == []
 
 
 def test_format_helm_chart_upgrade_plan_warns_when_target_appears_lower() -> None:
@@ -2865,6 +3238,7 @@ def test_upgrade_helm_chart_readiness_requires_generated_target(
             paths,
             {"deploy": {"targets": []}},
             plan,
+            observations={},
         )
 
 
@@ -3140,6 +3514,10 @@ def test_validate_command_runs_strict_checks_by_default(
     strict_called: dict[str, bool] = {"called": False}
     quota_called: dict[str, Any] = {}
     captured: dict[str, Any] = {}
+    report = _compatibility_output_report(admission=False)
+    monkeypatch.setattr(
+        cli, "assess_config", lambda config: captured.update(assessed=config) or report
+    )
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
     monkeypatch.setattr(
         cli,
@@ -3208,6 +3586,9 @@ def test_validate_command_runs_strict_checks_by_default(
     assert "apps:" in output
     assert "- none" in output
     assert "Valid:" in output
+    _assert_compatibility_details_hidden(result.output)
+    assert captured["assessed"] is captured["config"]
+    assert not fake_paths.reports_dir.exists()
     assert strict_called["called"] is True
     assert captured["source_profile"] == SourceProfile.PORTABLE
     assert quota_called["config"] is captured["config"]
@@ -3347,6 +3728,7 @@ def test_validation_scope_summary_lines_group_enabled_components_concisely(
 def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "assess_config", lambda *_a, **_k: {"rows": []})
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
     monkeypatch.setattr(
         cli,
@@ -3378,6 +3760,7 @@ def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
 def test_runtime_validation_non_strict_warns_on_confirmed_live_quota_insufficiency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
     monkeypatch.setattr(
         cli,
@@ -3439,6 +3822,7 @@ def test_runtime_validation_non_strict_warns_on_confirmed_live_quota_insufficien
 def test_validate_command_prints_mk8s_gpu_validation_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "assess_config", lambda *_a, **_k: {"rows": []})
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
     monkeypatch.setattr(
         cli,
@@ -3478,6 +3862,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
 def test_validate_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "assess_config", lambda *_a, **_k: {"rows": []})
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
@@ -4315,6 +4700,7 @@ def test_quota_request_command_prints_coverage_gaps_when_no_request_is_possible(
 def test_load_generated_context_exports_manifest_tool_versions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     flux_version, terraform_version = _bundled_tool_versions()
@@ -4419,7 +4805,41 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
     assert (fake_paths.infra_dir / ".terraform.lock.hcl").exists()
 
 
-def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_render_snapshot_cutoff_precedes_generated_writes(tmp_path, monkeypatch):
+    (tmp_path / "config.yaml").write_text("{}\n")
+    paths = _fake_paths(tmp_path)
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _: ("cfg", paths))
+
+    def reject(*args):
+        raise ValueError("unfinished snapshot requires previous cxcli binary")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_generation.require_current_active_soperator_snapshots",
+        reject,
+    )
+    monkeypatch.setattr(cli, "render_flux", lambda *a, **k: pytest.fail("must not render"))
+    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml"), "--force"])
+    assert result.exit_code == 1
+    assert "previous cxcli binary" in result.output
+    assert not paths.generated_dir.exists()
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("inherited", [False, True])
+def test_render_command_invokes_renderer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal: bool, inherited: bool
+) -> None:
+    from io import StringIO
+
+    from rich.console import Console
+
+    from nebius_cxcli.soperator_install_progress import _ACTIVE
+
+    progress_output = StringIO()
+    progress_console = Console(
+        file=progress_output, force_terminal=terminal, width=160, _environ={"TERM": "xterm"}
+    )
+    monkeypatch.setattr(cli, "progress_console", progress_console)
     (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     calls: dict[str, Any] = {}
@@ -4489,7 +4909,52 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
         ),
     )
 
-    result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
+    for name, description in {
+        "_raise_on_render_gpu_fabric_drift": "Preparing render inputs",
+        "_runtime_component_output_values": "Resolving component outputs",
+        "render_terraform_artifacts": "Rendering infrastructure and the pinned upstream graph",
+        "render_flux": "Rendering infrastructure and the pinned upstream graph",
+        "_warn_on_config_live_quota_issues": "Checking resource quotas",
+        "_write_generated_runtime_manifest": "Preparing deployment manifest",
+        "_try_generate_terraform_lock_file": "Resolving Terraform providers",
+        "promote_staged_generated_paths": "Publishing generated artifacts",
+    }.items():
+        operation = getattr(cli, name)
+
+        def observed(*args, _operation=operation, _description=description, **kwargs):
+            assert _ACTIVE.get() is not None
+            assert _description in progress_output.getvalue()
+            return _operation(*args, **kwargs)
+
+        monkeypatch.setattr(cli, name, observed)
+
+    confirm = cli._confirm_render_overwrite
+
+    def confirm_without_spinner(*args, **kwargs):
+        assert _ACTIVE.get() is None
+        return confirm(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "_confirm_render_overwrite", confirm_without_spinner)
+    with ExitStack() as scope:
+        if inherited:
+            scope.enter_context(
+                cli.install_progress_scope(
+                    cli.SoperatorUpgradeProgress(progress_console, prefix="Parent")
+                )
+            )
+        result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")])
+        assert cli.install_progress_active() is inherited
+    assert not cli.install_progress_active()
+    assert _ACTIVE.get() is None
+    assert not progress_console._live_stack
+    progress_text = progress_output.getvalue()
+    if not terminal:
+        prefix = "Parent" if inherited else "Render"
+        assert f"{prefix}: START Preparing render inputs" in progress_text
+        assert f"{prefix}: OK Publishing generated artifacts" in progress_text
+        assert "\x1b" not in progress_text
+        assert "OK Resolving Terraform providers" not in progress_text
+        assert "SKIPPED" in progress_text
 
     assert result.exit_code == 0, result.output
     assert "Rendered 2 file(s)" in _plain_output(result.output)
@@ -4507,7 +4972,8 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     assert calls["manifest_config"] == "cfg"
     assert calls["manifest_profile"] == SourceProfile.PORTABLE
     assert calls["lock_config"] == "cfg"
-    assert calls["lock_paths"] == fake_paths
+    assert calls["lock_paths"].project_dir == fake_paths.project_dir
+    assert calls["lock_paths"].generated_dir != fake_paths.generated_dir
 
     staged_paths = calls["terraform_paths"]
     assert isinstance(staged_paths, ProjectPaths)
@@ -4706,9 +5172,18 @@ def test_render_command_accepts_local_source_profile(
 def test_validate_generated_command_portable_checks_module_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     captured: dict[str, Any] = {}
+    report = _compatibility_output_report()
+    monkeypatch.setattr(
+        cli,
+        "admit_compatibility",
+        lambda config, paths, frozen, *, terraform_validated: (
+            captured.update(admission=(paths, frozen, terraform_validated)) or report
+        ),
+    )
 
     monkeypatch.setattr(
         cli,
@@ -4765,11 +5240,17 @@ def test_validate_generated_command_portable_checks_module_sources(
     assert captured["quota_phase"] == "validate-generated"
     assert captured["quota_paths"] == fake_paths
     assert captured["quota_runtime_env"] == {}
+    _assert_compatibility_details_hidden(result.output)
+    assert captured["admission"] == (fake_paths, {}, True)
+    assert (
+        json.loads((fake_paths.reports_dir / "compatibility-admission.json").read_text()) == report
+    )
 
 
 def test_validate_generated_command_requires_manifest_module_sources_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4836,7 +5317,7 @@ def test_generic_catalog_soperator_latest_is_rejected() -> None:
 
     assert version == ""
     assert issue is not None
-    assert "exact immutable chart version" in issue
+    assert "exact chart version" in issue
 
 
 def test_catalog_non_soperator_latest_is_rejected() -> None:
@@ -4846,7 +5327,7 @@ def test_catalog_non_soperator_latest_is_rejected() -> None:
 
     assert version == ""
     assert issue is not None
-    assert "exact immutable chart version" in issue
+    assert "exact chart version" in issue
 
 
 def test_validate_sources_command_reports_warnings_and_fails_on_issues(
@@ -4880,9 +5361,11 @@ def test_validate_sources_command_reports_warnings_and_fails_on_issues(
     assert "--no-validate-sources" not in output
 
 
+@pytest.mark.parametrize("soperator_context", [False, True])
 def test_create_source_validation_failure_reports_skip_guidance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    soperator_context: bool,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     monkeypatch.setattr(
@@ -4895,13 +5378,17 @@ def test_create_source_validation_failure_reports_skip_guidance(
         ),
     )
 
-    with pytest.raises(RuntimeError) as exc_info:
-        cli._validate_component_sources_or_raise()
+    token = cli._SOPERATOR_LIFECYCLE_INTERNAL.set(soperator_context)
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            cli._validate_component_sources_or_raise()
+    finally:
+        cli._SOPERATOR_LIFECYCLE_INTERNAL.reset(token)
 
     message = str(exc_info.value)
     assert "checks the full component catalog" in message
     assert "NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS" in message
-    assert "--no-validate-sources" in message
+    assert ("--no-validate-sources" in message) is not soperator_context
 
 
 def test_validate_sources_command_accepts_positional_component_sources_path(
@@ -4939,368 +5426,6 @@ def test_validate_sources_command_accepts_positional_component_sources_path(
     assert result.exit_code == 0, result.output
     assert captured["load_explicit"] == sources_file
     assert captured["validate_explicit"] == sources_file
-
-
-def test_grafana_command_exports_selected_dashboard_json(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    output_dir = tmp_path / "dashboards"
-    captured: dict[str, Any] = {}
-
-    monkeypatch.setattr(
-        cli,
-        "bearer_auth_candidates",
-        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="test")],
-    )
-    monkeypatch.setattr(
-        cli,
-        "list_folders",
-        lambda base_url, auth_candidates: (
-            captured.__setitem__("folder_base_url", base_url),
-            captured.__setitem__("folder_auth_sources", [item.source for item in auth_candidates]),
-            (cli.GrafanaFolder(uid="folder-uid", title="mk8s"),),
-        )[2],
-    )
-    monkeypatch.setattr(
-        cli,
-        "list_dashboards",
-        lambda base_url, auth_candidates, *, folder_uid, folder_title="": (
-            captured.__setitem__("dashboard_base_url", base_url),
-            captured.__setitem__("dashboard_folder_uid", folder_uid),
-            captured.__setitem__("dashboard_folder_title", folder_title),
-            (
-                cli.GrafanaDashboard(
-                    uid="dashboard-uid",
-                    title="Cluster Autoscaler",
-                    folder_uid=folder_uid,
-                    folder_title=folder_title,
-                ),
-            ),
-        )[3],
-    )
-    monkeypatch.setattr(
-        cli,
-        "dashboard_json",
-        lambda base_url, auth_candidates, *, dashboard_uid: (
-            captured.__setitem__("detail_base_url", base_url),
-            captured.__setitem__("detail_dashboard_uid", dashboard_uid),
-            {
-                "uid": dashboard_uid,
-                "title": "Cluster Autoscaler",
-                "panels": [{"datasource": {"type": "prometheus", "uid": "source"}}],
-            },
-        )[2],
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--export-dashboard",
-            "https://grafana.example/dashboards/f/folder-uid/mk8s",
-            "--dashboard-uid",
-            "dashboard-uid",
-            "--output-dir",
-            str(output_dir),
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    exported = output_dir / "mk8s" / "cluster-autoscaler.json"
-    assert json.loads(exported.read_text(encoding="utf-8")) == {
-        "uid": "dashboard-uid",
-        "title": "Cluster Autoscaler",
-        "panels": [{"datasource": {"type": "prometheus", "uid": "source"}}],
-    }
-    assert captured["folder_base_url"] == "https://grafana.example/"
-    assert captured["folder_auth_sources"] == ["test"]
-    assert captured["dashboard_folder_uid"] == "folder-uid"
-    assert captured["detail_dashboard_uid"] == "dashboard-uid"
-    assert "Exported Cluster Autoscaler" in _plain_output(result.output)
-
-
-def test_grafana_command_api_export_with_attach_rewrites_and_attaches(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    output_dir = tmp_path / "dashboards"
-    catalog_path = tmp_path / "component_sources.yaml"
-    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
-    captured: dict[str, Any] = {"detail_uids": []}
-
-    monkeypatch.setattr(
-        cli,
-        "bearer_auth_candidates",
-        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="test")],
-    )
-    monkeypatch.setattr(
-        cli,
-        "list_folders",
-        lambda _base_url, _auth_candidates: (cli.GrafanaFolder(uid="folder-uid", title="mk8s"),),
-    )
-    monkeypatch.setattr(
-        cli,
-        "list_dashboards",
-        lambda _base_url, _auth_candidates, *, folder_uid, folder_title="": (
-            cli.GrafanaDashboard(
-                uid="dashboard-one",
-                title="Cluster",
-                folder_uid=folder_uid,
-                folder_title=folder_title,
-            ),
-            cli.GrafanaDashboard(
-                uid="dashboard-two",
-                title="Nodes",
-                folder_uid=folder_uid,
-                folder_title=folder_title,
-            ),
-        ),
-    )
-
-    def fake_dashboard_json(
-        _base_url: str,
-        _auth_candidates: object,
-        *,
-        dashboard_uid: str,
-    ) -> dict[str, Any]:
-        cast(list[str], captured["detail_uids"]).append(dashboard_uid)
-        title = "Cluster" if dashboard_uid == "dashboard-one" else "Nodes"
-        return {
-            "uid": dashboard_uid,
-            "title": title,
-            "panels": [{"datasource": {"type": "prometheus", "uid": "source-prometheus"}}],
-        }
-
-    monkeypatch.setattr(cli, "dashboard_json", fake_dashboard_json)
-    monkeypatch.setattr(
-        cli,
-        "resolve_component_sources_file",
-        lambda *, explicit=None: explicit or catalog_path,
-    )
-    monkeypatch.setattr(
-        cli,
-        "catalog_datasources",
-        lambda _path: (
-            "grafana",
-            (
-                cli.CatalogDatasource(
-                    name="Nebius User Metrics",
-                    uid="nebius-user-metrics",
-                    datasource_type="prometheus",
-                ),
-            ),
-        ),
-    )
-
-    def fake_attach_dashboards_to_catalog(
-        component_sources_path: Path,
-        *,
-        grafana_component_id: str,
-        exports: Any,
-        overwrite: bool,
-    ) -> None:
-        captured["attach_path"] = component_sources_path
-        captured["grafana_component_id"] = grafana_component_id
-        captured["exports"] = tuple(exports)
-        captured["overwrite"] = overwrite
-
-    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--export-dashboard",
-            "https://grafana.example/",
-            "--folder-uid",
-            "folder-uid",
-            "--dashboard-uid",
-            "dashboard-one,dashboard-two",
-            "--output-dir",
-            str(output_dir),
-            "--attach",
-            "--component-sources",
-            str(catalog_path),
-            "--dashboard-folder",
-            "mk8s",
-            "--datasource",
-            "Nebius User Metrics",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured["detail_uids"] == ["dashboard-one", "dashboard-two"]
-    assert json.loads((output_dir / "mk8s" / "cluster.json").read_text(encoding="utf-8")) == {
-        "uid": "dashboard-one",
-        "title": "Cluster",
-        "panels": [{"datasource": {"type": "prometheus", "uid": "nebius-user-metrics"}}],
-    }
-    assert captured["attach_path"] == catalog_path
-    assert captured["grafana_component_id"] == "grafana"
-    assert captured["overwrite"] is False
-    exports = cast(tuple[cli.ExportedDashboard, ...], captured["exports"])
-    assert [export.dashboard_key for export in exports] == ["cluster", "nodes"]
-    assert all(export.catalog_folder == "mk8s" for export in exports)
-    assert all(export.datasource_name == "Nebius User Metrics" for export in exports)
-    assert "Attached 2 dashboard(s)" in _plain_output(result.output)
-
-
-def test_grafana_export_url_parts_parse_dashboard_urls_and_uid_lists() -> None:
-    base_url, folder_uid, dashboard_uids = cli._grafana_export_url_parts(
-        "https://grafana.example/d/dashboard-uid/title?orgId=1",
-        folder_uid="",
-        dashboard_uids=(),
-    )
-
-    assert base_url == "https://grafana.example/"
-    assert folder_uid == ""
-    assert dashboard_uids == ("dashboard-uid",)
-
-    requested_uids = tuple(cli._split_multi_value_tokens(["first,second", "third"]))
-    base_url, folder_uid, dashboard_uids = cli._grafana_export_url_parts(
-        "https://grafana.example/dashboards/f/folder-uid/mk8s",
-        folder_uid="explicit-folder",
-        dashboard_uids=requested_uids,
-    )
-
-    assert base_url == "https://grafana.example/"
-    assert folder_uid == "explicit-folder"
-    assert dashboard_uids == ("first", "second", "third")
-
-    with pytest.raises(RuntimeError, match="must be a Grafana URL"):
-        cli._grafana_export_url_parts("not-a-url", folder_uid="", dashboard_uids=())
-
-
-def test_grafana_export_auth_candidates_support_basic_auth_password_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ADMIN_PASSWORD", "s3cr3t")
-    monkeypatch.setattr(
-        cli,
-        "bearer_auth_candidates",
-        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="bearer")],
-    )
-
-    candidates = cli._grafana_export_auth_candidates(
-        token_env="",
-        username="admin",
-        password_env="ADMIN_PASSWORD",
-    )
-
-    assert [candidate.source for candidate in candidates] == ["bearer", "Basic auth user admin"]
-    assert candidates[-1].authorization_header() == "Basic YWRtaW46czNjcjN0"
-
-
-def test_grafana_export_auth_candidates_require_basic_auth_password_non_tty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("GRAFANA_PASSWORD", raising=False)
-    monkeypatch.setattr(cli, "bearer_auth_candidates", lambda **_kwargs: [])
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-
-    with pytest.raises(RuntimeError, match="Grafana Basic auth password is missing"):
-        cli._grafana_export_auth_candidates(
-            token_env="",
-            username="admin",
-            password_env="GRAFANA_PASSWORD",
-        )
-
-
-def test_prompt_grafana_folder_tty_sorts_choices_and_enables_prefix_jump(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, Any] = {}
-
-    def fake_select(*_args: object, **kwargs: object) -> str:
-        captured.update(kwargs)
-        return "question"
-
-    fake_questionary = SimpleNamespace(
-        Choice=lambda **kwargs: SimpleNamespace(**kwargs),
-        select=fake_select,
-    )
-    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
-    monkeypatch.setattr(
-        cli,
-        "_ask_questionary_with_prefix_jumps",
-        lambda _question: cast(list[SimpleNamespace], captured["choices"])[0].value,
-    )
-
-    selected = cli._prompt_grafana_folder(
-        (
-            cli.GrafanaFolder(uid="gamma", title="Gamma"),
-            cli.GrafanaFolder(uid="alpha", title="alpha"),
-            cli.GrafanaFolder(uid="beta", title="Beta"),
-        )
-    )
-
-    assert selected.uid == "alpha"
-    assert [choice.title for choice in cast(list[SimpleNamespace], captured["choices"])] == [
-        "alpha (alpha)",
-        "Beta (beta)",
-        "Gamma (gamma)",
-    ]
-    assert captured["use_jk_keys"] is False
-    assert "Type a letter to jump" in str(captured["instruction"])
-
-
-def test_prompt_grafana_dashboards_tty_sorts_choices_and_enables_prefix_jump(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, Any] = {}
-
-    def fake_checkbox(*_args: object, **kwargs: object) -> str:
-        captured.update(kwargs)
-        return "question"
-
-    fake_questionary = SimpleNamespace(
-        Choice=lambda **kwargs: SimpleNamespace(**kwargs),
-        checkbox=fake_checkbox,
-    )
-    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
-    monkeypatch.setattr(cli, "_configure_questionary_checkbox_symbols", lambda: None)
-    monkeypatch.setattr(
-        cli,
-        "_ask_questionary_with_prefix_jumps",
-        lambda _question: [cast(list[SimpleNamespace], captured["choices"])[1].value],
-    )
-
-    selected = cli._prompt_grafana_dashboards(
-        (
-            cli.GrafanaDashboard(
-                uid="gamma",
-                title="Gamma Dashboard",
-                folder_uid="folder",
-                folder_title="Folder",
-            ),
-            cli.GrafanaDashboard(
-                uid="alpha",
-                title="alpha Dashboard",
-                folder_uid="folder",
-                folder_title="Folder",
-            ),
-            cli.GrafanaDashboard(
-                uid="beta",
-                title="Beta Dashboard",
-                folder_uid="folder",
-                folder_title="Folder",
-            ),
-        )
-    )
-
-    assert [dashboard.uid for dashboard in selected] == ["beta"]
-    assert [choice.title for choice in cast(list[SimpleNamespace], captured["choices"])] == [
-        "alpha Dashboard (alpha)",
-        "Beta Dashboard (beta)",
-        "Gamma Dashboard (gamma)",
-    ]
-    assert captured["use_jk_keys"] is False
-    assert captured["use_search_filter"] is True
-    assert "Type a letter to jump" in str(captured["instruction"])
-    assert "Ctrl-A toggles all" in str(captured["instruction"])
 
 
 def test_questionary_prefix_jump_keys_move_to_first_matching_choice() -> None:
@@ -5359,435 +5484,6 @@ def test_collect_leaf_paths_skip_recursive_config_structures() -> None:
 
     assert cli._collect_scalar_leaf_paths(payload) == [("name",)]
     assert cli._collect_promptable_leaf_paths(values) == [(0,)]
-
-
-def test_grafana_export_auth_candidates_suppress_bearer_warning_for_basic_auth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def fake_bearer_auth_candidates(**kwargs: object) -> list[object]:
-        captured.update(kwargs)
-        return []
-
-    monkeypatch.setenv("GRAFANA_PASSWORD", "secret")
-    monkeypatch.setattr(cli, "bearer_auth_candidates", fake_bearer_auth_candidates)
-
-    candidates = cli._grafana_export_auth_candidates(
-        token_env="",
-        username="admin",
-        password_env="GRAFANA_PASSWORD",
-    )
-
-    assert captured["on_warning"] is None
-    assert len(candidates) == 1
-    assert candidates[0].source == "Basic auth user admin"
-
-
-def test_grafana_command_attaches_local_dashboard_json_without_api_calls(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dashboard_file = tmp_path / "source-dashboard.json"
-    dashboard_file.write_text(
-        json.dumps(
-            {
-                "dashboard": {
-                    "id": 1,
-                    "version": 4,
-                    "uid": "local-dashboard",
-                    "title": "Local Dashboard",
-                    "panels": [{"datasource": {"type": "prometheus", "uid": "source-prometheus"}}],
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    catalog_path = tmp_path / "component_sources.yaml"
-    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
-    output_dir = tmp_path / "dashboards"
-    captured: dict[str, Any] = {}
-
-    def fail_api_call(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("local dashboard JSON mode must not call Grafana API helpers")
-
-    monkeypatch.setattr(cli, "bearer_auth_candidates", fail_api_call)
-    monkeypatch.setattr(cli, "list_folders", fail_api_call)
-    monkeypatch.setattr(cli, "list_dashboards", fail_api_call)
-    monkeypatch.setattr(cli, "dashboard_json", fail_api_call)
-    monkeypatch.setattr(
-        cli,
-        "resolve_component_sources_file",
-        lambda *, explicit=None: explicit or catalog_path,
-    )
-    monkeypatch.setattr(
-        cli,
-        "catalog_datasources",
-        lambda path: (
-            captured.__setitem__("catalog_path", path),
-            (
-                "grafana",
-                (
-                    cli.CatalogDatasource(
-                        name="Nebius User Metrics",
-                        uid="nebius-user-metrics",
-                        datasource_type="prometheus",
-                    ),
-                ),
-            ),
-        )[1],
-    )
-
-    def fake_attach_dashboards_to_catalog(
-        component_sources_path: Path,
-        *,
-        grafana_component_id: str,
-        exports: Any,
-        overwrite: bool,
-    ) -> None:
-        captured["attach_path"] = component_sources_path
-        captured["grafana_component_id"] = grafana_component_id
-        captured["exports"] = tuple(exports)
-        captured["overwrite"] = overwrite
-
-    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--dashboard-json",
-            str(dashboard_file),
-            "--output-dir",
-            str(output_dir),
-            "--attach",
-            "--component-sources",
-            str(catalog_path),
-            "--dashboard-folder",
-            "mk8s",
-            "--datasource",
-            "Nebius User Metrics",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    exported = output_dir / "mk8s" / "local-dashboard.json"
-    assert json.loads(exported.read_text(encoding="utf-8")) == {
-        "uid": "local-dashboard",
-        "title": "Local Dashboard",
-        "panels": [{"datasource": {"type": "prometheus", "uid": "nebius-user-metrics"}}],
-    }
-    assert captured["catalog_path"] == catalog_path
-    assert captured["attach_path"] == catalog_path
-    assert captured["grafana_component_id"] == "grafana"
-    assert captured["overwrite"] is False
-    exports = captured["exports"]
-    assert len(exports) == 1
-    assert exports[0].dashboard_key == "local-dashboard"
-    assert exports[0].catalog_folder == "mk8s"
-    assert exports[0].datasource_name == "Nebius User Metrics"
-    assert exports[0].path == exported
-    assert "Attached 1 dashboard(s)" in _plain_output(result.output)
-
-
-def test_grafana_command_exports_multiple_local_dashboard_json_without_catalog_calls(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first_dashboard = tmp_path / "cluster.json"
-    first_dashboard.write_text(
-        json.dumps(
-            {
-                "dashboard": {
-                    "id": 1,
-                    "version": 2,
-                    "uid": "cluster",
-                    "title": "Cluster",
-                    "panels": [],
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    second_dashboard = tmp_path / "nodes.json"
-    second_dashboard.write_text(
-        json.dumps({"id": 3, "version": 4, "uid": "nodes", "title": "Nodes", "panels": []}),
-        encoding="utf-8",
-    )
-    output_dir = tmp_path / "dashboards"
-
-    def fail_call(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("local export-only mode must not call API or catalog helpers")
-
-    monkeypatch.setattr(cli, "bearer_auth_candidates", fail_call)
-    monkeypatch.setattr(cli, "list_folders", fail_call)
-    monkeypatch.setattr(cli, "list_dashboards", fail_call)
-    monkeypatch.setattr(cli, "dashboard_json", fail_call)
-    monkeypatch.setattr(cli, "resolve_component_sources_file", fail_call)
-    monkeypatch.setattr(cli, "catalog_datasources", fail_call)
-    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fail_call)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--dashboard-json",
-            str(first_dashboard),
-            "--dashboard-json",
-            str(second_dashboard),
-            "--output-dir",
-            str(output_dir),
-            "--dashboard-folder",
-            "mk8s",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert json.loads((output_dir / "mk8s" / "cluster.json").read_text(encoding="utf-8")) == {
-        "uid": "cluster",
-        "title": "Cluster",
-        "panels": [],
-    }
-    assert json.loads((output_dir / "mk8s" / "nodes.json").read_text(encoding="utf-8")) == {
-        "uid": "nodes",
-        "title": "Nodes",
-        "panels": [],
-    }
-    assert "Attached" not in _plain_output(result.output)
-
-
-def test_grafana_command_overwrite_applies_to_local_json_and_catalog_attach(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dashboard_file = tmp_path / "dashboard.json"
-    dashboard_file.write_text(
-        json.dumps({"uid": "local-dashboard", "title": "Local Dashboard", "panels": []}),
-        encoding="utf-8",
-    )
-    output_dir = tmp_path / "dashboards"
-    existing = output_dir / "mk8s" / "local-dashboard.json"
-    existing.parent.mkdir(parents=True)
-    existing.write_text('{"uid":"old"}\n', encoding="utf-8")
-    catalog_path = tmp_path / "component_sources.yaml"
-    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
-    captured: dict[str, Any] = {}
-
-    monkeypatch.setattr(
-        cli,
-        "resolve_component_sources_file",
-        lambda *, explicit=None: explicit or catalog_path,
-    )
-    monkeypatch.setattr(
-        cli,
-        "catalog_datasources",
-        lambda _path: (
-            "grafana",
-            (
-                cli.CatalogDatasource(
-                    name="Nebius User Metrics",
-                    uid="nebius-user-metrics",
-                    datasource_type="prometheus",
-                ),
-            ),
-        ),
-    )
-
-    def fake_attach_dashboards_to_catalog(
-        _component_sources_path: Path,
-        *,
-        grafana_component_id: str,
-        exports: Any,
-        overwrite: bool,
-    ) -> None:
-        captured["grafana_component_id"] = grafana_component_id
-        captured["exports"] = tuple(exports)
-        captured["overwrite"] = overwrite
-
-    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--dashboard-json",
-            str(dashboard_file),
-            "--output-dir",
-            str(output_dir),
-            "--attach",
-            "--component-sources",
-            str(catalog_path),
-            "--dashboard-folder",
-            "mk8s",
-            "--datasource",
-            "Nebius User Metrics",
-            "--overwrite",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(existing.read_text(encoding="utf-8")) == {
-        "uid": "local-dashboard",
-        "title": "Local Dashboard",
-        "panels": [],
-    }
-    assert captured["grafana_component_id"] == "grafana"
-    assert captured["overwrite"] is True
-    exports = captured["exports"]
-    assert len(exports) == 1
-    assert exports[0].path == existing
-
-
-def test_grafana_command_requires_exactly_one_dashboard_source(tmp_path: Path) -> None:
-    dashboard_file = tmp_path / "dashboard.json"
-    dashboard_file.write_text(json.dumps({"uid": "local", "title": "Local"}), encoding="utf-8")
-
-    missing_result = runner.invoke(cli.app, ["grafana"])
-    both_result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--export-dashboard",
-            "https://grafana.example/",
-            "--dashboard-json",
-            str(dashboard_file),
-        ],
-    )
-    local_with_folder_uid_result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--dashboard-json",
-            str(dashboard_file),
-            "--folder-uid",
-            "folder",
-        ],
-    )
-    local_with_dashboard_uid_result = runner.invoke(
-        cli.app,
-        [
-            "grafana",
-            "--dashboard-json",
-            str(dashboard_file),
-            "--dashboard-uid",
-            "dashboard",
-        ],
-    )
-
-    assert missing_result.exit_code != 0
-    assert "Pass exactly one of --export-dashboard or --dashboard-json" in _plain_output(
-        missing_result.output
-    )
-    assert both_result.exit_code != 0
-    assert "Pass exactly one of --export-dashboard or --dashboard-json" in _plain_output(
-        both_result.output
-    )
-    assert local_with_folder_uid_result.exit_code != 0
-    assert (
-        "--folder-uid and --dashboard-uid are only valid with --export-dashboard"
-        in _plain_output(local_with_folder_uid_result.output)
-    )
-    assert local_with_dashboard_uid_result.exit_code != 0
-    assert (
-        "--folder-uid and --dashboard-uid are only valid with --export-dashboard"
-        in _plain_output(local_with_dashboard_uid_result.output)
-    )
-
-
-def test_validate_dashboards_command_reports_live_fit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("version: v1\n", encoding="utf-8")
-    captured: dict[str, Any] = {}
-
-    class Result(SimpleNamespace):
-        @property
-        def ok(self) -> bool:
-            return not self.errors
-
-    monkeypatch.setattr(
-        cli,
-        "_load_context_readonly",
-        lambda path: (
-            captured.__setitem__("config_path", path),
-            (
-                "config",
-                SimpleNamespace(
-                    config_path=path,
-                    generated_dir=tmp_path / "generated",
-                    reports_dir=tmp_path / "generated" / "reports",
-                ),
-            ),
-        )[1],
-    )
-
-    def fake_validate_grafana_dashboard_fits(
-        config: object,
-        *,
-        target_ref: str = "",
-        target_extra_envs: object = None,
-        progress_callback: object = None,
-    ) -> tuple[Result, ...]:
-        captured["target_ref"] = target_ref
-        captured["target_extra_envs"] = target_extra_envs
-        if callable(progress_callback):
-            progress_callback("init", 0, 1)
-            progress_callback("cluster1: nebius-kubernetes/kubernetes-cluster-monitoring", 0, 1)
-            progress_callback("cluster1: nebius-kubernetes/kubernetes-cluster-monitoring", 1, 1)
-            progress_callback("done", 1, 1)
-        return (
-            Result(
-                target_ref="cluster1",
-                signal="metrics",
-                dashboard_ref="nebius-kubernetes/kubernetes-cluster-monitoring",
-                dashboard_uid="cxcli-kubernetes-metrics",
-                datasource="Nebius User Metrics",
-                datasource_uid="nebius-user-metrics",
-                datasource_type="prometheus",
-                read_endpoint="metrics_user_read",
-                source="cxcli-owned JSON",
-                checks=("Metric/label names matched; PromQL checked",),
-                errors=(),
-                warnings=("Tempo query returned no traces: {}",),
-            ),
-        )
-
-    monkeypatch.setattr(
-        cli,
-        "validate_grafana_dashboard_fits",
-        fake_validate_grafana_dashboard_fits,
-    )
-
-    result = runner.invoke(
-        cli.app,
-        ["validate-dashboards", str(config_path), "--target", "cluster1"],
-    )
-
-    assert result.exit_code == 0, result.output
-    output = _plain_output(result.output)
-    normalized_output = " ".join(output.split())
-    assert captured["config_path"] == config_path
-    assert captured["target_ref"] == "cluster1"
-    assert captured["target_extra_envs"] == {}
-    assert "Grafana dashboards: validating 1 dashboard binding(s)" in normalized_output
-    assert (
-        "Grafana dashboards: cluster1: nebius-kubernetes/kubernetes-cluster-monitoring (1/1)"
-        in normalized_output
-    )
-    assert (
-        normalized_output.count(
-            "Grafana dashboards: cluster1: nebius-kubernetes/kubernetes-cluster-monitoring (1/1)"
-        )
-        == 1
-    )
-    assert "OK: metrics@cluster1" in normalized_output
-    assert "Nebius User Metrics (prometheus, metrics_user_read)" in normalized_output
-    assert "Source: cxcli-owned JSON" in normalized_output
-    assert "Checks: - Metric/label names matched; PromQL checked" in normalized_output
-    assert "Warnings: - Tempo query returned no traces: {}" in normalized_output
-    assert f"Grafana dashboards fit live datasources: {config_path}" in output.replace("\n", "")
 
 
 def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: Path) -> None:
@@ -5915,7 +5611,7 @@ def test_kube_context_name_for_target_does_not_guess_ambiguous_history(
     assert cli._kube_context_name_for_target("cluster1") == ""
 
 
-def test_kube_context_name_for_target_prefers_matching_current_context(
+def test_kube_context_name_for_target_rejects_ambiguous_current_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5946,50 +5642,10 @@ def test_kube_context_name_for_target_prefers_matching_current_context(
     )
     monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
 
-    assert (
-        cli._kube_context_name_for_target("cluster1") == "nebius-cluster1-mk8scluster-new-external"
-    )
+    assert cli._kube_context_name_for_target("cluster1") == ""
     assert cli._kube_context_name_for_target("cluster2") == (
         "nebius-cluster2-mk8scluster-other-external"
     )
-
-
-def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafana(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    kubeconfig = tmp_path / "config"
-    kubeconfig.write_text(
-        yaml.safe_dump({"apiVersion": "v1", "kind": "Config", "contexts": []}),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
-    monkeypatch.setattr(
-        cli, "enabled_cluster_target_refs", lambda _config: ("cluster1", "cluster2")
-    )
-    monkeypatch.setattr(
-        cli,
-        "grafana_enabled_for_target",
-        lambda _config, *, target_ref="": target_ref in {"cluster1", "cluster2"},
-    )
-    paths = SimpleNamespace(
-        generated_dir=tmp_path / "generated",
-        reports_dir=tmp_path / "generated" / "reports",
-    )
-
-    with ExitStack() as stack, pytest.raises(RuntimeError) as excinfo:
-        cli._grafana_dashboard_validation_target_envs(
-            {},
-            cast(ProjectPaths, paths),
-            target_ref="",
-            stack=stack,
-        )
-
-    message = str(excinfo.value)
-    assert "could not resolve an explicit kube context" in message
-    assert "cluster1, cluster2" in message
-    assert f"nebius-cxcli flux apply {paths.generated_dir.resolve()}" in message
-    assert "nebius-cxcli flux apply <config.yaml>" not in message
 
 
 def test_render_command_requires_force_in_noninteractive_overwrite(
@@ -6159,10 +5815,31 @@ def test_render_command_decline_is_clean_cancel_not_error(
     assert calls["rendered"] is False
 
 
+@pytest.mark.parametrize(
+    "failed_operation,description",
+    [
+        ("render_flux", "Rendering infrastructure and the pinned upstream graph"),
+        ("_write_generated_runtime_manifest", "Preparing deployment manifest"),
+        ("_try_generate_terraform_lock_file", "Resolving Terraform providers"),
+    ],
+)
+@pytest.mark.parametrize("interrupted", [False, True])
 def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failed_operation: str,
+    description: str,
+    interrupted: bool,
 ) -> None:
+    from io import StringIO
+
+    from rich.console import Console
+
+    from nebius_cxcli.soperator_install_progress import _ACTIVE
+
+    progress_output = StringIO()
+    progress_console = Console(file=progress_output, force_terminal=False)
+    monkeypatch.setattr(cli, "progress_console", progress_console)
     (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
@@ -6177,16 +5854,28 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
         "render_terraform_artifacts",
         lambda *_args, **_kwargs: [(_args[1].infra_dir / "main.tf")],
     )
-    monkeypatch.setattr(
-        cli,
-        "render_flux",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
+    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_write_generated_runtime_manifest", lambda *_a, **_k: None)
+
+    def fail(*_args, **_kwargs):
+        assert _ACTIVE.get() is not None
+        assert f"START {description}" in progress_output.getvalue()
+        if interrupted:
+            raise KeyboardInterrupt()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, failed_operation, fail)
 
     result = runner.invoke(cli.app, ["render", "--force", str(tmp_path / "config.yaml")])
 
-    assert result.exit_code == 1, result.output
-    assert "boom" in _plain_output(result.output)
+    assert result.exit_code == (130 if interrupted else 1), result.output
+    if not interrupted:
+        assert "boom" in _plain_output(result.output)
+    assert f"FAILED {description}" in progress_output.getvalue()
+    assert f"OK {description}" not in progress_output.getvalue()
+    assert not cli.install_progress_active()
+    assert _ACTIVE.get() is None
+    assert not progress_console._live_stack
     assert preserved.read_text(encoding="utf-8") == "keep-me\n"
     assert not any(fake_paths.project_dir.glob(".generated-staging-*"))
 
@@ -6194,9 +5883,14 @@ def test_render_command_preserves_existing_generated_bundle_when_rerender_fails(
 def test_deploy_command_uses_single_canonical_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "render": {"module_sources": []},
+    }
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
@@ -6212,31 +5906,15 @@ def test_deploy_command_uses_single_canonical_path(
         paths: object,
         loaded_manifest: object,
         *,
-        skip_validations: bool,
-        skip_validation_kinds: set[str],
-        requested_target_ref: str | None = None,
-        all_targets: bool = False,
-        job_policy: str = "fail",
-        cancel_job_ids: Sequence[str] = (),
-        requeue_job_ids: Sequence[str] = (),
-        job_wait_timeout_seconds: int = 0,
-        job_refresh_interval_seconds: int = 30,
+        options: cli.DeployOptions,
     ) -> cli.DeployRunSummary:
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
-        captured["skip_validations"] = skip_validations
-        captured["skip_validation_kinds"] = skip_validation_kinds
-        captured["requested_target_ref"] = requested_target_ref
-        captured["all_targets"] = all_targets
-        captured["job_policy"] = job_policy
-        captured["cancel_job_ids"] = cancel_job_ids
-        captured["requeue_job_ids"] = requeue_job_ids
-        captured["job_wait_timeout_seconds"] = job_wait_timeout_seconds
-        captured["job_refresh_interval_seconds"] = job_refresh_interval_seconds
+        captured["options"] = options
         return cli.DeployRunSummary()
 
-    monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
+    monkeypatch.setattr(cli, "deploy_rendered_bundle", _fake_deploy_generated_artifacts)
 
     result = runner.invoke(
         cli.app,
@@ -6258,15 +5936,7 @@ def test_deploy_command_uses_single_canonical_path(
         "config": "cfg",
         "paths": fake_paths,
         "manifest": manifest,
-        "skip_validations": False,
-        "skip_validation_kinds": set(),
-        "requested_target_ref": None,
-        "all_targets": False,
-        "job_policy": "wait-then-cancel",
-        "cancel_job_ids": (),
-        "requeue_job_ids": (),
-        "job_wait_timeout_seconds": 3600,
-        "job_refresh_interval_seconds": 30,
+        "options": cli.DeployOptions(job_policy="wait-then-cancel", job_wait_timeout="1h"),
     }
 
 
@@ -6823,12 +6493,12 @@ def test_acceptance_test_help_shows_safe_examples() -> None:
     assert "Slurm NCCL benchmark:" in benchmark_help
     assert "Plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
     assert "plain MK8s K8s NCCL benchmark:" not in benchmark_help
-    assert "Default: all schedulable GPU nodes." in benchmark_help
-    assert "Default: no timeout; the run continues until completion or user cancellation." in (
-        benchmark_help
-    )
-    assert "Default: 300. On 1-GPU runs, below-threshold bandwidth" in benchmark_help
-    assert "reported as a comment when NCCL completes" in benchmark_help
+    assert "K8s defaults to the active catalog cap" in benchmark_help
+    assert "Slurm defaults to all schedulable GPU nodes." in benchmark_help
+    assert "K8s defaults to the active catalog timeout" in benchmark_help
+    assert "Slurm defaults to none, until completion or cancellation." in benchmark_help
+    assert "Default: 300. On one-GPU-per-node shapes" in benchmark_help
+    assert "a comment when NCCL completes" in benchmark_help
     assert (
         "nebius-cxcli acceptance-test benchmark <config.yaml> --target mk8s-prod "
         "--suite k8s-nccl --max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
@@ -7837,12 +7507,17 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
 def test_deploy_command_prints_ssh_jumphost_access_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "render": {"module_sources": []},
+    }
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
     monkeypatch.setattr(
         cli,
@@ -7871,12 +7546,13 @@ def test_deploy_command_prints_ssh_jumphost_access_hint(
 def test_deploy_command_prints_wireguard_access_commands(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
     monkeypatch.setattr(
         cli,
@@ -7911,12 +7587,13 @@ def test_deploy_command_prints_wireguard_access_commands(
 def test_deploy_command_prints_wireguard_generation_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
     monkeypatch.setattr(
         cli,
@@ -7978,14 +7655,15 @@ def test_deploy_footer_styles_copy_paste_commands_not_labels(
 def test_deploy_command_passes_one_run_validation_skip_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
         cli,
-        "_deploy_generated_artifacts",
+        "deploy_rendered_bundle",
         lambda config, paths, loaded_manifest, **kwargs: captured.update(
             {
                 "config": config,
@@ -8009,8 +7687,8 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["skip_validations"] is False
-    assert captured["skip_validation_kinds"] == {
+    assert captured["options"].skip_validations is False
+    assert captured["options"].skip_validation_kinds == {
         "mk8s_gpu_visibility",
         "mk8s_observability_ingestion",
     }
@@ -8020,11 +7698,11 @@ def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
 
     result = runner.invoke(
@@ -8045,11 +7723,11 @@ def test_deploy_command_rejects_legacy_cuda_smoke_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
 
     result = runner.invoke(
@@ -8070,11 +7748,11 @@ def test_deploy_command_rejects_benchmark_nccl_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
 
     result = runner.invoke(
@@ -8158,11 +7836,11 @@ def test_deploy_command_rejects_required_cluster_smoke_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
 
     result = runner.invoke(
@@ -8182,8 +7860,9 @@ def test_deploy_command_rejects_required_cluster_smoke_skip_value(
 def test_deploy_command_accepts_config_yaml_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
     captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
@@ -8192,7 +7871,7 @@ def test_deploy_command_accepts_config_yaml_target(
 
     monkeypatch.setattr(cli, "_load_deploy_context", _fake_load)
     monkeypatch.setattr(
-        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+        cli, "deploy_rendered_bundle", lambda *args, **kwargs: cli.DeployRunSummary()
     )
 
     result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
@@ -8233,7 +7912,7 @@ def test_destroy_command_passes_auto_auth_flag(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(cli, "_load_destroy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(cli, "_confirm_generated_destroy", lambda *args, **kwargs: True)
@@ -8272,7 +7951,7 @@ def test_destroy_command_accepts_config_yaml_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
     captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
@@ -8317,8 +7996,8 @@ def test_destroy_command_confirmation_targets_infra_only_when_no_apps(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    config = {"infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]}}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    config = {"infra": {"components": [{"id": "vm", "enabled": True, "inputs": {}}]}}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli,
@@ -8357,7 +8036,8 @@ def test_destroy_command_confirmation_deletes_apps_before_cluster_destroy(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
         },
@@ -8376,19 +8056,9 @@ def test_destroy_command_confirmation_deletes_apps_before_cluster_destroy(
 
     result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path)])
 
-    assert result.exit_code == 0, result.output
-    assert "No changes applied." in _plain_output(result.output)
-    assert (
-        captured["prompt_text"]
-        == "Continue and destroy all rendered app and infra resources for this project?"
-    )
-    assert captured["warning_text"] == (
-        "Destroy will remove all rendered project resources represented by the generated "
-        "manifest by deleting rendered app resources from the handed-off MK8s target first "
-        "so Kubernetes finalizers and CSI cleanup can run, then running Terraform destroy "
-        f"against the rendered infra bundle under {fake_paths.infra_dir}. This generated bundle "
-        "still destroys the handed-off MK8s cluster directly after app teardown."
-    )
+    assert result.exit_code == 1
+    assert "--target CLUSTER_ID" in _plain_output(result.output)
+    assert not captured
 
 
 def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_apps(
@@ -8398,7 +8068,8 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
     captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
     }
 
@@ -8415,27 +8086,27 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
 
     result = runner.invoke(cli.app, ["destroy", str(fake_paths.config_path)])
 
-    assert result.exit_code == 0, result.output
-    assert "No changes applied." in _plain_output(result.output)
-    assert (
-        captured["prompt_text"]
-        == "Continue and delete rendered app resources and destroy only cxcli-owned infra?"
-    )
-    assert captured["warning_text"] == (
-        "Destroy will delete the rendered app resources from the external MK8s target first. "
-        "The existing MK8s cluster and node groups are external to cxcli and will not be "
-        f"destroyed. Any cxcli-managed infra under {fake_paths.infra_dir} is still destroyed "
-        "after app teardown."
-    )
+    assert result.exit_code == 1
+    assert "--target CLUSTER_ID" in _plain_output(result.output)
+    assert not captured
 
 
 def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_validation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s(charts=[{"id": "gateway-helm", "enabled": True}])
     calls: list[tuple[Any, ...]] = []
+    report = _compatibility_output_report()
+    monkeypatch.setattr(
+        cli,
+        "admit_compatibility",
+        lambda config, paths, frozen, *, terraform_validated: (
+            calls.append(("admission", paths, frozen, terraform_validated)) or report
+        ),
+    )
 
     monkeypatch.setattr(
         cli,
@@ -8507,12 +8178,19 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
         ),
         ("validate", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, False),
         ("flux", fake_paths, "deploy", {"render": {"module_sources": []}}),
+        ("admission", fake_paths, {}, True),
     ]
+    output = capsys.readouterr()
+    _assert_compatibility_details_hidden(output.out + output.err)
+    assert (
+        json.loads((fake_paths.reports_dir / "compatibility-admission.json").read_text()) == report
+    )
 
 
 def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s()
@@ -8592,6 +8270,7 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
 def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s()
@@ -8810,6 +8489,7 @@ def test_mysterybox_runtime_payload_values_preflight_skips_recorded_versions() -
 def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _mysterybox_first_deploy_config()
@@ -8842,6 +8522,7 @@ def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
 def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _mysterybox_first_deploy_config()
@@ -8941,6 +8622,7 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
 def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     rendered_messages: list[str] = []
@@ -9312,10 +8994,14 @@ def test_validate_generated_mk8s_resource_name_preflight_passes_state_managed_na
     }
 
 
+@pytest.mark.parametrize("skip_apply", [False, True])
+@pytest.mark.parametrize("publish_reports", [False, True])
 def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, skip_apply: bool, publish_reports: bool
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
+    public_paths = _fake_paths(tmp_path / "public workspace") if publish_reports else None
     config = {
         "infra": {"components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]},
@@ -9327,6 +9013,11 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
         }
     }
     calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        cli,
+        "_refresh_mysterybox_eso_flux_after_terraform",
+        lambda *a: calls.append(("refresh_outputs",)),
+    )
 
     monkeypatch.setattr(
         cli,
@@ -9345,7 +9036,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
             calls.append(
                 (
                     "kube_env",
@@ -9356,7 +9047,11 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": "/tmp/kubeconfig"}
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -9390,28 +9085,51 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
         fake_paths,
         manifest,
         skip_validations=False,
+        skip_terraform_apply=skip_apply,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
+        report_paths=public_paths,
     )
 
     assert calls == [
         ("preflight", config, fake_paths, manifest),
-        ("apply_with_status", config, fake_paths, False, False),
+        *([] if skip_apply else [("apply_with_status", config, fake_paths, False, False)]),
+        ("refresh_outputs",),
         ("inventory", config, fake_paths),
         (
             "kube_env",
             config,
             fake_paths,
             _mk8s_target(fake_paths),
-            True,
-            True,
+            False,
+            False,
         ),
-        ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
-        ("flux", _target_paths(fake_paths), {"KUBECONFIG": "/tmp/kubeconfig"}),
+        (
+            "cluster_status",
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            },
+        ),
+        (
+            "flux",
+            _target_paths(fake_paths),
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            },
+        ),
         (
             "warn_bootstrap",
             config,
-            _target_paths(fake_paths),
-            {"KUBECONFIG": "/tmp/kubeconfig"},
+            public_paths or _target_paths(fake_paths),
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            },
             "mk8s",
         ),
     ]
@@ -9420,6 +9138,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
 def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
     manifest = {
@@ -9446,8 +9165,13 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
-            calls.append(("kube_env", target)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
+            calls.append(("kube_env", target))
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -9484,6 +9208,7 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -9491,10 +9216,32 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
     assert calls[:3] == [
         ("preflight", config, fake_paths, manifest),
         ("inventory", config, fake_paths),
-        ("kube_env", _external_mk8s_target(fake_paths)),
+        (
+            "kube_env",
+            {
+                key: value
+                for key, value in _external_mk8s_target(fake_paths).items()
+                if key != "kube_context"
+            },
+        ),
     ]
-    assert ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
-    assert ("flux", _target_paths(fake_paths), {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert (
+        "cluster_status",
+        {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
+    ) in calls
+    assert (
+        "flux",
+        _target_paths(fake_paths),
+        {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
+    ) in calls
     assert any("skipping Terraform apply" in item for item in messages)
 
 
@@ -9624,6 +9371,7 @@ def test_collect_grafana_status_after_flux_returns_pending_status_after_timeout(
 def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
@@ -9651,7 +9399,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
             calls.append(
                 (
                     "kube_env",
@@ -9662,7 +9410,11 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": "/tmp/kubeconfig"}
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -9696,6 +9448,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -9708,15 +9461,16 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
             config,
             fake_paths,
             _mk8s_target(fake_paths),
-            True,
-            True,
+            False,
+            False,
         ),
     ]
 
 
-def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes_all_kubeconfigs(
+def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_uses_temporary_kubeconfigs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
@@ -9747,7 +9501,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
             calls.append(
                 (
                     "kube_env",
@@ -9758,7 +9512,11 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": "/tmp/kubeconfig"}
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -9785,6 +9543,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -9797,7 +9556,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
             config,
             fake_paths,
             _mk8s_target(fake_paths),
-            True,
+            False,
             False,
         ),
         (
@@ -9805,7 +9564,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
             config,
             fake_paths,
             _mk8s_target(fake_paths, target_ref="mk8s-2"),
-            True,
+            False,
             False,
         ),
     ]
@@ -9814,6 +9573,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
 def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s(
         charts=[
@@ -9851,7 +9611,7 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
             calls.append(
                 (
                     "kube_env",
@@ -9860,7 +9620,11 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig"}
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
@@ -9884,6 +9648,7 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -9891,24 +9656,32 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
     assert (
         "kube_env",
         _mk8s_target(fake_paths, target_ref="cluster1"),
-        True,
+        False,
         False,
     ) in calls
     assert (
         "kube_env",
         _mk8s_target(fake_paths, target_ref="cluster2"),
-        True,
+        False,
         False,
     ) in calls
     assert (
         "flux",
         flux_target_dir(fake_paths, "cluster1"),
-        {"KUBECONFIG": "/tmp/cluster1.kubeconfig"},
+        {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/cluster1.kubeconfig",
+        },
     ) in calls
     assert (
         "flux",
         flux_target_dir(fake_paths, "cluster2"),
-        {"KUBECONFIG": "/tmp/cluster2.kubeconfig"},
+        {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/cluster2.kubeconfig",
+        },
     ) in calls
 
 
@@ -9961,6 +9734,7 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
 def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
@@ -9991,7 +9765,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True, **_kwargs: (
             calls.append(
                 (
                     "kube_env",
@@ -10002,7 +9776,11 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": "/tmp/kubeconfig"}
+            or {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -10035,6 +9813,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -10045,10 +9824,17 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             config,
             fake_paths,
             _mk8s_target(fake_paths),
-            True,
-            True,
+            False,
+            False,
         ),
-        ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}),
+        (
+            "cluster_status",
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            },
+        ),
         (
             "gpu_validations",
             [
@@ -10060,7 +9846,11 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                 }
             ],
             fake_paths.reports_dir,
-            {"KUBECONFIG": "/tmp/kubeconfig"},
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/kubeconfig",
+            },
         ),
         ("inventory", config, fake_paths),
     ]
@@ -10069,6 +9859,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
 def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s(
         charts=[
@@ -10095,6 +9886,10 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         }
     }
     calls: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        "nebius_cxcli.grafana_database_runtime.preflight_grafana_database",
+        lambda *_args, **_kwargs: calls.append(("database_admission", None)),
+    )
 
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
@@ -10108,7 +9903,11 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(
@@ -10150,7 +9949,11 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         emit=None,
     ) -> list[Path]:
         assert validations == [cluster_smoke_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        }
         calls.append(("validation", validations))
         return [reports_dir / "cluster-inventory-report.json"]
 
@@ -10161,10 +9964,12 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
     assert calls == [
+        ("database_admission", None),
         ("validation", [cluster_smoke_validation]),
         ("flux", _target_paths(fake_paths)),
     ]
@@ -10196,7 +10001,11 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
-    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "render": {"module_sources": []},
+    }
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
     with pytest.raises(
@@ -10215,6 +10024,7 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
 def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
@@ -10248,7 +10058,11 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
@@ -10262,7 +10076,11 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     ) -> list[Path]:
         assert validations == manifest["deploy"]["validations"]
         assert reports_dir == fake_paths.reports_dir
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        }
         assert emit is not None
         reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
@@ -10319,6 +10137,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -10335,6 +10154,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
 def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     cluster1_validation = {
@@ -10368,7 +10188,9 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         cli,
         "_prepare_cluster_handoff_kube_env",
         lambda config, paths, *, stack, target=None, **_kwargs: {
-            "KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig"
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig",
         },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
@@ -10408,12 +10230,27 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
     assert validation_calls == [
-        ([cluster1_validation], {"KUBECONFIG": "/tmp/cluster1.kubeconfig"}),
-        ([cluster2_validation], {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}),
+        (
+            [cluster1_validation],
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/cluster1.kubeconfig",
+            },
+        ),
+        (
+            [cluster2_validation],
+            {
+                cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+                cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+                "KUBECONFIG": "/tmp/cluster2.kubeconfig",
+            },
+        ),
     ]
     markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "GPU visibility probe (cluster1)" in markdown
@@ -10423,6 +10260,7 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
 def test_deploy_generated_artifacts_target_report_excludes_unselected_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     cluster1_validation = {
@@ -10456,7 +10294,11 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/cluster2.kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/cluster2.kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
@@ -10469,7 +10311,11 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         emit=None,
     ) -> list[Path]:
         assert validations == [cluster2_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/cluster2.kubeconfig",
+        }
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = reports_dir / "deploy-gpu-visibility-report-cluster2.json"
         report_path.write_text(
@@ -10510,6 +10356,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
         requested_target_ref="cluster2",
     )
@@ -10524,6 +10371,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
 def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_skipping_optional(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     optional_validation = {
@@ -10553,7 +10401,11 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
@@ -10571,7 +10423,11 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         emit=None,
     ) -> list[Path]:
         assert validations == [required_validation]
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        }
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_path = reports_dir / "mysterybox-eso-connectivity-report-mk8s.json"
         report_path.write_text(
@@ -10619,6 +10475,7 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         fake_paths,
         manifest,
         skip_validations=True,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -10635,6 +10492,7 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
 def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_is_not_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {
@@ -10660,7 +10518,11 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: False)
@@ -10673,7 +10535,11 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         emit=None,
     ) -> list[Path]:
         assert reports_dir == fake_paths.reports_dir
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        }
         assert emit is not None
         reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/1: GPU visibility probe.")
@@ -10714,6 +10580,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         fake_paths,
         manifest,
         skip_validations=False,
+        deployment_lease=SimpleNamespace(assert_held=lambda: None),
         skip_validation_kinds=set(),
     )
 
@@ -10728,10 +10595,15 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     ]
 
 
+@pytest.mark.parametrize(
+    "durable,publication_failure", [(False, False), (True, False), (True, True)]
+)
 def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, durable: bool, publication_failure: bool
 ) -> None:
+    monkeypatch.setattr(cli, "_read_kube_system_namespace_uid", lambda **kw: "unit-uid")
     fake_paths = _fake_paths(tmp_path)
+    output_paths = _fake_paths(tmp_path / "permanent") if durable else fake_paths
     config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
@@ -10760,7 +10632,11 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     monkeypatch.setattr(
         cli,
         "_prepare_cluster_handoff_kube_env",
-        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+        lambda *_args, **_kwargs: {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
@@ -10772,7 +10648,11 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
-        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        assert extra_env == {
+            cli.GRAFANA_TARGET_CLUSTER_ID_ENV: "unit-cluster",
+            cli.GRAFANA_TARGET_KUBE_CONTEXT_ENV: "unit-context",
+            "KUBECONFIG": "/tmp/kubeconfig",
+        }
         assert emit is not None
         reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
@@ -10802,16 +10682,28 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
 
+    if publication_failure:
+        from nebius_cxcli import deployment_reports
+
+        def fail_publication(*args, **kwargs):
+            raise OSError("write failed")
+
+        monkeypatch.setattr(deployment_reports, "publish_deployment_reports", fail_publication)
     with pytest.raises(RuntimeError, match="GPU stack readiness check failed"):
         cli._deploy_generated_artifacts(
             config,
             fake_paths,
             manifest,
             skip_validations=False,
+            deployment_lease=SimpleNamespace(assert_held=lambda: None),
             skip_validation_kinds=set(),
+            report_paths=output_paths if durable else None,
         )
 
-    markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
+    if publication_failure:
+        assert "could not be published" in printed[-1]
+        return
+    markdown = (output_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "- Overall status: `FAIL`" in markdown
     assert "### GPU stack readiness" in markdown
     assert "### GPU visibility probe" in markdown
@@ -10827,9 +10719,9 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
         "No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
-        f"  Generated bundle: {fake_paths.generated_dir}",
-        f"  Validation detail reports: {fake_paths.reports_dir}",
-        f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
+        f"  Generated bundle: {output_paths.generated_dir}",
+        f"  Validation detail reports: {output_paths.reports_dir}",
+        f"  Deploy report: {output_paths.reports_dir / 'deploy-report.md'}",
         "[red]Deploy failed[/red]",
     ]
 
@@ -10879,87 +10771,23 @@ def test_raise_on_live_quota_issues_fails_only_on_confirmed_insufficiency(
         cli._raise_on_live_quota_issues("cfg", phase="deploy")
 
 
-def test_destroy_generated_artifacts_destroys_flux_before_terraform(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
+def test_destroy_generated_artifacts_destroys_flux_before_non_mk8s_terraform(tmp_path, monkeypatch):
+    paths = _fake_paths(tmp_path)
     config = {
-        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "infra": {"components": [{"id": "vm", "enabled": True}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
-    manifest = {
-        "schema": "nebius-cxcli-generated/v1",
-        "deploy": {
-            "status_watchers": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "kind": "nebius.mk8s.cluster",
-                    "parent_id": "project-456",
-                    "resource_name": "cluster-a",
-                }
-            ]
-        },
-    }
-    calls: list[tuple[Any, ...]] = []
-
+    calls = []
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *a: calls.append("backend"))
+    monkeypatch.setattr(cli, "_destroy_rendered_flux_bundle", lambda *a, **k: calls.append("apps"))
     monkeypatch.setattr(
-        cli,
-        "_ensure_terraform_backend_ready",
-        lambda current_config: calls.append(("backend", current_config)),
+        cli, "_run_terraform_destroy_with_recovery", lambda *a, **k: calls.append("terraform")
     )
-    monkeypatch.setattr(
-        cli,
-        "_destroy_rendered_flux_bundle",
-        lambda current_config, paths, loaded_manifest, **kwargs: calls.append(
-            ("destroy_flux", current_config, paths, loaded_manifest, kwargs)
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: calls.append(
-            (
-                "destroy_tf",
-                current_config,
-                paths,
-                yes,
-                initialize,
-                status_watchers,
-            )
-        ),
-    )
-
-    cli._destroy_generated_artifacts(
-        config,
-        fake_paths,
-        manifest,
-        yes=True,
-    )
-
-    assert calls == [
-        ("backend", config),
-        ("destroy_flux", config, fake_paths, manifest, {"all_targets": True}),
-        (
-            "destroy_tf",
-            config,
-            fake_paths,
-            True,
-            True,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "kind": "nebius.mk8s.cluster",
-                    "parent_id": "project-456",
-                    "resource_name": "cluster-a",
-                }
-            ],
-        ),
-    ]
+    cli._destroy_generated_artifacts(config, paths, {}, yes=True)
+    assert calls == ["backend", "apps", "terraform"]
 
 
-def test_destroy_rendered_flux_bundle_deletes_post_flux_before_flux(
+def test_destroy_rendered_flux_bundle_rejects_missing_target_before_deletion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -10982,16 +10810,12 @@ def test_destroy_rendered_flux_bundle_deletes_post_flux_before_flux(
         lambda paths, *, env: calls.append(("namespaces", paths)),
     )
 
-    cli._destroy_rendered_flux_bundle(config, fake_paths, {})
-
-    assert calls == [
-        ("post_flux", fake_paths),
-        ("flux", fake_paths),
-        ("namespaces", fake_paths),
-    ]
+    with pytest.raises(RuntimeError, match="target"):
+        cli._destroy_rendered_flux_bundle(config, fake_paths, {})
+    assert calls == []
 
 
-def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
+def test_destroy_rendered_flux_bundle_deletes_all_target_flux(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -11000,7 +10824,8 @@ def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {
             "targets": [
                 _mk8s_target(fake_paths, target_ref="cluster-a"),
@@ -11052,11 +10877,11 @@ def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
     )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
-    cli._destroy_generated_artifacts(
+    cli._destroy_rendered_flux_bundle(
         config,
         fake_paths,
         manifest,
-        yes=True,
+        all_targets=True,
     )
 
     assert calls == [
@@ -11066,7 +10891,6 @@ def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
         ("post_flux", "cluster-b"),
         ("flux", "cluster-b"),
         ("namespaces", "cluster-b"),
-        ("terraform", None),
     ]
 
 
@@ -11076,7 +10900,8 @@ def test_destroy_rendered_flux_bundle_attempts_remaining_targets_after_target_fa
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {
             "targets": [
                 _external_mk8s_target(fake_paths, target_ref="external-a"),
@@ -11196,7 +11021,7 @@ def test_post_flux_adapter_configmap_readback_requires_exact_content(
         },
     }
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
@@ -11295,57 +11120,31 @@ def test_delete_post_flux_manifest_removes_webhooks_before_namespaces(
     ]
 
 
-def test_destroy_generated_artifacts_external_target_skips_terraform_destroy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
-    manifest = {
-        "schema": "nebius-cxcli-generated/v1",
-        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
-    }
-    calls: list[tuple[Any, ...]] = []
-    messages: list[str] = []
-
-    monkeypatch.setattr(
-        cli,
+@pytest.mark.parametrize("external", [False, True])
+def test_destroy_generated_artifacts_rejects_every_mk8s_target(tmp_path, monkeypatch, external):
+    paths = _fake_paths(tmp_path)
+    target = _external_mk8s_target(paths) if external else _mk8s_target(paths)
+    for name in (
+        "_ensure_terraform_backend_ready",
         "_destroy_rendered_flux_bundle",
-        lambda current_config, paths, loaded_manifest, **kwargs: calls.append(
-            ("destroy_flux", current_config, paths, loaded_manifest, kwargs)
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
         "_run_terraform_destroy_with_recovery",
-        lambda *_args, **_kwargs: calls.append(("destroy_tf",)),
-    )
-    monkeypatch.setattr(
-        cli.console,
-        "print",
-        lambda message, *args, **kwargs: messages.append(str(message)),
-    )
-
-    cli._destroy_generated_artifacts(
-        config,
-        fake_paths,
-        manifest,
-        yes=True,
-    )
-
-    assert calls == [("destroy_flux", config, fake_paths, manifest, {"all_targets": True})]
-    assert any(
-        "External MK8s cluster and node groups were not destroyed" in item for item in messages
-    )
+    ):
+        monkeypatch.setattr(
+            cli, name, lambda *a, **k: pytest.fail("MK8s must use the SDK workflow")
+        )
+    with pytest.raises(ValueError, match="--target CLUSTER_ID"):
+        cli._destroy_generated_artifacts({}, paths, {"deploy": {"targets": [target]}}, yes=True)
 
 
-def test_destroy_generated_artifacts_external_target_flux_failure_is_fatal(
+def test_destroy_generated_artifacts_apps_only_failure_is_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
-        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "deploy": {"targets": []},
     }
     monkeypatch.setattr(
         cli,
@@ -11354,7 +11153,7 @@ def test_destroy_generated_artifacts_external_target_flux_failure_is_fatal(
     )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
-    with pytest.raises(RuntimeError, match="external MK8s target"):
+    with pytest.raises(RuntimeError, match="Rendered app teardown failed"):
         cli._destroy_generated_artifacts(
             config,
             fake_paths,
@@ -11368,10 +11167,14 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = {
-        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "infra": {"components": [{"id": "vm", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
-    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "render": {"module_sources": []},
+    }
     captured: dict[str, Any] = {}
     messages: list[str] = []
 
@@ -11410,84 +11213,6 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
         )
 
     assert "destroy" not in captured
-    assert messages == []
-
-
-def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_destroyed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    config = {
-        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
-        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
-    }
-    manifest = {
-        "schema": "nebius-cxcli-generated/v1",
-        "deploy": {"targets": [_mk8s_target(fake_paths)]},
-    }
-    captured: dict[str, Any] = {}
-    calls: list[str] = []
-    messages: list[str] = []
-
-    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        cli,
-        "_destroy_rendered_flux_bundle",
-        lambda current_config, paths, loaded_manifest, **kwargs: (
-            calls.append("destroy_flux"),
-            captured.setdefault(
-                "destroy_flux",
-                {
-                    "config": current_config,
-                    "paths": paths,
-                    "manifest": loaded_manifest,
-                    "kwargs": kwargs,
-                },
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_destroy_with_recovery",
-        lambda current_config, paths, *, yes, initialize=True, status_watchers=None: (
-            calls.append("destroy_terraform"),
-            captured.setdefault(
-                "destroy",
-                {
-                    "config": current_config,
-                    "paths": paths,
-                    "yes": yes,
-                    "initialize": initialize,
-                    "status_watchers": status_watchers,
-                },
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        cli.console, "print", lambda message, *args, **kwargs: messages.append(str(message))
-    )
-
-    cli._destroy_generated_artifacts(
-        config,
-        fake_paths,
-        manifest,
-        yes=True,
-    )
-
-    assert captured["destroy"] == {
-        "config": config,
-        "paths": fake_paths,
-        "yes": True,
-        "initialize": True,
-        "status_watchers": None,
-    }
-    assert captured["destroy_flux"] == {
-        "config": config,
-        "paths": fake_paths,
-        "manifest": manifest,
-        "kwargs": {"all_targets": True},
-    }
-    assert calls == ["destroy_flux", "destroy_terraform"]
     assert messages == []
 
 
@@ -11550,7 +11275,7 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
         calls.append(("run", tuple(cmd), env, capture_output, text, timeout, check))
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     class _FakeStatus:
@@ -11575,7 +11300,15 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     assert any(
         call[0] == "run"
         and call[1]
-        == ("kubectl", "--cache-dir", str(cache_dir), "apply", "-k", str(fake_paths.flux_dir))
+        == (
+            "kubectl",
+            "--cache-dir",
+            str(cache_dir),
+            "apply",
+            "--server-side",
+            "-k",
+            str(fake_paths.flux_dir),
+        )
         for call in calls
     )
     assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
@@ -11650,7 +11383,7 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
         calls.append(("run", tuple(cmd), env, capture_output, text, timeout, check))
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     class _FakeStatus:
@@ -11674,7 +11407,15 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     assert any(
         call[0] == "run"
         and call[1]
-        == ("kubectl", "--cache-dir", str(cache_dir), "apply", "-k", str(fake_paths.flux_dir))
+        == (
+            "kubectl",
+            "--cache-dir",
+            str(cache_dir),
+            "apply",
+            "--server-side",
+            "-k",
+            str(fake_paths.flux_dir),
+        )
         for call in calls
     )
     assert ("wait_flux_apis", fake_paths, {"KUBECONFIG": "/tmp/kubeconfig"}, cache_dir) in calls
@@ -11732,7 +11473,7 @@ def test_apply_rendered_flux_retries_transient_kubectl_apply_failure(
                 )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
@@ -11754,8 +11495,15 @@ def test_apply_rendered_flux_retries_transient_kubectl_apply_failure(
     assert wait_calls == ["apis", "flux"]
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Error from server (Forbidden): helmreleases is forbidden",
+        'Apply failed with 1 conflict: conflict with "another-manager": .data.dashboard',
+    ],
+)
 def test_apply_rendered_flux_does_not_retry_non_transient_kubectl_apply_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: str
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
@@ -11787,12 +11535,12 @@ def test_apply_rendered_flux_does_not_retry_non_transient_kubectl_apply_failure(
             apply_calls.append(tuple(cmd))
             return SimpleNamespace(
                 returncode=1,
-                stderr="Error from server (Forbidden): helmreleases is forbidden",
+                stderr=error,
                 stdout="",
             )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
@@ -11812,7 +11560,10 @@ def test_apply_rendered_flux_does_not_retry_non_transient_kubectl_apply_failure(
     assert len(apply_calls) == 1
     assert sleeps == []
     assert wait_calls == ["apis"]
-    assert "Forbidden" in str(excinfo.value.stderr)
+    assert str(excinfo.value.stderr) == error
+    assert "--server-side" in apply_calls[0]
+    assert not any(arg.startswith("--field-manager") for arg in apply_calls[0])
+    assert "--force-conflicts" not in apply_calls[0]
 
 
 def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
@@ -11859,7 +11610,7 @@ def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
         calls.append(("run", tuple(cmd), timeout))
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     class _FakeStatus:
@@ -11956,7 +11707,7 @@ def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_re
             )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
 
     cli._apply_post_flux_manifest(manifest_path, env={})
 
@@ -12102,7 +11853,7 @@ def test_apply_post_flux_manifest_deletes_hook_resources_before_creation(
             )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
 
     cli._apply_post_flux_manifest(manifest_path, env={})
 
@@ -12170,7 +11921,7 @@ def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
             return SimpleNamespace(returncode=0, stderr="", stdout=value)
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
 
     cli._apply_post_flux_manifest(manifest_path, env={})
 
@@ -12211,7 +11962,7 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     sleeps: list[float] = []
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     cli._run_post_flux_kubectl(
@@ -12250,7 +12001,7 @@ def test_run_post_flux_kubectl_retries_etcd_leader_timeout(
             )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
 
     cli._run_post_flux_kubectl(
@@ -12286,7 +12037,7 @@ def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
     monkeypatch.setattr(cli, "wait_for_flux_resource_apis", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "wait_for_rendered_flux_resources", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda cmd, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
     )
@@ -12346,7 +12097,7 @@ def test_apply_rendered_flux_private_handoff_reports_network_guidance(
         lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
     )
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda cmd, **kwargs: SimpleNamespace(
             returncode=1,
@@ -12440,7 +12191,7 @@ def test_apply_rendered_flux_reinstalls_when_flux_crds_are_missing(
         lambda paths, *, extra_env=None, emit=None: calls.append(("wait_flux", paths, extra_env)),
     )
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda cmd, **kwargs: (
             calls.append(("run", tuple(cmd))),
@@ -12579,11 +12330,12 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
 
     with pytest.raises(
         RuntimeError,
-        match="kubectl -n demo describe helmrelease\\.helm\\.toolkit\\.fluxcd\\.io/demo",
+        match="kubectl --context selected -n demo describe helmrelease\\.helm\\.toolkit\\.fluxcd\\.io/demo",
     ):
         flux_ops.wait_for_rendered_flux_resources(
             cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
             timeout_seconds=0,
+            extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "selected"},
         )
 
 
@@ -12892,7 +12644,7 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
     assert "Succeeded" in plain
 
 
-def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pending(
+def test_wait_for_rendered_flux_resources_accepts_statusless_oci_repository(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     flux_dir = tmp_path / "generated" / "flux"
@@ -12942,7 +12694,14 @@ def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pendi
 
     def _fake_get_target(target, *, env, timeout_seconds=20):
         if target.kind == "HelmRepository":
-            return ({}, "")
+            return (
+                {
+                    "kind": "HelmRepository",
+                    "metadata": {"name": "demo", "namespace": "flux-system"},
+                    "spec": {"type": "oci"},
+                },
+                "",
+            )
         return (
             {
                 "status": {
@@ -12965,14 +12724,12 @@ def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pendi
     plain = "\n".join(_plain_output(item) for item in emissions)
     assert "HelmRepository" in plain
     assert "flux-system/demo" in plain
-    assert "controller has not published a Ready condition yet" in plain
+    assert "OCI data object; no Ready status" in plain
     assert "HelmRelease" in plain
     assert "demo/demo" in plain
     assert "InstallSucceeded" in plain
-    assert "Rendered HelmRelease workloads are Ready" in plain
-    assert "Skipping the remaining wait for Flux source objects" in plain
-    assert "kubectl get helmreleases.helm.toolkit.fluxcd.io -A" in plain
-    assert "NOTE:" in plain
+    assert "Skipping the remaining wait" not in plain
+    assert "NOTE:" not in plain
 
 
 def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
@@ -13027,7 +12784,7 @@ def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
             ),
         )
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
 
     flux_ops.wait_for_rendered_flux_resources(
@@ -13863,7 +13620,8 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
         encoding="utf-8",
     )
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "runtime_config": {
             **json.loads(json.dumps(source_payload)),
             "infra": {
@@ -13974,7 +13732,8 @@ def test_sync_mysterybox_primary_version_ids_rejects_concurrent_bundle_edits(
         }
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "runtime_config": json.loads(json.dumps(source_payload)),
         "render": {
             "terraform_tfvars": {
@@ -14083,7 +13842,11 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
+        "render": {"module_sources": []},
+    }
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14170,7 +13933,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14247,7 +14010,7 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14297,7 +14060,7 @@ def test_terraform_destroy_command_confirmation_targets_infra_dir(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14339,11 +14102,6 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
         "_unlock_terraform_state_lock",
         lambda config, paths, *, force: calls.append(("unlock", force)) or lock_info,
     )
-    monkeypatch.setattr(
-        cli,
-        "_attempt_mk8s_node_group_destroy_recovery",
-        lambda *, status_watchers, yes: calls.append(("cleanup", yes, status_watchers)) or False,
-    )
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
 
     cli._run_terraform_destroy_with_recovery(
@@ -14383,91 +14141,24 @@ def test_terraform_unlock_non_force_rejects_blank_lock_owner(
         )
 
 
-def test_run_terraform_destroy_with_recovery_deletes_stuck_mk8s_node_group_and_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[Any, ...]] = []
+def test_terraform_destroy_failure_never_starts_alternate_cloud_deletion(tmp_path, monkeypatch):
+    calls = []
 
-    def _fake_destroy_with_status(
-        config: object, paths: object, *, initialize: bool = True, status_watchers=None
-    ) -> None:
-        calls.append(("destroy", initialize, status_watchers))
-        if len([call for call in calls if call[0] == "destroy"]) == 1:
-            raise RuntimeError("Terraform destroy timed out")
+    def fail(*args, **kwargs):
+        calls.append("terraform")
+        raise RuntimeError("provider failure")
 
-    monkeypatch.setattr(cli, "_run_terraform_destroy_with_status", _fake_destroy_with_status)
-    monkeypatch.setattr(
-        cli,
-        "_attempt_mk8s_node_group_destroy_recovery",
-        lambda *, status_watchers, yes: calls.append(("cleanup", yes, status_watchers)) or True,
-    )
-    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
-
-    cli._run_terraform_destroy_with_recovery(
-        "cfg",
-        fake_paths,
-        yes=True,
-        initialize=True,
-        status_watchers=[
-            {
-                "component_id": "mk8s",
-                "instance_id": "mk8s",
-                "kind": "nebius.mk8s.cluster",
-                "parent_id": "project-456",
-                "resource_name": "cluster-a",
-            }
-        ],
-    )
-
-    assert calls == [
-        (
-            "destroy",
-            True,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "kind": "nebius.mk8s.cluster",
-                    "parent_id": "project-456",
-                    "resource_name": "cluster-a",
-                }
-            ],
-        ),
-        (
-            "cleanup",
-            True,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "kind": "nebius.mk8s.cluster",
-                    "parent_id": "project-456",
-                    "resource_name": "cluster-a",
-                }
-            ],
-        ),
-        (
-            "destroy",
-            True,
-            [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "kind": "nebius.mk8s.cluster",
-                    "parent_id": "project-456",
-                    "resource_name": "cluster-a",
-                }
-            ],
-        ),
-    ]
+    monkeypatch.setattr(cli, "_run_terraform_destroy_with_status", fail)
+    with pytest.raises(RuntimeError, match="provider failure"):
+        cli._run_terraform_destroy_with_recovery({}, _fake_paths(tmp_path), yes=True)
+    assert calls == ["terraform"]
 
 
 def test_terraform_unlock_command_reports_when_no_lock_is_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14495,7 +14186,7 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
     lock_info = SimpleNamespace(
         lock_id="lock-123",
         who="rezab@host",
@@ -14525,12 +14216,12 @@ def test_terraform_unlock_command_reports_cleared_lock_metadata(
     assert "owner=rezab@host" in plain
 
 
-def test_flux_bootstrap_command_invokes_flux_ops(
+def test_flux_bootstrap_command_rejects_missing_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1", "deploy": {}}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}, "deploy": {}}
 
     monkeypatch.setattr(
         cli, "_load_generated_flux_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -14554,15 +14245,19 @@ def test_flux_bootstrap_command_invokes_flux_ops(
             "inventory", {"config": config, "paths": paths}
         ),
     )
-    monkeypatch.setattr(cli, "ensure_flux", lambda _paths, *, extra_env=None: "reconciled")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Flux cannot run without a declared target")
+
+    monkeypatch.setattr(cli, "ensure_flux", forbidden)
 
     result = runner.invoke(
         cli.app,
         ["flux", "bootstrap", str(tmp_path / "generated")],
     )
 
-    assert result.exit_code == 0, result.output
-    assert "Flux reconciled" in _plain_output(result.output)
+    assert result.exit_code != 0
+    assert "requires a declared cluster target" in _plain_output(result.output)
     assert captured["auth"] == {
         "config": "cfg",
         "need_terraform": False,
@@ -14829,7 +14524,9 @@ def test_wait_for_flux_namespace_ready_fails_with_targeted_guidance(
     monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(RuntimeError, match="stuck terminating") as excinfo:
-        flux_ops.wait_for_flux_namespace_ready(timeout_seconds=30)
+        flux_ops.wait_for_flux_namespace_ready(
+            timeout_seconds=30, extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "selected"}
+        )
 
     message = str(excinfo.value)
     assert re.search(
@@ -14837,7 +14534,7 @@ def test_wait_for_flux_namespace_ready_fails_with_targeted_guidance(
         message,
     )
     assert re.search(r"\bfinalizers\.fluxcd\.io\b", message)
-    assert "kubectl get namespace flux-system -o yaml" in message
+    assert "kubectl --context selected get namespace flux-system -o yaml" in message
 
 
 def test_install_flux_controllers_waits_for_namespace_before_apply(
@@ -16490,7 +16187,8 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
@@ -16618,9 +16316,37 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     assert captured["post_flux"][1]["KUBECONFIG"] == "/tmp/kubeconfig"
 
 
+def _stub_application_admission_for_effects_test(monkeypatch):
+    # Peer isolation: public admission regressions use native Helm and the real evaluator.
+    @contextmanager
+    def admitted(config, paths, manifest, **kwargs):
+        yield paths, manifest, {"rows": []}
+
+    def observe(_cli, config, paths, manifest, targets, *, stack, kube_envs):
+        for target in targets:
+            kube_envs[target["target_ref"]] = cli._prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                target=target,
+                persist_local_kubeconfig=False,
+                set_current_context=False,
+            )
+        return {}
+
+    monkeypatch.setattr(
+        "nebius_cxcli.application_compatibility.captured_application_execution", admitted
+    )
+    monkeypatch.setattr("nebius_cxcli.application_execution.observe_application_targets", observe)
+    monkeypatch.setattr(
+        "nebius_cxcli.application_execution.validate_observed_applications", lambda *a: {}
+    )
+
+
 def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_application_admission_for_effects_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
         "version": "v1",
@@ -16637,7 +16363,8 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
@@ -16739,14 +16466,14 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
 
     assert result.exit_code == 0, result.output
     assert "Flux applied from" in _plain_output(result.output)
-    assert captured["backend"] == fake_config
+    assert "backend" not in captured
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoff"] == (
         fake_config,
         fake_paths,
         _mk8s_target(fake_paths),
-        True,
-        True,
+        False,
+        False,
     )
     assert captured["apply_flux"] == (target_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
     assert captured["warn_bootstrap"] == (
@@ -16764,9 +16491,10 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     )
 
 
-def test_flux_apply_command_all_targets_persists_contexts_without_switching_current_context(
+def test_flux_apply_command_all_targets_reuses_preflight_contexts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _stub_application_admission_for_effects_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
     fake_config = {
         "version": "v1",
@@ -16788,7 +16516,8 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
         },
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {
             "targets": [
                 _mk8s_target(fake_paths),
@@ -16860,21 +16589,21 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     )
 
     assert result.exit_code == 0, result.output
-    assert captured["backend"] == fake_config
+    assert "backend" not in captured
     assert captured["inventory"] == (fake_config, fake_paths)
     assert captured["handoffs"] == [
         (
             fake_config,
             fake_paths,
             _mk8s_target(fake_paths),
-            True,
+            False,
             False,
         ),
         (
             fake_config,
             fake_paths,
             _mk8s_target(fake_paths, target_ref="mk8s-2"),
-            True,
+            False,
             False,
         ),
     ]
@@ -16923,7 +16652,8 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {
-        "schema": "nebius-cxcli-generated/v1",
+        "schema": "nebius-cxcli-generated/v2",
+        "execution": {"backend": {}},
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     captured: dict[str, Any] = {}
@@ -16967,7 +16697,7 @@ def test_flux_destroy_command_confirmation_targets_flux_dir(
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
 
     monkeypatch.setattr(
         cli,
@@ -17055,7 +16785,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
     grafana_result = runner.invoke(cli.app, ["grafana", "--help"])
     render_result = runner.invoke(cli.app, ["render", "--help"])
-    validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
+    validate_dashboards_result = runner.invoke(cli.app, ["grafana", "validate", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_apply_result = runner.invoke(cli.app, ["terraform", "apply", "--help"])
@@ -17134,8 +16864,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     upgrade_example_config = "~/deployments/tenant-name-example/project-name-example/config.yaml"
 
     assert (
-        "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "acceptance-test, soperator, upgrade, migrate, and bootstrap-ci use config.yaml"
+        "validate, quota-check, quota-request, render, deploy, "
+        "acceptance-test, upgrade, migrate, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
         f"upgrade example: | nebius-cxcli upgrade node-template {upgrade_example_config} "
@@ -17144,25 +16874,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "nebius-cxcli upgrade --help" in top_help
     assert "live nebius quota/capacity assessment" in quota_check_help
     assert "quota allowances to confirm the shortage" in quota_request_help
-    assert "export grafana dashboards through the api or local json" in grafana_help
-    assert "--export-dashboard" in grafana_help
-    assert "--dashboard-json" in grafana_help
-    assert "grafana base url or folder url to export from" in grafana_help
-    assert "dashboard url to export from" not in grafana_help
-    assert "repeat to process multiple files" in grafana_help
-    assert "repeat to attach multiple files" not in grafana_help
-    assert "--attach" in grafana_help
-    assert "examples:" in grafana_help
-    assert "interactive api export" in grafana_help
-    assert "non-interactive api export" in grafana_help
-    assert "api export with catalog attach" in grafana_help
-    assert "local json attach without grafana api credentials" in grafana_help
-    assert "multiple local json files with an explicit catalog" in grafana_help
-    assert (
-        "nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/" in grafana_help
-    )
-    assert "grafana.nebius.dev" not in grafana_help
-    assert "nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json" in grafana_help
+    assert "import, export and validate grafana dashboards" in grafana_help
+    for name in ("import", "export", "validate"):
+        assert name in grafana_help
+    assert "--export-dashboard" not in grafana_help
     assert "separate request surface" in quota_request_help
     assert "confirmed live quota shortages" in quota_request_help
     assert "--all-regions" in quota_check_help
@@ -17172,20 +16887,13 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "prompting only before replacing existing render-owned artifacts unless --force is provided"
         in render_help
     )
-    assert "target cluster instance_id" in validate_dashboards_help
-    assert "explicit kube context" in validate_dashboards_help
+    assert "exact configured cluster target" in validate_dashboards_help
+    assert "--token-env" in validate_dashboards_help
     assert "target_ref" not in validate_dashboards_help
-    assert "generated artifact bundle" in deploy_help
-    assert "does not run `flux bootstrap`" in deploy_help
-    assert "does not create or update github workflows" in deploy_help
-    assert "deploy reconciles every target by default" in deploy_help
-    assert "use `--target <target-id>` to narrow flux/app work" in deploy_help
-    assert "the default all-target behavior" in deploy_help
-    assert "for a single-target run, the refreshed validation summary" in deploy_help
-    assert "include only validations for that selected target" in deploy_help
-    assert "validation pass/fail" in deploy_help
-    assert "copy-paste commands" in deploy_help
-    assert "important generated paths" in deploy_help
+    assert "rendered configuration" in deploy_help
+    assert "--dry-run" in deploy_help
+    assert "coordinated platform changes automatically" in deploy_help
+    assert "--target" in deploy_help
     assert "day-2 lifecycle upgrades from config.yaml" in upgrade_help
     assert "non-soperator target-scoped helm chart upgrades" in upgrade_help
     legacy_scope_label = "V" + "1"
@@ -17252,7 +16960,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 "
         "--to-gpu-stack-preset cuda13.0 --dry-run"
     ) in upgrade_node_template_help
-    assert "omitted --to-version, --to-os, and --to-gpu-stack-preset values keep" in (
+    assert "omitted --to-version defaults to the current control-plane minor" in (
+        upgrade_node_template_help
+    )
+    assert "omitted --to-os and --to-gpu-stack-preset keep the selected live node-group value" in (
         upgrade_node_template_help
     )
     assert "--no-interactive for automation" in upgrade_node_template_help
@@ -17300,11 +17011,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "apps:<chart>@mk8s --to-version <chart-version> --dry-run"
     ) in upgrade_helm_help
     assert "use nebius-cxcli soperator upgrade for soperator chart upgrades" in (upgrade_helm_help)
-    assert "destroy all rendered project resources" in destroy_help
-    assert "destructive inverse of `deploy`" in destroy_help
-    assert "whole rendered project" in destroy_help
+    assert "immutable nebius cluster id" in destroy_help
+    assert "required even for one mk8s cluster" in destroy_help
+    assert "managed and onboarded clusters" in destroy_help
     assert "--yes" in destroy_help
-    assert "refresh the deploy report" in deploy_help
     assert "refresh the deploy report" in tf_apply_help
     assert "terraform destroy" in tf_destroy_help
     assert "--yes" in tf_destroy_help
@@ -17345,15 +17055,14 @@ def test_help_text_maps_commands_to_target_types() -> None:
     )
     assert "discover uses a deployment-scope directory" in output
     assert (
-        "grafana exports dashboard JSON from a Grafana API or local JSON file "
-        "and only edits component_sources.yaml with --attach"
+        "grafana install persists target observability settings and installs Grafana and its backends"
     ) in output
     assert (
-        "validate, validate-dashboards, quota-check, quota-request, render, "
-        "deploy, acceptance-test, soperator, upgrade, migrate, and bootstrap-ci use config.yaml"
+        "validate, quota-check, quota-request, render, "
+        "deploy, acceptance-test, upgrade, migrate, and bootstrap-ci use config.yaml"
     ) in output
     assert (
-        "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
+        "destroy uses config.yaml and --target CLUSTER_ID for one MK8s cluster; projects without MK8s use rendered-resource teardown"
         in output
     )
     assert "email also uses config.yaml and resolves sibling generated/ automatically" in output
@@ -17367,13 +17076,15 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "flux uses generated/flux" in output
     assert "validate-sources accepts optional component_sources.yaml" in output
     assert "auth has no positional path" in output
-    assert "soperator onboard registers existing Nebius MK8s targets in config.yaml" in output
+    assert "soperator create uses a deployments root, discover uses an output directory" in output
+    assert "onboard accepts an existing config/project directory or a deployments root" in output
+    assert "soperator upgrade/status and destroy use config.yaml" in output
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
-    assert "grafana Export or attach Grafana dashboard JSON" in output
+    assert "grafana Install Grafana and manage dashboards" in output
     assert "validate Use CONFIG_YAML" in output
-    assert "validate-dashboards Use CONFIG_YAML" in output
+    assert "validate-dashboards" not in output
     assert "source config" in output
     assert "deployment" in output
     assert "live quota/capacity" in output
@@ -17383,7 +17094,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "assessment for enabled infra components." in output
     assert "quota-request Use CONFIG_YAML" in output
     assert "deploy Use CONFIG_YAML" in output
-    assert "destroy Use CONFIG_YAML" in output
+    assert "destroy Delete one explicitly selected MK8s cluster" in output
 
 
 def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:
@@ -17485,7 +17196,7 @@ def test_flux_apply_command_fails_when_no_enabled_charts_exist(
         lambda _path: (
             fake_config,
             fake_paths,
-            {"schema": "nebius-cxcli-generated/v1", "deploy": {}},
+            {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}, "deploy": {}},
         ),
     )
 
@@ -17510,7 +17221,11 @@ def test_email_command_handles_sent_and_noop(
     monkeypatch.setattr(
         cli,
         "_load_email_context",
-        lambda _path: ("cfg", fake_paths, {"schema": "nebius-cxcli-generated/v1"}),
+        lambda _path: (
+            "cfg",
+            fake_paths,
+            {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}},
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -17760,8 +17475,8 @@ def test_top_level_help_describes_global_component_sources_override() -> None:
     assert "component_sources.yaml" in output
     assert "cwd -> env ->" in output
     assert "--source-profile" in output
-    assert "Defaults" in output
-    assert "to portable." in output
+    normalized = " ".join(output.split())
+    assert "otherwise portable." in normalized
     assert "source.portable" in output
     assert "source.local" in output
 
@@ -18009,7 +17724,7 @@ def test_auth_recreate_forces_profile_rotation(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
-def test_load_context_authenticates_before_normalized_config_write(
+def test_load_context_authenticates_without_normalized_config_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -18041,10 +17756,10 @@ def test_load_context_authenticates_before_normalized_config_write(
     config, paths = cli._load_context(config_path)
 
     assert (config, paths) == (fake_config, fake_paths)
-    assert events[:3] == [
+    assert events == [
         ("load", config_path, False),
         ("auth", fake_config, False),
-        ("load", config_path, True),
+        ("alignment", fake_config, fake_paths),
     ]
 
 
@@ -18052,8 +17767,9 @@ def test_manifest_context_authenticates_before_tfvars_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _stub_compatibility_for_orchestration_test(monkeypatch)
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v2", "execution": {"backend": {}}}
     fake_config = SimpleNamespace()
     events: list[object] = []
 
@@ -19015,7 +18731,7 @@ def test_ensure_mysterybox_eso_credentials_secret_converges_when_missing(
     assert applied[0]["credentials"] == credentials
     monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=1,
@@ -19242,7 +18958,7 @@ def test_kubectl_validate_mysterybox_eso_tls_uses_in_cluster_curl_probe(
         )
 
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
     monkeypatch.setattr(
         cli.console,
         "print",
@@ -19280,7 +18996,7 @@ def test_kubectl_validate_mysterybox_eso_tls_fails_fast_on_tls_error(
 ) -> None:
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
     monkeypatch.setattr(
-        cli.subprocess,
+        cli.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=1,
@@ -19361,7 +19077,7 @@ def test_run_mysterybox_eso_connectivity_validation_writes_deploy_report_detail(
     }
 
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/kubectl")
-    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.kubernetes_process, "run", _fake_run)
 
     written = cli.run_mysterybox_eso_validations(
         [spec],
@@ -19399,7 +19115,7 @@ def test_ensure_runtime_auth_material_recreates_stale_cached_public_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
-    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material, **_kw: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     fake_config = SimpleNamespace(
@@ -19508,7 +19224,7 @@ def test_ensure_runtime_auth_material_replaces_inherited_snapshot_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
-    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material, **_kw: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "canonical.pem"
@@ -19599,7 +19315,7 @@ def test_ensure_runtime_auth_material_issues_s3_only_for_terraform(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
-    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material, **_kw: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "key.pem"
@@ -19652,7 +19368,7 @@ def test_ensure_runtime_auth_material_preserves_operator_auth_until_s3_bootstrap
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cli, "_ensure_runtime_auth_material", _REAL_ENSURE_RUNTIME_AUTH_MATERIAL)
-    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material: None)
+    monkeypatch.setattr(cli._runtime_identity_verifier, "verify", lambda _material, **_kw: None)
     _clear_runtime_auth_env()
     cli._RUNTIME_AUTH_READY_PROJECTS.clear()
     key_file = tmp_path / "key.pem"

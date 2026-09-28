@@ -994,11 +994,25 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
     }
 
 
+@pytest.mark.parametrize(
+    "registry", ["oci://cr.eu-north1.nebius.cloud/soperator", "oci://cr.nebius.cloud/soperator"]
+)
 def test_validate_enabled_soperator_uses_dedicated_official_entry(
     monkeypatch: pytest.MonkeyPatch,
+    registry: str,
 ) -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from nebius_cxcli import cli
+    from soperator_fixtures import sample_snapshot
+
+    snapshot = replace(sample_snapshot(), registry=registry, snapshot_sha256="")
+    monkeypatch.setattr(
+        cli, "freeze_soperator_release", lambda *_a, **_k: SimpleNamespace(snapshot=snapshot)
+    )
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
-    entry = soperator_install_entry("4.1.7")
+    entry = soperator_install_entry("4.1.7", chart_repo=snapshot.chart_oci_url("umbrella"))
     payload["apps"]["charts"] = [
         {
             "id": "soperator",
@@ -1023,14 +1037,23 @@ def test_validate_enabled_soperator_uses_dedicated_official_entry(
     monkeypatch.setattr("nebius_cxcli.cli._resolve_helm_chart_validation_issues", _fake_validate)
 
     assert _validate_enabled_chart_sources(payload, chart_meta_cache={}) == []
-    assert captured == {
-        "chart_name": "helm-soperator-fluxcd",
-        "chart_repo": entry.chart_repo,
-        "chart_version": "4.1.7",
-    }
+    # Dedicated admission already verified the exact umbrella package.
+    assert captured == {}
 
 
-def test_validate_enabled_soperator_rejects_non_official_repository() -> None:
+def test_validate_enabled_soperator_rejects_non_official_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from nebius_cxcli import cli
+    from soperator_fixtures import sample_snapshot
+
+    monkeypatch.setattr(
+        cli,
+        "freeze_soperator_release",
+        lambda *_a, **_k: SimpleNamespace(snapshot=sample_snapshot()),
+    )
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     payload["apps"]["charts"] = [
         {

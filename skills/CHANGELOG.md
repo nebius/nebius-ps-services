@@ -4,7 +4,175 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Changed
+
+- Let authorized unmanaged PR workflows call the shared commit transaction for
+  successive reviewed repairs without renewed commit prompts. Scope private
+  continuation to one session, branch, origin and base; retain exact-tree
+  claims, normal hooks, managed/SDLC boundaries and explicit completion.
+
 ### Fixed
+
+- Isolate native workflow CI fixtures from runner-installed system Git filters
+  and run the owned-origin safety regressions in the same test step.
+
+- Synchronize the Codex plugin's commit-intent status message with its owning
+  hook template so packaged plugin validation passes.
+
+- Correct portable course-build packaging for virtual ZIP member paths and empty
+  symlinked publication roots; clarify copied-template build prerequisites.
+
+- Add reusable build/check, deterministic archive and publication-budget templates
+  to `create-learning-course`, with project-owned renderer adapters and copied
+  presentation assets. Keep bulky downloads external, explicitly allow scoped
+  companion links, and distinguish reading portability from runtime delivery.
+
+- Standardize `create-learning-course` typography and presentation: numbered
+  Official references, bulleted next-step options and a standalone course
+  Glossary. Remove published mission/syllabus sections while retaining unique
+  learner context; align starter assets, regression checks and evaluations.
+
+- Require exactly one course-level Glossary and Where to Go Next in
+  `create-learning-course`, shared by all lessons and guides. Consolidate local
+  entries while preserving meanings and first-use teaching; align templates,
+  checker, regression tests and evals. Lessons end with Mental model and
+  optional References; glossary keys remain unique and sorted A–Z. Reject
+  appendices placed before teaching or wrapping lessons/guides, including
+  content before the appendix heading.
+
+- Ground `design` in the selected project's design documents and executable
+  code, give code precedence over conflicting prose, report discrepancies and
+  redesign unintended conflicts. Support confirmed unused prototype refactors
+  without compatibility shims unless requested; default to non-mutating plans,
+  allow explicitly requested implementation subject to host mode, and keep
+  canonical document publication with `maintain-project-specs`.
+
+- Aligned the project-instructions README flow, target and write boundaries with
+  authorized native human-rule repair; managed generation retains its receipt
+  and guarded helper requirements.
+
+- Removed the global per-script Run/Execute approval requirement for necessary
+  work already authorized by the user. Check the full global instruction file
+  for the obsolete gate, including human-owned text outside managed regions,
+  and preserve explicit read-only limits and real tool controls.
+
+- Reuse task authorization for necessary new credentials and secrets, keeping
+  secure storage and uncovered access changes explicit. Align native global
+  templates, troubleshooting guidance and spec-owner routing; allow focused
+  repair of explicitly selected human-owned project rules without repeated
+  approval or a generated-rule receipt. Preserve managed ownership checks.
+
+- Clarified headless Playwright Test as the default for permitted full-course
+  browser checks, preserving visual/accessibility coverage, pending evidence
+  and restricted request scopes; aligned the two SDLC GUI catalog descriptions.
+- Refresh live-test loopback endpoints before validating a restart receipt,
+  and clear earlier restart proof before another attempt. Reject unowned,
+  public or mismatched runtime bindings without publishing replacement evidence.
+- Recreate owned live-test containers after checkout or dependency changes so
+  restart checks use current Compose metadata; rediscover dynamic endpoints
+  after recreation and restart while retaining the database volume.
+- Added classified recovery for failed combined validation after SDLC task
+  integration, retaining failed-wave evidence and requiring counted corrective
+  dispatch, safe cleanup and original-oracle resolution before promotion.
+
+- Bound headless live-test acceptance to owner-recorded clean builds and the
+  running web image, rejecting stale deployments, web mounts and wrong endpoints
+  before browser launch and at independent checkpoints.
+- Replaced native desktop capture prerequisites for web SDLC acceptance with
+  four owned headless Playwright Test stages, frozen independent assertions,
+  hashed traces/screenshots, API/database checkpoints and owned restart evidence.
+  Keep mode retains the application and evidence while closing browser processes.
+- Pinned Playwright MCP to 0.0.81 with headless isolated Chrome defaults in
+  Codex and Claude templates. Native desktop acceptance remains separately declared.
+
+- Added an evidence-bound transition for recovered pre-promotion SDLC
+  environment blockers, preserving failed trials and repair budgets.
+- Prevented aggregate live-evidence collection from certifying a three-tier
+  lifecycle with a missing or failed required browser capability gate.
+- Rediscover dynamic live-test ports after service restart while verifying
+  retained database-volume identity before browser and API persistence checks.
+
+- Defined the SDLC startup JSON ownership lock and required hook-discovery
+  verification before phase dispatch; an empty lock cannot establish a run.
+  The live verifier now rejects unregistered execution and requires an immutable
+  startup observation for phase and final PASS, preventing late certification.
+  Its file-location loader resolves sibling validators independently of cwd.
+
+- Removed a stale blanket remote prohibition from the SDLC test instructions;
+  the shared owned-local-origin guard remains the single admission rule.
+
+- Routed repair revalidation through `align` and added an owner-managed route
+  refresh that archives prior progress, preserves budgets, and reruns every gate
+  when installed route policy changes. Retired owner names are not accepted.
+
+- Allowed an integrated SDLC coordinator to prepare an appended corrective wave
+  after prior waves finish, preserving completed tasks and the existing TDD base.
+
+- Enabled pre-commit live runtime validation for one verified SDLC worker
+  assignment. Task identity, scope, active batch and Git lineage are checked
+  before Compose runs; integration and promoted UAT evidence stay separate.
+
+- Prevented the SDLC execution secret scanner from treating dynamic CSRF cookie
+  lookups and runtime secret factories as literal credentials. Bounded expression
+  parsing preserves rejection of quoted secrets and malformed assignments.
+
+- Clarified that the local SDLC live test permits fixed public image pulls and
+  pinned Python dependency downloads at build time while requiring a local-only
+  runtime. Aligned capability capture with dedicated-browser creation and
+  routed documentation completion through the current general `align` phase.
+
+- Made dedicated SDLC browser cleanup resumable after process exit precedes
+  receipt persistence. Fresh PID and process-group absence is required;
+  remaining groups, reused identities and inspection failures still block.
+
+- Corrected SDLC plan-authoring and state-layout instructions to use the
+  execution validator's adjacent `.plan.vN.md.lock` marker. The documented
+  `.plan.vN.lock` filename was rejected as an unlocked plan.
+
+- Admit newly published SDLC specs to Git tracking before strict planning gates,
+  with canonical-pair-only staging and preparation-owned contract commits.
+- Bind live workflow phase evidence and Docker Compose to the registered SDLC
+  integration checkout before promotion and the exact primary checkout afterward.
+
+- Removed the fresh-project refinement deadlock: a read-only requirements
+  readiness check now admits context/design, while full prompt-impact
+  settlement still requires ready design before planning and execution.
+  Missing canonical specs receive an owner-managed draft-pair bootstrap that
+  preserves existing counterparts and makes no design-readiness claim.
+
+- Repaired disposable SDLC Git admission with one verifier-owned local bare
+  origin per fixture. Creation, validation, resume and cleanup share exact
+  ownership and frozen-baseline checks; inherited command configuration,
+  external/extra remotes, unsafe storage and altered push guards fail closed.
+- Renamed the SDLC live action to `--create-live-test` and consolidated evidence
+  input under `--live-evidence PATH`; retired flags have no aliases. Canonical
+  Docker/browser results now resolve through the owned profile generation,
+  validating its identity and Git history independently of the aggregate.
+
+- Fixed concurrent first-use Worktree state creation before lifecycle locking.
+  Directory creation now converges when another caller wins, while canonical
+  path, symlink, file-type, and private state permission checks remain active.
+  Added deterministic race injection for both directories and unsafe winners.
+
+- Corrected SDLC golden-path ordering so prompt intake establishes coordinator
+  ownership before requirements authoring. The live-evidence collector now
+  accepts all required skill owners, including `align`, and its regressions
+  run in the full deterministic verifier. Updated requirements guidance to
+  the current prompt-v3 contract. Replaced stale static prose assertions with
+  current operational clauses and normalized whitespace, with removal-based
+  negative controls so missing workflow duties still fail. The readiness
+  matrix now reports the executed canonical receipt check instead of a
+  nonexistent lifecycle-dependency capability.
+
+- Removed commit/commit-push's required leading invocation grammar. The root
+  agent now interprets action requests semantically and binds a separate,
+  nonauthorizing root-turn receipt during canonical preparation. Enabled natural
+  language selection on both hosts while preserving one-use claims, delegated
+  workflow ownership, candidate review, default-branch controls and replay
+  rejection. Unrelated prompts no longer overwrite active authorizations.
+  Receipt-capture failures now report fixed nonblocking reasons without raw
+  input or a usable digest; native host fixtures verify identity handling and
+  preservation of earlier state after validation failure.
 
 - Replaced shared-runtime ancestor searches with declared, verified support
   bundles across scripts and hooks. Validate the loader and transitive source

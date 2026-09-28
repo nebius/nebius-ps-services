@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,serial_slow_producer_batch_ready_p50_seconds,value,0.0248968,s
+baseline-trial1,worker_prefetched_batch_ready_p50_seconds,value,0.0103519,s
+baseline-trial1,serial_slow_producer_tokens_per_second,value,28979.456,count:tokens/s
+baseline-trial1,worker_prefetched_tokens_per_second,value,106946.863,count:tokens/s
+candidate-trial1,serial_slow_producer_batch_ready_p50_seconds,value,0.0248688,s
+candidate-trial1,worker_prefetched_batch_ready_p50_seconds,value,0.0104397,s
+candidate-trial1,serial_slow_producer_tokens_per_second,value,34270.573,count:tokens/s
+candidate-trial1,worker_prefetched_tokens_per_second,value,104131.099,count:tokens/s

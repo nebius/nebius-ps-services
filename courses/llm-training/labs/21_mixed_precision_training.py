@@ -12,11 +12,12 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 from tiny_lm import build_tiny_lm, make_language_batch
 
 
@@ -171,6 +172,8 @@ def train_mode(
         scaler.update()
         return loss.detach(), gradient_norm.detach()
 
+    one_step = annotated_operation(one_step, "mixed_precision_step")
+
     for _ in range(warmup):
         one_step()
     torch.cuda.synchronize()
@@ -249,13 +252,13 @@ def main() -> None:
             "All numerical-equivalence thresholds must be finite and positive."
         )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     torch.set_float32_matmul_precision("highest")
 
     model_shape = (
         {"hidden": 384, "layers": 3, "heads": 6, "sequence": 128, "batch": 4}
-        if args.profile == "smoke"
+        if args.profile == "small"
         else {
             "hidden": 1_024,
             "layers": 6,
@@ -264,7 +267,7 @@ def main() -> None:
             "batch": 8,
         }
     )
-    vocab_size = 2_048 if args.profile == "smoke" else 8_192
+    vocab_size = 2_048 if args.profile == "small" else 8_192
     base = build_tiny_lm(
         torch,
         vocab_size=vocab_size,
@@ -403,4 +406,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

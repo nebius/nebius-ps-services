@@ -1,0 +1,3 @@
+variant,metric,case,value,unit
+baseline-trial1,cuda_events_with_device_time,value,13,none
+repeat-trial1,cuda_events_with_device_time,value,13,none

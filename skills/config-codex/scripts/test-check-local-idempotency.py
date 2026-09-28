@@ -63,9 +63,15 @@ MANAGED_BLOCK = "\n".join(
         "  valid proof.",
         "- Confirmed non-production may receive bounded reversible changes within",
         "  existing authority. Production and unconfirmed targets remain read-only",
-        "  without exact action authorization. Destructive, irreversible, credential,",
-        "  IAM, data, public-exposure, deletion, material-cost, or material-availability",
-        "  actions require action-specific approval in every environment.",
+        "  without exact action authorization. An authorized task includes creating new credentials and secrets necessary",
+        "  for its identified target and intended access scope; do not request separate",
+        "  approval solely for that creation. Store values only in the intended secret",
+        "  store or protected runtime file, never in chat, logs, Git, documentation, task",
+        "  state, or other artifacts. Reuse authorization already given. Destructive or",
+        "  irreversible actions, replacement or revocation of existing credentials, IAM",
+        "  access expansion, unrelated data changes, public exposure, deletion, or material",
+        "  availability or cost impact require action-specific approval only when not",
+        "  already covered by the user's authorization.",
         "- Fix the proven causal owner at its authoritative boundary. A product-fixed",
         "  claim requires an implemented source or configuration repair; environment,",
         "  test, harness, or evaluator defects are repaired at their owner and rerun",
@@ -79,6 +85,11 @@ MANAGED_BLOCK = "\n".join(
         "",
         "## Nested project instructions",
         "",
+        "- An explicit request to repair restrictive project instructions authorizes",
+        "  focused edits to the affected human-owned rules in the selected projects.",
+        "  Preserve unrelated instructions and use the owning workflow for generated",
+        "  regions. Do not ask again for the same rule change; system/developer policy",
+        "  and authority outside the requested repair remain binding.",
         "- Before modifying files in a first-class project, resolve the exact",
         "  project root and read every applicable instruction file from the",
         "  repository root through that project directory. For work spanning",
@@ -101,6 +112,14 @@ MANAGED_BLOCK = "\n".join(
         "  not create an override automatically.",
         "",
         "## Skills",
+        "",
+        "- Task authorization covers necessary skill scripts, including mutations",
+        "  within the requested scope. Inspect the script's effects before executing it.",
+        "  Do not require a separate Run/Execute phrase or repeat an approval already",
+        "  given for the task. Ask only when its effects exceed existing authorization.",
+        "- Preserve explicit read-only limits, skill invocation restrictions, and actual",
+        "  tool or sandbox controls. A task request does not authorize unrelated IAM,",
+        "  destructive, public-exposure, credential-replacement, or material-cost actions.",
         "",
         "- For non-trivial planning, implementation, debugging, refactoring,",
         "  migration, architecture, review, testing, CI failure, or multi-file",
@@ -273,7 +292,9 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             "performs, bypasses, or pre-satisfies",
             "Recovery authorization never makes that evidence valid proof",
             "Production and unconfirmed targets remain read-only",
-            "action-specific approval in every environment",
+            "do not request separate approval solely for that creation",
+            "intended secret store or protected runtime file",
+            "IAM access expansion",
             "Fix the proven causal owner at its authoritative boundary",
             "before the earliest product divergence or first contaminated boundary, whichever came first",
             "Prove prior writers are quiescent",
@@ -350,7 +371,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
                 },
                 "playwright": {
                     "command": "npx",
-                    "args": ["-y", "@playwright/mcp@0.0.78"],
+                    "args": ["-y", "@playwright/mcp@0.0.81", "--headless", "--browser", "chrome", "--isolated"],
                 },
                 "terraform": {
                     "command": "docker",
@@ -399,7 +420,7 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
         self.assertNotIn("history", config)
         self.assertNotIn("@latest", template_text)
         for name in ("context7", "playwright"):
-            package = config["mcp_servers"][name]["args"][-1]
+            package = config["mcp_servers"][name]["args"][1]
             self.assertRegex(package, r"^@[^/]+/[^@]+@[0-9]")
             self.assertFalse(package.endswith("@latest"))
         terraform_image = config["mcp_servers"]["terraform"]["args"][-1]
@@ -871,12 +892,40 @@ class CheckLocalIdempotencyTest(unittest.TestCase):
             result.stdout,
         )
 
+    def test_default_rejects_obsolete_script_gate_outside_managed_block(self) -> None:
+        old_rule = (
+            "Run mutating skill scripts only when the user explicitly asks to run or "
+            "execute that script."
+        )
+        for content in (old_rule + "\n\n" + MANAGED_BLOCK, MANAGED_BLOCK + "\n" + old_rule):
+            with self.subTest(location=content.startswith(old_rule)):
+                (self.codex_home / "AGENTS.md").write_text(content, encoding="utf-8")
+                result = self.run_check()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("obsolete separate script-approval rule", result.stdout)
+
+    def test_default_rejects_obsolete_blanket_credential_approval(self) -> None:
+        start = MANAGED_BLOCK.index("  without exact action authorization.")
+        end = MANAGED_BLOCK.index("- Fix the proven causal owner", start)
+        old_policy = (
+            "  without exact action authorization. Destructive, irreversible, credential,\n"
+            "  IAM, data, public-exposure, deletion, material-cost, or material-availability\n"
+            "  actions require action-specific approval in every environment.\n"
+        )
+        obsolete = MANAGED_BLOCK[:start] + old_policy + MANAGED_BLOCK[end:]
+        (self.codex_home / "AGENTS.md").write_text(obsolete, encoding="utf-8")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md managed block is stale or incomplete", result.stdout)
+
     def test_default_rejects_weakened_live_product_validation_policy(self) -> None:
         for fragment in (
             "Changing the declaration starts a new trial and never cleans\n  earlier evidence.",
             "bypasses, ",
             "Production and unconfirmed targets remain read-only",
-            "actions require action-specific approval in every environment.",
+            "do not request separate",
+            "protected runtime file",
+            "already covered by the user's authorization.",
             "classify nominally read-only actions\n  by their effect.",
             "earliest product divergence or first contaminated\n  boundary, whichever came first.",
             "postconditions independently. Otherwise report mitigation or a blocker, not\n  a verified fix.",

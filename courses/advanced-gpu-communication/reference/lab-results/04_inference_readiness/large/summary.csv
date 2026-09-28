@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,world_size,value,2,none
+baseline-trial1,distinct_host_count,value,2,none
+repeat-trial1,world_size,value,2,none
+repeat-trial1,distinct_host_count,value,2,none

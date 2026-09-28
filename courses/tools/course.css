@@ -15,7 +15,7 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
 a { color: var(--blue); text-underline-offset: .18em; overflow-wrap: anywhere; }
 a:hover { color: var(--teal); }
 :focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; }
@@ -36,19 +36,33 @@ nav .section-links ul { list-style: disc; }
 nav summary { font-weight: 650; }
 nav a { display: inline-block; padding: .3rem .2rem; border-radius: 5px; text-decoration: none; }
 nav a:hover { text-decoration: underline; background: var(--mint-wash); }
+nav > details li > a { display: inline; }
 section, article, figure { scroll-margin-top: 1.5rem; }
 h2 { font-size: clamp(1.6rem, 2.6vw, 2.1rem); line-height: 1.25; letter-spacing: -.025em; margin: 0 0 1.1rem; }
 h3 { font-size: 1.25rem; line-height: 1.35; margin-top: 1.8rem; }
+h4 { font-size: 1.1rem; }
+h5 { font-size: 1rem; }
+h6 { font-size: .95rem; }
 h4, h5, h6 { line-height: 1.4; margin-top: 1.6rem; }
 p { margin: .7rem 0 1rem; }
 main > section { margin: 0 0 2rem; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 2rem clamp(1.3rem, 3vw, 2.5rem); box-shadow: 0 3px 14px #24343d04; }
 main p, .lesson > div, .lesson > details, .supporting-guide > ul, .supporting-guide > ol { max-width: var(--reading-width); }
 main > section:target, article:target, figure:target { border-color: var(--teal); }
-.course-subtitle { color: var(--muted); }
+.performance-tools { overflow-wrap: anywhere; }
+.performance-workflow { margin: 1rem 0; }
 .lesson > div, .lesson > details { margin: 1.15rem 0; }
 .lesson > .how-it-works { max-width: none; }
 .how-it-works > ul, .how-it-works > ol { max-width: var(--reading-width); }
-.lesson > div > strong, .lesson > details > summary { color: var(--ink); }
+.lesson > div > h3, .tools-field > h3 { margin: 0 0 .7rem; color: var(--ink); font-size: 1.25rem; }
+.tools-field { margin: 1.15rem 0; }
+.next-steps-list { padding-left: 1.5rem; }
+.next-steps-list > li { margin: 1.5rem 0; padding-left: .25rem; }
+.next-steps-list > li > h3 { margin: 0 0 .7rem; }
+#guide-glossary > dl { max-width: var(--reading-width); }
+#official-references > ol { list-style-type: decimal; padding-left: 1.5rem; }
+#official-references li { margin: .6rem 0; }
+dt { margin-top: .75rem; font-weight: 650; overflow-wrap: anywhere; }
+dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
 .lesson .lesson-outcome { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
 .lesson .warning { border-color: var(--amber); background: var(--amber-wash); }
 .lesson .lesson-visuals { padding-top: .5rem; border-top: 1px solid var(--line); }
@@ -59,7 +73,7 @@ pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(
 pre code { padding: 0; background: none; overflow-wrap: normal; }
 .table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 100px; }
+th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 14em; overflow-wrap: normal; }
 th { background: var(--blue-wash); font-weight: 650; }
 tbody tr:last-child td { border-bottom: 0; }
 .course-contract { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
@@ -74,8 +88,11 @@ tbody tr:last-child td { border-bottom: 0; }
 .lab-scope { display: inline-block; margin-top: 0; padding: .1rem .6rem; border-radius: 20px; color: var(--teal); background: var(--mint-wash); font-size: .85rem; }
 .lab-source { margin-top: 1.2rem; border: 1px solid var(--line); padding: .65rem 1rem; border-radius: 8px; }
 .lab-source > summary { color: var(--blue); overflow-wrap: anywhere; }
+.setup-guide, .route-heading, .lesson h2, .lab h3 { overflow-wrap: anywhere; }
 .optional-study { margin-top: 1.5rem; padding-top: .25rem; border-top: 1px solid var(--line); }
 figure { margin: 1.5rem 0 2rem; padding: .75rem; border: 1px solid var(--line); border-radius: 10px; background: white; min-width: 0; width: 100%; }
+.guide-image { max-width: 640px; margin-inline: auto; }
+.guide-image img { display: block; width: 100%; height: auto; }
 svg { display: block; width: 100%; max-width: 100%; height: auto; font: 18px Arial, Helvetica, sans-serif; color: var(--ink); fill: var(--ink); }
 svg .diagram-label { font-size: 15px; }
 svg .diagram-small { font-size: 13px; }

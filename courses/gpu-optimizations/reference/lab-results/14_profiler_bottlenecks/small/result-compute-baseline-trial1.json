@@ -1,0 +1,33 @@
+{
+  "correctness": {
+    "finite_output": true,
+    "numerically_equivalent": true
+  },
+  "lab": "14_profiler_bottlenecks",
+  "measurements": {
+    "algorithmic_arithmetic_intensity_flop_per_byte": 170.6667,
+    "checksum": -1.946e-05,
+    "dtype": "float32",
+    "effective_minimum_io_gb_per_s": 181.5716,
+    "effective_workload_tflops": 30.9882,
+    "input_scale_divisor": 32.0,
+    "minimum_input_output_bytes": 12582912,
+    "mode": "baseline",
+    "timing": {
+      "median_ms": 0.0693,
+      "min_ms": 0.0679,
+      "p90_ms": 0.0732
+    },
+    "useful_operations": 2147483648,
+    "width": 1024
+  },
+  "parameters": {
+    "iterations": 20,
+    "mode": "baseline",
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

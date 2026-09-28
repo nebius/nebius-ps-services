@@ -10,6 +10,7 @@ Updates project-facing documentation after implementation evidence, feature
 evaluation, resolved steering, UAT, or final run review shows docs need to
 match implemented behavior. Multi-layer behavior docs must be backed by
 evaluated end-to-end slice evidence when applicable.
+Returns to `sdlc-start` for the general `align` quality gate before commitment.
 
 ## Main Boundaries
 

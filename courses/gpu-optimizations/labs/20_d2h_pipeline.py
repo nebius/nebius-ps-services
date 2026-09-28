@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import Future, ThreadPoolExecutor
 import math
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable
 
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 class OutputSlot:
@@ -80,7 +81,7 @@ def check_output(torch: Any, host: Any, batch: int, delay_ms: float) -> int:
 
 
 def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
-    width = 512 if args.profile == "smoke" else 2048
+    width = 512 if args.profile == "small" else 2048
     pooled = args.mode in ("pooled", "nonblocking", "pipeline")
     asynchronous = args.mode in ("nonblocking", "pipeline")
     compute = torch.cuda.Stream()
@@ -155,7 +156,7 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     torch.set_num_threads(1)
     torch.backends.cuda.matmul.allow_tf32 = False
     with torch.inference_mode():
@@ -187,4 +188,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

@@ -1,0 +1,39 @@
+{
+  "correctness": {
+    "projection_decode_matches_reference": true
+  },
+  "lab": "25_fabric_inference",
+  "measurements": {
+    "batch": {
+      "max_ms": 1.361448026727885,
+      "median_ms": 0.2849289739970118,
+      "min_ms": 0.23616297403350472,
+      "samples_ms": [
+        1.361448026727885,
+        1.32222002139315,
+        0.4358949991001282,
+        0.3195640165358782,
+        0.30594499548897147,
+        0.23856199914007448,
+        0.2639129525050521,
+        0.23862599846324883,
+        0.23655599215999246,
+        0.23616297403350472
+      ]
+    },
+    "generated_tokens_per_request": 8,
+    "peak_allocated_bytes": 34754560,
+    "ranks": 16,
+    "requests": 32,
+    "tokens_per_second": 898469.5252603015,
+    "width": 512
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 16
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

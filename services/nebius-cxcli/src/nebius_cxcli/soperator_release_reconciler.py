@@ -5,14 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from .paths import ProjectPaths
-from .soperator_failures import SoperatorFailureDisposition
+from .soperator_deployment_profile import rendered_deployment_profile
 from .soperator_operation import SoperatorOperationSpec, soperator_stage_plan_sha256
 from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
 from .soperator_release import SoperatorReleaseSnapshot
@@ -22,7 +21,6 @@ from .soperator_strategy import SoperatorStrategy, SoperatorStrategyPlan, plan_s
 
 SOPERATOR_RECONCILE_RECEIPT_SCHEMA = "nebius-cxcli.soperator-reconcile-receipt.v7"
 SOPERATOR_RECONCILE_RECEIPT_FILENAME = "soperator-release-reconcile.json"
-SOPERATOR_RECONCILE_MAX_FAILURES = 3
 SOPERATOR_RECONCILE_REPAIR_LINEAGE_SCHEMA = "nebius-cxcli.soperator-reconcile-repair-lineage.v1"
 _ADMITTED_RENDER_REPAIR_REASONS = frozenset(
     {
@@ -50,8 +48,11 @@ _ADMITTED_RENDER_REPAIR_REASONS = frozenset(
         "install-worker-scratch-binding-v1",
         "install-enroot-userns-binding-v1",
         "install-worker-docker-binding-v1",
+        "install-worker-docker-storage-v1",
         "install-worker-topology-binding-v1",
         "install-worker-cpu-mask-binding-v1",
+        "install-native-observability-v1",
+        "native-token-writer-retirement-v1",
     }
 )
 
@@ -60,12 +61,7 @@ _ADMITTED_RENDER_REPAIR_REASONS = frozenset(
 class SoperatorReconcileExecutionPolicy:
     """Caller-selected execution semantics for a release reconciliation."""
 
-    forward_until_complete: bool = False
-    retry_initial_seconds: float = 5.0
-    retry_max_seconds: float = 60.0
-    sleep: Callable[[float], None] = time.sleep
-    classify_failure: Callable[[str, Exception], SoperatorFailureDisposition] | None = None
-    observe_advisory: Callable[[str], object] | None = None
+    forward_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,6 +220,29 @@ _NOOP_TRANSITION_PLAN = (
     ),
 )
 
+# Fresh Dev/Test setup has no pre-existing customer workload to quiesce. All
+# remaining transitions still carry the same immutable operation and lease fence.
+_FAST_INSTALL_TRANSITION_PLAN = (
+    *_FULL_TRANSITION_PLAN[:5],
+    ("wait-required-bootstrap", TransitionMode.OBSERVE, "wait_pre_restore_product", False),
+    (
+        "restore-infrastructure-and-scheduling-preimages",
+        TransitionMode.MUTATE_ONCE,
+        "restore_infrastructure",
+        True,
+    ),
+    ("wait-infrastructure-convergence", TransitionMode.OBSERVE, "wait_infrastructure", False),
+    ("open-ordinary-user-admission", TransitionMode.RECONCILE_FORWARD, "restore_checks", False),
+    ("release-requeued-running-jobs", TransitionMode.MUTATE_ONCE, "release_requeued_jobs", True),
+    ("release-other-operation-held-jobs", TransitionMode.MUTATE_ONCE, "release_held_jobs", True),
+    (
+        "wait-final-service-and-slurm-smoke",
+        TransitionMode.RECONCILE_FORWARD,
+        "wait_final_product",
+        False,
+    ),
+)
+
 _PROTECTED_DATA_PLANE_TRANSITION_PLAN = (
     ("resolve-immutable-sources", TransitionMode.VERIFY, "resolve_sources", False),
     (
@@ -350,15 +369,29 @@ _PROTECTED_DATA_PLANE_TRANSITION_PLAN = (
 
 def _transition_plan(
     strategy: SoperatorStrategy,
+    deployment_profile: str = "standard",
 ) -> tuple[tuple[str, TransitionMode, str, bool], ...]:
+    if deployment_profile == "fast-dev-test" and strategy is SoperatorStrategy.INSTALL:
+        return _FAST_INSTALL_TRANSITION_PLAN
+    plan: tuple[tuple[str, TransitionMode, str, bool], ...]
     if strategy is SoperatorStrategy.NOOP:
-        return _NOOP_TRANSITION_PLAN
-    if strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
-        return _PROTECTED_DATA_PLANE_TRANSITION_PLAN
-    return _FULL_TRANSITION_PLAN
+        plan = _NOOP_TRANSITION_PLAN
+    elif strategy is SoperatorStrategy.PROTECTED_DATA_PLANE:
+        plan = _PROTECTED_DATA_PLANE_TRANSITION_PLAN
+    else:
+        plan = _FULL_TRANSITION_PLAN
+    if deployment_profile == "fast-dev-test":
+        # The smoke submits a job under operation authority for every strategy.
+        return tuple(
+            _FAST_INSTALL_TRANSITION_PLAN[-1] if row[2] == "wait_final_product" else row
+            for row in plan
+        )
+    return plan
 
 
-def soperator_reconcile_stage_plan_sha256(*, strategy: str, rendered_graph_sha256: str) -> str:
+def soperator_reconcile_stage_plan_sha256(
+    *, strategy: str, rendered_graph_sha256: str, deployment_profile: str = "standard"
+) -> str:
     """Bind the rendered release graph and exact reconcile phase order."""
 
     try:
@@ -368,9 +401,16 @@ def soperator_reconcile_stage_plan_sha256(*, strategy: str, rendered_graph_sha25
     return _stable_sha256(
         {
             "renderedGraphSha256": rendered_graph_sha256,
+            **(
+                {"deploymentProfile": deployment_profile}
+                if deployment_profile != "standard"
+                else {}
+            ),
             "transitions": [
                 {"phase": phase, "mode": mode.value, "irreversible": irreversible}
-                for phase, mode, _callback, irreversible in _transition_plan(resolved_strategy)
+                for phase, mode, _callback, irreversible in _transition_plan(
+                    resolved_strategy, deployment_profile
+                )
             ],
         }
     )
@@ -379,9 +419,10 @@ def soperator_reconcile_stage_plan_sha256(*, strategy: str, rendered_graph_sha25
 def _transition_definitions(
     callbacks: SoperatorReconcileCallbacks,
     strategy: SoperatorStrategy,
+    deployment_profile: str = "standard",
 ) -> tuple[_TransitionDefinition, ...]:
     definitions: list[_TransitionDefinition] = []
-    for phase, mode, callback_name, irreversible in _transition_plan(strategy):
+    for phase, mode, callback_name, irreversible in _transition_plan(strategy, deployment_profile):
         action = getattr(callbacks, callback_name)
         if action is None:
             raise ValueError(
@@ -717,6 +758,16 @@ def _repair_successor_seed(
     replacement_artifact_sha256 = str(current_operation.get("artifactReceiptSha256") or "")
     predecessor_render_sha256 = str(predecessor_release.get("umbrellaRenderSha256") or "")
     replacement_render_sha256 = str(current_release.get("umbrellaRenderSha256") or "")
+    if repair.reason == "native-token-writer-retirement-v1":
+        from .soperator_graph_repair import validate_frontier, validate_successor
+
+        validate_frontier(predecessor)
+        validate_successor(predecessor_spec, asdict(operation_spec))
+        if (
+            predecessor_artifact_sha256 != replacement_artifact_sha256
+            or predecessor_render_sha256 != replacement_render_sha256
+        ):
+            raise ValueError("Native graph repair changed the frozen artifacts")
     if any(
         not re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
         for digest in (
@@ -772,11 +823,17 @@ def _repair_successor_seed(
             and isinstance(predecessor_transitions[-1], Mapping)
             and predecessor_transitions[-1].get("status") == "failed"
         )
-    if repair.reason in {
+    if repair.reason == "install-native-observability-v1":
+        from .soperator_install_observability_repair import validate_observability_frontier
+
+        validate_observability_frontier(predecessor)
+        predecessor_frontier = "interrupted-initial-acceptance-before-check-submission"
+    elif repair.reason in {
         "install-nodeset-runtime-binding-v1",
         "install-worker-scratch-binding-v1",
         "install-enroot-userns-binding-v1",
         "install-worker-docker-binding-v1",
+        "install-worker-docker-storage-v1",
         "install-worker-topology-binding-v1",
         "install-worker-cpu-mask-binding-v1",
     }:
@@ -1112,7 +1169,6 @@ def _reconcile_soperator_release_once(
     callbacks: SoperatorReconcileCallbacks,
     operation_spec: SoperatorOperationSpec,
     emit: Callable[[str], None] | None = None,
-    max_failures: int | None = SOPERATOR_RECONCILE_MAX_FAILURES,
     rollback_on_failure: bool = True,
     repair_lineage: SoperatorReconcileRepairLineage | None = None,
 ) -> Path:
@@ -1171,6 +1227,7 @@ def _reconcile_soperator_release_once(
         != soperator_reconcile_stage_plan_sha256(
             strategy=strategy.strategy.value,
             rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+            deployment_profile=rendered_deployment_profile(paths),
         )
         or effective_spec.release_snapshot_sha256 != snapshot.snapshot_sha256
     ):
@@ -1233,7 +1290,9 @@ def _reconcile_soperator_release_once(
         "irreversibleFrontier": None,
         "status": "running",
     }
-    steps = _transition_definitions(callbacks, strategy.strategy)
+    steps = _transition_definitions(
+        callbacks, strategy.strategy, rendered_deployment_profile(paths)
+    )
     if (
         strategy.strategy is SoperatorStrategy.PROTECTED_DATA_PLANE
         and callbacks.rollback_before_frontier is None
@@ -1243,23 +1302,33 @@ def _reconcile_soperator_release_once(
         )
 
     if repair_lineage is not None:
-        if strategy.strategy is not SoperatorStrategy.PROTECTED_DATA_PLANE and not (
-            strategy.strategy is SoperatorStrategy.INSTALL
-            and repair_lineage.reason
-            in {
-                "install-dashboard-source-delivery-v1",
-                "install-checks-jail-binding-v1",
-                "install-rest-dependency-v1",
-                "install-checks-login-binding-v1",
-                "install-jail-collector-binding-v1",
-                "install-gpu-maintenance-binding-v1",
-                "install-nodeset-runtime-binding-v1",
-                "install-worker-scratch-binding-v1",
-                "install-enroot-userns-binding-v1",
-                "install-worker-docker-binding-v1",
-                "install-worker-topology-binding-v1",
-                "install-worker-cpu-mask-binding-v1",
-            }
+        native_graph_repair = (
+            strategy.strategy is SoperatorStrategy.IN_PLACE
+            and repair_lineage.reason == "native-token-writer-retirement-v1"
+        )
+        if (
+            not native_graph_repair
+            and strategy.strategy is not SoperatorStrategy.PROTECTED_DATA_PLANE
+            and not (
+                strategy.strategy is SoperatorStrategy.INSTALL
+                and repair_lineage.reason
+                in {
+                    "install-dashboard-source-delivery-v1",
+                    "install-checks-jail-binding-v1",
+                    "install-rest-dependency-v1",
+                    "install-checks-login-binding-v1",
+                    "install-jail-collector-binding-v1",
+                    "install-gpu-maintenance-binding-v1",
+                    "install-nodeset-runtime-binding-v1",
+                    "install-worker-scratch-binding-v1",
+                    "install-enroot-userns-binding-v1",
+                    "install-worker-docker-binding-v1",
+                    "install-worker-docker-storage-v1",
+                    "install-worker-topology-binding-v1",
+                    "install-worker-cpu-mask-binding-v1",
+                    "install-native-observability-v1",
+                }
+            )
         ):
             raise ValueError("Soperator repair lineage requires an admitted strategy and reason")
         lineage_payload, imported_transitions = _repair_successor_seed(
@@ -1427,14 +1496,6 @@ def _reconcile_soperator_release_once(
             continue
 
         mutating = step.mode in {TransitionMode.RECONCILE_FORWARD, TransitionMode.MUTATE_ONCE}
-        if (
-            mutating
-            and max_failures is not None
-            and int(transition.get("failureAttempts", 0)) >= max_failures
-        ):
-            raise RuntimeError(
-                f"Soperator transition {step.phase} exhausted its bounded retry budget"
-            )
         if step.irreversible and payload.get("irreversibleFrontier") is None:
             payload["irreversibleIntent"] = {
                 "transitionId": transition_id,
@@ -1463,7 +1524,10 @@ def _reconcile_soperator_release_once(
                     )
                 evidence = recover(transition)
             else:
-                evidence = step.action()
+                from .deployment_timing import timed_phase
+
+                with timed_phase(step.phase):
+                    evidence = step.action()
         except Exception:
             transition["status"] = "failed"
             if mutating:
@@ -1493,7 +1557,7 @@ def _reconcile_soperator_release_once(
             _write_receipt(receipt_path, payload)
             raise
         transition.pop("failureType", None)
-        transition["failureAttempts"] = 0
+        transition.setdefault("failureAttempts", 0)
         transition["evidence"] = _sanitized_evidence(evidence)
         transition["status"] = "complete"
         transition["receiptSha256"] = _transition_receipt_sha256(transition)
@@ -1532,7 +1596,7 @@ def reconcile_soperator_release(
     execution_policy: SoperatorReconcileExecutionPolicy | None = None,
     repair_lineage: SoperatorReconcileRepairLineage | None = None,
 ) -> Path:
-    """Run one durable reconciliation attempt under the caller-owned supervisor."""
+    """Run one durable reconciliation attempt without resetting historical evidence."""
 
     policy = execution_policy or SoperatorReconcileExecutionPolicy()
     return _reconcile_soperator_release_once(
@@ -1546,15 +1610,13 @@ def reconcile_soperator_release(
         callbacks=callbacks,
         operation_spec=operation_spec,
         emit=emit,
-        max_failures=None if policy.forward_until_complete else SOPERATOR_RECONCILE_MAX_FAILURES,
-        rollback_on_failure=not policy.forward_until_complete,
+        rollback_on_failure=not policy.forward_only,
         repair_lineage=repair_lineage,
     )
 
 
 __all__ = [
     "SOPERATOR_RECONCILE_RECEIPT_FILENAME",
-    "SOPERATOR_RECONCILE_MAX_FAILURES",
     "SOPERATOR_RECONCILE_RECEIPT_SCHEMA",
     "SoperatorReconcileCallbacks",
     "SoperatorReconcileExecutionPolicy",

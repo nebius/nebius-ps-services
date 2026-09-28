@@ -1,0 +1,17 @@
+{
+  "files": [
+    "compute-trials-rank-0.png",
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "manifest.json",
+    "result-trials-trial1-1.json",
+    "result-trials-trial1-2.json",
+    "result-trials-trial1-3.json",
+    "summary.csv",
+    "systems-trials-rank-0.png"
+  ],
+  "identity": "3c4d0b5def39acbd",
+  "schema": "run-labs-owned/v1"
+}

@@ -17,7 +17,7 @@ from nebius_cxcli.soperator_adapter import compile_upstream_soperator_values
 from nebius_cxcli.soperator_config_materialization import _materialize_soperator_guided_sssd_values
 from nebius_cxcli.soperator_release import SoperatorReleaseGraphNode
 from nebius_cxcli.soperator_release_artifacts import (
-    render_soperator_consumers,
+    render_soperator_source_documents,
     soperator_consumer_namespaces,
 )
 from nebius_cxcli.soperator_release_source import SoperatorSourceReceipt
@@ -26,19 +26,31 @@ from soperator_fixtures import sample_snapshot
 from test_soperator_upstream_adapter import _values
 
 
+def render_soperator_consumers(snapshot, source, values):
+    return tuple(
+        doc
+        for doc in render_soperator_source_documents(snapshot, source, values)
+        if doc["kind"] == "HelmRelease"
+    )
+
+
 @pytest.fixture
 def frozen_charts(tmp_path):
+    return frozen_charts_for(tmp_path, "4.1.8")
+
+
+def frozen_charts_for(tmp_path, version):
     if not shutil.which("helm"):
         pytest.skip("helm is required for frozen chart integration validation")
     fixtures = Path(__file__).parent / "fixtures"
-    archive = fixtures / "soperator-configuration-4.1.8.tar.gz"
-    hashes = json.loads((fixtures / "soperator-configuration-4.1.8.json").read_text())
+    archive = fixtures / f"soperator-configuration-{version}.tar.gz"
+    hashes = json.loads((fixtures / f"soperator-configuration-{version}.json").read_text())
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == hashes["fixture_sha256"]
     with tarfile.open(archive) as source:
         source.extractall(tmp_path, filter="data")
     for name, expected in hashes["files"].items():
         assert hashlib.sha256((tmp_path / name).read_bytes()).hexdigest() == expected
-    snapshot = sample_snapshot(release="4.1.8")
+    snapshot = sample_snapshot(release=version)
     roles = {
         "umbrella": "soperator-fluxcd",
         "slurmCluster": "slurm-cluster",
@@ -318,3 +330,76 @@ def test_check_mount_aliases_cannot_shadow_retained_home(frozen_charts, check, k
     compiled, _ = compile_upstream_soperator_values(values, release=snapshot)
     with pytest.raises(ValueError, match="canonical|retained"):
         compile_checks_policy(source, compiled)
+
+
+def test_standard_gpu_check_allocations_reach_upstream_chart_and_restored_schedules(frozen_charts):
+    from nebius_cxcli.soperator_checks_phase import ChecksPhase, ChecksPhaseContext
+    from nebius_cxcli.soperator_checks_policy import compile_checks_policy
+
+    snapshot, _, source = frozen_charts
+    count = 8
+    values = _values()
+    values["nodesets"][0]["slurmd"]["resources"]["gpu"] = count
+    compiled, _ = compile_upstream_soperator_values(values, release=snapshot)
+    policy = compile_checks_policy(source, compiled)
+    for phase in (ChecksPhase.SCHEDULES, ChecksPhase.READY):
+        effective = policy.effective_values(
+            compiled, installing=True, context=ChecksPhaseContext(phase, "")
+        )
+        rendered = _render_values(
+            source / "helm/soperator-activechecks",
+            effective["soperatorActiveChecks"]["overrideValues"],
+        )
+        checked = set()
+        for resource in rendered:
+            if resource["kind"] != "ActiveCheck":
+                continue
+            spec = resource["spec"]
+            if spec["checkType"] != "slurmJob":
+                continue
+            env = spec["slurmJobSpec"]["jobContainer"].get("env", [])
+            allocation = [item["value"] for item in env if item["name"] == "SBATCH_GPUS_PER_NODE"]
+            if allocation:
+                assert allocation == [str(count)]
+                checked.add(resource["metadata"]["name"])
+        assert "cuda-samples" in checked
+        assert any("all-reduce-perf-nccl" in name for name in checked)
+
+
+def test_source_compiler_selects_no_nfs_in_any_declared_phase(tmp_path):
+    from types import SimpleNamespace
+
+    from nebius_cxcli.soperator_artifact_selection import compile_required_stages
+    from nebius_cxcli.soperator_release import SoperatorArtifactRequest, VerifiedSoperatorSource
+    from nebius_cxcli.soperator_release_resolver import (
+        _release_chart_identity,
+        _rendered_repositories,
+    )
+
+    snapshot, receipt, _ = frozen_charts_for(tmp_path, "4.1.11")
+    source = VerifiedSoperatorSource(
+        metadata=SimpleNamespace(release=snapshot.release),
+        source=receipt,
+        registry=snapshot.registry,
+        charts=snapshot.charts,
+        capability_contract=snapshot.capability_contract,
+        capability_sha256=snapshot.capability_sha256,
+        populate_jail_image=snapshot.populate_jail_image,
+        jail_cuda_version=snapshot.jail_cuda_version,
+    )
+    values = _values()
+    values["observability"] = {"enabled": False}
+    request = SoperatorArtifactRequest.deployment("cluster", values)
+    for acquired in (None, snapshot):
+        stages = compile_required_stages(source, request, acquired)
+        assert set(stages) == {"desired", "initial", "maintenance", "acceptance"}
+        for compiled, documents in stages.values():
+            assert compiled["nfsServer"]["enabled"] is False
+            repositories = _rendered_repositories(documents)
+            identities = [
+                _release_chart_identity(doc, repositories)[0]
+                for doc in documents
+                if doc["kind"] == "HelmRelease"
+            ]
+            assert "helm-nfs-server" not in identities
+            assert "helm-slurm-cluster" in identities

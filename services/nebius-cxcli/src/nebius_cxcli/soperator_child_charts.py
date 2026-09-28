@@ -11,14 +11,13 @@ from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
 from .runtime_config import to_plain_data
 from .slack_notifier_runtime import soperator_notifier_mysterybox_secret_refs
+from .soperator_deployment_profile import FAST_DEV_TEST, deployment_profile
 
 SOPERATOR_APP_ID = "soperator"
 SOPERATOR_CHECKS_VALUES_KEY = "soperator-checks"
 SOPERATOR_ACTIVECHECKS_VALUES_KEY = "soperator-activechecks"
 ACTIVECHECKS_ENABLED_PATH = f"values.{SOPERATOR_ACTIVECHECKS_VALUES_KEY}.enabled"
 CHECKS_ENABLED_PATH = f"values.{SOPERATOR_CHECKS_VALUES_KEY}.enabled"
-DCGM_EXPORTER_VALUES_KEY = "soperator-dcgm-exporter"
-DCGM_EXPORTER_ENABLED_PATH = f"values.{DCGM_EXPORTER_VALUES_KEY}.enabled"
 REBOOTER_ENABLED_PATH = "values.rebooter.enabled"
 ACTIVECHECKS_CLUSTER_REF_PATH = f"values.{SOPERATOR_ACTIVECHECKS_VALUES_KEY}.slurmClusterRefName"
 SSH_CHECK_LOGIN_ENV_PATH = (
@@ -82,10 +81,6 @@ def _activechecks_enabled(soperator_row: Mapping[str, Any]) -> bool:
 
 def _checks_enabled(soperator_row: Mapping[str, Any]) -> bool:
     return read_component_path(soperator_row, CHECKS_ENABLED_PATH) is True
-
-
-def _dcgm_exporter_enabled(soperator_row: Mapping[str, Any]) -> bool:
-    return read_component_path(soperator_row, DCGM_EXPORTER_ENABLED_PATH) is True
 
 
 def _rebooter_enabled(soperator_row: Mapping[str, Any]) -> bool:
@@ -261,7 +256,18 @@ def soperator_child_chart_warnings(payload_or_config: Any) -> tuple[str, ...]:
     for soperator_row in _enabled_app_rows(payload, SOPERATOR_APP_ID):
         target_label = _warning_target_label(soperator_row)
         activechecks_enabled = _activechecks_enabled(soperator_row)
-        if activechecks_enabled:
+        if (
+            activechecks_enabled
+            and deployment_profile(soperator_row.get("values", {})) == FAST_DEV_TEST
+        ):
+            warnings.append(
+                f"Soperator ActiveChecks controller is enabled for target {target_label}. "
+                "Fast Dev/Test keeps reviewed active and passive diagnostics disabled; "
+                "required bootstrap and operational hooks are retained. Acceptance uses "
+                "service readiness and ordinary-user Slurm smoke tests; GPU health and "
+                "performance qualification are waived."
+            )
+        elif activechecks_enabled:
             warnings.append(
                 "Soperator ActiveChecks are enabled "
                 f"for target {target_label}. Active diagnostics and reviewed passive "
@@ -280,15 +286,6 @@ def soperator_child_chart_warnings(payload_or_config: Any) -> tuple[str, ...]:
                 "maintenance drain/node handoff; actual host reboot happens only "
                 "after SlurmNodeReboot is set. Keep it disabled unless advanced "
                 "Soperator-managed node maintenance is intentionally configured."
-            )
-        if _dcgm_exporter_enabled(soperator_row):
-            warnings.append(
-                "Soperator DCGM job-mapping exporter is enabled "
-                f"for target {target_label}; cxcli's standard GPU telemetry path "
-                "uses the NVIDIA GPU Operator DCGM exporter plus the Nebius "
-                "Observability Agent. Enable the Soperator exporter only when "
-                "Slurm per-job DCGM labels are required, and avoid duplicate DCGM "
-                "scraping."
             )
     return tuple(dict.fromkeys(warnings))
 

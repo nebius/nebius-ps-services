@@ -1,6 +1,21 @@
-# GPU Performance Optimization with PyTorch
+# GPU Performance Optimization
 
 This course teaches a repeatable optimization workflow: establish a trustworthy baseline, classify the limiter, select the smallest useful evidence, change one factor, and remeasure end to end.
+
+Hardware routes:
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Learn to improve GPU workloads with a causal loop: freeze equivalent
+work, measure correctly, classify the limiter, choose focused evidence, change
+one factor, and remeasure end to end.
+
+The course owns general PyTorch performance. Training checkpointing, inference
+attention, and CUDA C++ implementation belong to their specialized courses.
 
 ## 1. Controlled GPU optimization
 
@@ -34,7 +49,7 @@ Investigate in this order: define the desired outcome and correctness limits; re
 
 Compare the real input pipeline with synthetic host inputs and with inputs already resident on the GPU to investigate input starvation. Compilation translates a program region into an executable implementation; fusion combines operations into fewer kernels; a CUDA Graph is a reusable plan of device operations and their dependencies. These techniques respectively change implementation, remove intermediate work, or reduce repeated submission overhead. Layout describes how tensor indices map to storage; numerical precision describes how finely values are represented. They are introduced here as a map, then defined and practiced in their own lessons. These are hypotheses to test, not switches to enable together. Distributed overlap belongs later, after the local path is understood.
 
-Read-only nvidia-smi and NVIDIA Data Center GPU Manager (DCGM) observations describe device state and trends. A profiler records execution activity: PyTorch Profiler associates framework operations with that activity, Nsight Systems explains the CPU/transfer/kernel timeline, and Nsight Compute examines selected kernel resource and memory behavior. NVIDIA Tools Extension (NVTX) supplies human-readable ranges in a trace. Profilers add overhead, so collect diagnostic traces separately from final unprofiled timing. Lesson 3 and the Diagnostic tooling setup guide explain selection and safe use.
+Read-only nvidia-smi and NVIDIA Data Center GPU Manager (DCGM) observations describe device state and trends. A profiler records execution activity: PyTorch Profiler associates framework operations with that activity, Nsight Systems explains the CPU/transfer/kernel timeline, and Nsight Compute examines selected kernel resource and memory behavior. NVIDIA Tools Extension (NVTX) supplies human-readable ranges in a trace. Profilers add overhead, so collect diagnostic traces separately from final unprofiled timing. Lesson 3 and the Diagnostic tooling reference guide explain selection and safe use.
 
 ### Execution and dependencies
 
@@ -58,7 +73,9 @@ Most false speedups come from changing the workload, omitting required synchroni
 
 Assume a request spends 6 milliseconds preparing data on the CPU and 4 milliseconds executing GPU work, with no overlap. Halving the GPU work yields 8 milliseconds overall, not 5. If preparation of the next batch can safely overlap the current batch's device work, steady-state throughput may instead be limited by the slower stage; first-request latency and buffer ownership still need separate checks. Draw both timelines before choosing a technique.
 
-**Practice labs**
+**Practice**
+
+Use the Lab 01 guide as a baseline worksheet: name the workload, correctness check and timed boundary before running it in Lesson 2. Distributed preflight comes later in Lesson 11.
 
 - [Lab 01: Compare CPU timers and CUDA events](reference/labs/01_timing_basics.md)
 
@@ -90,7 +107,9 @@ Reading a CUDA scalar with `.item()` is a small operation with a significant ord
 
 CUDA submission is asynchronous. A CPU timer stopped after submission reports enqueue cost. Two timing-enabled CUDA events measure an elapsed stream interval. A CPU timer stopped after required synchronization includes the host-observed wait for completion. These are different metrics, not contradictory answers.
 
-**Practice labs**
+**Practice**
+
+Run Labs 01 and 02 to distinguish timer boundaries from synchronization overhead while preserving the same useful work.
 
 - [Lab 01: Compare CPU timers and CUDA events](reference/labs/01_timing_basics.md)
 - [Lab 02: Remove unnecessary per-step host synchronization](reference/labs/02_sync_trap.md)
@@ -119,7 +138,7 @@ A useful profile connects the code that requested work to the activity that comp
 
 PyTorch Profiler connects Python operators, shapes, allocations, and scheduled training steps; short active windows and semantic NVTX ranges keep traces interpretable. Nsight Systems shows CPU threads, CUDA application programming interface (API) calls, kernels, copies, collectives, and gaps on a common timeline; inspect the timeline before aggregate tables. Nsight Compute replays selected kernels to collect instruction, memory, scheduler, and roofline metrics; replay overhead means its run is not acceptance timing. `nvidia-smi` and DCGM provide device state, NVIDIA Collective Communications Library (NCCL) Tests isolate collectives, `nvbandwidth` isolates supported transfer paths, and serving load tools own request-level distributions. Tool availability and counter permission belong to the cluster owner; the learner verifies them inside an allocation and fails clearly if a required scope is unavailable.
 
-For an initial tool map, use the [Diagnostic tooling setup](reference/tooling-setup.md) guide: it separates device health, continuous telemetry, framework attribution, system timelines, kernel counters and load generation. It also explains protected DCGM Exporter/Prometheus collection, counter contention, NCCL Tests versus nvbandwidth and standardized benchmark context. Reading these interfaces is not permission to reconfigure cluster monitoring or networking. Use the cheapest observation that can distinguish your current hypothesis, then narrow the scope before collecting expensive kernel details.
+For an initial tool map, use the [Diagnostic tooling reference](../README.md#how-to-set-up-the-lab) guide: it separates device health, continuous telemetry, framework attribution, system timelines, kernel counters and load generation. It also explains protected DCGM Exporter/Prometheus collection, counter contention, NCCL Tests versus nvbandwidth and standardized benchmark context. Reading these interfaces is not permission to reconfigure cluster monitoring or networking. Use the cheapest observation that can distinguish your current hypothesis, then narrow the scope before collecting expensive kernel details.
 
 ### Follow a submitted operation onto the device
 
@@ -131,7 +150,9 @@ Nsight Systems can retain PyTorch context through explicit NVTX and supported Py
 
 Capturing every counter creates huge, perturbing traces without answering the question. Engineers also confuse monitoring, profiling, and benchmarking, or treat unavailable privileged counters as a reason to guess.
 
-**Practice labs**
+**Practice**
+
+Run Lab 07, then investigate the synchronization case in Lab 14. Read its launch, memory and compute cases as previews for the later mechanisms.
 
 - [Lab 07: Build a readable profiler map of a workload](reference/labs/07_profile_workload.md)
 - [Lab 14: Diagnose synchronization, launch, memory, and compute limits](reference/labs/14_profiler_bottlenecks.md)
@@ -166,7 +187,9 @@ An activation illustrates work that can sometimes be fused with nearby arithmeti
 
 H100 can finish small elementwise kernels faster than Python and the runtime can dispatch them. The symptom is a launch-dense timeline with low work per launch, not merely low average utilization.
 
-**Practice labs**
+**Practice**
+
+Use Lab 03 to compare eager and compiled execution; connect launch counts and intermediate traffic to the complete operation time.
 
 - [Lab 03: Compare eager and compiled pointwise execution](reference/labs/03_compile_fusion.md)
 
@@ -202,7 +225,9 @@ Graph capture is powerful for repeated fixed work but fragile around dynamic all
 
 The dependency structure is a directed acyclic graph (DAG): nodes are operations, edges are prerequisites, and no chain loops back to its own unfinished start. Replay repeats this finite plan.
 
-**Practice labs**
+**Practice**
+
+Use Lab 04 to distinguish graph preparation from replay and check that refreshed inputs still produce the correct result.
 
 - [Lab 04: Replay a fixed-shape workload with a CUDA Graph](reference/labs/04_cuda_graphs.md)
 
@@ -236,7 +261,9 @@ Batch-ready timestamps, queue depth, idle gaps and stage durations distinguish t
 
 Increasing workers can move the bottleneck to storage, CPU scheduling, memory, interprocess transfer, or shared filesystem contention. It can also duplicate or reorder samples and change the training workload.
 
-**Practice labs**
+**Practice**
+
+Run Lab 05 to locate input waiting, then Lab 19 to test bounded input-copy overlap without reusing a buffer too early.
 
 - [Lab 05: Locate waiting in a DataLoader pipeline](reference/labs/05_input_pipeline.md)
 - [Lab 19: Overlap H2D copies with a bounded input ring](reference/labs/19_h2d_pipeline.md)
@@ -271,7 +298,9 @@ Logical tensor bytes can understate physical traffic. Temporary materialization,
 
 A persisting-L2 (level-two cache) access policy identifies a memory range whose accesses should receive preferential retention in the shared L2 cache on supported configurations. It is a reuse hint, not a guarantee that the range stays resident. Giving a proven reusable range that preference competes with other useful data and requires CUDA-level evidence.
 
-**Practice labs**
+**Practice**
+
+Revisit Lab 03 with a ledger of intermediate bytes, then inspect Lab 10 as a shape/layout preview for Lesson 9. Extend the input-pipeline investigation by accounting for any required layout conversion.
 
 - [Lab 03: Compare eager and compiled pointwise execution](reference/labs/03_compile_fusion.md)
 - [Lab 10: Survey library behavior across shapes and dtypes](reference/labs/10_shape_precision.md)
@@ -294,7 +323,7 @@ Fragmentation means free storage is divided into pieces that cannot satisfy a pa
 
 An output pipeline moves device results into host buffers and hands completed results to a consumer, such as an encoder or storage client. A buffer pool reuses a bounded set of allocations. Backpressure is the wait imposed when every slot is still owned by a transfer or consumer; it prevents unbounded queued results. A future represents eventual completion or failure of a worker task. This lesson applies allocator lifetime to both GPU and CPU ownership, after Lesson 6 established input-stream dependencies.
 
-Read/write accounting counts bytes moved. A allocation-lifetime diagram asks when each allocation must coexist, which determines whether the workload fits and whether allocator state is being mistaken for a leak.
+Read/write accounting counts bytes moved. An allocation-lifetime diagram asks when each allocation must coexist, which determines whether the workload fits and whether allocator state is being mistaken for a leak.
 
 An allocation contributes to memory demand for as long as some operation needs it. Inputs, outputs, workspaces, communication buffers and compiler or graph pools can overlap in lifetime. Peak demand occurs where the largest set must coexist, so shortening one long-lived allocation can matter more than reducing several small ones.
 
@@ -308,7 +337,9 @@ Capacity and bandwidth are different problems. Reducing reserved memory may not 
 
 CUDA memory pools and stream-ordered allocation make reuse and ordering explicit below the framework layer; they do not reduce live tensor bytes.
 
-**Practice labs**
+**Practice**
+
+Use Lab 12 to distinguish live and reserved memory, then Lab 20 to verify when output buffers can safely be reused.
 
 - [Lab 12: Follow live, cached, and released GPU memory](reference/labs/12_allocator_lifetime.md)
 - [Lab 20: Drain a bounded D2H output pipeline](reference/labs/20_d2h_pipeline.md)
@@ -341,7 +372,9 @@ Representative shapes, batches, dtypes and layouts expose these choices without 
 
 A mathematically smaller shape can run slower when it selects a poor kernel, wastes a final tile, or prevents fusion. Padding can improve kernel efficiency while increasing total work, so comparisons must normalize useful work.
 
-**Practice labs**
+**Practice**
+
+Run the Lab 10 shape and precision comparisons, preserving the numerical contract and including any conversion or padding cost.
 
 - [Lab 10: Survey library behavior across shapes and dtypes](reference/labs/10_shape_precision.md)
 
@@ -373,13 +406,15 @@ Across ranks, one worker may reach a collective later than its peers. Their appa
 
 These problems can all leave execution resources idle, but they arise at different scheduling levels. A branch rewrite cannot remove a one-block tail, and adding blocks cannot equalize variable per-rank data.
 
-**Practice labs**
+**Practice**
+
+Use Lab 15 to distinguish unequal task work from a partial final grid wave before choosing a balancing change.
 
 - [Lab 15: Distinguish task imbalance from partial grid waves](reference/labs/15_tail_load_balance.md)
 
 **Mental model**
 
-Parallel completion is set by the slowest participating unit. Work distributions, bucket sizes, expert routing, and grid size create different kinds of tails.
+Unused lanes, unequal block or rank work, and a partial final grid wave are different causes of idle capacity. Identify which unit finishes late before changing how work is grouped.
 
 ## 11. GPU communication paths and performance
 
@@ -417,11 +452,13 @@ MPI, the Message Passing Interface, coordinates cooperating processes. In an MPI
 
 Two fast GPUs can spend most of a step waiting for communication. Wrong placement, a slow link, network congestion or one late rank can overwhelm a small algorithmic improvement. A synthetic all-reduce curve isolates part of the problem; only a subsequent application measurement establishes useful benefit.
 
-**Practice labs**
+**Practice**
 
-- [Lab 00: Establish the optimization platform contract](reference/labs/00_cluster_preflight.md)
-- [Lab 17: Measure a two-node NCCL message-size curve](reference/labs/17_nccl_transport_sweep.md)
-- [Lab 18: Run and interpret NVIDIA NCCL Tests on Slurm](reference/labs/18_nccl_tests_report.md)
+On the separate fabric cluster, complete Advanced Lab 05, then use Labs 09 and 10 to relate the verified transport to a message-size curve.
+
+- [Lab 05: Establish the optimization platform contract](../advanced-gpu-communication/reference/labs/05_transport_readiness.md)
+- [Lab 09: Measure a two-node NCCL message-size curve](../advanced-gpu-communication/reference/labs/09_nccl_transport_sweep.md)
+- [Lab 10: Run and interpret NVIDIA NCCL Tests on Slurm](../advanced-gpu-communication/reference/labs/10_nccl_tests_report.md)
 
 **Mental model**
 
@@ -455,10 +492,12 @@ A timeline connects bucket readiness, collective start and end, independent comp
 
 Non-uniform memory access (NUMA) means that a CPU’s access cost depends on which socket owns the memory. Placing communication buffers and processes near their GPU and network attachment can avoid extra host interconnect traffic; placement must be verified for the actual allocation.
 
-**Practice labs**
+**Practice**
 
-- [Lab 08: Compare one GPU with two-node DDP](reference/labs/08_distributed_scaling.md)
-- [Lab 13: Test whether communication can overlap independent compute](reference/labs/13_collective_overlap.md)
+Use Advanced Labs 12 and 13 on the fabric cluster to separate fixed-work scaling from communication overlap; judge the complete step, not one shortened wait.
+
+- [Lab 12: Compare one GPU with two-node DDP](../advanced-gpu-communication/reference/labs/12_distributed_scaling.md)
+- [Lab 13: Test whether communication can overlap independent compute](../advanced-gpu-communication/reference/labs/13_collective_overlap.md)
 
 **Mental model**
 
@@ -490,7 +529,9 @@ For example, `1.125 * 3.625 - 4 = 0.078125` in exact arithmetic. Rounding the pr
 
 Custom code can win a microbenchmark yet lose end to end, duplicate a maintained library, or become incompatible with new shapes and software. The optimization layer is an engineering cost decision, not a badge of sophistication.
 
-**Practice labs**
+**Practice**
+
+Complete Lab 09 with a controlled compilation comparison, then use Lab 16 to decide whether an unresolved gap justifies custom-kernel ownership.
 
 - [Lab 09: Build a causal compilation experiment](reference/labs/09_capstone.md)
 - [Lab 16: Custom kernel decision making](reference/labs/16_library_first_decision.md)
@@ -498,3 +539,77 @@ Custom code can win a microbenchmark yet lose end to end, duplicate a maintained
 **Mental model**
 
 Mature libraries encode hardware-specific algorithms and ongoing maintenance. Framework composition, compilation, library selection, or a custom epilogue often captures the value without owning an entire kernel.
+
+## 14. GPU fabric topology and peer traffic
+
+**Objective**
+
+Distinguish local peer traffic from inter-node transfers and interpret a verified peer matrix without treating an average as proof of every path.
+
+**How it works**
+
+A GPU fabric is the collection of links and switches connecting devices. NVLink/NVSwitch connects the eight H100s inside a worker; InfiniBand connects separate workers. A one-GPU TCP worker cannot supply evidence about either eight-GPU peer paths or the intended cross-node fabric. First verify placement, then test the relevant path. Eight devices produce 56 directed peer pairs; a missing pair invalidates a full-matrix claim. Copy engines move data through dedicated transfer hardware, while kernels execute on streaming multiprocessors (SMs). These paths can move the same bytes with different resource costs. Use the measured minimum and per-pair matrix to locate an asymmetry before proposing a driver or fabric fault.
+
+The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
+
+Consider two peer pairs carrying the same 64 MiB buffer. If one takes 0.25 ms and the other 0.50 ms, the second path supplies half the useful rate. That difference does not identify a bad switch: first verify direction, engine, device placement, repeated variation and competing work. Inspect the vendor matrix before averaging. The diagonal is not a peer transfer and must not be included as a zero-bandwidth link. Increasing buffer size is a separate workload study because setup overhead becomes a smaller fraction of elapsed time. Preserve the same buffer and iteration count when comparing execution engines. Stop if any directed pair fails data verification.
+
+**Practice**
+
+Complete Advanced Lab 01 before Lab 06 on the fabric cluster. Verify all directed pairs, then compare transfer engines at the same buffer size and iteration count.
+
+- [Lab 01: Verify the GPU fabric and rank placement](../advanced-gpu-communication/reference/labs/01_fabric_topology.md)
+- [Lab 06: Compare copy engines and SM peer traffic](../advanced-gpu-communication/reference/labs/06_nvlink_bandwidth.md)
+
+**Mental model**
+
+A peer matrix describes directed paths under a particular transfer engine. Verify each path and its data before using the minimum or average to explain the fabric.
+
+## 15. GPU memory over InfiniBand
+
+**Objective**
+
+Distinguish host and GPU memory registration, interpret RDMA transfer units, and isolate the effect of queue depth while preserving verified payloads.
+
+**How it works**
+
+Remote direct memory access (RDMA) lets a network adapter read or write registered memory without the remote CPU copying each payload. The network interface controller (NIC), called a host channel adapter (HCA) on InfiniBand, performs the transfer. Memory registration exposes a specific buffer to that adapter with the required access rights. Host registration and GPU registration are different paths; GPUDirect RDMA permits the NIC to access GPU memory. DMA-BUF is Linux’s buffer-sharing interface; `nvidia-peermem` is NVIDIA’s peer-memory kernel module. The selected GPU-registration path must match the installed driver, kernel and NIC stack. Check the GPU-to-NIC topology and actual registration evidence before interpreting speed. A TCP address may be used for connection bootstrap even when payloads use InfiniBand. Conversely, a NET/IB log alone does not prove direct GPU memory access. At 200 Gbit/s bidirectional aggregate traffic, dividing by eight gives 25 GB/s aggregate; that is not 25 GB/s in each direction. Keep sizes and queue depth equal when comparing memory types.
+
+The linked advanced lab requires the separate two-node, sixteen-H100 cluster and a qualified GPU-memory registration path. Inspect endpoint payload validation, registration evidence and the vendor transfer timings. This RDMA-only transfer does not provide a useful CUDA kernel timeline, so Nsight Systems is explicitly inapplicable. Grafana compares measured transfer results and supplies job-window context; sampled GPU activity cannot establish network latency or prove GPUDirect RDMA.
+
+For a controlled experiment, hold the selected HCA, GPU, message size, iteration count, queue-pair count and transmit depth fixed, changing only host versus GPU memory. Require both endpoints to validate nonzero received bytes. Next, freeze the successful GPU-memory path and change transmit depth alone. A deeper queue can hide latency until bandwidth or another resource saturates; it can also add work without improving useful rate. Neither result authorizes changing switch policy. Inspect the owner-qualified topology and runtime evidence before proposing an infrastructure intervention. Keep connection logs private and report the measured path, units and registration method with the result.
+
+**Practice**
+
+Use Advanced Lab 07 to compare verified host and GPU transfers, then change transmit depth alone. Inspect endpoint validation and vendor timings; Nsight Systems is inapplicable to this RDMA-only transfer.
+
+- [Lab 07: Validate host and GPU memory over InfiniBand](../advanced-gpu-communication/reference/labs/07_rdma_bandwidth.md)
+
+**Mental model**
+
+Registration determines which memory the NIC can access. Queue depth determines how much work can remain in flight; both the validated path and the measurement units must be known before interpreting bandwidth.
+
+## 16. Communication ownership and rank timelines
+
+**Objective**
+
+Use per-rank timelines to identify the dependency that limits a collective step and distinguish useful overlap from resource contention.
+
+**How it works**
+
+A rank is one process in a distributed group. A collective combines or exchanges values across that group. It has both a value contract and a participation contract: every required rank must execute compatible operations in compatible order. A hierarchy can reduce cross-node participants but adds local reductions and broadcasts. The NVIDIA Collective Communications Library (NCCL) already chooses topology-aware algorithms, so an explicit hierarchy may be slower. Overlap helps only when independent computation occupies time that would otherwise be exposed communication. The completion time is determined by the slowest participating rank. Use PyTorch traces for framework attribution, Systems CUDA/NCCL timelines for cross-process dependencies, and a separate unprofiled run for the final number. A shorter wait accompanied by slower general matrix multiplication (GEMM) is not automatically an end-to-end improvement; communication and compute can compete for streaming multiprocessor (SM) and memory resources.
+
+The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
+
+Suppose serialized communication takes 4 ms and independent compute takes 6 ms. Ideal overlap would approach 6 ms, but actual overlap can contend for SMs or memory and take 8 ms. An 8 ms result improves on a 10 ms serial step while still falling short of that ideal. If compute expands to 11 ms under contention, a shorter exposed collective wait can accompany a slower total step. Mark submission, useful compute and dependency waits separately. Compare the same iteration on every rank, because the fastest rank cannot authorize the next distributed step. Retain the distributions and separate instrumentation cost from the clean measurement.
+
+**Practice**
+
+Use Advanced Lab 11 to compare collective ownership, then Lab 14 to correlate the same iteration across PyTorch and Systems rank reports.
+
+- [Lab 11: Compare flat and hierarchical all-reduce](../advanced-gpu-communication/reference/labs/11_collective_layout.md)
+- [Lab 14: Correlate PyTorch and Systems traces across ranks](../advanced-gpu-communication/reference/labs/14_distributed_profiling.md)
+
+**Mental model**
+
+Distributed completion follows the last required dependency. Overlap is useful only when it shortens the complete step without changing the value or participation contract.

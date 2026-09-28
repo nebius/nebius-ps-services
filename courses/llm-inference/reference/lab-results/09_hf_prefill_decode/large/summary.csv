@@ -1,0 +1,8 @@
+variant,metric,case,value,unit
+baseline-trial1,prefill_timing_median_seconds,value,0.0124848,s
+baseline-trial1,prompt_tokens,value,769,none
+baseline-trial1,decode_steps_per_request,value,0,none
+candidate-trial1,prefill_timing_median_seconds,value,0.0122483,s
+candidate-trial1,decode_timing_median_seconds,value,0.0115302,s
+candidate-trial1,prompt_tokens,value,769,none
+candidate-trial1,decode_steps_per_request,value,7,none

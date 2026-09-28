@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -14,14 +15,14 @@ from nebius_cxcli.soperator_config_materialization import (
 )
 from nebius_cxcli.soperator_values import (
     EXPLICIT_VALUES_FIELD,
-    apply_frozen_feature_defaults,
+    apply_source_feature_defaults,
     explicit_values,
     mark_explicit_value,
     read_soperator_values_file,
     seed_soperator_values,
     validate_feature_values,
-    validate_frozen_input,
     validate_schedule,
+    validate_source_input,
 )
 from soperator_fixtures import sample_snapshot
 
@@ -145,10 +146,10 @@ def test_frozen_defaults_and_routing_use_selected_release(tmp_path):
         (directory / "values.yaml").write_text(yaml.safe_dump(values))
         charts[role] = replace(snapshot.umbrella, source_path=role)
     frozen = SimpleNamespace(
-        snapshot=replace(snapshot, charts=charts), source=SimpleNamespace(source_dir=str(tmp_path))
+        charts=charts, umbrella=snapshot.umbrella, source=SimpleNamespace(source_dir=str(tmp_path))
     )
-    validate_frozen_input({"slurmConfig": {"customNestedSetting": 3}}, frozen)
-    validate_frozen_input(
+    validate_source_input({"slurmConfig": {"customNestedSetting": 3}}, frozen)
+    validate_source_input(
         {"controllerManager": {"manager": {"resources": {"limits": {"cpu": "2"}}}}}, frozen
     )
     for value in (
@@ -159,11 +160,11 @@ def test_frozen_defaults_and_routing_use_selected_release(tmp_path):
         {"serviceMonitor": {}},
     ):
         with pytest.raises(ValueError):
-            validate_frozen_input(value, frozen)
+            validate_source_input(value, frozen)
     with pytest.raises(ValueError, match="Unsupported"):
-        validate_frozen_input({"typo": True}, frozen)
+        validate_source_input({"typo": True}, frozen)
     row = {"id": "soperator", "enabled": True}
-    apply_frozen_feature_defaults({"apps": {"charts": [row]}}, frozen)
+    apply_source_feature_defaults({"apps": {"charts": [row]}}, frozen)
     assert row["values"]["soperator-backup-config"]["prune"]["retention"]["keepDaily"] == 11
 
 
@@ -213,25 +214,26 @@ def test_sssd_shared_references_lower_to_each_consumer():
     assert all(item["sssd"]["enabled"] is False for item in values["nodesets"])
 
 
-def test_resume_rejects_values_file_before_reading_it(tmp_path):
+def test_deploy_rejects_values_file_before_reading_it(tmp_path):
     from typer.testing import CliRunner
 
     result = CliRunner().invoke(
         cli.app,
         [
-            "soperator",
-            "install",
+            "deploy",
             str(tmp_path),
-            "--resume",
             "--values-file",
             str(tmp_path / "missing"),
         ],
     )
     assert result.exit_code != 0
-    assert "does not accept fresh-install options: --values-file" in " ".join(result.output.split())
+    rendered = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
+    assert "No such option" in rendered
+    assert "--values-file" in rendered
 
 
 def test_real_wizard_prefills_file_and_records_confirmed_default(monkeypatch):
+    monkeypatch.setattr(cli.typer, "confirm", lambda *a, **kw: True)
     from nebius_cxcli.components import ComponentEntry
 
     row = {"id": "soperator", "instance_id": "mk8s", "enabled": True, "values": {}}
@@ -326,7 +328,10 @@ def test_real_normalization_and_upgrade_keep_explicit_values(tmp_path):
 def test_feature_prompts_are_conditional_and_required():
     from nebius_cxcli.components import soperator_install_entry
 
-    entry = soperator_install_entry(version="4.1.8")
+    entry = soperator_install_entry(
+        version="4.1.8",
+        chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd",
+    )
     row = {
         "id": "soperator",
         "enabled": True,
@@ -348,3 +353,112 @@ def test_feature_prompts_are_conditional_and_required():
             payload=payload, entry=entry, full_path_label=label
         )
         assert cli._dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_observability_defaults_are_taken_from_frozen_umbrella_without_persistence(
+    tmp_path, enabled
+):
+    from nebius_cxcli.soperator_values import with_source_observability
+
+    snapshot = sample_snapshot()
+    directory = tmp_path / snapshot.umbrella.source_path
+    directory.mkdir(parents=True)
+    native = {
+        "enabled": enabled,
+        "dcgmExporter": {
+            "enabled": True,
+            "values": {"validateToolkit": True, "hpcJobMapDir": "/upstream/jobs"},
+        },
+        "vmStack": {"enabled": False},
+        "opentelemetry": {"enabled": True},
+    }
+    (directory / "values.yaml").write_text(yaml.safe_dump({"observability": native}))
+    frozen = SimpleNamespace(
+        charts=snapshot.charts,
+        umbrella=snapshot.umbrella,
+        source=SimpleNamespace(source_dir=str(tmp_path)),
+    )
+    authored = {"observability": {"dcgmExporter": {"values": {"validateToolkit": False}}}}
+    before = copy.deepcopy(authored)
+    validate_source_input(authored, frozen)
+    effective = with_source_observability(authored, frozen)
+    assert effective["observability"]["enabled"] is enabled
+    assert effective["observability"]["dcgmExporter"]["values"] == {
+        "validateToolkit": False,
+        "hpcJobMapDir": "/upstream/jobs",
+    }
+    assert effective["observability"]["vmStack"] == {"enabled": False}
+    assert authored == before
+    # A different frozen release default must not inherit the previous one.
+    native["dcgmExporter"]["enabled"] = False
+    (directory / "values.yaml").write_text(yaml.safe_dump({"observability": native}))
+    assert (
+        with_source_observability(authored, frozen)["observability"]["dcgmExporter"]["enabled"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("path", ["values", "overrideValues"])
+def test_bundled_grafana_cannot_bypass_optional_app_selection(tmp_path, path):
+    config = tmp_path / "input.yaml"
+    config.write_text(
+        yaml.safe_dump({"observability": {"vmStack": {path: {"grafana": {"enabled": True}}}}})
+    )
+    with pytest.raises(ValueError, match="bundled Grafana is disabled"):
+        read_soperator_values_file(config)
+
+
+def test_obsolete_dcgm_input_rejected_even_without_explicit_metadata():
+    with pytest.raises(ValueError, match="reauthor"):
+        validate_feature_values({"soperator-dcgm-exporter": {"enabled": False}})
+
+
+@pytest.mark.parametrize(
+    "change", ["dcgm", "grafana", "unauthenticated", "fingerprint", "same", "other_patch"]
+)
+def test_frozen_observability_replay_rejects_policy_changes(change):
+    from nebius_cxcli.soperator_operation import soperator_sha256
+    from nebius_cxcli.soperator_values import assert_frozen_observability_replay
+
+    previous = {"observability": {"enabled": True, "dcgmExporter": {"enabled": True}}}
+    desired = copy.deepcopy(previous)
+    material = {"renderedFluxSha256": "frozen"}
+    receipt = {**material, "fingerprint": soperator_sha256(material), "createdAt": "ignored"}
+    if change == "dcgm":
+        desired["observability"]["dcgmExporter"]["enabled"] = False
+    elif change == "grafana":
+        desired["observability"]["vmStack"] = {"values": {"grafana": {"enabled": True}}}
+    elif change == "fingerprint":
+        receipt["fingerprint"] = "tampered"
+    args = dict(
+        receipt=receipt,
+        previous_bundle_sha256="changed" if change == "unauthenticated" else "frozen",
+        desired_bundle_sha256="frozen" if change == "same" else "candidate",
+        previous_values=previous,
+        desired_values=desired,
+    )
+    before = copy.deepcopy(args)
+    if change in {"same", "other_patch"}:
+        assert_frozen_observability_replay(**args)
+    else:
+        with pytest.raises(ValueError, match="[Ff]rozen"):
+            assert_frozen_observability_replay(**args)
+    assert args == before
+
+
+@pytest.mark.parametrize(
+    "native",
+    [
+        {"clusterId": "replacement"},
+        {"region": "replacement"},
+        {"vmStack": {"overrideValues": {"vmagent": {"enabled": False}}}},
+        {"opentelemetry": {"logs": {"overrideValues": {"config": {}}}}},
+        {"opentelemetry": {"events": {"overrideValues": {"config": {}}}}},
+    ],
+)
+def test_native_inputs_cannot_replace_protected_bindings(tmp_path, native):
+    path = tmp_path / "input.yaml"
+    path.write_text(yaml.safe_dump({"observability": native}))
+    with pytest.raises(ValueError, match="owned|protected"):
+        read_soperator_values_file(path)

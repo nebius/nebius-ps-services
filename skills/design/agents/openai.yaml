@@ -1,6 +1,6 @@
 interface:
   display_name: "Design"
-  short_description: "Design software and delegate governed AI subsystem choices"
-  default_prompt: "Use $design to understand requirements, inspect the existing system, route missing due diligence through $research, use $app-stack for undecided application layers, delegate AI behavior, topology, policy, and contracts once to $ai-agent-design, consume its scoped $ai-stack component decision, apply $system-design-rules, compare alternatives, and create a /plan handoff."
+  short_description: "Plan against existing code and resolve design conflicts"
+  default_prompt: "Use $design to read this project's design documents and implemented code, give code precedence and report discrepancies, resolve proposal conflicts, and return a plan without implementing by default. Keep canonical documents owned by $maintain-project-specs. Preserve research and specialist handoffs; continue to implementation only when explicitly requested and host mode permits."
 policy:
   allow_implicit_invocation: true

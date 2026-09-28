@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,sm_count,value,132,none
+baseline-trial1,global_memory_bytes,value,150109880320,bytes
+baseline-trial1,runtime_version,value,13030,none
+repeat-trial1,sm_count,value,132,none
+repeat-trial1,global_memory_bytes,value,150109880320,bytes
+repeat-trial1,runtime_version,value,13030,none

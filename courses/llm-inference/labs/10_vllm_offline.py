@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import time
 
@@ -11,11 +12,12 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def aggregate_outputs(outputs: list[object], *, max_tokens: int) -> dict[str, object]:
@@ -62,11 +64,25 @@ def main() -> None:
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--max-model-len", type=int, default=2_048)
     parser.add_argument("--enforce-eager", action="store_true")
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help="Keep the single-GPU engine in this process for NVTX-scoped diagnostics.",
+    )
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
+    if os.environ.get("COURSE_CAPTURE") == "1" and not args.in_process:
+        raise SystemExit(
+            "Offline vLLM capture requires --in-process so the selected NVTX range "
+            "contains GPU launches; retain the default process mode for clean timing."
+        )
+    if args.in_process:
+        # vLLM reads this setting when constructing the engine. Parent NVTX
+        # ranges do not propagate into the default EngineCore child process.
+        os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     try:
         from vllm import LLM, SamplingParams
     except ImportError as exc:
@@ -80,7 +96,7 @@ def main() -> None:
         "Explain the difference between LLM prefill and decode.",
         "Why should inference benchmarks report latency percentiles?",
     ]
-    copies = 1 if args.profile == "smoke" else 4
+    copies = 1 if args.profile == "small" else 4
     prompts = [
         f"{prompt} Example request {index}."
         for index, prompt in enumerate(base_prompts * copies, start=1)
@@ -99,13 +115,14 @@ def main() -> None:
     sampling = SamplingParams(temperature=0.0, max_tokens=max_tokens)
     for _ in range(args.warmup):
         engine.generate(prompts, sampling)
+    measured_generate = annotated_operation(engine.generate, "vllm_generate")
     elapsed = 0.0
     prompt_token_counts: list[int] = []
     output_token_counts: list[int] = []
     finish_reasons: list[str | None] = []
     for _ in range(args.iterations):
         started = time.perf_counter()
-        outputs = engine.generate(prompts, sampling)
+        outputs = measured_generate(prompts, sampling)
         elapsed += time.perf_counter() - started
         if len(outputs) != len(prompts):
             raise SystemExit(
@@ -149,4 +166,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

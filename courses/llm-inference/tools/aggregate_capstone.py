@@ -16,6 +16,14 @@ from typing import Any
 def load_trial(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as stream:
         payload = json.load(stream)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Capstone input must be an object: {path}")
+    experiment = payload.get("experiment")
+    if not isinstance(experiment, dict) or experiment.get("instrumented") is not False:
+        raise SystemExit(
+            f"Capstone requires explicit unprofiled provenance in {path}; "
+            "rerun the trial without profiling."
+        )
     if payload.get("schema") != "gpu-course-result/v1":
         raise SystemExit(f"Unexpected schema in {path}")
     if payload.get("lab_id") != "32_inference_capstone":
@@ -25,9 +33,9 @@ def load_trial(path: Path) -> dict[str, Any]:
     measurements = payload.get("measurements")
     environment = payload.get("environment")
     if (
-        payload.get("profile") not in ("smoke", "h100")
+        payload.get("profile") not in ("small", "large")
         or not isinstance(environment, dict)
-        or environment.get("gpu_family") != "NVIDIA H100"
+        or environment.get("gpu_family") not in ("NVIDIA H100", "NVIDIA H200")
         or any(
             not isinstance(environment.get(key), str) or not environment[key].strip()
             for key in ("torch_version", "cuda_version")
@@ -38,6 +46,10 @@ def load_trial(path: Path) -> dict[str, Any]:
         or re.fullmatch(r"[0-9a-f]{12}", payload["run_id"]) is None
     ):
         raise SystemExit(f"Invalid or incomplete capstone contract in {path}")
+    if measurements.get("acceptance_timing") is False:
+        raise SystemExit(
+            f"Artifact excludes acceptance timing in {path}; rerun without profiling."
+        )
     for key, minimum in (("warmup", 0), ("iterations", 1)):
         value = measurements.get(key)
         if type(value) is not int or value < minimum:
@@ -135,7 +147,8 @@ def main() -> None:
             "materialized_to_sdpa_ratio": round(ratio, 4),
             "decision": decision,
             "claim_scope": (
-                "exact single-H100 prefill shape, software, and measurement "
+                f"exact single-{contracts[0]['environment']['gpu_family'].removeprefix('NVIDIA ')} "
+                "prefill shape, software, and measurement "
                 "contract in the three input records; no serving claim"
             ),
             "causal_report_required": True,

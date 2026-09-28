@@ -136,6 +136,13 @@ jobs:
           set -euo pipefail
           make ci-quality verify-wheel-cli
 
+      - name: Qualify pinned Grafana charts, API and PostgreSQL persistence
+        run: |
+          set -euo pipefail
+          uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_postgres.py
+          uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_api.py
+          uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_persistence.py
+
       - name: Upload exact nebius-cxcli wheel
         uses: actions/upload-artifact@v7
         with:

@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,reference_next_loss,value,5.705605983734131,none
+baseline-trial1,resumed_next_loss,value,5.705605983734131,none
+baseline-trial1,max_parameter_error,value,0.0,none
+repeat-trial1,reference_next_loss,value,5.705605983734131,none
+repeat-trial1,resumed_next_loss,value,5.705605983734131,none
+repeat-trial1,max_parameter_error,value,0.0,none

@@ -14,7 +14,7 @@ and operating instructions belong in the owning project folder.
 | --- | --- | --- |
 | `.github/` | Repository automation, dependency updates, and shared workflows. | [root changelog](CHANGELOG.md) |
 | `services/` | Service and CLI projects. | service-local `README.md` / `CHANGELOG.md` files |
-| `courses/` | Five practical GPU performance engineering courses. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/README.md) |
+| `courses/` | Seven courses: a text-only Slurm/Soperator introduction, five GPU foundations and specializations, and advanced sixteen-GPU communication labs. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/docs/course-builder.md) |
 | `platform-infra/` | Reusable Terraform modules and examples for Nebius infrastructure. | [README](platform-infra/README.md), [changelog](platform-infra/CHANGELOG.md) |
 | `helm-charts/` | Reusable Helm charts. | chart-local `README.md` / `CHANGELOG.md` files |
 | `skills/` | Public reusable Agent Skills and the local skills installer. | [README](skills/README.md), [changelog](skills/CHANGELOG.md) |
@@ -25,8 +25,9 @@ unchanged `skills/` catalog. See the [installation guide](skills/README.md#nativ
 
 ## Common Use Cases
 
-- Learn GPU fundamentals, performance optimization, LLM training and inference,
-  and custom CUDA kernels through the [course catalog](https://nebius.github.io/nebius-ps-services/courses/).
+- Start with Slurm and Soperator, then learn GPU fundamentals, performance
+  optimization, LLM training, LLM inference, custom CUDA kernels and advanced
+  communication through the [course catalog](https://nebius.github.io/nebius-ps-services/courses/).
 - Deploy and operate Nebius AI/ML infrastructure with Terraform.
 - Package platform services and validation workloads with Helm.
 - Generate and deploy customer-facing Nebius configuration with service-local
@@ -43,7 +44,7 @@ Pages to deploy from branch `main` and folder `/(root)` after the website files
 merge. The root `.nojekyll` enables static publication without a custom
 deployment workflow. Other eligible repository files become available through
 Pages as well. Initial setup, course build and validation instructions live in
-[courses/README.md](courses/README.md#website-publication).
+[course builder guide](courses/docs/course-builder.md).
 
 ## Changelog Policy
 

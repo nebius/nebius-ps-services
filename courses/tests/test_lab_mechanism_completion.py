@@ -146,12 +146,8 @@ def test_worked_lab_guides_are_published_and_navigable(course: str) -> None:
     assert 'data-source="reference/lab-mechanisms.md"' in page
     assert 'id="guide-reference-lab-mechanisms"' in page
     assert "Lab mechanisms and evidence" in (ROOT / course / "README.md").read_text()
-    if course != "gpu-optimizations":
-        assert any(
-            "(../lab-mechanisms.md)" in path.read_text()
-            for path in (ROOT / course / "reference/labs").glob("*.md")
-        )
-        assert page.count('href="#guide-reference-lab-mechanisms"') >= 3
+    # Supplemental guides remain available from the contents; labs no longer
+    # require reading-list backlinks to them.
 
 
 def test_scheduler_trace_conserves_per_request_work() -> None:

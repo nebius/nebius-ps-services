@@ -25,7 +25,15 @@ worker transfer, resource-free future-wave replanning, sensitive-content gates,
 and a shared Agentic SDLC lease when running inside a managed outer worktree.
 Corrective replanning holds the transition lock, preserves full definitions and
 digests for every active or completed task, and appends only resource-free
-future waves. Sealed, promoted, or completed execution cannot be reopened.
+future waves. An integrated coordinator can prepare an appended planned wave
+after all preceding waves are done; it preserves the existing TDD and integration
+lineage. Sealed, promoted, or completed execution cannot be reopened.
+
+Failed combined checks use `wave-fail` with canonical classifier and counted
+dispatch identities. It retains a permanent failed-wave receipt and retires
+only clean reachable worker resources. An unresolved failure admits only its
+diagnosis-bound corrective wave. Passing corrected combined checks creates a
+separate digest-bound resolution; stale or missing proof blocks promotion.
 
 The shared lease is schema v4 with `active` and terminal `released` states.
 Promotion persists Git, lease, local interop, then coordinator state in that
@@ -40,7 +48,7 @@ exact recovery.
 The private helper exposes `prepare`, `seal-tdd`, `replan-future`,
 `wave-prepare`, `batch-advance`, `task-arm`, `task-start`, `task-heartbeat`,
 `task-watch`, `task-requeue`, `task-recover`, `task-finish`, `wave-integrate`,
-`wave-complete`, `seal-feature`, `promote`, `release-outer-lease`,
+`wave-complete`, `wave-fail`, `seal-feature`, `promote`, `release-outer-lease`,
 `complete-outer-integration`, and `status`.
 It is an internal state-transition surface, not a public SDLC CLI.
 
@@ -66,3 +74,8 @@ worker results carry typed `spec_gaps` for root-coordinator reconciliation.
 Worker path inventories disable Git rename folding so protected source paths
 cannot disappear behind an allowed destination, and all gap text uses the same
 sensitive-evidence scanner as validation and commit metadata.
+
+The generic credential-assignment screen distinguishes bounded, parseable
+unquoted lookup/call expressions from literal values, so CSRF cookie access and
+runtime secret generation can pass. Quoted literals, malformed expressions and
+provider-specific credential patterns remain blocked.

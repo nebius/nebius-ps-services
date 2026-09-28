@@ -1,0 +1,30 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "12_capstone",
+  "measurements": {
+    "baseline_median_ms": 0.209056,
+    "baseline_min_ms": 0.208608,
+    "baseline_p90_ms": 0.209632,
+    "baseline_samples": 20,
+    "candidate_median_ms": 0.108384,
+    "candidate_min_ms": 0.107648,
+    "candidate_p90_ms": 0.109184,
+    "candidate_samples": 20,
+    "elements": 33554432,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.108384,
+    "kernel_min_ms": 0.107648,
+    "kernel_p90_ms": 0.109184,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 1.19209e-07,
+    "variant_order": "baseline-first",
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

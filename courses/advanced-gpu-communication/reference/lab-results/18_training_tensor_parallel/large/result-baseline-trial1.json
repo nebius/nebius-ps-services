@@ -1,0 +1,33 @@
+{
+  "correctness": {
+    "column_forward_matches_reference": true,
+    "input_gradient_matches_reference": true,
+    "optimizer_update_matches_reference": true,
+    "row_forward_matches_reference": true,
+    "weight_gradient_matches_reference": true
+  },
+  "lab": "18_training_tensor_parallel",
+  "measurements": {
+    "batch": 128,
+    "forward_relative_l2": 0.0,
+    "input_gradient_all_reduce_bytes": 2097152,
+    "input_gradient_all_reduce_median_ms": 0.0981,
+    "input_gradient_relative_l2": 0.00275124,
+    "learning_rate": 0.01,
+    "parameter_shard_bytes_per_rank": 134217728,
+    "parameter_update_relative_l2": 0.0,
+    "replicated_parameter_bytes": 268435456,
+    "row_parallel_forward_relative_l2": 0.00285929,
+    "training_step_slowest_rank_median_ms": 0.6681,
+    "weight_gradient_relative_l2": 0.0,
+    "width": 8192
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

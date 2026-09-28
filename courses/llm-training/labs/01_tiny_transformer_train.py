@@ -10,11 +10,12 @@ from common import (
     add_common_args,
     load_torch,
     open_private_exclusive,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 from tiny_lm import build_tiny_lm, make_language_batch
 
 
@@ -22,14 +23,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--save-checkpoint", action="store_true")
+    parser.add_argument(
+        "--zero-grad-fill",
+        action="store_true",
+        help="Zero existing gradient buffers instead of releasing them; keep all work fixed.",
+    )
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
     hidden, layers, heads, sequence, batch = (
-        (512, 4, 8, 256, 8) if args.profile == "smoke" else (2_048, 12, 16, 1_024, 4)
+        (512, 4, 8, 256, 8) if args.profile == "small" else (2_048, 12, 16, 1_024, 4)
     )
     vocab_size = 4_096
     model = build_tiny_lm(
@@ -41,6 +47,10 @@ def main() -> None:
         max_sequence=sequence,
     ).to("cuda")
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    forward = annotated_operation(model, "forward")
+    backward = annotated_operation(lambda loss: loss.backward(), "backward")
+    update = annotated_operation(optimizer.step, "optimizer")
+    clear_gradients = annotated_operation(optimizer.zero_grad, "zero_grad")
     inputs, labels = make_language_batch(
         torch,
         batch_size=batch,
@@ -57,11 +67,11 @@ def main() -> None:
 
     def train_step() -> tuple[object, object]:
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits = model(inputs)
+            logits = forward(inputs)
             loss = torch.nn.functional.cross_entropy(
                 logits.reshape(-1, vocab_size), labels.reshape(-1)
             )
-        loss.backward()
+        backward(loss)
         if any(parameter.grad is None for parameter in trainable_parameters):
             raise SystemExit("At least one trainable parameter has no gradient.")
         gradient_norm = torch.nn.utils.clip_grad_norm_(
@@ -69,8 +79,8 @@ def main() -> None:
             1.0,
             error_if_nonfinite=True,
         )
-        optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
+        update()
+        clear_gradients(set_to_none=not args.zero_grad_fill)
         return loss.detach(), gradient_norm.detach()
 
     for _ in range(args.warmup):
@@ -129,6 +139,14 @@ def main() -> None:
         lab_id="01_tiny_transformer_train",
         environment=environment,
         measurements={
+            "model_shape": {
+                "hidden": hidden,
+                "layers": layers,
+                "sequence": sequence,
+                "batch": batch,
+                "vocab_size": vocab_size,
+            },
+            "precision": "bf16-forward-fp32-parameters",
             "parameters": sum(parameter.numel() for parameter in model.parameters()),
             "tokens": tokens,
             "initial_loss": round(losses[0], 5),
@@ -165,4 +183,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

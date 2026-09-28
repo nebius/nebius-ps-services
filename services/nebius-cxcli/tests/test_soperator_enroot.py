@@ -139,7 +139,7 @@ def test_profile_apply_rejects_kernel_policy_collision_before_mutation(
             return SimpleNamespace(stdout=json.dumps({"items": [existing]}))
         return SimpleNamespace(stdout="{}")
 
-    monkeypatch.setattr(enroot.subprocess, "run", run)
+    monkeypatch.setattr(enroot.kubernetes_process, "run", run)
     monkeypatch.setattr(enroot, "enroot_profile_nodes_ready", lambda *a: True)
     args = dict(env={}, cache_dir=tmp_path, timeout_seconds=0, poll_interval_seconds=0)
     if mutation:
@@ -153,7 +153,7 @@ def test_profile_apply_rejects_kernel_policy_collision_before_mutation(
 
 def test_profile_gate_timeout_does_not_claim_installation(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        enroot.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout='{"items": []}')
+        enroot.kubernetes_process, "run", lambda *a, **kw: SimpleNamespace(stdout='{"items": []}')
     )
     monkeypatch.setattr(enroot, "enroot_profile_nodes_ready", lambda *a: False)
     with pytest.raises(RuntimeError, match="every ready node"):
@@ -333,7 +333,7 @@ def test_staged_profile_is_applied_only_after_upstream_owner_before_main(
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         raise AssertionError(args)
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", run)
     monkeypatch.setattr(flux_ops, "_rendered_soperator_graph_contract", lambda *a: contract)
     monkeypatch.setattr(flux_ops, "_run_kubectl_json_process", lambda *a, **k: {"items": []})
     for name in [

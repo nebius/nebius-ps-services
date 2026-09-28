@@ -11,12 +11,13 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -31,7 +32,7 @@ def main() -> None:
     if args.steps < 1:
         raise SystemExit("--steps must be positive")
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     try:
         from datasets import Dataset
@@ -122,7 +123,7 @@ def main() -> None:
         for parameter in trainer.model.parameters()
         if parameter.requires_grad
     ]
-    result = trainer.train()
+    result = annotated_operation(trainer.train, "trainer_train")()
     for hook in gradient_hooks:
         hook.remove()
     loss = result.metrics.get("train_loss")
@@ -174,4 +175,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

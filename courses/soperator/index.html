@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Soperator: A Nebius Slurm cluster running on Kubernetes</title><link rel="icon" href="data:,"><style>:root {
+  color-scheme: light;
+  --ink: #24343d;
+  --muted: #52626b;
+  --paper: #f7f9f7;
+  --card: #ffffff;
+  --line: #dbe5e1;
+  --blue: #245880;
+  --teal: #206757;
+  --amber: #86500e;
+  --blue-wash: #eef5fc;
+  --mint-wash: #eef8f2;
+  --amber-wash: #fff7e7;
+  --reading-width: 88ch;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+a { color: var(--blue); text-underline-offset: .18em; overflow-wrap: anywhere; }
+a:hover { color: var(--teal); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; }
+.skip-link { position: absolute; top: .5rem; left: 1rem; transform: translateY(-180%); padding: .5rem; background: white; z-index: 10; }
+.skip-link:focus { transform: none; }
+header { padding: 3rem max(5vw, 1.25rem) 2.5rem; text-align: center; background: linear-gradient(115deg, var(--mint-wash), var(--blue-wash)); border-bottom: 1px solid var(--line); }
+h1 { max-width: 1000px; margin: 0 auto; font-size: clamp(2.1rem, 4.2vw, 3.3rem); line-height: 1.18; letter-spacing: -.035em; text-wrap: balance; }
+.guided-hours { margin: 1rem 0 0; color: var(--muted); font-size: .95rem; }
+.course-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.5rem; max-width: 1800px; margin: auto; padding: 2rem 1.5rem 5rem; }
+aside, main { min-width: 0; }
+nav { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; font-size: .87rem; line-height: 1.5; padding: 1.15rem; background: var(--card); border: 1px solid var(--line); border-radius: 14px; scrollbar-gutter: stable; }
+nav h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .07em; margin: 1.6rem 0 .6rem; }
+nav ol, nav ul { padding-left: 1.2rem; }
+nav li { margin: .25rem 0; }
+nav li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+nav .section-links { list-style: none; padding: 0; }
+nav .section-links ul { list-style: disc; }
+nav summary { font-weight: 650; }
+nav a { display: inline-block; padding: .3rem .2rem; border-radius: 5px; text-decoration: none; }
+nav a:hover { text-decoration: underline; background: var(--mint-wash); }
+nav > details li > a { display: inline; }
+section, article, figure { scroll-margin-top: 1.5rem; }
+h2 { font-size: clamp(1.6rem, 2.6vw, 2.1rem); line-height: 1.25; letter-spacing: -.025em; margin: 0 0 1.1rem; }
+h3 { font-size: 1.25rem; line-height: 1.35; margin-top: 1.8rem; }
+h4 { font-size: 1.1rem; }
+h5 { font-size: 1rem; }
+h6 { font-size: .95rem; }
+h4, h5, h6 { line-height: 1.4; margin-top: 1.6rem; }
+p { margin: .7rem 0 1rem; }
+main > section { margin: 0 0 2rem; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 2rem clamp(1.3rem, 3vw, 2.5rem); box-shadow: 0 3px 14px #24343d04; }
+main p, .lesson > div, .lesson > details, .supporting-guide > ul, .supporting-guide > ol { max-width: var(--reading-width); }
+main > section:target, article:target, figure:target { border-color: var(--teal); }
+.performance-tools { overflow-wrap: anywhere; }
+.performance-workflow { margin: 1rem 0; }
+.lesson > div, .lesson > details { margin: 1.15rem 0; }
+.lesson > .how-it-works { max-width: none; }
+.how-it-works > ul, .how-it-works > ol { max-width: var(--reading-width); }
+.lesson > div > h3, .tools-field > h3 { margin: 0 0 .7rem; color: var(--ink); font-size: 1.25rem; }
+.tools-field { margin: 1.15rem 0; }
+.next-steps-list { padding-left: 1.5rem; }
+.next-steps-list > li { margin: 1.5rem 0; padding-left: .25rem; }
+.next-steps-list > li > h3 { margin: 0 0 .7rem; }
+#guide-glossary > dl { max-width: var(--reading-width); }
+#official-references > ol { list-style-type: decimal; padding-left: 1.5rem; }
+#official-references li { margin: .6rem 0; }
+dt { margin-top: .75rem; font-weight: 650; overflow-wrap: anywhere; }
+dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
+.lesson .lesson-outcome { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.lesson .warning { border-color: var(--amber); background: var(--amber-wash); }
+.lesson .lesson-visuals { padding-top: .5rem; border-top: 1px solid var(--line); }
+summary { cursor: pointer; }
+details > summary { padding: .35rem 0; }
+code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--blue-wash); border-radius: 3px; padding: .1em .3em; overflow-wrap: anywhere; }
+pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; }
+pre code { padding: 0; background: none; overflow-wrap: normal; }
+.table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 14em; overflow-wrap: normal; }
+th { background: var(--blue-wash); font-weight: 650; }
+tbody tr:last-child td { border-bottom: 0; }
+.course-contract { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.course-contract > div { border-top: 3px solid var(--teal); padding: .4rem .4rem 0; }
+.course-contract h3 { margin-top: .5rem; }
+.lab, .supporting-guide { padding: 1.4rem 0; border-top: 1px solid var(--line); }
+.lab h3, .supporting-guide > h3 { margin-top: .5rem; }
+.lab-guide { display: block; }
+.lab-guide-section { margin: 1.5rem 0; }
+.lab-guide-section h4 { font-size: 1.1rem; color: var(--teal); margin-bottom: .5rem; }
+.practice-links, .lab-lessons { border-left: 3px solid var(--teal); padding-left: 1rem; }
+.lab-scope { display: inline-block; margin-top: 0; padding: .1rem .6rem; border-radius: 20px; color: var(--teal); background: var(--mint-wash); font-size: .85rem; }
+.lab-source { margin-top: 1.2rem; border: 1px solid var(--line); padding: .65rem 1rem; border-radius: 8px; }
+.lab-source > summary { color: var(--blue); overflow-wrap: anywhere; }
+.setup-guide, .route-heading, .lesson h2, .lab h3 { overflow-wrap: anywhere; }
+.optional-study { margin-top: 1.5rem; padding-top: .25rem; border-top: 1px solid var(--line); }
+figure { margin: 1.5rem 0 2rem; padding: .75rem; border: 1px solid var(--line); border-radius: 10px; background: white; min-width: 0; width: 100%; }
+.guide-image { max-width: 640px; margin-inline: auto; }
+.guide-image img { display: block; width: 100%; height: auto; }
+svg { display: block; width: 100%; max-width: 100%; height: auto; font: 18px Arial, Helvetica, sans-serif; color: var(--ink); fill: var(--ink); }
+svg .diagram-label { font-size: 15px; }
+svg .diagram-small { font-size: 13px; }
+.overview-diagram svg rect, .overview-diagram svg .diagram-shape { fill: var(--blue-wash); stroke: var(--blue); stroke-width: 2; }
+.overview-diagram svg .arrows { stroke: var(--teal); stroke-width: 3; }
+.overview-diagram svg .axes, .overview-diagram svg .timeline { stroke: var(--blue); stroke-width: 3; }
+.overview-diagram svg .roofline { fill: none; stroke: var(--amber); stroke-width: 5; }
+.overview-diagram svg .diagram-note { font-size: 15px; fill: var(--muted); }
+.overview-diagram svg .exposed { fill: var(--amber-wash); stroke: var(--amber); }
+figcaption { padding: .8rem .4rem .25rem; font-size: .92rem; color: var(--muted); }
+footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--muted); font-size: .9rem; }
+.catalog-navigation { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 1rem; }
+.catalog-home { font-weight: 650; }
+.course-switcher { margin-top: .5rem; }
+.course-switcher ul { list-style: none; padding: 0; }
+.course-switcher li { margin-top: .5rem; }
+.course-switcher [aria-current="page"] { display: block; padding: .4rem; border-left: 3px solid var(--teal); background: var(--mint-wash); font-weight: 650; }
+.current-label { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer details { margin-top: .8rem; }
+.license-footer summary { font-size: .875rem; }
+.license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .875rem/1.65 system-ui, sans-serif; }
+@media (max-width: 950px) {
+  .course-layout { grid-template-columns: 1fr; padding: 1rem 1rem 3rem; gap: 1.5rem; }
+  nav { position: static; max-height: none; }
+  nav > details > ol { columns: 2; column-gap: 2rem; }
+  nav li { break-inside: avoid; }
+}
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  header { padding: 2.3rem 1.2rem 2rem; }
+  .course-layout { padding: 1rem .65rem 3rem; }
+  main > section { padding: 1.2rem 1rem; }
+  nav > details > ol { columns: 1; }
+  .course-contract { grid-template-columns: 1fr; }
+  h2 { font-size: 1.6rem; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+  body { background: white; font-size: 11pt; }
+  .course-layout { display: block; padding: 0; }
+  aside, .skip-link { display: none; }
+  header { padding: 1rem; }
+  main > section { border: 0; padding: 0; box-shadow: none; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+</style></head>
+<body class="text-course"><a class="skip-link" href="#main">Skip to course</a>
+<header><h1>Soperator: A Nebius Slurm cluster running on Kubernetes</h1><p class="guided-hours">Estimated guided hours: 2</p></header>
+<div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents"><div class="catalog-navigation">
+<a class="catalog-home" href="../index.html">← All courses</a>
+<details class="course-switcher"><summary>Switch course</summary>
+<ul><li><span aria-current="page" data-course="soperator">Soperator: A Nebius Slurm cluster running on Kubernetes<span class="current-label">Current course</span></span></li><li><a href="../gpu-fundamentals/index.html">GPU Fundamentals</a></li><li><a href="../gpu-optimizations/index.html">GPU Performance Optimization</a></li><li><a href="../llm-training/index.html">LLM Training</a></li><li><a href="../llm-inference/index.html">LLM Inference</a></li><li><a href="../custom-cuda-kernels/index.html">Custom CUDA Kernels for GPU Optimization</a></li><li><a href="../advanced-gpu-communication/index.html">Advanced Labs: Multi-GPUs Multi-Nodes communication optimization</a></li></ul></details></div><details open><summary>Table of contents</summary>
+<ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Lessons</h2><ol><li><a href="#lesson-1-slurm-turns-resource-requests-into-running-work">Slurm turns resource requests into running work</a></li><li><a href="#lesson-2-soperator-maintains-slurm-inside-kubernetes">Soperator maintains Slurm inside Kubernetes</a></li><li><a href="#lesson-3-describe-the-work-before-requesting-resources">Describe the work before requesting resources</a></li><li><a href="#lesson-4-choose-batch-or-interactive-execution">Choose batch or interactive execution</a></li><li><a href="#lesson-5-count-slurm-tasks-and-pytorch-workers-separately">Count Slurm tasks and PyTorch workers separately</a></li><li><a href="#lesson-6-follow-a-job-from-queue-to-completion">Follow a job from queue to completion</a></li></ol>
+<h2>Reference and further reading</h2><ul class="section-links"><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul></details></nav></aside>
+<main id="main"><section id="course-overview"><h2>Course overview</h2><p>Slurm schedules cluster jobs; Soperator maintains Slurm on Kubernetes. In six lessons, learn to request resources, choose batch or interactive execution, and follow a job from submission to logs and completion.</p><p>You need basic Linux shell knowledge and familiarity with CPUs and GPUs; Slurm and Kubernetes are introduced from first principles. Read in order, or use the lesson objectives to check your readiness. This prepares you for the GPU courses&#x27; Slurm labs.</p><p>Worked examples and questions require no cluster access or setup. To run an example later, use an authorized cluster&#x27;s login node and follow its partition, account and resource limits.</p></section>
+<section class="lesson" id="lesson-1-slurm-turns-resource-requests-into-running-work"><h2>1. Slurm turns resource requests into running work</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain what Slurm schedules and distinguish the login, controller and worker roles in the path from submitting a job to executing it.</p></div><div class="how-it-works"><h3>How it works</h3><p>Slurm is an open-source workload manager developed and maintained by SchedMD. It gives applications access to cluster resources, starts and supervises their work, and queues requests when resources are busy. A <strong>job</strong> is a request to perform work under an allocation of resources and a time limit. Queuing lets many users share a cluster without manually choosing an unused machine.</p><p>The three roles have different responsibilities:</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Role</th><th scope="col">Responsibility</th></tr></thead><tbody><tr><td>Login node</td><td>Provides a shell for preparing files, submitting requests and inspecting results. It is not the place for a long training run.</td></tr><tr><td>Controller</td><td>Runs <code>slurmctld</code>, the service that tracks resources and jobs and makes scheduling decisions. It does not execute the training workload.</td></tr><tr><td>Worker, or compute node</td><td>Runs <code>slurmd</code>, which accepts assigned work. Its <code>slurmstepd</code> processes supervise job steps and their input/output. CPUs and GPUs here execute the application.</td></tr></tbody></table></div><p>A <strong>partition</strong> is a named collection of workers with scheduling rules, such as a maximum runtime or permitted users. Partitions may overlap. An <strong>allocation</strong> is the resources granted to a particular job; a partition is not itself a reservation for you.</p><p>For example, suppose two workers each provide one GPU. A request for one GPU on one node can fit on either eligible worker. A request for two GPUs on one node cannot fit merely because the cluster has two GPUs in total. The placement requirement matters as much as the total count.</p><p>Your client command contacts Slurm, the controller selects eligible resources, and the worker executes the assigned processes. The controller coordinates work; it is not a relay through which all application data and log bytes flow.</p></div><div class="practice-links"><h3>Practice</h3><p>A submitted job is waiting while its user can still type on the login node. Which component decides when it starts, and where will its application run?</p><p>Answer: <code>slurmctld</code> decides when the allocation can be granted. The application runs on allocated workers, not in the login shell or controller process.</p></div><div class="mental-model"><h3>Mental model</h3><p>The login node is your workbench, the controller assigns resources, and workers execute the application. A request must fit an eligible placement, not just a cluster-wide total.</p></div></section><section class="lesson" id="lesson-2-soperator-maintains-slurm-inside-kubernetes"><h2>2. Soperator maintains Slurm inside Kubernetes</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain how Soperator&#x27;s service roles and worker NodeSets relate to Kubernetes resources without confusing pod placement with Slurm job scheduling.</p></div><div class="how-it-works"><h3>How it works</h3><p>Soperator is Nebius&#x27;s open-source Kubernetes operator for Slurm. An <strong>operator</strong> is a controller that continually compares declared configuration with running resources and reconciles differences. Kubernetes places containers on provisioned machines and manages their lifecycle; Nebius infrastructure supplies the underlying compute resources.</p><p>A Kubernetes <strong>node</strong> is a host for containers. A <strong>Pod</strong> groups containers that run together on a node. In Soperator, a Slurm worker is represented by a worker Pod; it is not the same object as the underlying Kubernetes node. A Slurm job normally runs within an existing worker environment rather than creating a new Kubernetes Pod for each submitted job.</p><p>The component names below follow Soperator 4.1.8, the release used by the course setup. A <strong>custom resource</strong> extends Kubernetes with a product-specific object. <code>SlurmCluster</code> declares the Slurm cluster. Its <code>spec.slurmNodes</code> configuration, represented by the <code>SlurmNodes</code> type in the source, describes service roles:</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">SlurmNodes role</th><th scope="col">What it provides</th></tr></thead><tbody><tr><td><code>controller</code></td><td>The <code>slurmctld</code> service and its scheduling configuration/state.</td></tr><tr><td><code>login</code></td><td>Secure Shell (SSH) access and Slurm client tools for users.</td></tr><tr><td><code>accounting</code></td><td>When enabled, <code>slurmdbd</code> records job/resource history in a database. The database may be external or managed through the MariaDB integration.</td></tr><tr><td><code>rest</code></td><td>When enabled, <code>slurmrestd</code> exposes Slurm&#x27;s REST application programming interface over HTTP for software clients. Shell commands do not require this interface.</td></tr><tr><td><code>exporter</code></td><td>When enabled, exposes Slurm metrics for monitoring. It is separate from the scheduler and the accounting database.</td></tr></tbody></table></div><p>A separate <strong>NodeSet</strong> custom resource describes a group of worker Pods, including their number, placement and container resources. Soperator manages those workers through Kubernetes StatefulSets, which maintain Pods with stable identities. Each worker runs <code>slurmd</code> and registers its configured capacity with Slurm. A NodeSet groups worker infrastructure; a Slurm partition groups workers for scheduling policy. They serve different purposes even when their memberships match.</p><p>The host&#x27;s physical capacity, the worker container&#x27;s resource budget and a job&#x27;s Slurm allocation are three different quantities. Kubernetes needs room for system services and other containers, so the worker budget normally leaves some CPU and host memory reserved. A container CPU limit can throttle its work; a memory limit can cause an out-of-memory termination. Administrators must check both Slurm&#x27;s advertised capacity and the effective worker limits when investigating a resource mismatch.</p><p>Supporting components make that environment usable. Shared storage supplies the <strong>jail</strong>, a common Linux filesystem mounted by the login, controller and worker Pods. Users see this environment in login sessions and jobs running on workers; the controller also accesses shared user information and Slurm configuration. The jail helps keep programs and libraries consistent; special paths such as <code>/tmp</code> and device/process mounts remain node-local. A populate-jail job initializes that filesystem. Persistent storage also holds configuration-dependent state. <strong>MUNGE</strong> authenticates Slurm messages between trusted components; it does not replace SSH access controls or a user&#x27;s scheduling permissions.</p><p>Health checks help detect unhealthy workers, which may be drained so new jobs avoid them. The optional Slurm exporter and NVIDIA Data Center GPU Manager (DCGM) telemetry provide different views: scheduler state and GPU measurements. Pod recovery does not by itself restore a training process&#x27;s lost state; the application still needs checkpoints and an appropriate restart strategy.</p><p>There are therefore two scheduling decisions: Kubernetes places the worker Pods on hosts, then Slurm assigns application resources within eligible workers. A running Pod alone does not prove its Slurm worker is available for jobs.</p></div><div class="practice-links"><h3>Practice</h3><p>A worker Pod is running, but Slurm marks its worker as drained. Should a user expect a new GPU job to start there?</p><p>Answer: no. Kubernetes availability and Slurm eligibility are different states. Slurm excludes the drained worker from new allocations; the operator or administrator must investigate the reason.</p></div><div class="mental-model"><h3>Mental model</h3><p>Soperator maintains the Slurm environment on Kubernetes. SlurmNodes configures services, NodeSets define workers, and Slurm schedules jobs on the resulting eligible resources.</p></div></section><section class="lesson" id="lesson-3-describe-the-work-before-requesting-resources"><h2>3. Describe the work before requesting resources</h2><div class="lesson-outcome"><h3>Objective</h3><p>Distinguish jobs, steps and tasks, and calculate the resources requested by a small GPU job without confusing host memory with GPU memory.</p></div><div class="how-it-works"><h3>How it works</h3><p>A <strong>job step</strong> is an execution launched within a job allocation, usually with <code>srun</code>. A <strong>task</strong> is one process that Slurm launches for that step. A task can create threads or child processes; that does not automatically increase its allocation. For example, one job can run a preparation step, then a training step, reusing its allocated resources.</p><p>Write down the process layout before choosing flags:</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Option</th><th scope="col">Meaning</th></tr></thead><tbody><tr><td><code>--nodes=2</code></td><td>Request two nodes.</td></tr><tr><td><code>--ntasks=2</code></td><td>Request two Slurm tasks in total.</td></tr><tr><td><code>--ntasks-per-node=1</code></td><td>Request one task on each selected node. Use totals that agree when specifying both task options.</td></tr><tr><td><code>--cpus-per-task=4</code></td><td>Request four configured Slurm CPU resources for each task.</td></tr><tr><td><code>--gpus-per-node=1</code></td><td>Request one GPU on each node.</td></tr><tr><td><code>--mem=16G</code></td><td>Request 16 GiB of host memory per node, not GPU memory.</td></tr><tr><td><code>--time=00:10:00</code></td><td>Set a ten-minute job time limit.</td></tr><tr><td><code>--partition=NAME</code></td><td>Select an eligible partition.</td></tr><tr><td><code>--account=NAME</code></td><td>Charge the job to an authorized Slurm account.</td></tr></tbody></table></div><p>Two nodes, one task per node, four CPUs per task and one GPU per node requests two tasks, eight CPUs and two GPUs in total. With <code>--mem=16G</code>, each node must supply the requested host memory. These are illustrative requests, not universal CPU-to-GPU sizing recommendations. A Slurm CPU can represent a core or hardware thread depending on site configuration.</p><p>Increase <code>--cpus-per-task</code> or <code>--mem</code> when a job needs more of the worker&#x27;s available resources. These flags request a larger Slurm allocation; they do not enlarge the worker container&#x27;s Kubernetes limits or the underlying machine. If the worker budget is configured too small, the administrator must correct that configuration before a larger job can use the host&#x27;s remaining capacity.</p><p>GPU request options have different scopes. <code>--gpus-per-task=1</code> ties GPU count to tasks; <code>--gpus-per-node=1</code> ties it to nodes. The older generic-resource form <code>--gres=gpu:1</code> also requests GPUs per node. Use the site&#x27;s supported form rather than stacking equivalent flags. Slurm&#x27;s <code>--gpus*</code> options require the appropriate resource-selection configuration. GPU visibility and binding depend on the allocated resources and the site&#x27;s isolation settings; do not overwrite <code>CUDA_VISIBLE_DEVICES</code> to reach unallocated GPUs.</p><p>An administrator grants your login identity and Slurm account/partition access. A Linux group controls filesystem permissions; a Slurm account controls scheduling/accounting associations. They are not interchangeable. Keep code, inputs and the required software environment in locations available to workers. Slurm transfers the batch script, not all files it refers to. Soperator&#x27;s shared jail helps with access, but a login node&#x27;s local temporary file is still a poor place for a worker&#x27;s required input.</p></div><div class="practice-links"><h3>Practice</h3><p>A one-node job requests two tasks, three CPUs per task and one GPU per task. How many CPUs and GPUs does it need? Does raising <code>--mem</code> enlarge GPU memory?</p><p>Answer: six Slurm CPUs and two GPUs on that node. Raising <code>--mem</code> requests more host memory; it cannot enlarge a GPU&#x27;s physical memory.</p></div><div class="mental-model"><h3>Mental model</h3><p>Describe processes first, then reserve their CPUs, GPUs, host memory and time. Resource counts and placement must agree, and requesting capacity does not parallelize the application automatically.</p></div></section><section class="lesson" id="lesson-4-choose-batch-or-interactive-execution"><h2>4. Choose batch or interactive execution</h2><div class="lesson-outcome"><h3>Objective</h3><p>Choose between <code>sbatch</code>, <code>salloc</code> and <code>srun</code>, and explain where commands execute and where their output is written.</p></div><div class="how-it-works"><h3>How it works</h3><p><code>sbatch</code> submits a script and returns a job ID once Slurm accepts it. Acceptance is not completion, and the job may wait in the queue. Slurm later runs one copy of the batch script on an allocated worker. An <code>srun</code> inside that script creates a step and launches its tasks.</p><p>Consider this small example, saved as <code>job.sbatch</code> in a shared project directory. It requests one GPU and prints device information; it is not a performance test. The examples use an authorized default partition/account. If your site has no suitable default, add its supplied <code>--partition</code> and <code>--account</code> values.</p><pre tabindex="0"><code>#!/bin/bash
+#SBATCH --job-name=device-check
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=4G
+#SBATCH --time=00:05:00
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+set -euo pipefail
+srun bash -euc &#x27;hostname; nvidia-smi --query-gpu=name,memory.total --format=csv&#x27;</code></pre><p>The example&#x27;s project directory is <code>~/slurm-examples/device-check</code>. Create its log directory before submitting: Slurm opens output files before the script body can create directories. <code>umask 077</code> makes newly created files private to your user; it does not change existing files.</p><pre tabindex="0"><code>umask 077
+mkdir -p ~/slurm-examples/device-check/logs
+cd ~/slurm-examples/device-check
+# Save the script above as job.sbatch in this directory, then submit it.
+sbatch job.sbatch</code></pre><p><code>%x</code> becomes the job name and <code>%j</code> the job ID. For synthetic job ID <code>12345</code>, standard output is <code>logs/device-check-12345.out</code> and standard error is <code>logs/device-check-12345.err</code>. The batch working directory defaults to the submission directory; <code>--chdir</code> can select another worker-accessible directory. Without an explicit output path, Slurm normally writes <code>slurm-JOBID.out</code> in that working directory, which explains stray files after submitting from home. <code>#SBATCH</code> lines are Slurm directives: shell variables such as <code>$HOME</code> are not expanded there. Put directives before executable shell lines.</p><p>For an interactive session, <strong>allocation</strong> and <strong>execution</strong> are separate steps. <code>salloc</code> waits for resources and starts a command or shell for the allocation. Its default shell normally stays on the submitting host; reserving a GPU has not moved that shell to a worker. <code>srun</code> launches the worker-side shell:</p><pre tabindex="0"><code>salloc --nodes=1 --ntasks=1 --cpus-per-task=2 \
+  --gpus-per-node=1 --mem=4G --time=00:10:00
+srun --ntasks=1 --pty bash
+hostname
+nvidia-smi
+exit  # Leave the worker shell.
+exit  # Leave the salloc shell and release the allocation.</code></pre><p>Run these interactively in order, waiting for the allocation before starting the step. <code>--pty</code> supplies a pseudo-terminal for the worker shell. A standalone <code>srun</code> can also request an allocation and execute a command in one operation; it may wait for resources. In an existing allocation, it normally starts a step using that allocation. Interactive output returns to the terminal; batch output follows the configured files. Disconnecting from SSH is not a substitute for explicitly ending an interactive allocation.</p></div><div class="practice-links"><h3>Practice</h3><p>A user runs <code>salloc</code> successfully and then types <code>python train.py</code> at the resulting login-host prompt. Why is that a problem, and what changes the execution location?</p><p>Answer: a plain command runs in that shell on the login host. <code>srun python train.py</code> launches the application as a worker-side step, assuming the program and environment are available there. The allocation alone does not move it.</p></div><div class="mental-model"><h3>Mental model</h3><p><code>sbatch</code> schedules a script, <code>salloc</code> reserves resources for an interactive session, and <code>srun</code> launches tasks. Create log destinations before submission and distinguish an accepted request from finished work.</p></div></section><section class="lesson" id="lesson-5-count-slurm-tasks-and-pytorch-workers-separately"><h2>5. Count Slurm tasks and PyTorch workers separately</h2><div class="lesson-outcome"><h3>Objective</h3><p>Read a two-node PyTorch launch and calculate how many Slurm launcher tasks and GPU training processes it creates.</p></div><div class="how-it-works"><h3>How it works</h3><p>A distributed application coordinates multiple processes. A <strong>rank</strong> identifies one process within that application&#x27;s group; <strong>world size</strong> is the group&#x27;s process count. Slurm and the application&#x27;s launcher can create different layers of processes, so their counts need not match.</p><p>PyTorch&#x27;s <code>torchrun</code> launches training workers and supplies their distributed environment. One common layout uses one Slurm task per node, with each task running a <code>torchrun</code> launcher that starts one child worker per local GPU.</p><p>For two nodes with eight allocated GPUs each, that layout has two Slurm tasks and sixteen training processes: two launchers times eight children. It needs the separate two-eight-GPU environment described in the GPU courses, not the two-one-GPU base cluster. This example explains launch mechanics, not network performance or a complete training program.</p><p>Read the following as the body of a batch script whose directives request <code>--nodes=2</code>, <code>--ntasks=2</code>, <code>--ntasks-per-node=1</code> and <code>--gpus-per-node=8</code>, plus appropriate per-launcher CPUs, host memory and time. The application <code>train.py</code> must already implement distributed training and select its local GPU correctly; this text course does not supply that application.</p><pre tabindex="0"><code>mapfile -t hosts &lt; &lt;(scontrol show hostnames &quot;$SLURM_JOB_NODELIST&quot;)
+export MASTER_ADDR=&quot;${hosts[0]}&quot;
+export MASTER_PORT=29500  # Choose an available, site-permitted port.
+srun --ntasks=2 --ntasks-per-node=1 bash -euc &#x27;
+  torchrun --nnodes=2 --nproc-per-node=8 \
+    --node-rank=&quot;$SLURM_PROCID&quot; \
+    --master-addr=&quot;$MASTER_ADDR&quot; --master-port=&quot;$MASTER_PORT&quot; \
+    train.py
+&#x27;</code></pre><p>Both launchers contact the same first allocated host and port to establish the process group. That address must be reachable between the workers and the port must not collide with another job; it is not a public listener to expose on the internet. The single quotes let each launched shell expand its own <code>SLURM_PROCID</code>, giving launcher ranks zero and one. <code>scontrol show hostnames</code> expands Slurm&#x27;s compressed node list into individual hostnames.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Variable</th><th scope="col">Meaning in this layout</th></tr></thead><tbody><tr><td><code>SLURM_JOB_ID</code></td><td>The allocation&#x27;s job ID.</td></tr><tr><td><code>SLURM_JOB_NODELIST</code></td><td>The allocated Slurm node names.</td></tr><tr><td><code>SLURM_NTASKS</code></td><td>Two Slurm launcher tasks, not sixteen training ranks.</td></tr><tr><td><code>SLURM_PROCID</code></td><td>Each Slurm task&#x27;s global index, used here as the launcher node rank.</td></tr><tr><td><code>RANK</code>, <code>LOCAL_RANK</code>, <code>WORLD_SIZE</code></td><td>Set by <code>torchrun</code> for each child: its global index, local GPU/process index and sixteen-process group size.</td></tr></tbody></table></div><p>A direct Slurm-per-GPU layout is also possible when the application supports that initialization path. Do not combine sixteen Slurm tasks with eight <code>torchrun</code> children per task: that would start 128 training processes and oversubscribe the intended sixteen GPUs. <code>torchrun</code> does not automatically translate every Slurm variable into a correct distributed setup.</p></div><div class="practice-links"><h3>Practice</h3><p>A new cluster has four nodes with four GPUs each. Using one launcher per node and one child per GPU, what are the Slurm task count and training world size?</p><p>Answer: four Slurm tasks and sixteen training processes. Request the four-node allocation, launch one task on each node, and give each launcher four children. The total stays sixteen, but the placement and inter-node communication change.</p></div><div class="mental-model"><h3>Mental model</h3><p>Count launcher processes and training processes separately. Slurm provides the allocation and launcher placement; <code>torchrun</code> provides the child-worker ranks for the application.</p></div></section><section class="lesson" id="lesson-6-follow-a-job-from-queue-to-completion"><h2>6. Follow a job from queue to completion</h2><div class="lesson-outcome"><h3>Objective</h3><p>Select the right command for pending, running and completed jobs, then combine scheduler records with application output before deciding what happened.</p></div><div class="how-it-works"><h3>How it works</h3><p>Start with the question you need to answer. <code>sinfo</code> describes partitions and nodes; <code>squeue</code> describes current jobs. Use your own user filter and a small output format instead of repeatedly requesting the entire cluster state.</p><pre tabindex="0"><code>sinfo -o &#x27;%P %a %l %D %t %G&#x27;
+squeue --me -o &#x27;%.18i %.12j %.10T %.10M %.6D %R&#x27;</code></pre><p>The <code>sinfo</code> columns show partition, availability, time limit, node count, node state and generic resources such as GPUs. A star beside a partition marks the default. In the <code>squeue</code> example, columns are job ID, name, state, elapsed time, node count and reason or allocated nodes. These are scheduler facts, not GPU utilization measurements.</p><p>A pending job has not started. <code>Resources</code> indicates that the requested resources are currently unavailable; <code>Priority</code> means higher-priority jobs are ahead; <code>Dependency</code> means another condition must finish first. Inspect the request and reason before changing resource counts. A drained or down worker is an administrator investigation, not something a learner should force back into service.</p><p>Set <code>job_id</code> to the actual ID returned by your submission; <code>12345</code> below is a synthetic example. <code>scontrol show job</code> exposes details such as requested resources, working directory, output paths, state and reason:</p><pre tabindex="0"><code>job_id=12345
+scontrol show job &quot;$job_id&quot;
+squeue --steps --jobs=&quot;$job_id&quot;</code></pre><p>For a running step, <code>sstat</code> can report sampled process-memory and CPU statistics when the site&#x27;s accounting plugins collect them. <code>--allsteps</code> includes the job&#x27;s running steps rather than silently selecting one:</p><pre tabindex="0"><code>sstat --jobs=&quot;$job_id&quot; --allsteps \
+  --format=JobID,AveCPU,MaxRSS</code></pre><p><strong>RSS</strong> is resident set size, a process-memory measure. <code>MaxRSS</code> is not total GPU memory and is not a sum across ranks. Missing values can mean unavailable collection, an already-finished step or sampling that missed short work; they do not prove zero resource use. Follow the output path reported by <code>scontrol</code>. For the previous batch example, once the file exists:</p><pre tabindex="0"><code>tail -n 40 &quot;logs/device-check-${job_id}.out&quot;
+tail -n 40 &quot;logs/device-check-${job_id}.err&quot;</code></pre><p>After a job leaves <code>squeue</code>, use <code>sacct</code> if persistent accounting is enabled. It reports both the allocation and its steps, including the batch script and numbered <code>srun</code> steps:</p><pre tabindex="0"><code>sacct --jobs=&quot;$job_id&quot; \
+  --format=JobID,JobName,State,ExitCode,Elapsed,AllocCPUS,MaxRSS</code></pre><p><code>COMPLETED</code> means Slurm observed successful completion; <code>FAILED</code>, <code>TIMEOUT</code>, <code>OUT_OF_MEMORY</code> and <code>CANCELLED</code> require different explanations. <code>ExitCode</code> contains an exit status and signal separated by a colon; <code>0:0</code> means neither indicated failure. Inspect the step records as well as the batch row: a script that ignores a failed command may still exit successfully. Even a clean exit does not prove a correct model, valid output or improved performance. Check the application&#x27;s own completion and correctness evidence. If accounting is disabled, retain logs and application artifacts; an empty history is not success.</p><p>To stop one of your own jobs, first verify its ID and identity with <code>scontrol</code>, then cancel that exact job:</p><pre tabindex="0"><code>scancel &quot;$job_id&quot;</code></pre><p>Cancellation ends work; it is not a diagnostic read. Avoid user-wide cancellation when you mean one job. Likewise, launching another <code>srun</code> step into a busy allocation consumes resources and may wait; it is not passive monitoring. Use queue, accounting and log queries first. Avoid tight polling loops that unnecessarily load the controller.</p></div><div class="practice-links"><h3>Practice</h3><p>A job disappears from <code>squeue</code>. Its batch row says <code>COMPLETED</code>, but an <code>srun</code> step says <code>FAILED</code> and the expected result is missing. Was the workload successful? State the next two things to inspect.</p><p>Answer: no success has been established. Inspect that step&#x27;s exit code and the application error log; then correct the script&#x27;s failure propagation before resubmitting. The controller&#x27;s completion record cannot replace application correctness evidence.</p></div><div class="mental-model"><h3>Mental model</h3><p>Use <code>sinfo</code> for capacity, <code>squeue</code> and <code>scontrol</code> for current state, <code>sstat</code> for available live step statistics, and <code>sacct</code> plus logs for history. Always match the evidence to the exact job and verify application success separately.</p></div></section><section id="next-steps"><h2>Where to Go Next</h2><div data-source="NEXT-STEPS.md"><p>Choose an optional direction that matches the work you want to do next.</p><ul class="next-steps-list"><li><h3>Continue with a GPU course</h3><p>Use the course switcher to return to a GPU course. Follow the <a href="../lab-guide.html#how-to-set-up-the-lab">shared environment setup</a>, then use its lab guides for exact resource requests and performance investigations. This introduction explains the scheduler behavior behind those commands.</p></li><li><h3>Explore job arrays</h3><p>For larger collections of similar independent jobs, study Slurm job arrays: an array associates indexed instances with one submission, and a concurrency limit bounds simultaneous execution. Ask how input selection and output naming must change so instances do not overwrite one another.</p></li><li><h3>Coordinate dependent jobs</h3><p>For pipelines, study Slurm dependencies: a downstream job can wait for an upstream outcome instead of using a shell polling loop. Ask when successful process exit is sufficient and when an application artifact must also be checked.</p></li><li><h3>Read the administrator references</h3><p>For cluster administrators, the versioned Soperator API and Helm chart sources explain deployment options and reconciliation. Reading them does not require changing a cluster. Keep user job investigation separate from administrative changes to workers, partitions or accounts. Public references follow below.</p></li></ul></div></section><section id="guide-glossary" data-source="GLOSSARY.md"><h2>Glossary</h2><dl><dt>Account</dt><dd>Slurm association used for charging usage and applying scheduling policy; separate from a Linux group.</dd><dt>Allocation</dt><dd>Resources granted to a job for a limited time.</dd><dt>Controller</dt><dd>Slurm scheduling service, <code>slurmctld</code>.</dd><dt>DCGM</dt><dd>NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.</dd><dt>Jail</dt><dd>Soperator&#x27;s shared Linux user filesystem, with some special/node-local paths excluded.</dd><dt>Job</dt><dd>A scheduled request for work and its resource allocation.</dd><dt>Job step</dt><dd>An execution within an allocation, commonly launched by <code>srun</code>.</dd><dt>Login node</dt><dd>User entry point for preparing and submitting work and reading results.</dd><dt>MUNGE</dt><dd>Credential service used to authenticate messages between trusted Slurm components.</dd><dt>NodeSet</dt><dd>Soperator custom resource describing a group of worker Pods.</dd><dt>Operator</dt><dd>Kubernetes controller that reconciles declared and observed application resources.</dd><dt>Partition</dt><dd>Named collection of Slurm workers and scheduling rules; not a private allocation.</dd><dt>Pod</dt><dd>Kubernetes unit grouping containers placed together on a host.</dd><dt>Rank / world size</dt><dd>A distributed application&#x27;s process index / total process count.</dd><dt>REST API</dt><dd>HTTP interface for programmatic Slurm access through optional <code>slurmrestd</code>.</dd><dt>RSS</dt><dd>Resident set size; process memory resident in host RAM, not GPU memory.</dd><dt>Slurm CPU</dt><dd>A schedulable CPU resource whose core/thread interpretation depends on the site.</dd><dt>SlurmCluster / SlurmNodes</dt><dd>Cluster custom resource / its service-role configuration type.</dd><dt>StatefulSet</dt><dd>Kubernetes workload resource maintaining Pods with stable identities.</dd><dt>Task</dt><dd>A process launched by Slurm; it may itself launch child processes.</dd><dt>Worker</dt><dd>Slurm compute environment running <code>slurmd</code> and assigned application work.</dd></dl></section><section id="official-references"><h2>Official references</h2><ol><li id="reference-1"><a href="https://slurm.schedmd.com/overview.html">SchedMD: Slurm overview</a></li><li id="reference-2"><a href="https://slurm.schedmd.com/quickstart.html">SchedMD: Quick start user guide</a></li><li id="reference-3"><a href="https://slurm.schedmd.com/sbatch.html">SchedMD: sbatch</a></li><li id="reference-4"><a href="https://slurm.schedmd.com/salloc.html">SchedMD: salloc</a></li><li id="reference-5"><a href="https://slurm.schedmd.com/srun.html">SchedMD: srun</a></li><li id="reference-6"><a href="https://slurm.schedmd.com/cpu_management.html">SchedMD: CPU management</a></li><li id="reference-7"><a href="https://slurm.schedmd.com/gres.html">SchedMD: GPU and generic resource scheduling</a></li><li id="reference-8"><a href="https://slurm.schedmd.com/slurmstepd.html">SchedMD: slurmstepd</a></li><li id="reference-9"><a href="https://slurm.schedmd.com/sinfo.html">SchedMD: sinfo</a></li><li id="reference-10"><a href="https://slurm.schedmd.com/squeue.html">SchedMD: squeue</a></li><li id="reference-11"><a href="https://slurm.schedmd.com/scontrol.html">SchedMD: scontrol</a></li><li id="reference-12"><a href="https://slurm.schedmd.com/sstat.html">SchedMD: sstat</a></li><li id="reference-13"><a href="https://slurm.schedmd.com/sacct.html">SchedMD: sacct</a></li><li id="reference-14"><a href="https://slurm.schedmd.com/scancel.html">SchedMD: scancel</a></li><li id="reference-15"><a href="https://slurm.schedmd.com/job_state_codes.html">SchedMD: Job state codes</a></li><li id="reference-16"><a href="https://slurm.schedmd.com/job_reason_codes.html">SchedMD: Job reason codes</a></li><li id="reference-17"><a href="https://slurm.schedmd.com/job_exit_code.html">SchedMD: Job exit codes</a></li><li id="reference-18"><a href="https://slurm.schedmd.com/job_array.html">SchedMD: Job arrays</a></li><li id="reference-19"><a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/">Kubernetes: Container resource requests, limits and node allocatable capacity</a></li><li id="reference-20"><a href="https://github.com/nebius/nebius-solutions-library/blob/400d53abbcc7daa5553216aab1f0973ac40cb406/soperator/modules/available_resources/reserve.tf">Nebius Solutions Library: Soperator system-resource reserve policy</a></li><li id="reference-21"><a href="https://github.com/nebius/soperator">Nebius: Soperator repository</a></li><li id="reference-22"><a href="https://github.com/nebius/soperator/blob/4.1.8/docs/architecture.md">Nebius: Soperator 4.1.8 architecture</a></li><li id="reference-23"><a href="https://github.com/nebius/soperator/blob/4.1.8/api/v1/slurmcluster_types.go">Nebius: SlurmCluster and SlurmNodes types, 4.1.8</a></li><li id="reference-24"><a href="https://github.com/nebius/soperator/blob/4.1.8/api/v1alpha1/nodeset_types.go">Nebius: Worker NodeSet type, 4.1.8</a></li><li id="reference-25"><a href="https://github.com/nebius/soperator/blob/4.1.8/helm/slurm-cluster/values.yaml">Nebius: Slurm service chart configuration, 4.1.8</a></li><li id="reference-26"><a href="https://github.com/nebius/soperator/blob/4.1.8/helm/nodesets/values.yaml">Nebius: Worker NodeSet chart configuration, 4.1.8</a></li><li id="reference-27"><a href="https://github.com/nebius/soperator/blob/4.1.8/internal/render/controller/container.go">Nebius: Controller jail mount, 4.1.8</a></li><li id="reference-28"><a href="https://github.com/nebius/soperator/blob/4.1.8/images/controller/slurmctld_entrypoint.sh">Nebius: Controller shared users and Slurm configuration, 4.1.8</a></li><li id="reference-29"><a href="https://github.com/pytorch/pytorch/blob/main/torch/distributed/run.py">PyTorch: torchrun documentation and implementation</a></li></ol></section><footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text" tabindex="0">                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      &quot;License&quot; shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      &quot;Licensor&quot; shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      &quot;Legal Entity&quot; shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      &quot;control&quot; means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      &quot;You&quot; (or &quot;Your&quot;) shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      &quot;Source&quot; form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      &quot;Object&quot; form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      &quot;Work&quot; shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      &quot;Derivative Works&quot; shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      &quot;Contribution&quot; shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, &quot;submitted&quot;
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as &quot;Not a Contribution.&quot;
+
+      &quot;Contributor&quot; shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a &quot;NOTICE&quot; text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an &quot;AS IS&quot; BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets &quot;[]&quot;
+      replaced with your own identifying information. (Don&#x27;t include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same &quot;printed page&quot; as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre></details>
+</footer></main></div></body></html>

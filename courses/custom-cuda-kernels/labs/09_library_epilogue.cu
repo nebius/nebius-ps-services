@@ -38,14 +38,14 @@ __global__ void bias_relu(float* matrix, const float* bias, int rows, int column
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 09_library_epilogue [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 09_library_epilogue [--profile small|large]\n"; return 0; }
   try {
     validate_simple_arguments(argc, argv);
-    require_h100();
-    const bool smoke = argc > 1 && std::string(argv[1]) == "--smoke";
-    const int rows = smoke ? 128 : 1024;
-    const int columns = smoke ? 192 : 1536;
-    const int depth = smoke ? 96 : 768;
+    require_course_gpu();
+    const bool small = small_profile(argc, argv);
+    const int rows = small ? 128 : 1024;
+    const int columns = small ? 192 : 1536;
+    const int depth = small ? 96 : 768;
     const std::size_t left_elements = static_cast<std::size_t>(rows) * depth;
     const std::size_t right_elements = static_cast<std::size_t>(depth) * columns;
     const std::size_t output_elements = static_cast<std::size_t>(rows) * columns;
@@ -139,6 +139,7 @@ int main(int argc, char** argv) {
                  "with COURSE_ENABLE_CUTLASS=ON and the reviewed CUTLASS_ROOT\n";
     return 3;
 #endif
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

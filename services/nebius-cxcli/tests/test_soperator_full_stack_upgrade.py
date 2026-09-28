@@ -100,6 +100,44 @@ def _intent():
     )
 
 
+def test_protection_only_change_requires_reconciliation_and_survives_receipt_replay():
+    from nebius_cxcli.soperator_jail_protection import (
+        freeze_jail_protection,
+        protect_jail_directories,
+    )
+
+    intent = _intent()
+    group = intent.node_groups[0]
+    unchanged = replace(
+        intent,
+        source_release=intent.target_release,
+        source_kubernetes_version=intent.target_kubernetes_version,
+        kubernetes_hops=(),
+        compatibility_rows=tuple(
+            row
+            for row in intent.compatibility_rows
+            if row.kubernetes_version == intent.target_kubernetes_version
+        ),
+        node_groups=(
+            replace(
+                group,
+                source_version=group.target_version,
+                source_os=group.target_os,
+                source_drivers_preset=group.target_drivers_preset,
+            ),
+        ),
+    )
+    assert not unchanged.requires_fresh_checks
+    frozen = freeze_jail_protection(
+        protect_jail_directories({}, paths=["/workspace"], layout="managed", target_ref="cluster-a")
+    )
+    changed = replace(unchanged, jail_protection=frozen, jail_protection_changed=True)
+    assert changed.requires_fresh_checks
+    replay = campaign_intent_from_payload(asdict(changed))
+    assert replay.jail_protection == frozen and replay.digest == changed.digest
+    assert replay.requires_fresh_checks
+
+
 def _live_capacity_group(*, target: int, resource_version: int) -> SimpleNamespace:
     return SimpleNamespace(
         metadata=SimpleNamespace(
@@ -249,7 +287,7 @@ def test_managed_child_defers_required_graph_until_parent_refresh(tmp_path, monk
     [
         ("", "cluster-a", False),
         ("soperator-upgrade", "cluster-a", False),
-        ("soperator-destroy", "cluster-a", True),
+        ("destroy", "cluster-a", True),
         ("soperator-upgrade", "another-cluster", True),
     ],
 )

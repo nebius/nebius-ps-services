@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "144da87adf73ea8e68ad3d45c6be54d1966ebf72db452cd66ca55ab0128d0894",
+      "sha256": "06e780ef427d352ed89b34eb5456f191ac8e5784feb69d69490f7574f33dd206",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "491ad62928fab2146e6939a98bfd873bee56e9581a2ff1e5a7c554d7ad9a78d1",
+      "sha256": "d75c8d2fecb78f75c028746ab7c1f435a86d14445430d9c59b56f8ed39814168",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "907090008dcf8947d6ebe9f9c88bf74943fcffb395c15a746f38546c65584e1b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "770c8825374c20d4c478396ea35be979ed8203e3e4c20efdd436b1252b161b04",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "c671e8e2707d414a85a84c0e69e65a2d5cd10991ca139bded1c0af672bb6d614",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "383f9d1ce5a9d19de63504ca562823c84314c0cc1ff9f5833edb8b6dad77c9f0",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "0ff1c3800955139518b11f37dc9fe104aa8037be32dd2005b01f29a8b275907d",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "15_tail_load_balance",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a1ea905a8f5a2df598d2a00d4748102977068eeda17afe84de12e611e954c48d",
+  "summary_sha256": "80bbbba0cc0a1a651839b69c7a36e6ce6dcf18e1f7c3455fc843397c281864ce"
+}

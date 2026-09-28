@@ -1,5 +1,7 @@
 # Cluster smoke-test runbook
 
+**Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
+
 This is a target-qualification checklist, not the lesson execution order.
 Follow the [syllabus](../SYLLABUS.md) for the learning route and complete each
 exercise's relevant safety/setup gate before running it. Distributed and optional
@@ -13,8 +15,8 @@ submitting any job, restrict files created by the submitting shell:
 
 ```bash
 umask 077
-python -m pip check
-python tools/validate_course.py
+"$COURSE_PYTHON" -m pip check
+python3 tools/validate_course.py
 ```
 
 Slurm can create its output before the job script starts, so the mask inside a
@@ -24,25 +26,23 @@ a separately reviewed aggregate report.
 
 ## Gate 1: allocation and communication
 
-```bash
-sbatch slurm/two_node.sbatch labs/00_cluster_preflight.py --profile smoke
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Require one full non-MIG H100 per rank, correct local device binding, two
 distinct nodes for world size 2, successful NCCL initialization, and exact
 collective correctness. Local dependency checks do not establish this gate.
-Lab 00 requires two ranks; it is not a single-GPU allocation probe. The
+Lab 34 requires two ranks; it is not a single-GPU allocation probe. The
 one-GPU labs in Gate 2 perform their own H100 device check.
 
 ## Gate 2: causal objective and one-GPU correctness
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
-sbatch slurm/single_gpu.sbatch labs/13_loss_masking.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/02_gradient_accumulation.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile smoke
+python3 tools/submit_lab.py --lab 32_learning_basics slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
+python3 tools/submit_lab.py --lab 13_loss_masking slurm/single_gpu.sbatch labs/13_loss_masking.py --profile small
+python3 tools/submit_lab.py --lab 01_tiny_transformer_train slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+python3 tools/submit_lab.py --lab 02_gradient_accumulation slurm/single_gpu.sbatch labs/02_gradient_accumulation.py --profile small
+python3 tools/submit_lab.py --lab 14_activation_checkpointing slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+python3 tools/submit_lab.py --lab 21_mixed_precision_training slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile small
 ```
 
 Lab 32 can first be studied locally with `--device cpu`. Require a learned
@@ -70,9 +70,9 @@ that the other is correct.
 ## Gate 3: adaptation and reward-guided objectives
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/05_lora_sft.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/07_grpo_trainer.py --profile smoke
+python3 tools/submit_lab.py --lab 05_lora_sft slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
+python3 tools/submit_lab.py --lab 06_grpo_objective slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small
+python3 tools/submit_lab.py --lab 07_grpo_trainer slurm/single_gpu.sbatch labs/07_grpo_trainer.py --profile small
 ```
 
 External model exercises require pinned, approved artifacts. Check trainable
@@ -83,10 +83,10 @@ held-out model quality or production training efficiency.
 ## Gate 4: precision, resume, and data efficiency
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/26_input_pipeline.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile smoke
+python3 tools/submit_lab.py --lab 24_checkpoint_resume slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile small
+python3 tools/submit_lab.py --lab 25_sequence_packing slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small
+python3 tools/submit_lab.py --lab 26_input_pipeline slurm/single_gpu.sbatch labs/26_input_pipeline.py --profile small
+python3 tools/submit_lab.py --lab 27_fused_graph_trace slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small
 ```
 
 Resume must reproduce the next batch and update under the stated deterministic
@@ -100,7 +100,7 @@ Run the conditional FP8 gate only after a compatible Transformer Engine build
 and its recipe have been qualified in the approved environment:
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile smoke
+python3 tools/submit_lab.py --lab 22_transformer_engine_fp8 slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
 ```
 
 Record the resolved version and recipe. Collect warmed delayed-scaling samples
@@ -112,14 +112,7 @@ A missing dependency leaves this extension pending.
 
 ## Gate 5: two-node training mechanisms
 
-```bash
-sbatch slurm/two_node.sbatch labs/03_ddp_train.py --profile smoke
-sbatch slurm/two_node.sbatch labs/04_fsdp2_train.py --profile smoke
-sbatch slurm/two_node.sbatch labs/12_moe_expert_parallel.py --profile smoke
-sbatch slurm/two_node.sbatch labs/19_tensor_parallel_linear.py --profile smoke
-sbatch slurm/two_node.sbatch labs/28_communication_overlap.py --profile smoke
-sbatch slurm/two_node.sbatch labs/29_parallelism_mechanics.py --profile smoke
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Freeze global valid tokens, microbatch/accumulation, loss reduction, and
 optimizer semantics. Record local/global batch, sharding, phase peak memory,
@@ -130,26 +123,22 @@ pipeline, context, or expert-parallel scaling.
 
 After Lab 28's readiness model, qualify real DDP buckets and hooks with Lab 33:
 
-```bash
-sbatch slurm/two_node.sbatch labs/33_ddp_buckets.py --hook allreduce --bucket-cap-mb 1
-sbatch slurm/two_node.sbatch labs/33_ddp_buckets.py --hook allreduce --bucket-cap-mb 0.1
-sbatch slurm/two_node.sbatch labs/33_ddp_buckets.py --hook powersgd --bucket-cap-mb 0.1 --warmup 4
-```
+Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
 
 Inspect startup and measured bucket ledgers rather than treating the cap as an
 observed payload. Require valid SGD updates and full-precision reference
 agreement for allreduce. Compression reports trajectory errors; a finite short
 run does not establish acceptable task convergence. Use the complete guide for
 FP16/BF16 qualification and controlled comparisons. After unprofiled trials,
-`slurm/nsys_ddp.sbatch` captures each node's torchrun child in a unique private
+the advanced course’s per-rank Systems recipe captures each torchrun child in a unique private
 directory on shared storage. A rank failure terminates the step. Actual Slurm
 failure propagation, CUDA tracing and cross-node timelines need target evidence.
 
 ## Gate 6: profiler and causal capstone
 
 ```bash
-sbatch slurm/single_gpu.sbatch labs/30_training_profiler.py --profile smoke
-sbatch slurm/capstone_three_trials.sbatch --profile smoke
+python3 tools/submit_lab.py --lab 30_training_profiler slurm/single_gpu.sbatch labs/30_training_profiler.py --profile small
+python3 tools/submit_lab.py --lab 31_training_capstone slurm/capstone_three_trials.sbatch --profile small
 ```
 
 Retain all three fresh-process capstone records and confirm the launcher

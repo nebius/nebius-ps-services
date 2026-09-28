@@ -101,10 +101,10 @@ class SoperatorPublicDiscoveryRuntime:
 
         try:
             from nebius.api.nebius.iam.v1 import GetProjectRequest, ProjectServiceClient
-        except Exception as exc:  # pragma: no cover - import guard
+        except Exception:  # pragma: no cover - import guard
             raise RuntimeError(
                 "Nebius IAM SDK bindings are required for Soperator discovery scope validation."
-            ) from exc
+            ) from None
 
         sdk = init_nebius_sdk(
             parent_id=project_id,
@@ -124,10 +124,10 @@ class SoperatorPublicDiscoveryRuntime:
                     )
                     .wait()
                 )
-            except Exception as exc:
+            except Exception:
                 raise RuntimeError(
                     f"Nebius project '{project_id}' does not exist or is not accessible."
-                ) from exc
+                ) from None
             project_metadata = getattr(project, "metadata", None)
             observed_project_id = _text(getattr(project_metadata, "id", None))
             observed_tenant_id = _text(getattr(project_metadata, "parent_id", None))
@@ -143,10 +143,10 @@ class SoperatorPublicDiscoveryRuntime:
             executor = Mk8sKubernetesVersionExecutor(sdk)
             try:
                 cluster = executor.get_cluster(cluster_id)
-            except Exception as exc:
+            except Exception:
                 raise RuntimeError(
                     f"Nebius MK8s cluster '{cluster_id}' does not exist or is not accessible."
-                ) from exc
+                ) from None
             cluster_metadata = getattr(cluster, "metadata", None)
             observed_cluster_id = _text(getattr(cluster_metadata, "id", None))
             observed_cluster_project_id = _text(getattr(cluster_metadata, "parent_id", None))

@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,eager_median_seconds,value,2.69e-05,s
+baseline-trial1,cuda_graph_median_seconds,value,1.2200000000000002e-05,s
+repeat-trial1,eager_median_seconds,value,2.48e-05,s
+repeat-trial1,cuda_graph_median_seconds,value,1.21e-05,s

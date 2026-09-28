@@ -12,10 +12,12 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 usage() {
-  printf 'Usage: sbatch slurm/vllm_prefix_cache.sbatch [MODEL] [REQUESTS_PER_COHORT] [REVISION]\n'
+  printf 'Usage: python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch [MODEL] [REQUESTS_PER_COHORT] [REVISION]\n'
   printf 'Runs three independent, counterbalanced prefix-cache trials per policy.\n'
+  printf 'Uses batch-invariant execution and TRITON_ATTN in every policy and phase.\n'
 }
 
 if [[ ${1:-} == "--help" ]]; then
@@ -43,7 +45,7 @@ if [[ ! ${requests} =~ ^[0-9]+$ ]] || ((requests < 2)); then
   printf 'ERROR: REQUESTS_PER_COHORT must be an integer of at least two.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 if [[ ! -f ${course_dir}/labs/20_prefix_cache_client.py ]]; then
   printf 'ERROR: submit from the course root containing the prefix-cache client.\n' >&2
   exit 2
@@ -61,7 +63,7 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
   exit 2
 fi
 export COURSE_RUN_ID
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/20_prefix_cache_client/logs" "${course_dir}/results"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_pid=""
 
@@ -70,7 +72,9 @@ stop_server() {
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
   kill "${pid}" 2>/dev/null || true
-  for _ in {1..50}; do
+  local stop_attempts=50
+  if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
     if ! kill -0 "${pid}" 2>/dev/null; then
       wait "${pid}" 2>/dev/null || true
       return
@@ -92,14 +96,15 @@ run_trial() {
   local variant=$1
   local trial=$2
   local phase=$3
-  local server_log="${course_dir}/logs/vllm-prefix-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
+  local server_log="${course_dir}/results/20_prefix_cache_client/logs/vllm-prefix-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   command=(
-    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" vllm serve "${model}"
+    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" env VLLM_BATCH_INVARIANT=1 python3 tools/profile_lab.py --lab 20_prefix_cache_client --server -- vllm serve "${model}"
     --revision "${revision}"
     --tokenizer-revision "${revision}"
     --host 127.0.0.1
     --port "${port}"
     --dtype bfloat16
+    --attention-config '{"backend":"TRITON_ATTN"}'
     --max-model-len 2048
   )
   if [[ ${variant} == enabled ]]; then
@@ -130,12 +135,14 @@ run_trial() {
     exit 2
   fi
   if [[ ${phase} == probe ]]; then
+    "${course_python}" tools/server_capture.py start "${port}"
     "${course_python}" "${course_dir}/labs/34_policy_equivalence_client.py" \
       --base-url "http://127.0.0.1:${port}" --model "${model}" \
       --revision "${revision}" --workload prefix-cache --variant "${variant}" \
       --output "${course_dir}/results/20-prefix-cache-${variant}-trial-${trial}-digests-run-${COURSE_RUN_ID}.json"
   else
-    "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" \
+    "${course_python}" tools/server_capture.py start "${port}"
+    "${course_python}" "${course_dir}/labs/20_prefix_cache_client.py" --variant "${variant}" \
       --base-url "http://127.0.0.1:${port}" \
       --model "${model}" \
       --revision "${revision}" \
@@ -145,6 +152,7 @@ run_trial() {
       "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${port}/metrics', timeout=10).read().decode(), end='')" \
       >"${course_dir}/results/20_prefix-cache-${variant}-trial-${trial}-metrics-run-${COURSE_RUN_ID}.prom"
   fi
+  "${course_python}" tools/server_capture.py stop "${port}"
   stop_server
 }
 

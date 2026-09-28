@@ -82,7 +82,7 @@ a dependency-safe task graph.
 ## Writes
 
 - `plans/FEAT-*.plan.vN.md`.
-- `plans/FEAT-*.plan.vN.lock`.
+- `plans/FEAT-*.plan.vN.md.lock` (append `.lock` to the complete plan filename).
 - Plan fingerprint and state transition to `plan_locked`.
 - `corrective-plan-validation-v1` from
   `scripts/corrective_plan.py` for a corrective version.
@@ -106,7 +106,9 @@ a dependency-safe task graph.
   `unknown`; never infer parallel safety from missing data.
 - Record planned dependency waves for human review. Treat them as informative:
   `sdlc-prepare-execution` recomputes and verifies the graph before mutation.
-- Lock the plan.
+- Lock the plan with an adjacent regular marker file, for example
+  `FEAT-001.plan.v1.md.lock` beside `FEAT-001.plan.v1.md`. Keep the `.md`
+  suffix; execution preparation validates this exact marker path.
 - For a post-evaluation correction, create only adjacent immutable plan vN+1.
   Set `Plan kind: corrective`; bind the exact superseded plan, diagnosis,
   original regression oracle, and completed task manifest digest.

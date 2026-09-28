@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,ttft_p99_seconds,value,0.07648777205031365,s
+baseline-trial1,tokens_per_second,value,540.049762479546,count:tokens/s
+baseline-trial1,chunk_gap_p99_seconds,value,0.020230826979968697,s
+candidate-trial1,ttft_p99_seconds,value,0.15743281098548323,s
+candidate-trial1,tokens_per_second,value,487.22704776455106,count:tokens/s
+candidate-trial1,chunk_gap_p99_seconds,value,0.016434176010079682,s

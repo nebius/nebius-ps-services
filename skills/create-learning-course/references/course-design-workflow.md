@@ -81,11 +81,17 @@ Before a redesign, inspect complete affected prose, implementation, guide and
 diagram sources. Inventory unique concepts, assumptions, worked examples,
 failure explanations, supported experiment capabilities and safety checks.
 Use a private, bounded task audit when permitted, not learner-facing history.
-When adopting the four-section lesson pattern, move useful definitions,
+When adopting the lesson pattern, move useful definitions,
 prerequisite connections, purpose and mechanisms into How it works rather
 than deleting their teaching. Move operational evidence and feedback with the
 owning practice. Rewrite Mental model only after the explanation is complete;
 move any first-time teaching found in a summary back into How it works.
+Consolidate onward learning into one course Where to Go Next and taught terms
+into one course Glossary. Merge repeated entries without losing distinct
+meanings or useful onward options. Preserve first-use explanations in lessons,
+sort glossary keys A–Z and keep optional lesson References last. Optional study
+adds no required prerequisites or completion gates; remove local appendix
+headings after moving their content, without leaving compatibility copies.
 
 For each candidate duplicate ask whether it has the same learning purpose and
 adds no distinct reasoning. Keep a purposeful recall cue, preview or advanced
@@ -95,7 +101,11 @@ references with it. Recheck links and practical readiness afterward.
 
 Default to one canonical new path when restructuring. Do not create redirects,
 aliases or compatibility wrappers unless requested. Never silently discard
-material just because the new outline is shorter.
+material just because the new outline is shorter. When removing published mission
+and syllabus sections, compare their prerequisites, readiness, scope and safety
+qualifications with the retained orientation and teaching; relocate unique
+content before omitting them. Shared typography and semantic lists should
+standardize presentation without reducing explanations to fit a template.
 
 ## Course Profiles And Series
 

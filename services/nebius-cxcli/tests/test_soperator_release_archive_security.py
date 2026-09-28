@@ -4,17 +4,23 @@ import hashlib
 import io
 import json
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from nebius_cxcli.soperator_cache import locked_cache_entry, prepare_private_cache_root
-from nebius_cxcli.soperator_release import SoperatorGitTreeEntry, SoperatorReleaseMetadata
+from nebius_cxcli.soperator_release import (
+    SoperatorGitTreeEntry,
+    SoperatorReleaseMetadata,
+    verify_soperator_source_git_tree,
+)
 from nebius_cxcli.soperator_release_source import (
     SoperatorArchiveLimits,
     acquire_soperator_release_source,
     extract_soperator_release_archive,
+    normalized_tree_manifest,
 )
 
 
@@ -101,6 +107,149 @@ def test_archive_rejects_symlink_members(tmp_path: Path) -> None:
         )
 
 
+def _documentation_link_archive(tmp_path: Path) -> tuple[Path, str, SoperatorReleaseMetadata]:
+    content = b"Upstream contributor documentation.\n"
+    link = tarfile.TarInfo("soperator-4.1.7/CLAUDE.md")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "AGENTS.md"
+    archive, digest = _archive(tmp_path, [(link, b""), _file("soperator-4.1.7/AGENTS.md", content)])
+    entries = []
+    for name, mode, data in (
+        ("CLAUDE.md", "120000", b"AGENTS.md"),
+        ("AGENTS.md", "100644", content),
+    ):
+        blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()  # noqa: S324
+        entries.append(SoperatorGitTreeEntry(name, mode, "blob", blob, len(data)))
+    return (
+        archive,
+        digest,
+        SoperatorReleaseMetadata(
+            selector="4.1.7",
+            release="4.1.7",
+            repository="https://github.com/nebius/soperator",
+            tag="4.1.7",
+            commit="a" * 40,
+            tree="b" * 40,
+            archive_url="https://github.com/nebius/soperator/archive/refs/tags/4.1.7.tar.gz",
+            archive_root="soperator-4.1.7",
+            published_at="",
+            tree_entries=tuple(entries),
+        ),
+    )
+
+
+def test_documentation_link_is_inert_git_verified_and_reproducible(tmp_path: Path) -> None:
+    archive, digest, metadata = _documentation_link_archive(tmp_path)
+    source = extract_soperator_release_archive(
+        archive,
+        tmp_path / "source",
+        expected_root=metadata.archive_root,
+        expected_archive_sha256=digest,
+        expected_manifest_sha256=None,
+    )
+    assert not (source / "CLAUDE.md").is_symlink()
+    assert (source / "CLAUDE.md").read_bytes() == b"AGENTS.md"
+    verify_soperator_source_git_tree(source, metadata)
+    manifest, _ = normalized_tree_manifest(source)
+    replay = extract_soperator_release_archive(
+        archive,
+        tmp_path / "replay",
+        expected_root=metadata.archive_root,
+        expected_archive_sha256=digest,
+        expected_manifest_sha256=manifest,
+    )
+    verify_soperator_source_git_tree(replay, metadata)
+    opener = _ArchiveOpener(archive.read_bytes(), metadata.archive_url)
+    first = acquire_soperator_release_source(metadata, cache_root=tmp_path / "cache", opener=opener)
+    second = acquire_soperator_release_source(
+        metadata, cache_root=tmp_path / "cache", opener=opener
+    )
+    assert first == second
+    assert first.manifest_sha256 == manifest
+    assert not (Path(first.source_dir) / "CLAUDE.md").is_symlink()
+    bad_link = replace(metadata.tree_entries[0], sha="f" * 40)
+    with pytest.raises(ValueError, match="blob differs"):
+        verify_soperator_source_git_tree(
+            source, replace(metadata, tree_entries=(bad_link, metadata.tree_entries[1]))
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "target", "kind"),
+    [
+        ("CLAUDE.md", "/etc/passwd", tarfile.SYMTYPE),
+        ("CLAUDE.md", "../AGENTS.md", tarfile.SYMTYPE),
+        ("CLAUDE.md", "sub/AGENTS.md", tarfile.SYMTYPE),
+        ("CLAUDE.md", "AGENTS\\.md", tarfile.SYMTYPE),
+        ("CLAUDE.md", "missing.md", tarfile.SYMTYPE),
+        ("CLAUDE.md", "CLAUDE.md", tarfile.SYMTYPE),
+        ("script.sh", "AGENTS.md", tarfile.SYMTYPE),
+        ("helm/CLAUDE.md", "AGENTS.md", tarfile.SYMTYPE),
+        ("CLAUDE.md", "script.sh", tarfile.SYMTYPE),
+        ("CLAUDE.md", "AGENTS.md", tarfile.LNKTYPE),
+    ],
+)
+def test_documentation_link_rejects_non_documentation_and_unsafe_targets(
+    tmp_path: Path,
+    name: str,
+    target: str,
+    kind: bytes,
+) -> None:
+    link = tarfile.TarInfo(f"soperator-4.1.7/{name}")
+    link.type, link.linkname = kind, target
+    archive, digest = _archive(tmp_path, [(link, b""), _file("soperator-4.1.7/AGENTS.md")])
+    with pytest.raises(ValueError):
+        extract_soperator_release_archive(
+            archive,
+            tmp_path / "source",
+            expected_root="soperator-4.1.7",
+            expected_archive_sha256=digest,
+            expected_manifest_sha256=None,
+        )
+    assert not any(p.is_symlink() for p in (tmp_path / "source").rglob("*"))
+
+
+def test_documentation_link_rejects_chains_and_counts_in_size_limits(tmp_path: Path) -> None:
+    links = []
+    for name, target in (("CLAUDE.md", "AGENTS.md"), ("AGENTS.md", "README.md")):
+        link = tarfile.TarInfo(f"soperator-4.1.7/{name}")
+        link.type, link.linkname = tarfile.SYMTYPE, target
+        links.append((link, b""))
+    archive, digest = _archive(tmp_path, [*links, _file("soperator-4.1.7/README.md")])
+    with pytest.raises(ValueError, match="target must be a regular document"):
+        extract_soperator_release_archive(
+            archive,
+            tmp_path / "chain",
+            expected_root="soperator-4.1.7",
+            expected_archive_sha256=digest,
+            expected_manifest_sha256=None,
+        )
+    with pytest.raises(ValueError, match="per-file limit"):
+        extract_soperator_release_archive(
+            archive,
+            tmp_path / "size",
+            expected_root="soperator-4.1.7",
+            expected_archive_sha256=digest,
+            expected_manifest_sha256=None,
+            limits=SoperatorArchiveLimits(max_file_bytes=8),
+        )
+
+
+def test_git_verifier_rejects_actual_filesystem_links(tmp_path: Path) -> None:
+    archive, digest, metadata = _documentation_link_archive(tmp_path)
+    source = extract_soperator_release_archive(
+        archive,
+        tmp_path / "source",
+        expected_root=metadata.archive_root,
+        expected_archive_sha256=digest,
+        expected_manifest_sha256=None,
+    )
+    (source / "CLAUDE.md").unlink()
+    (source / "CLAUDE.md").symlink_to("AGENTS.md")
+    with pytest.raises(ValueError, match="non-regular file"):
+        verify_soperator_source_git_tree(source, metadata)
+
+
 def test_archive_enforces_per_file_and_expanded_size_limits(tmp_path: Path) -> None:
     archive, digest = _archive(
         tmp_path,
@@ -156,9 +305,7 @@ def test_acquire_rejects_cached_receipt_with_foreign_source_directory(
         archive_url=archive_url,
         archive_root="soperator-4.1.7",
         published_at="",
-        tree_entries=(
-            SoperatorGitTreeEntry("Chart.yaml", "100644", "blob", blob, len(content)),
-        ),
+        tree_entries=(SoperatorGitTreeEntry("Chart.yaml", "100644", "blob", blob, len(content)),),
     )
     opener = _ArchiveOpener(archive.read_bytes(), archive_url)
     cache_root = tmp_path / "cache"

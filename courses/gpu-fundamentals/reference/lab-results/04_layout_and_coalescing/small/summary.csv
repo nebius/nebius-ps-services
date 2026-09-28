@@ -1,0 +1,6 @@
+variant,metric,case,value,unit
+baseline-trial1,timings_contiguous_median_seconds,value,0.0001254,s
+baseline-trial1,timings_strided_view_median_seconds,value,0.0001251,s
+repeat-trial1,timings_contiguous_median_seconds,value,0.0001251,s
+repeat-trial1,timings_strided_view_median_seconds,value,0.0001252,s
+repeat-trial1,repack_break_even_reuses,value,334,none

@@ -4,9 +4,9 @@ A GPU can execute arithmetic quickly while still losing an application compariso
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 1 for CPU timers, CUDA events and the difference between timing GPU operations and timing a complete request with transfers. Complete the README setup and Lab 10 before this experiment. The formula, timing procedure and numerical check are explained below.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/01_cpu_gpu_crossover.json).
 
-Use one H100 and the Fundamentals environment. The smoke profile tests 1,024 and 1,000,000 FP32 elements; the H100 profile adds 32,000,000. A profile selects workload size, not a different correctness standard. No dataset is needed. The two-node Lab 00 belongs to the final collective lesson.
+Use one H100 and the Fundamentals environment. The small profile tests 1,024 and 1,000,000 FP32 elements; the large profile adds 32,000,000. A profile selects workload size, not a different correctness standard. No dataset is needed.
 
 H100 provides enormous parallel and matrix throughput, but it does not remove Python dispatch, launch latency, PCIe or network transfer, or application queueing. Large H100 peak numbers are relevant only after the measured path supplies enough eligible work.
 
@@ -26,23 +26,32 @@ Warm-up executes the GPU operation before steady-state samples so first-use setu
 
 The CUDA-event interval excludes the initial input copies and does not return the output to the CPU. It can include idle gaps and waits between the events; it is not a sum of active kernel durations. One PyTorch expression can launch multiple kernels. These are three measurements of different amounts of work, not three consecutive execution phases. Repeat measurements to see variation rather than relying on one sample.
 
-## Practice
-
 Slurm assigns cluster resources to jobs. The `sbatch` commands below run the script inside a GPU allocation; they do not execute GPU work on the login host.
 
 For an illustrative calculation, suppose the CPU expression takes 8 microseconds, host submission takes 10 microseconds in total, GPU execution takes 2 microseconds, and each of the two input copies and one output copy takes 7 microseconds. Assume these costs do not overlap and there are no other delays. The GPU computation takes 2 microseconds, but the complete GPU request takes 10 + 2 + 3 × 7 = 33 microseconds. Now suppose millions of values make the CPU take 900 microseconds, while submission and copies total 140 microseconds and GPU execution takes 100 microseconds: 240 microseconds end to end. The preferred processor changes with the workload and included operations. These are assumed numbers, not measured results or a prediction of the CUDA-event samples.
 
-Follow the README environment setup and run Lab 10 as the single-GPU compatibility/preflight check before Lab 01. Interpret its version layers in Lesson 2. Predict the crossover for three tensor sizes, run Lab 01, and explain the result without using the phrase “the GPU is faster.” Reserve the two-node Lab 00 preflight for Lesson 12, before its collective experiment.
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Start small, then repeat with the larger profile only after correctness passes. Both profiles run all three timing cases, so no source edit is required for this comparison.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile h100
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile large
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 01_cpu_gpu_crossover --job "$LAB_JOB_ID"
+```
 
 Require FP32 agreement with the CPU expression at `rtol=1e-5, atol=1e-6`. Compare `cpu_median_ms`, the `gpu_resident` distribution, and `gpu_with_transfers_median_ms` for each element count. No particular crossover or speedup is guaranteed.
 
@@ -50,17 +59,60 @@ Record CPU elapsed time, the CUDA-event interval, end-to-end time including tran
 
 A crossover is a property of the operation, software stack, and system—not a universal tensor size.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Sizes / case / cpu median (seconds) | `sizes.*.cpu_median_ms` | `s` |
+| Sizes / case / gpu resident / median (seconds) | `sizes.*.gpu_resident.median_ms` | `s` |
+| Sizes / case / gpu with transfers median (seconds) | `sizes.*.gpu_with_transfers_median_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_cpu_gpu_crossover \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Which measurement represents a pipeline that keeps intermediate tensors on the GPU? Which represents a one-off request with CPU inputs and a CPU output? Explain why enlarging the tensor may amortize launch overhead while increasing transfer time.
 
 Moving work to the GPU can improve throughput while worsening single-request latency or memory pressure. Keeping control-heavy work on the CPU can be correct even when a GPU implementation exists. Choose against the service objective, not a device label.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Open **CPU–GPU crossover by element count** for each slot. Plot CPU, resident GPU, and GPU including transfers at every element count. Locate `cpu_expression`, `h2d_inputs`, `gpu_expression`, and `d2h_output` in Systems. Explain why a CPU-input/CPU-output request includes copies absent from the resident measurement. Data residency is the guided tuning control; changing `small` to `large` only changes the tested sizes.
+
+Guided comparison: Compare CPU, resident-GPU, and transfer-inclusive timing at the same element count. Choose data residency for a repeated pipeline; independently find the first tested size where each GPU path beats the CPU and explain the transfer penalty.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
-If small-case times round to nearly zero, increase repetitions and inspect timer resolution rather than reporting an infinite speedup. If memory allocation fails on the large profile, retain smoke results and record the capacity limit.
+If small-case times round to nearly zero, increase repetitions and inspect timer resolution rather than reporting an infinite speedup. If memory allocation fails on the large profile, retain small results and record the capacity limit.
 
 Stopping a CPU timer immediately after an asynchronous launch measures submission time and omits unfinished GPU work. A CPU timer can measure a complete GPU request when the required synchronization or blocking output copy occurs before the timer stops.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

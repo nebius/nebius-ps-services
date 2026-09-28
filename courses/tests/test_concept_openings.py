@@ -1,28 +1,28 @@
 """Every lesson defines its concept before asking learners to apply it."""
 
+from course_builder import content as cb_content, markdown as cb_markdown, metadata as cb_metadata
 import re
 
 import pytest
-
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_every_lesson_has_a_complete_definition_first(course):
-    builder = load_builder()
-    lessons = builder.parse_course(ROOT / course / "COURSE.md")[2]
+    lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
     page = (ROOT / course / "index.html").read_text()
     for number, lesson in enumerate(lessons, 1):
         field = "How it works"
         introduction = lesson[field]
         assert len(introduction.split()) >= (350 if number == 1 else 180)
         assert list(lesson).index("Objective") < list(lesson).index(field)
-        rendered = builder.lesson_markup(lesson, number)
-        assert rendered.index("<strong>Objective</strong>") < rendered.index(
-            f"<strong>{field}</strong>"
+        links = {destination: "#practice" for value in lesson.values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)}
+        rendered = cb_content.lesson_markup(lesson, number, links)
+        assert rendered.index("<h3>Objective</h3>") < rendered.index(
+            f"<h3>{field}</h3>"
         )
-        assert builder.block(introduction) in rendered
+        assert cb_markdown.block(introduction, links, heading_offset=1) in rendered
     # Publication links may be rewritten; bind complete visible prose to its own lesson.
     with load_lab("tools/validate_course_template.py") as module:
         parser = module.Parser()
@@ -31,6 +31,13 @@ def test_every_lesson_has_a_complete_definition_first(course):
             (item["title"], {k: v for k, v in item.items() if k != "title"}, 0)
             for item in lessons
         ]
+        if len(canonical) > 1:
+            advanced = cb_metadata.course_metadata(ROOT / course)[
+                "advanced_lessons"
+            ]
+            canonical = [
+                item for n, item in enumerate(canonical, 1) if n not in advanced
+            ] + [canonical[n - 1] for n in advanced]
         module.validate_rendered_openings(parser, canonical)
 
 
@@ -40,7 +47,7 @@ def test_standalone_validator_rejects_missing_short_or_late_openings(course):
         valid = {
             "Objective": "Apply it",
             "How it works": "A definition. " * 100,
-            "Practice labs": "Try it",
+            "Practice": "Try it",
             "Mental model": "Remember the relationship",
         }
         module.validate_concept_opening("Example", valid)
@@ -50,7 +57,7 @@ def test_standalone_validator_rejects_missing_short_or_late_openings(course):
             {
                 "How it works": valid["How it works"],
                 "Objective": "Apply it",
-                "Practice labs": "Try it",
+                "Practice": "Try it",
                 "Mental model": "Remember",
             },
             {**valid, "What it is": "Old field"},
@@ -60,7 +67,7 @@ def test_standalone_validator_rejects_missing_short_or_late_openings(course):
                     "Objective",
                     "How it works",
                     "Mental model",
-                    "Practice labs",
+                    "Practice",
                 )
             },
         ):
@@ -69,8 +76,7 @@ def test_standalone_validator_rejects_missing_short_or_late_openings(course):
 
 
 def test_cuda_graph_definition_precedes_capture_restrictions():
-    builder = load_builder()
-    lessons = builder.parse_course(ROOT / "gpu-optimizations/COURSE.md")[2]
+    lessons = cb_metadata.parse_course(ROOT / "gpu-optimizations/COURSE.md")[2]
     introduction = lessons[4]["How it works"].lower()
     for term in (
         "operations",
@@ -88,34 +94,33 @@ def test_definition_field_can_own_a_contextual_diagram():
     with load_lab("tools/validate_course_template.py") as module:
         parser = module.Parser()
         parser.feed(
-            '<section class="lesson" id="example"><div class="how-it-works">Definition<figure id="detail-example"></figure></div></section>'
+            '<section data-lesson-number="1" class="lesson" id="example"><div class="how-it-works">Definition<figure id="detail-example"></figure></div></section>'
         )
         assert parser.figures["detail-example"] == ("lesson:1", "how-it-works")
         assert parser.lesson_first_fields == ["how-it-works"]
         late = module.Parser()
         late.feed(
-            '<section class="lesson" id="late"><div class="lesson-outcome">Apply it</div><div class="how-it-works">Definition</div></section>'
+            '<section data-lesson-number="1" class="lesson" id="late"><div class="lesson-outcome">Apply it</div><div class="how-it-works">Definition</div></section>'
         )
         assert late.lesson_first_fields == ["lesson-outcome"]
 
 
 @pytest.mark.parametrize("gap", ["\n", "\n\n"])
 def test_opening_table_parity_preserves_every_cell_and_literal_pipes(gap):
-    builder = load_builder()
     introduction = (
         "A | B stays literal.\n\n"
         "| Resource | Count |\n| --- | --- |\n| SMs | 132 |\n| L2 | 50 MB |"
         f"{gap}"
         "```text\n| Code | Value |\n| --- | --- |\n| A | B |\n```"
     )
-    rendered = builder.block(introduction)
+    rendered = cb_markdown.block(introduction)
     canonical = [("Architecture", {"How it works": introduction}, 0)]
     with load_lab("tools/validate_course_template.py") as module:
 
         def check(body):
             parser = module.Parser()
             parser.feed(
-                '<section class="lesson"><div class="how-it-works">'
+                '<section data-lesson-number="1" class="lesson"><div class="how-it-works">'
                 f"<p><strong>How it works</strong></p>{body}</div></section>"
             )
             module.validate_rendered_openings(parser, canonical)
@@ -133,19 +138,24 @@ def test_opening_table_parity_preserves_every_cell_and_literal_pipes(gap):
 
 @pytest.mark.parametrize("course", COURSES)
 def test_standalone_opening_parity_is_bound_to_its_own_lesson(course):
-    builder = load_builder()
-    lessons = builder.parse_course(ROOT / course / "COURSE.md")[2]
+    lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
     page = (ROOT / course / "index.html").read_text()
     with load_lab(f"{course}/tools/validate_course.py") as module:
         canonical = [
             (item["title"], {k: v for k, v in item.items() if k != "title"}, 0)
             for item in lessons
         ]
+        advanced = cb_metadata.course_metadata(ROOT / course)["advanced_lessons"]
+        canonical = [
+            item for n, item in enumerate(canonical, 1) if n not in advanced
+        ] + [canonical[n - 1] for n in advanced]
         parser = module.Parser()
         parser.feed(page)
         module.validate_rendered_openings(parser, canonical)
         openings = list(
-            re.finditer(r'<div class="how-it-works">(.*?)</div>', page, re.S)
+            re.finditer(
+                r'<div class="how-it-works">(.*?)</div>', page, re.DOTALL
+            )
         )
         first, second = openings[:2]
         swapped = (
@@ -155,7 +165,9 @@ def test_standalone_opening_parity_is_bound_to_its_own_lesson(course):
             + first[1]
             + page[second.end(1) :]
         )
-        truncated = page[: first.start(1)] + "Definition omitted" + page[first.end(1) :]
+        truncated = (
+            page[: first.start(1)] + "Definition omitted" + page[first.end(1) :]
+        )
         for invalid in (swapped, truncated):
             parser = module.Parser()
             parser.feed(invalid)
@@ -172,7 +184,7 @@ def test_every_lesson_renders_a_core_diagram_inside_its_explanation(course):
         assert not parser.errors
         module.validate_lesson_structure(parser)
         assert len(parser.lesson_core_diagrams) == len(
-            load_builder().parse_course(ROOT / course / "COURSE.md")[2]
+            cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
         )
         assert all(count >= 1 for count in parser.lesson_core_diagrams)
 
@@ -191,7 +203,7 @@ def test_diagram_and_order_checks_are_local_to_each_lesson(fault):
     practice = '<div class="practice-links">Practice</div>'
     mental = '<div class="mental-model">Summary</div>'
     document = (
-        '<section class="lesson">'
+        '<section data-lesson-number="1" class="lesson">'
         + objective
         + explanation
         + practice
@@ -205,7 +217,9 @@ def test_diagram_and_order_checks_are_local_to_each_lesson(fault):
         if fault == "missing":
             document = document.replace(figure, "")
         elif fault == "outside":
-            document = document.replace(figure, "").replace(practice, figure + practice)
+            document = document.replace(figure, "").replace(
+                practice, figure + practice
+            )
         elif fault == "no-svg":
             document = document.replace(
                 figure, '<figure id="core">Caption only</figure>'
@@ -216,7 +230,7 @@ def test_diagram_and_order_checks_are_local_to_each_lesson(fault):
             document = document.replace(mental, mental + mental)
         # Extra figures in a different lesson cannot satisfy this lesson's requirement.
         extra = (
-            '<section class="lesson">'
+            '<section data-lesson-number="1" class="lesson">'
             + objective
             + explanation.replace('id="core"', 'id="other"')
             .replace('id="t"', 'id="t2"')
@@ -233,12 +247,11 @@ def test_diagram_and_order_checks_are_local_to_each_lesson(fault):
 
 def test_explanation_list_parity_keeps_fenced_list_literals():
     source = "Steps:\n\n- Read the input.\n- Compute the result.\n\n```text\n- literal marker\n```"
-    builder = load_builder()
     with load_lab("tools/validate_course_template.py") as module:
         canonical = [("Example", {"How it works": source}, 0)]
         rendered = (
-            '<section class="lesson"><div class="how-it-works"><strong>How it works</strong> '
-            + builder.block(source)
+            '<section data-lesson-number="1" class="lesson"><div class="how-it-works"><strong>How it works</strong> '
+            + cb_markdown.block(source)
             + "</div></section>"
         )
         parser = module.Parser()

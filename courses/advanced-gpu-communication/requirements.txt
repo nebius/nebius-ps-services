@@ -1,0 +1,5 @@
+# Direct compatibility constraints only; this is not an immutable lock file.
+# The cluster owner must supply an approved hash-locked file or image digest.
+torch==2.14.0
+numpy==2.5.3
+pytest==9.1.1

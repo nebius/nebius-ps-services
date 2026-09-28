@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 
 import yaml
 
+from . import kubernetes_process
 from .component_defaults import read_component_path
 from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
@@ -264,30 +265,7 @@ def _kubectl_env(extra_env: Mapping[str, str] | None) -> dict[str, str]:
 
 
 def _target_kube_context(extra_env: Mapping[str, str] | None) -> str:
-    explicit_context = str((extra_env or {}).get(KUBE_CONTEXT_ENV) or "").strip()
-    if explicit_context:
-        return explicit_context
-    env_context = str(os.environ.get(KUBE_CONTEXT_ENV) or "").strip()
-    if env_context:
-        return env_context
-    kubeconfig_value = str(
-        (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
-    )
-    kubeconfig_paths = (
-        tuple(item for item in kubeconfig_value.split(os.pathsep) if item)
-        if kubeconfig_value
-        else (os.path.expanduser("~/.kube/config"),)
-    )
-    for kubeconfig_path in kubeconfig_paths:
-        try:
-            with open(kubeconfig_path, encoding="utf-8") as handle:
-                payload = yaml.safe_load(handle)
-        except (OSError, yaml.YAMLError):
-            continue
-        context = str(_mapping(payload).get("current-context") or "").strip()
-        if context:
-            return context
-    return ""
+    return str((extra_env or {}).get(KUBE_CONTEXT_ENV) or "").strip()
 
 
 def _kubectl_command(
@@ -319,7 +297,7 @@ def _run_kubectl(
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
     command = _kubectl_command(args, extra_env=extra_env)
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         input=input_text,
@@ -364,7 +342,7 @@ def _secret_has_keys(
         ["-n", namespace, "get", "secret", name, "-o", "json"],
         extra_env=extra_env,
     )
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         capture_output=True,
@@ -420,7 +398,7 @@ def _apply_secret(
 
 def _crd_exists(crd_name: str, *, extra_env: Mapping[str, str] | None) -> bool:
     command = _kubectl_command(["get", "crd", crd_name, "-o", "name"], extra_env=extra_env)
-    completed = subprocess.run(
+    completed = kubernetes_process.run(
         command,
         env=_kubectl_env(extra_env),
         capture_output=True,

@@ -1,29 +1,31 @@
 """Figures belong to their explanations and fit the reading surface."""
 
+from course_builder import config as cb_config, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
 import json
 import re
 import xml.etree.ElementTree as ET
 
 import pytest
-
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
     document = (root / "index.html").read_text()
     assert 'id="visual-models"' not in document
     assert 'href="#visual-models"' not in document
-    lessons = re.findall(r'<section class="lesson".*?</section>', document, re.S)
+    lessons = sorted(
+        re.findall(r'<section class="lesson".*?</section>', document, re.DOTALL),
+        key=lambda block: int(re.search(r'data-lesson-number="([0-9]+)"', block)[1]),
+    )
     placements = []
     for index, visual in enumerate(
-        builder.parse_visuals(root / "reference/visual-plan.md"), 1
+        cb_metadata.parse_visuals(root / "reference/visual-plan.md"), 1
     ):
         placements.append(
             (
-                f"diagram-{index}-{builder.slug(visual.title)}",
+                f"diagram-{index}-{cb_markdown.slug(visual.title)}",
                 visual.lesson,
                 visual.after,
                 visual.home,
@@ -34,17 +36,34 @@ def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
     ]:
         placements.append(
             (
-                "detail-" + builder.slug(entry["path"].split("/")[-1][:-4]),
+                "detail-" + cb_markdown.slug(entry["path"].split("/")[-1][:-4]),
                 entry["lessons"][0],
                 entry["after"],
                 entry["home"],
             )
         )
-    assert document.count("<figure ") == len(placements)
+    primer = re.search(
+        r'<section id="using-gpu-performance-tools".*?</section>',
+        document,
+        re.DOTALL,
+    ).group()
+    tool_figures = re.findall(
+        r"(?m)^!\[[^]]+\]\(diagrams/(tools-[a-z0-9-]+)\.svg\)$",
+        (root / "reference/performance-tools.md").read_text(),
+    )
+    assert primer.count("<figure ") == 1 + len(tool_figures)
+    for target in tool_figures:
+        assert primer.count(f'id="{target}"') == 1
+    assert primer.count('id="tools-measurement-loop"') == 1
+    explanation = primer.split('class="tools-field tools-how-it-works"')[1].split(
+        'class="tools-field tools-practice-labs"'
+    )[0]
+    assert 'id="tools-measurement-loop"' in explanation
+    assert document.count("<figure ") == len(placements) + 1 + len(tool_figures)
     labs = {
         match[1]: match[0]
         for match in re.finditer(
-            r'<article class="lab" id="lab-([^"]+)".*?</article>', document, re.S
+            r'<article class="lab" id="lab-([^"]+)".*?</article>', document, re.DOTALL
         )
     }
     assert sum(item.count("<figure ") for item in [*lessons, *labs.values()]) == len(
@@ -55,7 +74,7 @@ def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
         owner = (
             lessons[number - 1]
             if home == "lesson"
-            else labs[builder.slug(home.removeprefix("lab:"))]
+            else labs[cb_markdown.slug(home.removeprefix("lab:"))]
         )
         figure = re.search(rf'<figure\b[^>]*id="{target}"[^>]*>', owner).group()
         before = owner[: owner.index(figure)]
@@ -63,24 +82,23 @@ def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
             stages = [
                 name
                 for name in re.findall(r'<div class="([^"]+)"', before)
-                if name in builder.FIELD_CLASSES.values()
+                if name in cb_config.FIELD_CLASSES.values()
             ]
-            assert stages[-1] == builder.FIELD_CLASSES[field]
+            assert stages[-1] == cb_config.FIELD_CLASSES[field]
         else:
             assert re.findall(r"<h4>(.*?)</h4>", before)[-1] == field
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_teaching_labels_have_no_trailing_period(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
     source = (root / "COURSE.md").read_text()
     document = (root / "index.html").read_text()
-    for field in builder.LESSON_FIELDS:
+    for field in cb_config.LESSON_FIELDS:
         assert f"**{field}.**" not in source
         assert f"**{field}**" in source
         assert f"<strong>{field}.</strong>" not in document
-        assert f"<strong>{field}</strong>" in document
+        assert f"<h3>{field}</h3>" in document
     assert not re.search(r"<figcaption><strong>[^<]+\.</strong>", document)
 
 
@@ -96,7 +114,6 @@ def test_wide_layout_fits_diagrams_instead_of_forcing_pan() -> None:
 
 
 def test_invalid_overview_placement_is_rejected(tmp_path) -> None:
-    builder = load_builder()
     path = tmp_path / "visual-plan.md"
     path.write_text(
         "| Title | First stage | Second stage | Third stage | Explanation | Lesson | After | Layout | Home |\n"
@@ -104,16 +121,15 @@ def test_invalid_overview_placement_is_rejected(tmp_path) -> None:
         "| Example | A | B | C | Explanation | 0 | Mechanism | flow | lesson |\n"
     )
     with pytest.raises(ValueError, match="placement"):
-        builder.parse_visuals(path)
+        cb_metadata.parse_visuals(path)
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_detailed_diagrams_preserve_native_accessible_descriptions(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
-    count = len(builder.parse_course(root / "COURSE.md")[2])
-    for entry in builder.detailed_visuals(root, count):
-        markup = builder.detailed_diagram_markup(entry)
+    count = len(cb_metadata.parse_course(root / "COURSE.md")[2])
+    for entry in cb_visuals.detailed_visuals(root, count):
+        markup = cb_visuals.detailed_diagram_markup(entry)
         svg = ET.fromstring(entry["svg"])
         ids = {node.get("id") for node in svg.iter()}
         assert set(svg.get("aria-labelledby").split()) <= ids
@@ -129,9 +145,12 @@ def test_open_diagram_connectors_do_not_fill_as_polygons(course: str) -> None:
     def visit(node, inherited_fill="black", inherited_stroke="none"):
         fill = node.get("fill", inherited_fill)
         stroke = node.get("stroke", inherited_stroke)
-        if node.tag == "path" and "z" not in node.get("d", "").lower():
-            if stroke != "none":
-                assert fill == "none", f"open connector needs fill=none: {node.attrib}"
+        if (
+            node.tag == "path"
+            and "z" not in node.get("d", "").lower()
+            and stroke != "none"
+        ):
+            assert fill == "none", f"open connector needs fill=none: {node.attrib}"
         for child in node:
             visit(child, fill, stroke)
 
@@ -151,7 +170,6 @@ def test_open_diagram_connectors_do_not_fill_as_polygons(course: str) -> None:
     ],
 )
 def test_invalid_detailed_placements_fail_fast(tmp_path, changes) -> None:
-    builder = load_builder()
     reference = tmp_path / "reference"
     reference.mkdir()
     entry = {
@@ -164,11 +182,10 @@ def test_invalid_detailed_placements_fail_fast(tmp_path, changes) -> None:
     entry.update(changes)
     (reference / "visual-manifest.json").write_text(json.dumps({"diagrams": [entry]}))
     with pytest.raises(ValueError, match="placement"):
-        builder.detailed_visuals(tmp_path, 2)
+        cb_visuals.detailed_visuals(tmp_path, 2)
 
 
 def test_duplicate_detailed_diagram_is_rejected(tmp_path) -> None:
-    builder = load_builder()
     reference = tmp_path / "reference"
     reference.mkdir()
     (reference / "example.svg").write_text("<svg><desc>Example</desc></svg>")
@@ -183,14 +200,13 @@ def test_duplicate_detailed_diagram_is_rejected(tmp_path) -> None:
         json.dumps({"diagrams": [entry, entry]})
     )
     with pytest.raises(ValueError, match="duplicate"):
-        builder.detailed_visuals(tmp_path, 2)
+        cb_visuals.detailed_visuals(tmp_path, 2)
 
 
 def test_overview_placement_cannot_target_missing_lesson(monkeypatch) -> None:
-    builder = load_builder()
-    invalid = builder.OverviewDiagram(
+    invalid = cb_metadata.OverviewDiagram(
         "Example", "A", "B", "C", "Explanation", 999, "Mechanism", "flow", "lesson"
     )
-    monkeypatch.setattr(builder, "parse_visuals", lambda path: [invalid])
+    monkeypatch.setattr(cb_pages, "parse_visuals", lambda path: [invalid])
     with pytest.raises(ValueError, match="missing lesson"):
-        builder.render_course("gpu-fundamentals")
+        cb_pages.render_course("gpu-fundamentals")

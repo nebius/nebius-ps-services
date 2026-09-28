@@ -58,6 +58,8 @@ def terminal_native_check_pods(
     cluster: Mapping[str, Any],
     releases: Sequence[Mapping[str, Any]],
     read: Callable[[str], Mapping[str, Any] | None],
+    pending_checks: Mapping[str, Mapping[str, Any]] | None = None,
+    pending_check_uids: Mapping[str, str] | None = None,
 ) -> set[str]:
     """Recognize Pod -> terminal Job -> CronJob -> exact SlurmCluster ownership.
 
@@ -65,7 +67,12 @@ def terminal_native_check_pods(
     to that cluster. These Pods are history, not service readiness or successful
     checks; the caller must still evaluate its required ActiveCheck results.
     """
-    failed = [pod for pod in pods if _section(pod, "status").get("phase") == "Failed"]
+    failed = [
+        pod
+        for pod in pods
+        if _section(pod, "status").get("phase")
+        in ({"Pending", "Running"} if pending_checks is not None else {"Failed"})
+    ]
     if not failed:
         return set()
     cluster_meta = _metadata(cluster)
@@ -85,6 +92,7 @@ def terminal_native_check_pods(
     jobs = _index(read("jobs.batch"))
     crons = _index(read("cronjobs.batch"))
     checks = _index(read("activechecks.slurm.nebius.ai"))
+    scripts = None
     history = set()
     for pod in failed:
         meta = _metadata(pod)
@@ -129,6 +137,36 @@ def terminal_native_check_pods(
             and condition.get("type") in {"Complete", "Failed"}
             and condition.get("status") == "True"
         }
+        optional_pending = False
+        if pending_checks is not None:
+            expected = pending_checks.get(str(check_meta.get("name")))
+            expected_uid = (pending_check_uids or {}).get(str(check_meta.get("name")))
+            if (
+                expected is not None
+                and not auxiliary
+                and not terminal
+                and (expected_uid is None or expected_uid == check_meta.get("uid"))
+            ):
+                from .soperator_checks_contract import verify_native_pod, verify_native_template
+
+                try:
+                    script = verify_native_template(expected, check, _section(template, "template"))
+                    verify_native_template(
+                        expected, check, _section(_section(job, "spec"), "template")
+                    )
+                    verify_native_pod(expected, check, pod)
+                    if script:
+                        if scripts is None:
+                            scripts = _index(read("configmaps"))
+                        if (
+                            _section(scripts.get(script, {}), "data").get("sbatch.sh")
+                            != expected["slurmJobSpec"]["sbatchScript"]
+                        ):
+                            raise RuntimeError("native check script differs from frozen execution")
+                except (RuntimeError, KeyError, TypeError, ValueError):
+                    pass
+                else:
+                    optional_pending = True
         if (
             not meta.get("uid")
             or meta.get("namespace") != "soperator"
@@ -150,8 +188,9 @@ def terminal_native_check_pods(
                     and cluster_ref.get("uid") == cluster_meta.get("uid")
                 )
             )
-            or len(terminal) != 1
-            or job_status.get("active", 0)
+            or (not optional_pending and len(terminal) != 1)
+            or (pending_checks is not None and not optional_pending)
+            or (not optional_pending and job_status.get("active", 0))
             or job_status.get("terminating", 0)
             or _section(check, "spec").get("slurmClusterRefName") != cluster_meta.get("name")
             or _section(check, "spec").get("checkType") not in {"slurmJob", "k8sJob"}

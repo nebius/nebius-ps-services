@@ -1,0 +1,51 @@
+{
+  "correctness": {
+    "all_reduce_exact": true,
+    "distinct_gpu_per_rank": true,
+    "hardware_guard_passed": true
+  },
+  "lab": "01_fabric_topology",
+  "measurements": {
+    "active_ib_ports_per_node_min": 8,
+    "all_reduce": {
+      "max_ms": 2.1480359719134867,
+      "median_ms": 0.0859085121192038,
+      "min_ms": 0.07400102913379669,
+      "samples_ms": [
+        0.9446439798921347,
+        0.09113800479099154,
+        0.09456399129703641,
+        0.0780820264481008,
+        0.09073701221495867,
+        2.1480359719134867,
+        0.08143397280946374,
+        0.07612298941239715,
+        0.09152200073003769,
+        0.0746200093999505,
+        0.07400102913379669,
+        0.09038305142894387,
+        0.0756559893488884,
+        0.07537100464105606,
+        0.07463200017809868,
+        0.09726401185616851,
+        0.10476302122697234,
+        0.07638102397322655,
+        0.110225984826684,
+        0.07570500019937754
+      ]
+    },
+    "collective_sum": 136,
+    "gpus_per_node": 8,
+    "nodes": 2,
+    "nvlink_peers_per_gpu": 7,
+    "ranks": 16
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 16
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

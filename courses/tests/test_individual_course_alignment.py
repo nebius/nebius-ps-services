@@ -1,12 +1,11 @@
 """Course onboarding and evidence descriptions match the supplied experiments."""
 
-import re
 import importlib.util
+import re
 import shutil
 import subprocess
 
 import pytest
-
 from test_course_content_contract import ROOT
 from test_course_review_fixes import load_lab
 
@@ -34,8 +33,11 @@ def test_health_query_never_infers_full_gpu_from_missing_mig_state(value, expect
 def test_fundamentals_onboarding_is_reproducible_not_workspace_history():
     readme = text("gpu-fundamentals", "README.md")
     assert "Existing local 2.13 files" not in readme
-    assert "PyTorch 2.14" in readme
-    assert "qualification remain pending" in readme
+    assert "(../README.md#how-to-set-up-the-lab)" in readme
+    assert "(VERSIONS.md)" in readme
+    versions = text("gpu-fundamentals", "VERSIONS.md")
+    assert "PyTorch | 2.14.0 manifest authority" in versions
+    assert "qualification pending; no fallback approved" in versions
 
 
 def test_optimization_timing_distinguishes_intervals_from_active_kernels():
@@ -58,9 +60,11 @@ def test_fusion_traffic_is_logical_until_profiled():
 
 def test_optimization_readme_includes_two_node_preflight():
     body = text("gpu-optimizations", "README.md")
-    assert "preflight, the Lab 17 PyTorch communication sweep" in body
-    assert "slurm/nccl_tests.sbatch" in body
-    assert "MPI" in body
+    assert (
+        "Distributed transport, scaling and profiling practice now belongs to the advanced course"
+        in body
+    )
+    assert "../advanced-gpu-communication/index.html" in body
 
 
 def test_training_summaries_keep_actual_validation_and_mfu_scope():
@@ -85,23 +89,35 @@ def test_lora_saved_artifacts_are_an_explicit_extension():
 
 def test_recomputation_matches_work_within_each_lab_not_across_models():
     body = text("llm-training", "reference/labs/14_activation_checkpointing.md")
-    assert "matched work within each lab" in body
-    assert "Lab 14 does not execute an optimizer update" in body
+    assert "same tiny-transformer forward/loss/backward path" in body
+    assert "durations from a different model are not comparable" in body
+    assert "no optimizer is constructed or updated in this lab" in body
 
 
 def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
     readme = text("llm-inference", "README.md")
-    command = re.search(r"Example mechanics run:.*?```bash\n(.*?)```", readme, re.S)[1]
-    assert 'COURSE_PYTHON="$PWD/.venv-mechanics/bin/python"' in command
-    assert "sbatch slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py" in command
+    command = re.search(
+        r"Example mechanics run:.*?```bash\n(.*?)```", readme, re.DOTALL
+    )[1]
+    assert 'COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python"' in command
+    assert (
+        "tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py"
+        in command
+    )
     launcher = text("llm-inference", "slurm/single_gpu.sbatch")
     assert "COURSE_PYTHON" in launcher
 
 
-def test_inference_pipeline_parallelism_is_conditional_live_not_topology_only():
-    body = text("llm-inference", "reference/labs/19_tensor_parallel_linear.md")
-    assert "PP is only a topology comparison" not in body
-    assert "conditional advanced `pp` mode" in body
+def test_distributed_serving_has_a_complete_advanced_owner():
+    body = text(
+        "advanced-gpu-communication", "reference/labs/24_inference_tensor_parallel.md"
+    )
+    assert "Mechanics timing must not be reported as live serving TTFT" in body
+    assert "Labs 32–34" in body
+    serving = text(
+        "advanced-gpu-communication", "reference/labs/32_dynamo_disaggregation.md"
+    )
+    assert "NixlConnector" in serving and "--capture systems" in serving
 
 
 def test_inference_phase_lab_does_not_promise_unrecorded_client_metrics():
@@ -172,12 +188,15 @@ def cuda_argument_probe(tmp_path_factory):
     ("arguments", "status", "output"),
     [
         ([], 0, "4096"),
-        (["--smoke"], 0, "17"),
+        (["--profile", "small"], 0, "17"),
+        (["--profile", "large"], 0, "4096"),
+        (["--profile", "h100"], 2, ""),
+        (["--smoke"], 2, ""),
         (["--help"], 0, "help"),
         (["-h"], 0, "help"),
         (["--smok"], 2, ""),
-        (["--smoke", "--smoke"], 2, ""),
-        (["--smoke", "extra"], 2, ""),
+        (["--profile", "small", "--profile", "small"], 2, ""),
+        (["--profile", "small", "extra"], 2, ""),
         (["--help", "extra"], 2, ""),
         (["--size"], 2, ""),
     ],
@@ -186,20 +205,33 @@ def test_simple_cuda_flags_fail_before_any_device_work(
     cuda_argument_probe, arguments, status, output
 ):
     result = subprocess.run(
-        [str(cuda_argument_probe), *arguments], capture_output=True, text=True
+        [str(cuda_argument_probe), *arguments],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == status
     assert result.stdout == output
     if status:
-        assert "expected no arguments or --smoke" in result.stderr
+        assert (
+            "--profile" in result.stderr
+            and "small" in result.stderr
+            and "large" in result.stderr
+        )
 
 
-@pytest.mark.parametrize("number", [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11])
+@pytest.mark.parametrize("number", [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 13])
 def test_simple_cuda_entrypoints_validate_flags_before_device_activation(number):
     path = next((ROOT / "custom-cuda-kernels/labs").glob(f"{number:02}_*.cu"))
     main = path.read_text().split("int main(", 1)[1]
-    call = "validate_simple_arguments(" if number in (0, 9, 10) else "problem_size("
-    assert main.index(call) < main.index("require_h100(")
+    call = (
+        "for (int index = 1; index < argc;"
+        if number == 1
+        else "validate_simple_arguments("
+        if number in (9, 10, 13)
+        else "problem_size("
+    )
+    assert main.index(call) < main.index("require_course_gpu(")
 
 
 def test_publication_safety_scans_cpp_headers(tmp_path):

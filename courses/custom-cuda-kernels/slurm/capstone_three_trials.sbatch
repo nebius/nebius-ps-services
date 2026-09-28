@@ -12,7 +12,7 @@ set -o noclobber
 umask 077
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: sbatch %s EXECUTABLE [--smoke]\n' "$0"
+  printf 'Usage: python3 tools/submit_lab.py --lab 12_capstone %s EXECUTABLE [--profile small]\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ || $# -lt 1 ]]; then
@@ -31,7 +31,7 @@ if [[ ! -x ${executable} ]]; then
   printf 'ERROR: executable not found or not executable: %s\n' "${executable}" >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 command -v realpath >/dev/null 2>&1 || { printf 'ERROR: realpath is required.\n' >&2; exit 2; }
 command -v sha256sum >/dev/null 2>&1 || { printf 'ERROR: sha256sum is required.\n' >&2; exit 2; }
 executable_resolved=$(realpath "${executable}")
@@ -52,7 +52,7 @@ for trial in 1 2 3; do
   if ((trial % 2 == 0)); then order=candidate-first; fi
   trial_log="${result_dir}/trial-${trial}.txt"
   srun --ntasks=1 --gpus-per-task=1 \
-    "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" "${executable_resolved}" \
+    "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" python3 tools/cuda_result.py "${executable_resolved}" \
     "$@" --variant-order "${order}" >"${trial_log}"
   if ! grep -qx 'schema=gpu-course-result/v1' "${trial_log}" || \
      ! grep -qx 'lab_id=12_capstone' "${trial_log}" || \
@@ -80,6 +80,12 @@ awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
     if (elements == "") elements = $2
     else if (elements != $2) invalid_contract = 1
   }
+  /^gpu_name=/ {
+    if (++fields[trial, $1] != 1 || NF != 2 ||
+        $2 !~ /^NVIDIA H(100|200)( |$)/ || $2 ~ /MIG/) invalid_contract = 1
+    if (gpu_name == "") gpu_name = $2
+    else if (gpu_name != $2) invalid_contract = 1
+  }
   /^baseline_median_ms=/ {
     if (++fields[trial, $1] != 1 || NF != 2 || !positive_number($2)) invalid_contract = 1
     baseline[trial] = $2 + 0
@@ -102,6 +108,7 @@ awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
     if (trial != 3 || invalid_contract) exit 2
     for (i=1; i<=3; i++) {
       if (fields[i, "variant_order"] != 1 || fields[i, "elements"] != 1 ||
+          fields[i, "gpu_name"] != 1 ||
           fields[i, "baseline_median_ms"] != 1 || fields[i, "candidate_median_ms"] != 1) exit 2
     }
     bm=median3(baseline); cm=median3(candidate)
@@ -112,6 +119,7 @@ awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
     print "counterbalanced_order=true"
     print "all_correctness_gates_passed=true"
     print "elements=" elements
+    print "gpu_name=" gpu_name
     print "cuda_image_digest=" image_digest
     print "executable_path=" executable_path
     print "executable_sha256=" executable_sha256
@@ -119,7 +127,7 @@ awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
     print "candidate_median_of_medians_ms=" cm
     print "baseline_to_candidate_ratio=" ratio
     print "decision=" (cm < bm ? "candidate-for-scoped-keep" : "reject-under-tested-contract")
-    print "claim_scope=exact single-H100 executable, input size, image, and measurement contract"
+    print "claim_scope=exact single-GPU (" gpu_name ") executable, input size, image, and measurement contract"
     print "sanitizer_profiler_and_integration_evidence_required=true"
   }
 ' "${trial_logs[@]}" >"${summary}" || {

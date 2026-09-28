@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "460b15759b56a6b2bb39fc09e8c20c723fcad4281a523b85dc269237c73b78f2",
+      "sha256": "0e206a8bee19e33d3cafa38c3dae8f7086ee43cc73828308a77123f9ed45a9cf",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "fa9f8e0879c0eb9a2758fc54d5894bc7244fb503c80495b6551fc4cf4582ef76",
+      "sha256": "6e4423897eb9ead4979aa20ddde5ffc76650669d7b185a4934a653e477cb0745",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "f698e290e13efb6b3876940798d592fdb22a0db99ecbc38069e4e7ac0dcd2e0c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "58a505e3a2481cf4f5b6d37e4c2762bf637a04a86b79702fe49b466fe823830b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "32b10f28c3b33d641fc5d9cdc1ddc79b3a141c4c4221572c194751ffa2e1223a",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "12cd9445d8805c6ca74ae10c5ce712c922305657eb6840028221a8bcb29c1364",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "90bab346443b0f7f41e39abc01a74bd7ab5e4174aee2f74b36515329aa999c66",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_timing_basics",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a9250a8c5f62518225ab966445945257d3c022014ef8c8d7188a962f8e12f3ad",
+  "summary_sha256": "10020145e0fb1794ed58e3359026dbcb63754ae02cd51419b1cb8a0fb096812e"
+}

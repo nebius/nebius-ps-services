@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .flux_ops import apply_staged_soperator_release
 from .paths import ProjectPaths
 from .soperator_checks import SoperatorChecksExecution
@@ -18,6 +18,7 @@ from .soperator_checks_binding import AUXILIARY_CRONJOB
 from .soperator_checks_catchup import ChecksCatchupRecovery, expected_wait_hook
 from .soperator_checks_phase import ChecksPhase
 from .soperator_failures import SoperatorMainWorkloadIdentity
+from .soperator_graph_transition import NativeGraphTransition
 from .soperator_install_checks_repair import terminate_admitted_wait_hook
 
 
@@ -29,6 +30,7 @@ def recover_staged_checks(
     kube_context: str,
     extra_env: Mapping[str, str] | None,
     cache_dir: Path | None = None,
+    native_transition: NativeGraphTransition | None = None,
     freeze_main_workload_authority: Callable[
         [SoperatorMainWorkloadIdentity], SoperatorMainWorkloadIdentity
     ]
@@ -38,7 +40,7 @@ def recover_staged_checks(
     env = {**os.environ, **(extra_env or {})}
 
     def read_log(name: str, container: str) -> str:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             [
                 "kubectl",
                 "--context",
@@ -67,6 +69,7 @@ def recover_staged_checks(
             extra_env=env,
             cache_dir=cache_dir,
             checks_policy=checks.policy,
+            native_transition=native_transition,
             checks_context=checks.lifecycle.context(ChecksPhase.ACCEPTANCE)
             if checks.lifecycle is not None
             else None,
@@ -89,7 +92,7 @@ def recover_staged_checks(
     ).recover()
 
     def render_auxiliary(values: Mapping[str, Any]) -> Mapping[str, Any]:
-        rendered = subprocess.run(
+        rendered = kubernetes_process.run(
             [
                 "helm",
                 "template",

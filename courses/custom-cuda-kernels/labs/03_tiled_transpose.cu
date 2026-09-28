@@ -31,10 +31,10 @@ __global__ void tiled_unpadded_transpose(const float* input, float* output, int 
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 03_tiled_transpose [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 03_tiled_transpose [--profile small|large]\n"; return 0; }
   try {
     const int rows = static_cast<int>(problem_size(argc, argv, 1003, 8192));
-    require_h100();
+    require_course_gpu();
     const int columns = rows + 17;
     const std::size_t count = static_cast<std::size_t>(rows) * columns;
     std::vector<float> input(count), expected(count), naive_observed(count), unpadded_observed(count), padded_observed(count);
@@ -64,6 +64,8 @@ int main(int argc, char** argv) {
     print_timing("tiled_unpadded", unpadded_timing);
     print_timing("tiled_padded", padded_timing);
     std::cout << "naive_correctness=passed\nunpadded_correctness=passed\npadded_correctness=passed\nunpadded_shared_columns=32\npadded_shared_columns=33\n";
+    std::cout << "rows=" << rows << "\ncolumns=" << columns << '\n';
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

@@ -1,6 +1,6 @@
 ---
 name: project-agent-instructions
-description: "Use only for an explicit project-instruction mutation request or a maintain-project-specs route with a current spec receipt; render, create, refresh, adopt, or retire selected-project AGENTS.md rules with deterministic ownership and recovery."
+description: "Explicitly repair restrictive project instructions, or render, create, refresh, adopt, or retire selected-project AGENTS.md rules with receipt-bound ownership and recovery."
 disable-model-invocation: true
 ---
 
@@ -22,10 +22,12 @@ help as workflow authorization.
 
 ## Agent Compatibility
 
-Read `references/claude-discovery.md` before Claude discovery or any Claude
-inspection, application or replay. Keep the canonical `AGENTS.md` target;
-Claude requires an existing tracked `CLAUDE.md` import. Codex retains native
-profile and instruction precedence. Both hosts bind `--agent` and `--agent-home`.
+For managed generation, read `references/claude-discovery.md` before Claude
+discovery, inspection, application or replay. That helper path keeps canonical
+`AGENTS.md` and requires an existing tracked `CLAUDE.md` import. It binds
+`--agent` and `--agent-home` on both hosts. Explicit human-rule repair instead
+reads and patches the active native instruction source without creating imports
+or requiring helper discovery. Respect native instruction precedence.
 
 Use `$project-agent-instructions` in Codex, `/project-agent-instructions` in Claude Code, or
 `/skills:project-agent-instructions` in the Claude plugin. Dollar-prefixed skill examples
@@ -49,8 +51,8 @@ when determining whether a project-specific rule is redundant.
 ## Invocation Policy
 
 Use only when the user explicitly requests project-instruction mutation or
-`maintain-project-specs` explicitly routes here with its current canonical
-receipt. Task Implementer and Agentic SDLC only read already-effective
+`maintain-project-specs` routes an explicit repair request here. Managed
+generation additionally requires its current canonical receipt. Task Implementer and Agentic SDLC only read already-effective
 instructions and may report advisory status; they never invoke, wait for, or
 seal this workflow. Keep
 `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. Do not expose
@@ -58,6 +60,10 @@ a standalone public workflow command.
 
 ## When To Use
 
+- The user explicitly asks to fix existing restrictive project instructions;
+  use the focused human-rule repair path below when the affected prose is
+  human-owned. A spec receipt is required for managed generation, not merely
+  for editing human-owned prose.
 - `maintain-project-specs` has issued its current canonical receipt and routes
   an explicit project-instruction decision here.
 - The user explicitly asks to create, refresh, adopt, or retire project
@@ -76,6 +82,9 @@ a standalone public workflow command.
 
 ## Inputs
 
+Receipt and runtime inputs below apply to managed generation. Explicit human-rule
+repair uses the selected scope, active instructions and exact patch preimage.
+
 - Exact selected project root, enclosing Git root, and spec owner.
 - Current `docs/requirements.md` and `docs/design.md`.
 - Owner-issued mode-`0600` spec-validation receipt in a caller-owned private
@@ -91,8 +100,10 @@ a standalone public workflow command.
 ## Required Reads
 
 - Read `references/decision-contract.md` completely.
-- Read both specs completely, then run `inspect` with their owner receipt.
-- Read the resulting manifest and any active selected-project instruction file.
+- For managed generation, read both specs completely, then run `inspect` with
+  their owner receipt.
+- Read any active selected-project instruction file and, for managed generation,
+  the resulting manifest.
 - Read only repository sources needed to validate proposed rule locators and
   commands.
 
@@ -106,11 +117,57 @@ a standalone public workflow command.
 - The managed tail region of `<selected-project-root>/AGENTS.md` only through
   the helper and only for an authorized v3 transition. Human-authored prefix
   bytes remain outside skill ownership.
+- Human-owned instruction clauses selected by an explicit repair request,
+  through a focused native file patch under the repair path below. This does
+  not transfer those bytes into generated-region ownership.
 
 The selected-project file is committed product truth. Private receipts and
 state must never be committed.
 
+## Explicit Repair Of Existing Instructions
+
+This path applies when the current user asks to repair restrictive or outdated
+instructions, including across identified projects in the requested workspace.
+The request itself authorizes the specified rule change; do not ask the user
+to approve it again. Ordinary implementation and spec maintenance alone do not
+authorize instruction changes.
+
+1. Resolve each affected project and read its active instruction chain. Locate
+   the actual conflicting clause, its source owner and any managed markers.
+   Repair the source template too when it would recreate the obsolete rule.
+2. Reconcile the requested policy with system/developer instructions and other
+   authority the user cannot change. A user-owned rule can be revised by the
+   user's explicit request; it is not an immutable veto on its own repair.
+   Do not silently weaken unrelated safeguards or assume unresolved scope.
+3. For unmarked human-owned prose or a human prefix outside an intact managed
+   region, inspect the exact current bytes, prepare the smallest targeted
+   patch, recheck the preimage, and preserve every unrelated byte. An existing
+   active override or fallback is the repair target; never create an alternate
+   dormant file. No canonical spec receipt is needed solely for this patch.
+4. For generated rules, use the existing receipt-bound process below. Never
+   hand-edit a managed region, forge ownership, or remove recovery artifacts.
+   Resolve missing ownership through exact-digest adoption only when the
+   current authorization covers it. A rule-repair request alone does not prove
+   ownership or authorize unrelated retirement.
+5. Review the diff and reread the active file after repair. Record the exact
+   file effect and any remaining conflict. Report `human-rules-repaired`
+   separately from helper outcomes; do not fabricate decision or receipt
+   digests. Recommend a fresh session for future instruction discovery, while
+   continuing currently authorized work under the direct user instruction.
+
+Credential policy must distinguish task authority from secret disclosure:
+creating new credentials or secrets necessary for an authorized task's target
+and intended access scope does not itself need another confirmation. Store
+values only in the intended secret store or protected runtime file. Preserve
+approval for uncovered credential replacement/revocation, IAM access expansion,
+destructive actions or material impact, and never expose secret values in
+artifacts. Do not copy this generic policy into every generated project file;
+repair an existing conflicting clause or keep the default in its global owner.
+
 ## Process
+
+The following process owns managed generation and refresh. Explicit human-rule
+repair above uses native focused editing and does not enter helper transitions.
 
 1. Require the owner-issued receipt to bind tracked spec files, complete
    status-aware requirements-to-design coverage, exact full-file digests,
@@ -167,7 +224,7 @@ state must never be committed.
    its directory sync failed. Never delete or overwrite that evidence directly.
 7. Only after explicit mutation authorization and final requirements/design
    reconciliation, run `apply`, then `verify` as this workflow's terminal
-   mutation. Never write or delete `AGENTS.md` directly.
+   mutation. Never write or delete a managed region directly.
 8. If state reports `reload_required: true`, stop only this instruction-
    mutation workflow and recommend a fresh session before relying on the new
    rules. Task Implementer and Agentic SDLC remain independent and may continue
@@ -219,8 +276,9 @@ state must never be committed.
 - Reject ignored targets and untracked or ignored ancestor/human-owned project
   instruction sources. Stage generated project truth before contract commit.
 - Global instructions may reveal a conflict but do not affect portable output
-  bytes. Never weaken a higher-level security, privacy, authorization,
-  publication, or destructive-operation safeguard.
+  bytes. Preserve higher-priority security, privacy, authorization,
+  publication, and destructive-operation safeguards. Explicit user changes to
+  user-owned policy follow the repair path above without repeated approval.
 - Treat closer nested instruction files as directory-scoped refinements, not
   authorization to weaken higher-level safeguards.
 
@@ -275,15 +333,16 @@ state must never be committed.
 - `OWNERSHIP_CONFLICT`: private ownership evidence is missing or stale.
 - `LEGACY_GENERATED_FILE`: v1 state needs manual resolution.
 - `EXISTING_INSTRUCTIONS_GAP` or `INSTRUCTION_CONFLICT`: human-owned active
-  instructions require a proposed human resolution.
+  instructions need resolution. Apply an already-authorized human-rule repair,
+  then inspect again; otherwise propose the exact unresolved change.
 - `RENDER_STATE_PUBLICATION_INCOMPLETE`: rerun the exact same render once to
   finish matching state publication and durability; do not alter its private
   evidence.
 - `UNSAFE_TARGET`, `CONCURRENT_MODIFICATION`, or `STALE_GENERATED_FILE`: stop
   without bypassing the helper.
 
-Return blockers to the coordinator. Do not create a fallback, loosen a rule,
-or remove recovery evidence automatically.
+Return unresolved blockers to the coordinator. Do not create a fallback,
+change rules without user authority, or remove recovery evidence automatically.
 
 ## Must Not
 
@@ -297,9 +356,11 @@ or remove recovery evidence automatically.
 
 ## Completion Criteria
 
-- The exact specs and effective discovery context are receipt-bound.
+- For managed generation, the exact specs and discovery context are receipt-bound.
+- For explicit human-rule repair, the active source, original clause, focused
+  diff and reread are verified; managed-generation receipts are not invented.
 - The result is `created`, `attached`, `refreshed`, `adopted`, `retired`,
-  `existing-sufficient`, `not-needed`, or a structured blocker.
+  `existing-sufficient`, `not-needed`, `human-rules-repaired`, or a structured blocker.
 - The result reports the exact file effect; `not-needed` never implies that a
   missing file should have been created.
 - Any generated file is deterministic, concise, public-safe, evidence-backed,
@@ -318,8 +379,9 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return selected project, active instruction source, outcome, decision and
-target digests, evidence paths, exact file effect, `reload_required`, and any
-blocker. For `not-needed`, say that no file was created or changed and that a
+Return selected project, active instruction source, outcome, target digest,
+exact file effect, `reload_required`, and any blocker. For managed generation,
+include decision digest and evidence paths; for human-rule repair mark those
+helper fields not applicable. For `not-needed`, say that no file was created or changed and that a
 missing target remains absent. Do not print raw private rationale, prompts,
 credentials, or environment values.

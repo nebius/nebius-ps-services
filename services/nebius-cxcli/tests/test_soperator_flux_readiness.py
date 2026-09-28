@@ -349,7 +349,7 @@ def test_generic_flux_wait_does_not_authenticate_main_terminal_failure(
     )
 
     targets = flux_ops._flux_wait_targets(flux_dir)
-    statuses, all_ready, only_sources_pending, _block = flux_ops._flux_status_block(
+    statuses, all_ready, _block = flux_ops._flux_status_block(
         targets,
         env={},
         started_at=0,
@@ -357,7 +357,6 @@ def test_generic_flux_wait_does_not_authenticate_main_terminal_failure(
 
     main_status = next(status for status in statuses if status.target.is_soperator_main)
     assert all_ready is False
-    assert only_sources_pending is False
     assert main_status.is_terminal_failure is False
     assert main_status.main_workload_identity is None
 
@@ -1068,7 +1067,7 @@ metadata:
             stderr="",
         )
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops.prepare_soperator_adapter_storage(paths, cache_dir=tmp_path / "cache")
 
@@ -1126,7 +1125,7 @@ metadata:
             stderr="",
         )
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     receipt = flux_ops.verify_soperator_adapter_storage(
         paths,
@@ -1558,3 +1557,180 @@ def test_native_upstream_observation_rejects_non_retained_protected_storage(
     assert ready is False
     assert "Bound with Retain" in detail
     assert receipt is None
+
+
+@pytest.mark.parametrize(
+    "divergence",
+    [
+        None,
+        "job-owner",
+        "check-uid",
+        "new-failure",
+        "required",
+        "cron-image",
+        "job-command",
+        "pod-image",
+        "admission-defaults",
+        "unexpected-projection",
+        "ephemeral-container",
+        "missing-toleration",
+    ],
+)
+def test_optional_pending_diagnostic_exemption_is_exact(monkeypatch, divergence):
+    import copy
+
+    responses = _retained_check_history_responses()
+    pod = responses["pods"]["items"][-1]
+    pod["status"] = {"phase": "Pending"}
+    job = responses["jobs.batch"]["items"][0]
+    job["status"] = {"active": 1}
+    check = responses["activechecks.slurm.nebius.ai"]["items"][0]
+    # A native k8sJob exercises the same exact executable projection without
+    # unrelated Slurm script/volume fixture details.
+    check["spec"].update(
+        name="native-check",
+        checkType="k8sJob",
+        k8sJobSpec={"jobContainer": {"image": "upstream/check:4.1.7", "command": ["true"]}},
+    )
+    template = {
+        "spec": {
+            "serviceAccountName": "example-activecheck-sa",
+            "containers": [
+                {"name": "native-check", "image": "upstream/check:4.1.7", "command": ["true"]}
+            ],
+        }
+    }
+    if divergence == "missing-toleration":
+        tolerations = [{"key": "required-taint", "operator": "Exists", "effect": "NoSchedule"}]
+        check["spec"]["tolerations"] = copy.deepcopy(tolerations)
+        template["spec"]["tolerations"] = copy.deepcopy(tolerations)
+    cron = responses["cronjobs.batch"]["items"][0]
+    cron["spec"] = {"jobTemplate": {"spec": {"template": copy.deepcopy(template)}}}
+    job["spec"] = {"template": copy.deepcopy(template)}
+    pod["spec"] = copy.deepcopy(template["spec"])
+    check["status"] = {}
+    required = copy.deepcopy(check)
+    required["metadata"].update(name="required-smoke", uid="required-uid")
+    required["status"] = {"k8sJobsStatus": {"lastJobStatus": "Complete"}}
+    responses["activechecks.slurm.nebius.ai"]["items"].append(required)
+    contract = _contract()
+    contract["readiness"] = {
+        "activeChecksRequired": True,
+        "acceptanceReadinessPolicy": {
+            "native-check": {"required": False, "execution": copy.deepcopy(check["spec"])},
+            "required-smoke": {"required": True, "execution": copy.deepcopy(required["spec"])},
+        },
+        "acceptanceExemptions": {
+            "native-check": {
+                "uid": "check-uid",
+                "execution": copy.deepcopy(check["spec"]),
+                "priorStatus": {},
+            },
+        },
+    }
+    if divergence == "job-owner":
+        pod["metadata"]["ownerReferences"][0]["uid"] = "foreign-job"
+    elif divergence == "check-uid":
+        check["metadata"]["uid"] = "foreign-check"
+    elif divergence == "new-failure":
+        check["status"] = {"k8sJobsStatus": {"lastJobStatus": "Failed"}}
+    elif divergence == "required":
+        del contract["readiness"]["acceptanceExemptions"]
+        contract["readiness"]["acceptanceReadinessPolicy"]["native-check"]["required"] = True
+    elif divergence == "cron-image":
+        cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["image"] = (
+            "unreviewed"
+        )
+    elif divergence == "job-command":
+        job["spec"]["template"]["spec"]["containers"][0]["command"] = ["false"]
+    elif divergence == "pod-image":
+        pod["spec"]["containers"][0]["image"] = "unreviewed"
+    elif divergence in {"admission-defaults", "unexpected-projection"}:
+        pod["spec"]["nodeName"] = "worker"
+        pod["spec"]["tolerations"] = [
+            {
+                "key": "node.kubernetes.io/not-ready",
+                "operator": "Exists",
+                "effect": "NoExecute",
+                "tolerationSeconds": 300,
+            }
+        ]
+        pod["spec"]["volumes"] = [
+            {
+                "name": "kube-api-access-abcde",
+                "projected": {
+                    "defaultMode": 420,
+                    "sources": [
+                        {"serviceAccountToken": {"expirationSeconds": 3607, "path": "token"}},
+                        {
+                            "configMap": {
+                                "name": "kube-root-ca.crt",
+                                "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                            }
+                        },
+                        {
+                            "downwardAPI": {
+                                "items": [
+                                    {
+                                        "fieldRef": {
+                                            "apiVersion": "v1",
+                                            "fieldPath": "metadata.namespace",
+                                        },
+                                        "path": "namespace",
+                                    }
+                                ]
+                            }
+                        },
+                    ],
+                },
+            }
+        ]
+        pod["spec"]["containers"][0]["volumeMounts"] = [
+            {
+                "name": "kube-api-access-abcde",
+                "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+                "readOnly": True,
+            }
+        ]
+        if divergence == "unexpected-projection":
+            pod["spec"]["volumes"][0]["projected"]["sources"][1]["configMap"]["name"] = "unreviewed"
+    elif divergence == "ephemeral-container":
+        pod["spec"]["ephemeralContainers"] = [{"name": "debug", "image": "unreviewed"}]
+    elif divergence == "missing-toleration":
+        del pod["spec"]["tolerations"]
+    _install_fake_kubectl_json(monkeypatch, responses)
+    ready, detail = flux_ops._soperator_product_readiness(contract, env={})
+    assert ready is (divergence in {None, "admission-defaults"}), detail
+
+
+@pytest.mark.parametrize("invalid", [None, "missing-power", "foreign-owner", "not-ready"])
+def test_fast_graph_readiness_uses_active_ephemeral_capacity(monkeypatch, invalid):
+    contract = _contract()
+    contract["readiness"] = {"nodeSets": ["worker-0"], "deploymentProfile": "fast-dev-test"}
+    responses = _responses()
+    source = responses["ocirepository"]
+    source["kind"] = "OCIRepository"
+    responses["ocirepositories,helmcharts"] = {"items": [source]}
+    node = responses.pop("nodesets.slurm.nebius.ai")["items"][0]
+    node["kind"] = "NodeSet"
+    node["spec"].update(replicas=8, ephemeralNodes=True)
+    power = {
+        "kind": "NodeSetPowerState",
+        "metadata": {
+            "namespace": "soperator",
+            "ownerReferences": [
+                {"kind": "NodeSet", "name": "worker-0", "uid": "nodeset-uid", "controller": True}
+            ],
+        },
+        "spec": {"nodeSetRef": "worker-0", "activeNodes": [0, 3]},
+    }
+    if invalid == "foreign-owner":
+        power["metadata"]["ownerReferences"][0]["uid"] = "foreign"
+    if invalid == "not-ready":
+        node["status"]["replicas"] = 1
+    responses["nodesets.slurm.nebius.ai,nodesetpowerstates.slurm.nebius.ai"] = {
+        "items": [node] if invalid == "missing-power" else [node, power]
+    }
+    _install_fake_kubectl_json(monkeypatch, responses)
+    ready, detail = flux_ops._soperator_product_readiness(contract, env={})
+    assert ready is (invalid is None), detail

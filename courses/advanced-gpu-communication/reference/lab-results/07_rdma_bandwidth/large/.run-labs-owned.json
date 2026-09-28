@@ -1,0 +1,17 @@
+{
+  "files": [
+    "grafana-baseline-candidate-bidirectional-gbps-page1.png",
+    "grafana-baseline-candidate-overview.png",
+    "grafana-baseline-candidate-validated-bytes-min-page1.png",
+    "grafana-candidate-depth64-bidirectional-gbps-page1.png",
+    "grafana-candidate-depth64-overview.png",
+    "grafana-candidate-depth64-validated-bytes-min-page1.png",
+    "manifest.json",
+    "result-baseline-trial1.json",
+    "result-candidate-trial1.json",
+    "result-depth64-trial1.json",
+    "summary.csv"
+  ],
+  "identity": "f34b8e1ada8ea970",
+  "schema": "run-labs-owned/v1"
+}

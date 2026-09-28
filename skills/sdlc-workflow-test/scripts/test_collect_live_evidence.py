@@ -72,6 +72,27 @@ class LiveEvidenceCollectorTests(unittest.TestCase):
         )
         self.assertEqual(first, second)
 
+    def test_collects_every_required_skill_owner(self) -> None:
+        for skill in collector.verifier.REQUIRED_EVIDENCE_SKILLS:
+            with self.subTest(skill=skill):
+                result = collector.collect(
+                    self.root,
+                    owner_kind="skill",
+                    owner=skill,
+                    source=self.source,
+                    name="result.json",
+                )
+                self.assertEqual(
+                    result["path"], f"evidence/skills/{skill}/artifacts/result.json"
+                )
+                self.assertEqual(
+                    (self.root / result["path"]).read_bytes(), self.source.read_bytes()
+                )
+
+    def test_support_skill_outside_evidence_matrix_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown skill owner"):
+            collector.owner_directory("skill", "worktree")
+
     def test_different_bytes_do_not_overwrite(self) -> None:
         collector.collect(
             self.root,

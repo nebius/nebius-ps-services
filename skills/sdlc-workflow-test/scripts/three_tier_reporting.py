@@ -22,26 +22,9 @@ def markdown_escape(value: object) -> str:
 
 
 def recommended_fix(source: object, issue: object) -> str:
-    combined = f"{source} {issue}".lower()
-    if (
-        "cgwindownotfound" in combined
-        or "pre-navigation-window-capture" in combined
-        or (
-            "environment_defect" in combined
-            and ("computer use" in combined or "computer-use" in combined)
-        )
-    ):
-        return (
-            "Keep the owned runtime unchanged. Before any retry, unless locked "
-            "Computer Use is explicitly enabled, unlock the host and place one "
-            "normal target-browser window visible, unminimized, foreground, and "
-            "on the current macOS Space. If the call hung or the service stopped "
-            "responding, make no further Computer Use calls; obtain explicit "
-            "authorization for fresh-session or service recovery."
-        )
     return (
-        "Resolve the recorded blocker, refresh its evidence, and resume from the "
-        "earliest responsible phase."
+        "Inspect the owned Playwright report and trace, repair the proven owner, "
+        "then start a new trial. Keep earlier failed evidence unchanged."
     )
 
 
@@ -66,34 +49,29 @@ def report_text(state: dict[str, Any]) -> str:
         f"- Git: `{markdown_escape(state['environment']['git'])}`",
         f"- Browser: `{markdown_escape(state['environment']['browser_name'])}`",
         f"- Dedicated browser instance: `{markdown_escape(state['browser_instance']['status'])}`",
-        f"- Computer use: `{markdown_escape(state['environment']['computer_use'])}`",
+        f"- Headless browser: `{markdown_escape(state['environment']['headless_browser'])}`",
         f"- Project root: `{markdown_escape(state['project_root'])}`",
         f"- Report path: `{markdown_escape(state['report_path'])}`",
         "",
-        "## Computer Use attempts",
+        "## Headless browser stages",
         "",
-        "| Stage | Outcome | Response | Dedicated instance | Action attempted | Lock | Visible | Frontmost | Current Space |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Stage | Outcome | Owned receipt |",
+        "| --- | --- | --- |",
     ]
-    attempts = state.get("computer_use_attempts", [])
-    if attempts:
-        for attempt in attempts:
-            lines.append(
-                f"| {markdown_escape(attempt['stage'])} | {markdown_escape(attempt['outcome'])} | "
-                f"{markdown_escape(attempt['response'])} | {markdown_escape(attempt['dedicated_instance'])} | "
-                f"{str(attempt['action_attempted']).lower()} | "
-                f"{markdown_escape(attempt['lock_state'])} | {markdown_escape(attempt['window_visible'])} | "
-                f"{markdown_escape(attempt['window_frontmost'])} | {markdown_escape(attempt['current_space'])} |"
-            )
-    else:
-        lines.append("| pending | NOT_RUN | pending | unknown | false | unknown | unknown | unknown | unknown |")
+    attempts = state.get("browser_stages", [])
+    for attempt in attempts:
+        lines.append(f"| {markdown_escape(attempt['stage'])} | {markdown_escape(attempt['outcome'])} | `{markdown_escape(attempt['path'])}` |")
+    if not attempts:
+        lines.append("| pending | NOT_RUN | pending |")
+    lines.extend(["", "- Headless execution does not require desktop capture, an unlocked screen, or a foreground window.",
+                  "- Locked agent continuation: UNVERIFIED unless a separate observed lock-interval report is attached."])
     lines.extend([
         "",
         "## Layer inventory",
         "",
         "| Layer | Runtime | Endpoint |",
         "| --- | --- | --- |",
-        f"| Frontend GUI | {markdown_escape(state['environment']['browser_name'])} via computer-use | `{markdown_escape(state['endpoints'].get('web', 'pending'))}` |",
+        f"| Frontend GUI | {markdown_escape(state['environment']['browser_name'])} via Playwright Test | `{markdown_escape(state['endpoints'].get('web', 'pending'))}` |",
         f"| Web/API server | Docker Compose web container | `{markdown_escape(state['endpoints'].get('api', 'pending'))}` |",
         f"| PostgreSQL database | Docker Compose database container | `{markdown_escape(state['endpoints'].get('database', 'internal only; pending'))}` |",
         "",

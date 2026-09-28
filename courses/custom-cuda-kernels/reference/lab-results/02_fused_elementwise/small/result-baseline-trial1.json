@@ -1,0 +1,31 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "02_fused_elementwise",
+  "measurements": {
+    "elements": 4099,
+    "fused_median_ms": 0.005104,
+    "fused_min_ms": 0.004832,
+    "fused_p90_ms": 0.005888,
+    "fused_samples": 20,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.005104,
+    "kernel_min_ms": 0.004832,
+    "kernel_p90_ms": 0.005888,
+    "kernel_samples": 20,
+    "logical_fused_bytes": 49188,
+    "logical_separate_bytes": 81980,
+    "maximum_absolute_error": 2.38419e-07,
+    "separate_median_ms": 0.007952,
+    "separate_min_ms": 0.007296,
+    "separate_p90_ms": 0.0088,
+    "separate_samples": 20,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

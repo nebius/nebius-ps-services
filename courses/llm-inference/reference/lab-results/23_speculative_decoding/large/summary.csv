@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,target_only_median_e2e_seconds,value,0.0024507,s
+baseline-trial1,high_acceptance_median_e2e_seconds,value,0.0006785,s
+baseline-trial1,low_acceptance_median_e2e_seconds,value,0.0028872,s
+baseline-trial1,high_acceptance_mean_accepted_prefix,value,3.714,none
+baseline-trial1,low_acceptance_mean_accepted_prefix,value,0,none
+candidate-trial1,target_only_median_e2e_seconds,value,0.0026034,s
+candidate-trial1,high_acceptance_median_e2e_seconds,value,0.0004712,s
+candidate-trial1,low_acceptance_median_e2e_seconds,value,0.0035122,s
+candidate-trial1,high_acceptance_mean_accepted_prefix,value,7.25,none
+candidate-trial1,low_acceptance_mean_accepted_prefix,value,0,none

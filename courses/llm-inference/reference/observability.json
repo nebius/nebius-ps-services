@@ -1,0 +1,1639 @@
+{
+  "schema": "gpu-course-observability/v1",
+  "course": "llm-inference",
+  "labs": {
+    "08_kv_cache": {
+      "lab": "08_kv_cache",
+      "title": "Lab 08: Compare cached attention with full recomputation",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "recompute_decode_median_seconds",
+          "path": "recompute_decode.median_ms",
+          "title": "Recompute decode / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.recompute_decode.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cached_decode_median_seconds",
+          "path": "cached_decode.median_ms",
+          "title": "Cached decode / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cached_decode.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "key_value_cache_bytes",
+          "path": "key_value_cache_mib",
+          "title": "Key value cache mib",
+          "unit": "bytes",
+          "scale": 1048576,
+          "description": "Measured artifact field measurements.key_value_cache_mib. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.04858e+06; unit bytes.",
+          "optional": false
+        }
+      ],
+      "question": "Identify which keys/values are newly computed at a continuation step and which are reused. Explain why longer histories increase attention reads even when the earlier projections are cached.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/08_kv_cache.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 08_kv_cache slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 08_kv_cache --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 08_kv_cache --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
+      "tuning_control": "Compare recomputation with cached decode for identical prompt and generated tokens",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Recompute decode / median (seconds)",
+        "Cached decode / median (seconds)",
+        "Key value cache mib"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "prompt_tokens",
+        "generated_tokens",
+        "key_value_cache_mib"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare recomputation with cached decode for identical prompt and generated tokens. Independently locate cache growth copies in Systems and decide whether a preallocated cache merits a separately validated implementation experiment.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "09_hf_prefill_decode": {
+      "lab": "09_hf_prefill_decode",
+      "title": "Lab 09: Follow real-model prefill and continuation",
+      "kind": "single_gpu",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "new_tokens"
+      ],
+      "metrics": [
+        {
+          "name": "prefill_timing_median_seconds",
+          "path": "prefill_timing.median_ms",
+          "title": "Prefill timing / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.prefill_timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "decode_timing_median_seconds",
+          "path": "decode_timing.median_ms",
+          "title": "Decode timing / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.decode_timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": true
+        },
+        {
+          "name": "prompt_tokens",
+          "path": "prompt_tokens",
+          "title": "Prompt tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.prompt_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "decode_steps_per_request",
+          "path": "decode_steps_per_request",
+          "title": "Decode steps per request",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.decode_steps_per_request. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw which token is input to each pass and which token is sampled from its output. Why is the last generated token not necessarily already represented in the returned cache when generation stops?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/09_hf_prefill_decode.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
+      "systems_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
+      "compute_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=model_forward,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
+      "tuning_control": "`--new-tokens`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Prefill timing / median (seconds)",
+        "Decode timing / median (seconds)",
+        "Prompt tokens",
+        "Decode steps per request"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model",
+        "revision",
+        "prompt_tokens",
+        {
+          "path": "requested_new_tokens_per_request",
+          "varies_with": [
+            "new_tokens"
+          ]
+        },
+        {
+          "path": "generated_new_tokens_per_request",
+          "varies_with": [
+            "new_tokens"
+          ]
+        },
+        {
+          "path": "decode_steps_per_request",
+          "varies_with": [
+            "new_tokens"
+          ]
+        },
+        "requests"
+      ],
+      "workload_parameters": [
+        "new_tokens"
+      ],
+      "guided_comparison": "Use `--new-tokens` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `new_tokens` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "10_vllm_offline": {
+      "lab": "10_vllm_offline",
+      "title": "Lab 10: Measure batched offline generation with vLLM",
+      "kind": "single_gpu",
+      "nvtx_range": "vllm_generate",
+      "tuning_parameters": [
+        "enforce_eager"
+      ],
+      "metrics": [
+        {
+          "name": "elapsed_seconds",
+          "path": "elapsed_seconds",
+          "title": "Elapsed seconds",
+          "unit": "s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.elapsed_seconds. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "output_tokens_per_second",
+          "path": "output_tokens_per_second",
+          "title": "Output tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.output_tokens_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "prompt_tokens_total",
+          "path": "prompt_tokens_total",
+          "title": "Prompt tokens total",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.prompt_tokens_total. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "output_tokens_total",
+          "path": "output_tokens_total",
+          "title": "Output tokens total",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.output_tokens_total. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Why can actual output length be less than the maximum token budget? Explain why comparing runs with different stopping behavior can change throughput without improving the engine. Which startup costs are excluded from this measurement?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/10_vllm_offline.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 10_vllm_offline --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_offline.sbatch --profile small --in-process",
+      "compute_command": "python3 tools/submit_lab.py --lab 10_vllm_offline '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=vllm_generate,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/vllm_offline.sbatch --profile small --in-process",
+      "tuning_control": "`--enforce-eager`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Elapsed seconds",
+        "Output tokens per second",
+        "Prompt tokens total",
+        "Output tokens total"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model",
+        "revision",
+        "requests",
+        "prompt_tokens_total",
+        "output_tokens_total"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the default engine with `--enforce-eager`, the two settings of this boolean control. Keep the model, prompts, sampling and profile fixed. Predict the throughput effect, verify completion accounting, and inspect the named report views. Run additional independent repetitions of both settings and explain whether measurement variation supports the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the single-GPU engine in-process for diagnostics; clean timing retains its default engine process mode.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate vllm_generate after warmup and follow its host submissions into GPU streams. Inspect generation kernels and copies, then test the named tuning control with separate unprofiled runs."
+      },
+      "gpu_telemetry": true
+    },
+    "11_serving_client": {
+      "lab": "11_serving_client",
+      "title": "Lab 11: Measure concurrent completion requests",
+      "kind": "server-client",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "concurrency",
+        "server_layout"
+      ],
+      "metrics": [
+        {
+          "name": "median_e2e_seconds",
+          "path": "median_e2e_ms",
+          "title": "Median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "p90_e2e_seconds",
+          "path": "p90_e2e_ms",
+          "title": "P90 e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.p90_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "request_throughput_per_second",
+          "path": "request_throughput_per_second",
+          "title": "Request throughput per second",
+          "unit": "reqps",
+          "scale": 1,
+          "description": "Measured artifact field measurements.request_throughput_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "output_tokens_per_second",
+          "path": "output_tokens_per_second",
+          "title": "Output tokens per second",
+          "unit": "count:tokens/s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.output_tokens_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "As concurrency grows, does aggregate throughput improve while individual completion latency worsens? Distinguish actual generated tokens from requested maximum tokens. Explain why request throughput alone is misleading when output lengths differ.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/11_serving_client.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 11_serving_client slurm/vllm_benchmark.sbatch",
+      "systems_command": "python3 tools/submit_lab.py --lab 11_serving_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_benchmark.sbatch",
+      "compute_command": null,
+      "tuning_control": "`--concurrency`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median e2e (seconds)",
+        "P90 e2e (seconds)",
+        "Request throughput per second",
+        "Output tokens per second"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [
+        "concurrency"
+      ],
+      "guided_comparison": "Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
+      },
+      "gpu_telemetry": true
+    },
+    "15_streaming_client": {
+      "lab": "15_streaming_client",
+      "title": "Lab 15: Observe first content and streaming gaps",
+      "kind": "server-client",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "concurrency",
+        "server_layout"
+      ],
+      "metrics": [
+        {
+          "name": "median_ttft_seconds",
+          "path": "median_ttft_ms",
+          "title": "Median ttft (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.median_ttft_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "p90_ttft_seconds",
+          "path": "p90_ttft_ms",
+          "title": "P90 ttft (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.p90_ttft_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "median_e2e_seconds",
+          "path": "median_e2e_ms",
+          "title": "Median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "median_inter_chunk_gap_seconds",
+          "path": "median_inter_chunk_gap_ms",
+          "title": "Median inter chunk gap (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "HTTP streaming inter-chunk gap, not per-token latency: one chunk can contain multiple tokens. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": true
+        },
+        {
+          "name": "request_throughput_per_second",
+          "path": "request_throughput_per_second",
+          "title": "Request throughput per second",
+          "unit": "reqps",
+          "scale": 1,
+          "description": "Measured artifact field measurements.request_throughput_per_second. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw request start, first content, later chunks, and completion. Why can one received chunk contain several tokens generated during the preceding gap? Compare these observations with server metrics without assuming their clocks and boundaries are identical.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/15_streaming_client.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch",
+      "systems_command": "python3 tools/submit_lab.py --lab 15_streaming_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_streaming_benchmark.sbatch",
+      "compute_command": null,
+      "tuning_control": "`CONCURRENCY` (third positional streaming-launcher argument)",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Median ttft (seconds)",
+        "P90 ttft (seconds)",
+        "Median e2e (seconds)",
+        "Median inter chunk gap (seconds)"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [
+        "concurrency"
+      ],
+      "guided_comparison": "Change `CONCURRENCY`, the streaming launcher's third positional argument after `MODEL` and `REQUESTS`, while holding the model, request count and immutable revision fixed. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
+      },
+      "gpu_telemetry": true
+    },
+    "16_model_artifact_audit": {
+      "lab": "16_model_artifact_audit",
+      "title": "Lab 16: Audit model, tokenizer, configuration, and license identity",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "hidden_size",
+          "path": "hidden_size",
+          "title": "Hidden size",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.hidden_size. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": true
+        },
+        {
+          "name": "layers",
+          "path": "layers",
+          "title": "Layers",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.layers. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": true
+        },
+        {
+          "name": "attention_heads",
+          "path": "attention_heads",
+          "title": "Attention heads",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.attention_heads. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": true
+        },
+        {
+          "name": "key_value_heads",
+          "path": "key_value_heads",
+          "title": "Key value heads",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.key_value_heads. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": true
+        },
+        {
+          "name": "maximum_positions",
+          "path": "maximum_positions",
+          "title": "Maximum positions",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.maximum_positions. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": true
+        }
+      ],
+      "question": "Which fields affect memory capacity, attention layout, and tokenization? Explain why identical prompt text with a different tokenizer or chat template is not necessarily identical model input.",
+      "interpretation": "This CPU-side artifact audit examines configuration and tensor metadata without running model inference. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/16_model_artifact_audit.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 16_model_artifact_audit slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Hidden size",
+        "Layers",
+        "Attention heads",
+        "Key value heads"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This CPU-side artifact audit examines configuration and tensor metadata without running model inference.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    },
+    "17_sampling_semantics": {
+      "lab": "17_sampling_semantics",
+      "title": "Lab 17: Compare greedy and seeded stochastic generation",
+      "kind": "single_gpu",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "max_new_tokens"
+      ],
+      "metrics": [
+        {
+          "name": "greedy_seconds",
+          "path": "greedy_seconds",
+          "title": "Greedy seconds",
+          "unit": "s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.greedy_seconds. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "seeded_sample_seconds",
+          "path": "seeded_sample_seconds",
+          "title": "Seeded sample seconds",
+          "unit": "s",
+          "scale": 1,
+          "description": "Measured artifact field measurements.seeded_sample_seconds. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "greedy_output_tokens",
+          "path": "greedy_output_tokens",
+          "title": "Greedy output tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.greedy_output_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "seeded_sample_output_tokens",
+          "path": "seeded_sample_output_tokens",
+          "title": "Seeded sample output tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.seeded_sample_output_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "For candidate probabilities 0.6, 0.3, and 0.1, explain which survive top-k of two and a nucleus threshold of 0.8. Why can shorter sampled output make a run finish earlier without improving per-token execution?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/17_sampling_semantics.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
+      "systems_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
+      "compute_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=generation,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
+      "tuning_control": "`--max-new-tokens`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Greedy seconds",
+        "Seeded sample seconds",
+        "Greedy output tokens",
+        "Seeded sample output tokens"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [
+        "max_new_tokens"
+      ],
+      "guided_comparison": "Use `--max-new-tokens` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `max_new_tokens` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "18_padding_bucketing": {
+      "lab": "18_padding_bucketing",
+      "title": "Lab 18: Reduce padded prefill work with length buckets",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "single_padded_batch_median_seconds",
+          "path": "single_padded_batch.median_ms",
+          "title": "Single padded batch / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.single_padded_batch.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "two_length_buckets_median_seconds",
+          "path": "two_length_buckets.median_ms",
+          "title": "Two length buckets / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.two_length_buckets.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "single_batch_padding_tokens",
+          "path": "single_batch_padding_tokens",
+          "title": "Single batch padding tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.single_batch_padding_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "bucketed_padding_tokens",
+          "path": "bucketed_padding_tokens",
+          "title": "Bucketed padding tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.bucketed_padding_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "maximum_last_logit_relative_l2",
+          "path": "maximum_last_logit_relative_l2",
+          "title": "Maximum last logit relative l2",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.maximum_last_logit_relative_l2. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Calculate the padding fraction before and after grouping. Which prompt determines each bucket's rectangle width? Explain the trade-off between finer buckets, extra launches, and smaller matrix batches.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/18_padding_bucketing.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
+      "tuning_control": "Compare unbucketed and length-bucketed prompts with the same true tokens",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Single padded batch / median (seconds)",
+        "Two length buckets / median (seconds)",
+        "Single batch padding tokens",
+        "Bucketed padding tokens"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model",
+        "revision",
+        "prompt_token_lengths",
+        "true_prompt_tokens"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare unbucketed and length-bucketed prompts with the same true tokens. Independently calculate padding waste and choose the grouping only if saved work outweighs extra launches.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "20_prefix_cache_client": {
+      "lab": "20_prefix_cache_client",
+      "title": "Lab 20: Investigate reusable prompt prefixes in a live engine",
+      "kind": "server-client",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "variant"
+      ],
+      "metrics": [
+        {
+          "name": "repeated_prefix_median_e2e_seconds",
+          "path": "repeated_prefix.median_e2e_ms",
+          "title": "Repeated prefix / median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.repeated_prefix.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "unique_prefix_median_e2e_seconds",
+          "path": "unique_prefix.median_e2e_ms",
+          "title": "Unique prefix / median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.unique_prefix.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "repeated_prefix_median_prompt_tokens",
+          "path": "repeated_prefix.median_prompt_tokens",
+          "title": "Repeated prefix / median prompt tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.repeated_prefix.median_prompt_tokens. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "prompt_token_ratio",
+          "path": "prompt_token_ratio",
+          "title": "Prompt token ratio",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.prompt_token_ratio. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Which exact token prefix is shared, and where does a near-match diverge? Explain why model/tokenizer identity and cache policy must be fixed. Distinguish shorter prompt work from genuinely reused computation.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/20_prefix_cache_client.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch",
+      "systems_command": "python3 tools/submit_lab.py --lab 20_prefix_cache_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_prefix_cache.sbatch",
+      "compute_command": null,
+      "tuning_control": "server prefix caching disabled/enabled",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Repeated prefix / median e2e (seconds)",
+        "Unique prefix / median e2e (seconds)",
+        "Repeated prefix / median prompt tokens",
+        "Prompt token ratio"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "model",
+        "revision",
+        "requests_per_cohort",
+        "repeated_prefix.median_prompt_tokens",
+        "unique_prefix.median_prompt_tokens",
+        "repeated_prefix.completion_tokens",
+        "unique_prefix.completion_tokens"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare prefix caching disabled/enabled for the same request cohorts and three counterbalanced trials. Independently contrast repeated-prefix and unique-prefix results; choose caching only after the paired greedy-output check passes.",
+      "paired_digests": true,
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
+      },
+      "gpu_telemetry": true
+    },
+    "23_speculative_decoding": {
+      "lab": "23_speculative_decoding",
+      "title": "Lab 23: Trace speculative acceptance, rejection, and recovery",
+      "kind": "single_gpu",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "draft_length"
+      ],
+      "metrics": [
+        {
+          "name": "target_only_median_e2e_seconds",
+          "path": "target_only.median_e2e_ms",
+          "title": "Target only / median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.target_only.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "high_acceptance_median_e2e_seconds",
+          "path": "high_acceptance.median_e2e_ms",
+          "title": "High acceptance / median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.high_acceptance.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "low_acceptance_median_e2e_seconds",
+          "path": "low_acceptance.median_e2e_ms",
+          "title": "Low acceptance / median e2e (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.low_acceptance.median_e2e_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "high_acceptance_mean_accepted_prefix",
+          "path": "high_acceptance.mean_accepted_prefix",
+          "title": "High acceptance / mean accepted prefix",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.high_acceptance.mean_accepted_prefix. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "low_acceptance_mean_accepted_prefix",
+          "path": "low_acceptance.mean_accepted_prefix",
+          "title": "Low acceptance / mean accepted prefix",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.low_acceptance.mean_accepted_prefix. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Work through one partially accepted proposal and identify the first token that must be discarded. Why can a longer draft increase wasted work? Compare saved target calls with measured total duration rather than equating the two.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/23_speculative_decoding.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
+      "systems_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
+      "compute_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=target_only,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
+      "tuning_control": "`--draft-length`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Target only / median e2e (seconds)",
+        "High acceptance / median e2e (seconds)",
+        "Low acceptance / median e2e (seconds)",
+        "High acceptance / mean accepted prefix"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "vocab_size",
+        "hidden_size",
+        "generated_tokens",
+        "mechanism_scope"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--draft-length` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "24_sdpa_attention": {
+      "lab": "24_sdpa_attention",
+      "title": "Lab 24: Compare materialized attention with SDPA dispatch",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "cases_timing_materialized_median_seconds",
+          "path": "cases.*.timing.materialized.median_ms",
+          "title": "Cases / case / timing / materialized / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cases.*.timing.materialized.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cases_timing_sdpa_median_seconds",
+          "path": "cases.*.timing.sdpa.median_ms",
+          "title": "Cases / case / timing / sdpa / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cases.*.timing.sdpa.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cases_incremental_peak_bytes_materialized",
+          "path": "cases.*.incremental_peak_bytes.materialized",
+          "title": "Cases / case / incremental peak bytes / materialized",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cases.*.incremental_peak_bytes.materialized. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "cases_incremental_peak_bytes_sdpa",
+          "path": "cases.*.incremental_peak_bytes.sdpa",
+          "title": "Cases / case / incremental peak bytes / sdpa",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cases.*.incremental_peak_bytes.sdpa. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Estimate the size of the explicit score matrix and compare it with observed incremental memory. Why might avoiding that matrix matter more for prefill than for a one-query decode step? Explain why backend names require profiler evidence.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/24_sdpa_attention.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small --external-only",
+      "compute_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small --external-only",
+      "tuning_control": "Compare explicit attention and fused SDPA separately for prefill and decode",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Cases / case / timing / materialized / median (seconds)",
+        "Cases / case / timing / sdpa / median (seconds)",
+        "Cases / case / incremental peak bytes / materialized",
+        "Cases / case / incremental peak bytes / sdpa"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "shape",
+        "cases.*.phase",
+        "cases.*.query_length",
+        "cases.*.key_value_length",
+        "cases.*.causal"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare explicit attention and fused SDPA separately for prefill and decode. Independently calculate score-matrix memory and use the kernel trace to verify the actual backend.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "25_workload_metrics": {
+      "lab": "25_workload_metrics",
+      "title": "Lab 25: Explore input length and recurrent operator work",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "concurrency"
+      ],
+      "metrics": [
+        {
+          "name": "workload_cells_input_projection_median_seconds",
+          "path": "workload_cells.*.input_projection.median_ms",
+          "title": "Workload cells / case / input projection / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.workload_cells.*.input_projection.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "workload_cells_one_recurrent_step_median_seconds",
+          "path": "workload_cells.*.one_recurrent_step.median_ms",
+          "title": "Workload cells / case / one recurrent step / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.workload_cells.*.one_recurrent_step.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "workload_cells_joined_projection_and_recurrence_median_seconds",
+          "path": "workload_cells.*.joined_projection_and_recurrence.median_ms",
+          "title": "Workload cells / case / joined projection and recurrence / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.workload_cells.*.joined_projection_and_recurrence.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Which operation grows with input length and which with iteration count? Why can batching improve matrix efficiency while increasing latency per completed batch? Contrast these simplified costs with real attention and cache growth omitted here.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Concurrency here means synthetic batch rows, not HTTP request concurrency.",
+      "dashboard": "reference/grafana/25_workload_metrics.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
+      "systems_command": "python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
+      "compute_command": "python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
+      "tuning_control": "`--concurrency`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Workload cells / case / input projection / median (seconds)",
+        "Workload cells / case / one recurrent step / median (seconds)",
+        "Workload cells / case / joined projection and recurrence / median (seconds)"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "workload_cells.*.input_length",
+        "workload_cells.*.recurrent_iterations"
+      ],
+      "workload_parameters": [
+        "concurrency"
+      ],
+      "guided_comparison": "Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "26_kv_capacity": {
+      "lab": "26_kv_capacity",
+      "title": "Lab 26: Calculate ideal KV storage for MHA, GQA, and MQA",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "sequence",
+        "concurrency"
+      ],
+      "metrics": [
+        {
+          "name": "cases_mha_ideal_bytes",
+          "path": "cases.mha.ideal_gib",
+          "title": "Cases / mha / ideal gib",
+          "unit": "bytes",
+          "scale": 1073741824,
+          "description": "Analytical KV-cache capacity estimate converted from rounded GiB. Not a measured device allocation. Display conversion: source value \u00d7 1.07374e+09; unit bytes.",
+          "optional": false
+        },
+        {
+          "name": "cases_gqa_ideal_bytes",
+          "path": "cases.gqa.ideal_gib",
+          "title": "Cases / gqa / ideal gib",
+          "unit": "bytes",
+          "scale": 1073741824,
+          "description": "Analytical KV-cache capacity estimate converted from rounded GiB. Not a measured device allocation. Display conversion: source value \u00d7 1.07374e+09; unit bytes.",
+          "optional": false
+        },
+        {
+          "name": "cases_mqa_ideal_bytes",
+          "path": "cases.mqa.ideal_gib",
+          "title": "Cases / mqa / ideal gib",
+          "unit": "bytes",
+          "scale": 1073741824,
+          "description": "Analytical KV-cache capacity estimate converted from rounded GiB. Not a measured device allocation. Display conversion: source value \u00d7 1.07374e+09; unit bytes.",
+          "optional": false
+        },
+        {
+          "name": "concurrency",
+          "path": "concurrency",
+          "title": "Concurrency",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.concurrency. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "sequence",
+          "path": "sequence",
+          "title": "Sequence",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.sequence. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Explain why doubling context doubles ideal KV bytes and why reducing KV heads can lower storage without reducing query-head count. Which terms must be adjusted for quantized KV and its scale metadata?",
+      "interpretation": "This capacity worksheet calculates bytes and token limits; it does not allocate a GPU KV cache. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/26_kv_capacity.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 26_kv_capacity slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small --sequence 4096 --concurrency 8",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "`--sequence`, `--concurrency`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Cases / mha / ideal gib",
+        "Cases / gqa / ideal gib",
+        "Cases / mqa / ideal gib",
+        "Concurrency"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [
+        "concurrency"
+      ],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This capacity worksheet calculates bytes and token limits; it does not allocate a GPU KV cache.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    },
+    "27_paged_kv": {
+      "lab": "27_paged_kv",
+      "title": "Lab 27: Follow paged-cache allocation, growth, and recycling",
+      "kind": "cpu-model",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "block_tokens",
+        "total_blocks"
+      ],
+      "metrics": [
+        {
+          "name": "demand_worksheet_required_blocks",
+          "path": "demand_worksheet.required_blocks",
+          "title": "Demand worksheet / required blocks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.demand_worksheet.required_blocks; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "demand_worksheet_free_blocks",
+          "path": "demand_worksheet.free_blocks",
+          "title": "Demand worksheet / free blocks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.demand_worksheet.free_blocks; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "demand_worksheet_shortfall_blocks",
+          "path": "demand_worksheet.shortfall_blocks",
+          "title": "Demand worksheet / shortfall blocks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.demand_worksheet.shortfall_blocks; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "demand_worksheet_internal_waste_tokens",
+          "path": "demand_worksheet.internal_waste_tokens",
+          "title": "Demand worksheet / internal waste tokens",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.demand_worksheet.internal_waste_tokens; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        }
+      ],
+      "question": "Why can a request's logical pages map to nonadjacent physical IDs? Calculate unused slots in the final page. Explain why growth must reserve capacity before updating the request length.",
+      "interpretation": "This CPU page-allocation simulation measures model state, not GPU memory traffic. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/27_paged_kv.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 27_paged_kv slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small --block-tokens 16 --total-blocks 4",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "`--block-tokens`, `--total-blocks`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Demand worksheet / required blocks",
+        "Demand worksheet / free blocks",
+        "Demand worksheet / shortfall blocks",
+        "Demand worksheet / internal waste tokens"
+      ],
+      "allow_source_change": true,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--block-tokens`, `--total-blocks` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This CPU page-allocation simulation measures model state, not GPU memory traffic.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    },
+    "28_continuous_batching": {
+      "lab": "28_continuous_batching",
+      "title": "Lab 28: Compare full-prefill and chunked scheduling",
+      "kind": "cpu-model",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "nonpreemptible_full_prefill_median_first_token_latency_quanta",
+          "path": "nonpreemptible_full_prefill.median_first_token_latency_quanta",
+          "title": "Nonpreemptible full prefill / median first token latency quanta",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.nonpreemptible_full_prefill.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "chunked_64_median_first_token_latency_quanta",
+          "path": "chunked_64.median_first_token_latency_quanta",
+          "title": "Chunked 64 / median first token latency quanta",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.chunked_64.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "chunked_256_control_median_first_token_latency_quanta",
+          "path": "chunked_256_control.median_first_token_latency_quanta",
+          "title": "Chunked 256 control / median first token latency quanta",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.chunked_256_control.median_first_token_latency_quanta; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        }
+      ],
+      "question": "Locate an arrival during a long full-prefill dispatch and calculate its waiting time. How does chunking change the next admission opportunity? Explain which conclusions depend on the model's equal unit-cost assumption.",
+      "interpretation": "This discrete CPU scheduling model has no GPU server or CUDA kernels. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/28_continuous_batching.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 28_continuous_batching slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "Compare full-prefill and chunked scheduling on the same arrivals and token work",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Nonpreemptible full prefill / median first token latency quanta",
+        "Chunked 64 / median first token latency quanta",
+        "Chunked 256 control / median first token latency quanta"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "prompts",
+        "outputs",
+        "arrival_service_quanta",
+        "work_units_per_service_quantum"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare full-prefill and chunked scheduling on the same arrivals and token work. Independently calculate the waiting time of one late request; this CPU scheduling model is not a GPU performance result.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This discrete CPU scheduling model has no GPU server or CUDA kernels.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    },
+    "29_quantization": {
+      "lab": "29_quantization",
+      "title": "Lab 29: Inspect quantized weight and KV storage mechanics",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "weight_timing_bf16_median_seconds",
+          "path": "weight_timing.bf16.median_ms",
+          "title": "Weight timing / bf16 / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.weight_timing.bf16.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "weight_timing_int8_weight_dequantize_then_matmul_median_seconds",
+          "path": "weight_timing.int8_weight_dequantize_then_matmul.median_ms",
+          "title": "Weight timing / int8 weight dequantize then matmul / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.weight_timing.int8_weight_dequantize_then_matmul.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "kv_dequantization_timing_median_seconds",
+          "path": "kv_dequantization_timing.median_ms",
+          "title": "Kv dequantization timing / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.kv_dequantization_timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "bf16_weight_bytes",
+          "path": "bf16_weight_bytes",
+          "title": "Bf16 weight bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.bf16_weight_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "int8_weight_and_scale_bytes",
+          "path": "int8_weight_and_scale_bytes",
+          "title": "Int8 weight and scale bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.int8_weight_and_scale_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Calculate the ideal payload reduction, then add scales and reconstructed buffers. Why can dequantize-then-compute be slower than the BF16 baseline? Which supported engine kernel would be necessary to test a true low-precision execution benefit?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/29_quantization.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
+      "tuning_control": "Compare BF16 with dequantize-then-compute at fixed shape",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Weight timing / bf16 / median (seconds)",
+        "Weight timing / int8 weight dequantize then matmul / median (seconds)",
+        "Kv dequantization timing / median (seconds)",
+        "Bf16 weight bytes"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "shape"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare BF16 with dequantize-then-compute at fixed shape. Independently include scale and reconstruction bytes before deciding whether this path saves usable memory; it does not benchmark a native low-bit GEMM.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "30_engine_profile": {
+      "lab": "30_engine_profile",
+      "title": "Lab 30: Probe an engine's readiness and request schema",
+      "kind": "qualification",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "elapsed_seconds",
+          "path": "elapsed_ms",
+          "title": "Elapsed (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "One bounded protocol probe; neither engine throughput nor steady-state latency. Missing values remain unknown. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "model_count",
+          "path": "model_count",
+          "title": "Model count",
+          "unit": "none",
+          "scale": 1,
+          "description": "One bounded protocol probe; neither engine throughput nor steady-state latency. Missing values remain unknown.",
+          "optional": true
+        }
+      ],
+      "question": "Which component owns model conversion, repository layout, server readiness, and client measurement? Why can a healthy server reject a request with the wrong token-budget field? Keep these boundaries separate in your diagnosis.",
+      "interpretation": "The HTTP client probes readiness and request schemas. These launchers own server startup and cleanup but do not start a GPU capture; profiling the client cannot capture server kernels. Use the owned serving experiments for GPU traces. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/30_engine_profile.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 30_engine_profile slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Elapsed (seconds)",
+        "Model count"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "The HTTP client probes readiness and request schemas. These launchers own server startup and cleanup but do not start a GPU capture; profiling the client cannot capture server kernels. Use the owned serving experiments for GPU traces.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    },
+    "32_inference_capstone": {
+      "lab": "32_inference_capstone",
+      "title": "Lab 32: Build a causal attention optimization report",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "timing_materialized_median_seconds",
+          "path": "timing.materialized.median_ms",
+          "title": "Timing / materialized / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.timing.materialized.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "timing_sdpa_median_seconds",
+          "path": "timing.sdpa.median_ms",
+          "title": "Timing / sdpa / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.timing.sdpa.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "incremental_peak_bytes_materialized",
+          "path": "incremental_peak_bytes.materialized",
+          "title": "Incremental peak bytes / materialized",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.incremental_peak_bytes.materialized. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "incremental_peak_bytes_sdpa",
+          "path": "incremental_peak_bytes.sdpa",
+          "title": "Incremental peak bytes / sdpa",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.incremental_peak_bytes.sdpa. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "max_abs_error",
+          "path": "max_abs_error",
+          "title": "Max abs error",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.max_abs_error. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Does the measured memory difference match the materialized score-matrix explanation? Does the timing conclusion survive order reversal? Explain how a large attention-kernel improvement could have a smaller end-to-end service impact.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/32_inference_capstone.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 32_inference_capstone slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
+      "systems_command": "python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
+      "compute_command": "python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
+      "tuning_control": "Compare materialized attention with SDPA across all three trials",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Timing / materialized / median (seconds)",
+        "Timing / sdpa / median (seconds)",
+        "Incremental peak bytes / materialized",
+        "Incremental peak bytes / sdpa"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "isl",
+        "osl",
+        "concurrency",
+        "warmup",
+        "iterations"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare materialized attention with SDPA across all three trials. Independently reconcile memory and timing evidence and estimate the service-level gain from its hotspot fraction.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "33_speculative_engine_client": {
+      "lab": "33_speculative_engine_client",
+      "title": "Lab 33: Check greedy equivalence in a speculative engine campaign",
+      "kind": "server-client",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "variant"
+      ],
+      "metrics": [
+        {
+          "name": "requests",
+          "path": "requests",
+          "title": "Requests",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.requests. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Does acceptance reduce target work enough to offset draft execution and verification? Compare actual output lengths, latency, and throughput under the same load. Keep startup memory and initialization separate from steady serving.",
+      "interpretation": "This helper records response equivalence. Performance evidence belongs to the separately collected campaign results; no latency or throughput is inferred from response digests.",
+      "dashboard": "reference/grafana/33_speculative_engine_client.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 33_speculative_engine_client slurm/vllm_speculative_ab.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "systems_command": "python3 tools/submit_lab.py --lab 33_speculative_engine_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_speculative_ab.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "compute_command": null,
+      "tuning_control": "Compare the real serving engine with speculation disabled/enabled using identical prompts and bounded greedy responses",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Requests"
+      ],
+      "allow_source_change": false,
+      "paired_digests": true,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the real serving engine with speculation disabled/enabled using identical prompts and bounded greedy responses. Independently relate accepted draft tokens to latency and reject a policy that changes paired response digests.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity with the matching unprofiled AIPerf exports. Use this lab's Grafana panels to check paired greedy-equivalence evidence."
+      },
+      "gpu_telemetry": true
+    },
+    "34_policy_equivalence_client": {
+      "lab": "34_policy_equivalence_client",
+      "title": "Lab 34: Preserve outputs while changing a serving policy",
+      "kind": "server-client",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "variant"
+      ],
+      "metrics": [],
+      "question": "Why must prompt content, tokenization, output budget, seed, and sampling policy remain fixed? Which settings should change in a chunking experiment, and which in a prefix-cache experiment? Separate correctness probes from load-generator measurements.",
+      "interpretation": "This helper records response equivalence. Performance evidence belongs to the separately collected campaign results; no latency or throughput is inferred from response digests.",
+      "dashboard": "reference/grafana/34_policy_equivalence_client.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 34_policy_equivalence_client slurm/vllm_chunked_prefill_ab.sbatch",
+      "systems_command": "python3 tools/submit_lab.py --lab 34_policy_equivalence_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_chunked_prefill_ab.sbatch",
+      "compute_command": null,
+      "tuning_control": "Compare chunked prefill disabled/enabled using the same prompt/output budgets and paired greedy outputs",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results"
+      ],
+      "allow_source_change": false,
+      "paired_digests": true,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Compare chunked prefill disabled/enabled using the same prompt/output budgets and paired greedy outputs. Independently inspect prefill/decode interference and choose the policy against the measured latency objective.",
+      "systems": {
+        "applicable": true,
+        "target": "server",
+        "reason": "Capture the owned GPU server and its worker descendants while the client supplies requests.",
+        "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity with the matching unprofiled AIPerf exports. Use this lab's Grafana panels to check paired greedy-equivalence evidence."
+      },
+      "gpu_telemetry": true
+    },
+    "35_inference_basics": {
+      "lab": "35_inference_basics",
+      "title": "Lab 35: Trace fixed-parameter autoregressive inference",
+      "kind": "cpu-model",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [],
+      "metrics": [],
+      "question": "Follow `steps`: which row was read, which token was chosen, and which input the next forward receives. Explain why changing the output budget changes work without improving a kernel. As a source-edit extension, change one score and predict the resulting sequence; keep the original run as the reference. How would sampling differ from greedy choice? Why does this table fail to model attention over a long prompt? Distinguish those missing mechanisms from the feedback loop it does demonstrate.",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/35_inference_basics.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 35_inference_basics slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda",
+      "systems_command": "python3 tools/submit_lab.py --lab 35_inference_basics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda",
+      "compute_command": null,
+      "tuning_control": "Trace greedy selection and the next autoregressive input",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results"
+      ],
+      "allow_source_change": true,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Trace greedy selection and the next autoregressive input. Independently change one source score and predict the selected sequence; changed tokens are a model study, not an optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "optional-cuda",
+        "reason": "The documented --device cuda run executes GPU work; the optional CPU run does not.",
+        "view": "For --device cuda only, expand lab_workload and CUDA API/GPU rows. Locate embedding, softmax/argmax and host reads in each token step. Correlate them with the generated-token record; this bigram exercise does not measure transformer serving performance. CPU mode has no GPU profiling."
+      },
+      "gpu_telemetry": true
+    },
+    "36_kv_tiering": {
+      "lab": "36_kv_tiering",
+      "title": "Lab 36: Model KV retention and restore decisions",
+      "kind": "cpu-model",
+      "nvtx_range": "lab_workload",
+      "tuning_parameters": [
+        "host_prefixes",
+        "storage_prefixes",
+        "ttl_ms",
+        "storage_gbps",
+        "gap_ms",
+        "restart_at",
+        "revision_change_at"
+      ],
+      "metrics": [
+        {
+          "name": "reuse_fraction",
+          "path": "reuse_fraction",
+          "title": "Reuse fraction",
+          "unit": "none",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.reuse_fraction; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "modeled_foreground_total_seconds",
+          "path": "modeled_foreground_total_ms",
+          "title": "Modeled foreground total (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Analytical or simulated result from measurements.modeled_foreground_total_ms; this is not a measured GPU duration or device occupancy. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "modeled_write_service_total_seconds",
+          "path": "modeled_write_service_total_ms",
+          "title": "Modeled write service total (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Analytical or simulated result from measurements.modeled_write_service_total_ms; this is not a measured GPU duration or device occupancy. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "no_cache_prefill_total_seconds",
+          "path": "no_cache_prefill_total_ms",
+          "title": "No cache prefill total (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Analytical or simulated result from measurements.no_cache_prefill_total_ms; this is not a measured GPU duration or device occupancy. Display conversion: source value \u00d7 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "read_bytes",
+          "path": "read_bytes",
+          "title": "Read bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.read_bytes; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        },
+        {
+          "name": "write_bytes",
+          "path": "write_bytes",
+          "title": "Write bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Analytical or simulated result from measurements.write_bytes; this is not a measured GPU duration or device occupancy.",
+          "optional": false
+        }
+      ],
+      "question": "Does TTL expire before the next reuse even when capacity is ample? Does increasing storage capacity help a low-reuse workload? Can a storage hit be rejected as too costly? After a modeled restart, only prefixes previously demoted to storage survive; exclusive tiers are not a persistent backup of every device entry. Explain why changing identity prevents reuse while a mere capacity change does not.",
+      "interpretation": "This CPU retention model simulates cache placement without transferring GPU data or running inference. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/36_kv_tiering.json",
+      "baseline_command": "python labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 0",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "`--host-prefixes`, `--storage-prefixes`, `--ttl-ms`, `--storage-gbps`, `--gap-ms`, `--restart-at`, `--revision-change-at`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Reuse fraction",
+        "Modeled foreground total (seconds)",
+        "Modeled write service total (seconds)",
+        "No cache prefill total (seconds)"
+      ],
+      "allow_source_change": true,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Use `--host-prefixes`, `--storage-prefixes`, `--ttl-ms`, `--storage-gbps`, `--gap-ms`, `--restart-at`, `--revision-change-at` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This CPU retention model simulates cache placement without transferring GPU data or running inference.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": false
+    }
+  },
+  "setup": {
+    "lab": "environment_readiness",
+    "title": "Environment readiness",
+    "kind": "qualification",
+    "nvtx_range": "ready_kernel",
+    "tuning_parameters": [],
+    "metrics": [
+      {
+        "name": "systems_report_bytes",
+        "path": "systems_report_bytes",
+        "title": "Systems report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      },
+      {
+        "name": "compute_report_bytes",
+        "path": "compute_report_bytes",
+        "title": "Compute report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      }
+    ],
+    "question": "Can both workers execute the canary and produce readable reports?",
+    "interpretation": "Baseline and candidate slots contain the two worker readiness results. They are readiness records, not optimization candidates. Inspect GPU telemetry and require fresh publication confirmation.",
+    "dashboard": "reference/grafana/environment_readiness.json"
+  }
+}

@@ -12,7 +12,7 @@ from .soperator_checks import SoperatorChecksExecution, _identifier
 from .soperator_checks_contract import job_execution_digest
 from .soperator_checks_policy import checks_digest
 from .soperator_install_runtime_recovery import slurm_fields, slurm_jobs, slurm_nodes
-from .soperator_install_storage_recovery import _accounted, _complete
+from .soperator_install_storage_recovery import _accounted, _complete, same_terminal_accounting
 from .soperator_worker_topology import H200_PHYSICAL, H200_QUOTA_DEFAULT
 
 _ACTIVE = {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "SUSPENDED"}
@@ -246,7 +246,9 @@ class InstallTopologyRecovery:
                 live.get("metadata", {}).get("uid") != failure["job"]["uid"]
                 or not _complete(live)
                 or job_execution_digest(live) != failure["job"]["entry"]["execution"]
-                or _accounted(runner, failure["slurm"]["JobId"]) != failure["slurm"]
+                or not same_terminal_accounting(
+                    failure["slurm"], _accounted(runner, failure["slurm"]["JobId"])
+                )
             ):
                 raise RuntimeError("topology recovery native failure changed")
         name = self.proof["reservation"]["name"]

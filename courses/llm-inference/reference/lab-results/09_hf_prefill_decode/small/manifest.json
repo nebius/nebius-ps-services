@@ -1,0 +1,79 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "e041d5db6d1ce3a99b3ef8ba0f2d10088ef6b53c5ffc138ea94cb9aec619b1e3",
+      "sha256": "66733666657a20eddb5d8c048c812e5446d7712c97b98b494a0e07beb2cea26f",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "ea63a43fd01a4b205d296c66705f2d2ee08b6ad7bd61d9b7d86667ba867d3365",
+      "sha256": "8181026e00192fa6567c57b332c36d62fab7476532097726d3cf8ea4fb2039ec",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "afce4fb550ef48546f87e69027f5431e1f6adf1cd1775313be0a5133585a7423",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "350bca843b440518af179207a533060507c7a724e5575450d52bc3388bb0b039",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "54ef06d89aecbe5ac4271ed8ee7417d88f9dd269e922edcc1dc267ac14339104",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "a57a1ea373a575f2ccc3c7b1f4ec4dd2ffac8d31455f75d99575d419fc48ddb7",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "575bc88c0b08631663f993f77cc9e423f68f6e8826bedeca973978ea690f0dd5",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "ef4ef69106145a1f0b3179d73e612a4e68d9987aaf7534690d4968483b12bbef",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "ac31829eb1a9a7dbaf44657540f58c200a988b2eb0d6f68287f0b9ab5de88212",
+      "tool": "compute"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "09_hf_prefill_decode",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "unlocked-gpu-clocks"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "3e1935a779452d20483f30312d9cd044beb393d43b9bef3ae4151eba291289fc",
+  "summary_sha256": "ffa8bc6fe1afcd8c8c5f0b5319e0de4b36446083e3f0d681e590358b340a156a"
+}

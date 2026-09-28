@@ -67,9 +67,10 @@ def trial_record(course, index):
     return {
         "schema": "gpu-course-result/v1",
         "lab_id": "31_training_capstone" if training else "32_inference_capstone",
-        "profile": "smoke",
+        "profile": "small",
         "run_id": f"{index:012x}",
         "seed": index,
+        "experiment": {"instrumented": False},
         "environment": {
             "gpu_family": "NVIDIA H100",
             "torch_version": "test",
@@ -103,6 +104,98 @@ def run_aggregator(course, trials, tmp_path, monkeypatch):
     with load_lab(f"{course}/tools/aggregate_capstone.py") as module:
         module.main()
     return output
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+@pytest.mark.parametrize("family", ("NVIDIA H100", "NVIDIA H200"))
+def test_capstone_preserves_supported_observed_hardware(
+    course, family, tmp_path, monkeypatch
+):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    for trial in trials:
+        trial["environment"]["gpu_family"] = family
+    result = json.loads(
+        run_aggregator(course, trials, tmp_path, monkeypatch).read_text()
+    )
+    assert result["verified_shared_contract"]["environment"]["gpu_family"] == family
+    assert family.removeprefix("NVIDIA ") in result["claim_scope"]
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+def test_capstone_rejects_mixed_supported_hardware(course, tmp_path, monkeypatch):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    trials[-1]["environment"]["gpu_family"] = "NVIDIA H200"
+    with pytest.raises(SystemExit, match="environment.*differ"):
+        run_aggregator(course, trials, tmp_path, monkeypatch)
+    assert not (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+@pytest.mark.parametrize("value", (None, [], "invalid", 0, False))
+def test_capstone_rejects_nonobject_input(course, value, tmp_path, monkeypatch):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    trials[-1] = value
+    with pytest.raises(SystemExit, match=r"object.*trial-2.json"):
+        run_aggregator(course, trials, tmp_path, monkeypatch)
+    assert not (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+@pytest.mark.parametrize(
+    "experiment",
+    (
+        "missing",
+        None,
+        [],
+        "invalid",
+        False,
+        {},
+        {"instrumented": None},
+        {"instrumented": True},
+        {"instrumented": 0},
+        {"instrumented": ""},
+        {"instrumented": "false"},
+    ),
+)
+def test_capstone_requires_clean_provenance(course, experiment, tmp_path, monkeypatch):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    if experiment == "missing":
+        del trials[-1]["experiment"]
+    else:
+        trials[-1]["experiment"] = experiment
+    with pytest.raises(SystemExit, match=r"unprofiled.*trial-2.json"):
+        run_aggregator(course, trials, tmp_path, monkeypatch)
+    assert not (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+def test_capstone_rejects_explicit_diagnostic_timing(course, tmp_path, monkeypatch):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    trials[-1]["measurements"]["acceptance_timing"] = False
+    with pytest.raises(SystemExit, match=r"acceptance timing.*trial-2.json"):
+        run_aggregator(course, trials, tmp_path, monkeypatch)
+    assert not (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
+@pytest.mark.parametrize("explicit_acceptance", (False, True))
+def test_clean_capstone_decision_is_unchanged(
+    course, explicit_acceptance, tmp_path, monkeypatch
+):
+    trials = [trial_record(course, index) for index in (1, 2, 3)]
+    if explicit_acceptance:
+        for trial in trials:
+            trial["measurements"]["acceptance_timing"] = True
+    payload = json.loads(
+        run_aggregator(course, trials, tmp_path, monkeypatch).read_text()
+    )
+    ratio = (
+        "baseline_to_candidate_ratio"
+        if course == "llm-training"
+        else "materialized_to_sdpa_ratio"
+    )
+    assert payload[ratio] == 2.0
+    assert payload["decision"] == "candidate-for-scoped-keep"
 
 
 @pytest.mark.parametrize("course", ("llm-training", "llm-inference"))
@@ -198,6 +291,11 @@ def test_capstone_rejects_invalid_shared_contract(
         "pooled",
         "zero",
         "overflow",
+        "h200",
+        "mixed_gpu",
+        "missing_gpu",
+        "duplicate_gpu",
+        "unsupported_gpu",
     ),
 )
 def test_cuda_capstone_validates_each_trial(case, tmp_path):
@@ -208,7 +306,7 @@ def test_cuda_capstone_validates_each_trial(case, tmp_path):
         1
     ].split('\' "${trial_logs[@]}"', 1)[0]
     records = [
-        f"variant_order={'candidate-first' if index == 2 else 'baseline-first'}\nelements=1024\nbaseline_median_ms=2\ncandidate_median_ms=1\n"
+        f"variant_order={'candidate-first' if index == 2 else 'baseline-first'}\ngpu_name=NVIDIA H100 80GB HBM3\nelements=1024\nbaseline_median_ms=2\ncandidate_median_ms=1\n"
         for index in (1, 2, 3)
     ]
     if case == "garbage":
@@ -229,6 +327,20 @@ def test_cuda_capstone_validates_each_trial(case, tmp_path):
             value.replace("ms=2", "ms=1e308").replace("ms=1\n", "ms=1e-308\n")
             for value in records
         ]
+    elif case == "h200":
+        records = [
+            value.replace("NVIDIA H100 80GB HBM3", "NVIDIA H200") for value in records
+        ]
+    elif case == "mixed_gpu":
+        records[1] = records[1].replace("NVIDIA H100 80GB HBM3", "NVIDIA H200")
+    elif case == "missing_gpu":
+        records[1] = records[1].replace("gpu_name=NVIDIA H100 80GB HBM3\n", "")
+    elif case == "duplicate_gpu":
+        records[1] += "gpu_name=NVIDIA H100 80GB HBM3\n"
+    elif case == "unsupported_gpu":
+        records = [
+            value.replace("NVIDIA H100 80GB HBM3", "NVIDIA A100") for value in records
+        ]
     paths = []
     for index, record in enumerate(records):
         path = tmp_path / f"trial-{index}.txt"
@@ -237,9 +349,12 @@ def test_cuda_capstone_validates_each_trial(case, tmp_path):
     result = subprocess.run(
         ["awk", "-F=", program, *paths], capture_output=True, text=True, check=False
     )
-    if case == "valid":
+    if case in ("valid", "h200"):
         assert result.returncode == 0, result.stderr
         assert "decision=candidate-for-scoped-keep" in result.stdout
+        gpu = "NVIDIA H200" if case == "h200" else "NVIDIA H100 80GB HBM3"
+        assert f"gpu_name={gpu}\n" in result.stdout
+        assert f"claim_scope=exact single-GPU ({gpu}) executable" in result.stdout
     else:
         assert result.returncode != 0
         assert "decision=" not in result.stdout
@@ -281,7 +396,7 @@ def test_training_profiler_honors_seed(monkeypatch):
 
     with load_lab("llm-training/labs/30_training_profiler.py") as module:
         monkeypatch.setattr(module, "load_torch", lambda: torch)
-        monkeypatch.setattr(module, "require_h100", lambda torch: {})
+        monkeypatch.setattr(module, "require_course_gpu", lambda torch: {})
         monkeypatch.setattr(module, "build_tiny_lm", build)
         with torch.random.fork_rng(devices=[]):
             for seed in (17, 17, 18):
@@ -333,9 +448,9 @@ def test_engine_profile_checks_generated_text(choice, tmp_path, monkeypatch):
         monkeypatch.setattr(
             module,
             "request_json",
-            lambda url, payload=None: {"data": []}
-            if payload is None
-            else {"choices": [choice]},
+            lambda url, payload=None: (
+                {"data": []} if payload is None else {"choices": [choice]}
+            ),
         )
         if choice.get("text"):
             module.main()
@@ -381,16 +496,17 @@ def test_publication_parser_preserves_inline_resources():
 
 
 def test_inline_code_preserves_literal_markdown():
-    with load_lab("tools/build_course_html.py") as module:
-        assert (
-            module.inline("`x ** 2` and `y ** 2`")
-            == "<code>x ** 2</code> and <code>y ** 2</code>"
-        )
-        assert (
-            module.inline("`[x](https://example.com)` and **bold**")
-            == "<code>[x](https://example.com)</code> and <strong>bold</strong>"
-        )
-        assert module.inline("[`x`](#x)") == '<a href="#x"><code>x</code></a>'
+    from course_builder import markdown
+
+    assert (
+        markdown.inline("`x ** 2` and `y ** 2`")
+        == "<code>x ** 2</code> and <code>y ** 2</code>"
+    )
+    assert (
+        markdown.inline("`[x](https://example.com)` and **bold**")
+        == "<code>[x](https://example.com)</code> and <strong>bold</strong>"
+    )
+    assert markdown.inline("[`x`](#x)") == '<a href="#x"><code>x</code></a>'
 
 
 @pytest.mark.parametrize("course", COURSES)

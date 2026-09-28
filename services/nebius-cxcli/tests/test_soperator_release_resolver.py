@@ -15,6 +15,7 @@ import yaml
 
 import nebius_cxcli.cli as cli
 import nebius_cxcli.soperator_release_resolver as resolver
+from nebius_cxcli.soperator_release import SoperatorArtifactRequest
 from soperator_fixtures import sample_snapshot
 
 
@@ -46,11 +47,107 @@ def _snapshot_with_current_mount_image():
     )
 
 
+@pytest.mark.parametrize("origin", ["fresh", "recent", "frozen"])
+@pytest.mark.parametrize("valid", [False, True])
+def test_release_source_verification_precedes_selection_publication(
+    tmp_path, monkeypatch, origin, valid
+):
+    from nebius_cxcli import soperator_release_artifacts
+    from test_soperator_release_identity import _metadata
+
+    snapshot = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
+    if origin == "frozen":
+        resolver._retain_release_snapshot(snapshot, cache_root=tmp_path)
+    source = SimpleNamespace(manifest_sha256=snapshot.source_manifest_sha256)
+    metadata = _metadata()
+    described = SimpleNamespace(
+        source=source,
+        metadata=metadata,
+        release=snapshot.release,
+        identity_sha256=snapshot.source_manifest_sha256,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_artifact_selection.compile_required_stages",
+        lambda *a: {"desired": ({}, [])},
+    )
+    writes = []
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_adapter.render_soperator_adapter_documents",
+        lambda *a, **k: ([], {}),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_values.with_source_observability", lambda values, source: values
+    )
+
+    class Ledger:
+        def __init__(self, _root):
+            pass
+
+        def locked(self, _metadata):
+            return nullcontext("identity")
+
+        def record(self, _identity):
+            writes.append("identity")
+
+    monkeypatch.setattr(resolver, "SoperatorReleaseIdentityLedger", Ledger)
+    monkeypatch.setattr(
+        resolver,
+        "_load_recent_release_snapshot",
+        lambda *a, **k: snapshot if origin == "recent" else None,
+    )
+    monkeypatch.setattr(resolver, "resolve_soperator_release", lambda *a, **k: metadata)
+    monkeypatch.setattr(resolver, "acquire_soperator_release_source", lambda *a, **k: source)
+    monkeypatch.setattr(
+        resolver,
+        "build_soperator_release_snapshot",
+        lambda *a, **k: (verify(snapshot, source), snapshot)[1],
+    )
+    monkeypatch.setattr(
+        resolver, "_retain_release_snapshot", lambda *a, **k: writes.append("retain")
+    )
+    monkeypatch.setattr(
+        resolver, "_write_recent_release_snapshot", lambda *a, **k: writes.append("cache")
+    )
+    monkeypatch.setattr(
+        resolver,
+        "frozen_soperator_release_from_snapshot",
+        lambda *a, **k: resolver.FrozenSoperatorRelease(metadata, source, snapshot),
+    )
+
+    def verify(*args, **kwargs):
+        assert args == (snapshot, source)
+        if not valid:
+            raise ValueError("official OCI chart helm-nfs-server differs from release source")
+        writes.append("verified")
+
+    monkeypatch.setattr(soperator_release_artifacts, "verify_soperator_release_artifacts", verify)
+
+    def freeze():
+        return resolver.freeze_soperator_release(
+            "4.1.7",
+            cache_root=tmp_path,
+            target_ref=snapshot.target_ref,
+            source=described,
+            request=SoperatorArtifactRequest.deployment(snapshot.target_ref, {}),
+            snapshot_sha256=snapshot.snapshot_sha256 if origin == "frozen" else None,
+        )
+
+    if valid:
+        assert freeze().snapshot == snapshot
+        assert writes == (
+            ["verified", "retain"] if origin == "frozen" else ["verified", "identity", "cache"]
+        )
+    else:
+        with pytest.raises(ValueError, match="helm-nfs-server differs from release source"):
+            freeze()
+        assert not writes
+
+
 def test_release_command_failure_is_bounded_and_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        resolver.subprocess,
+        resolver.kubernetes_process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
@@ -85,7 +182,7 @@ def test_release_command_timeout_is_bounded_and_sanitized(
             stderr=b"Authorization: Bearer release-timeout-sensitive-value",
         )
 
-    monkeypatch.setattr(resolver.subprocess, "run", _timeout)
+    monkeypatch.setattr(resolver.kubernetes_process, "run", _timeout)
 
     with pytest.raises(RuntimeError, match="timed out after 300 seconds") as excinfo:
         resolver._run(["helm", "pull"], label="download official chart")
@@ -94,18 +191,17 @@ def test_release_command_timeout_is_bounded_and_sanitized(
     assert "<redacted>" in str(excinfo.value)
 
 
-def test_recent_release_snapshot_cache_is_selector_bound_and_expires(tmp_path: Path) -> None:
+def test_recent_release_snapshot_cache_is_request_bound_and_expires(tmp_path: Path) -> None:
     snapshot = _snapshot_with_current_mount_image()
     cache_root = tmp_path / "cache"
     path = resolver._write_recent_release_snapshot(
         snapshot,
-        selector="4.1.7",
         cache_root=cache_root,
     )
     written_at = path.stat().st_mtime
 
     cached = resolver._load_recent_release_snapshot(
-        "4.1.7",
+        snapshot.request_sha256,
         cache_root=cache_root,
         now=written_at + 899,
     )
@@ -115,7 +211,7 @@ def test_recent_release_snapshot_cache_is_selector_bound_and_expires(tmp_path: P
     assert cached.release == "4.1.7"
     assert (
         resolver._load_recent_release_snapshot(
-            "4.1.7",
+            snapshot.request_sha256,
             cache_root=cache_root,
             now=written_at + 901,
         )
@@ -123,54 +219,14 @@ def test_recent_release_snapshot_cache_is_selector_bound_and_expires(tmp_path: P
     )
 
 
-def test_freeze_reuses_recent_verified_snapshot_without_github(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache_root = tmp_path / "cache"
-    resolver._write_recent_release_snapshot(
-        _snapshot_with_current_mount_image(),
-        selector="4.1.7",
-        cache_root=cache_root,
-    )
-    frozen = SimpleNamespace(metadata=object())
-    ledger_calls: list[object] = []
-
-    class _Ledger:
-        def __init__(self, _root) -> None:
-            pass
-
-        def locked(self, metadata):
-            ledger_calls.append(metadata)
-            return nullcontext()
-
-    monkeypatch.setattr(resolver, "SoperatorReleaseIdentityLedger", _Ledger)
-    monkeypatch.setattr(
-        resolver,
-        "frozen_soperator_release_from_snapshot",
-        lambda _snapshot, **_kwargs: frozen,
-    )
+def test_fresh_admission_requires_explicit_target_request(monkeypatch):
     monkeypatch.setattr(
         resolver,
         "resolve_soperator_release",
-        lambda *_args, **_kwargs: pytest.fail("recent sealed snapshot must avoid GitHub"),
+        lambda *a, **k: pytest.fail("no discovery without a request"),
     )
-    progress: list[str] = []
-
-    assert (
-        resolver.freeze_soperator_release(
-            "4.1.7",
-            current_release="1.22.3",
-            cache_root=cache_root,
-            emit=progress.append,
-        )
-        is frozen
-    )
-    assert ledger_calls == [frozen.metadata]
-    assert progress == [
-        "Cached release snapshot found; re-verifying source and identity",
-        "Cached release source and identity re-verified",
-    ]
+    with pytest.raises(ValueError, match="target configuration request"):
+        resolver.freeze_soperator_release("4.1.7")
 
 
 def test_recent_release_snapshot_rejects_stale_adapter_mount_image(tmp_path: Path) -> None:
@@ -182,13 +238,12 @@ def test_recent_release_snapshot_rejects_stale_adapter_mount_image(tmp_path: Pat
     )
     path = resolver._write_recent_release_snapshot(
         stale,
-        selector="4.1.7",
         cache_root=cache_root,
     )
 
     assert (
         resolver._load_recent_release_snapshot(
-            "4.1.7",
+            stale.request_sha256,
             cache_root=cache_root,
             now=path.stat().st_mtime + 1,
         )
@@ -197,17 +252,21 @@ def test_recent_release_snapshot_rejects_stale_adapter_mount_image(tmp_path: Pat
 
 
 @pytest.mark.parametrize("cached_selector", ["latest", "4.1.7"])
+@pytest.mark.parametrize("admitted_selector", ["latest", "4.1.7"])
 def test_frozen_digest_survives_selector_expiry_and_replacement(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached_selector: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cached_selector: str, admitted_selector: str
 ) -> None:
-    original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
+    original = resolver.seal_soperator_release_snapshot(
+        replace(_snapshot_with_current_mount_image(), selector=admitted_selector)
+    )
     cache_root = tmp_path / "cache"
+    resolver._write_recent_release_snapshot(original, cache_root=cache_root)
     path = resolver._write_recent_release_snapshot(
-        original, selector=cached_selector, cache_root=cache_root
+        replace(original, selector=cached_selector, snapshot_sha256=""), cache_root=cache_root
     )
     os.utime(path, (1, 1))
     changed = replace(original, archive_sha256="sha256:" + "a" * 64, snapshot_sha256="")
-    resolver._write_recent_release_snapshot(changed, selector="4.1.7", cache_root=cache_root)
+    resolver._write_recent_release_snapshot(changed, cache_root=cache_root)
     observed = []
 
     class _Ledger:
@@ -220,9 +279,13 @@ def test_frozen_digest_survives_selector_expiry_and_replacement(
 
     def rehydrate(snapshot, **_kwargs):
         assert snapshot == original
-        return SimpleNamespace(metadata="verified", snapshot=snapshot)
+        return SimpleNamespace(metadata="verified", snapshot=snapshot, source=object())
 
     monkeypatch.setattr(resolver, "SoperatorReleaseIdentityLedger", _Ledger)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_release_artifacts.verify_soperator_release_artifacts",
+        lambda *a, **k: None,
+    )
     monkeypatch.setattr(resolver, "frozen_soperator_release_from_snapshot", rehydrate)
     monkeypatch.setattr(
         resolver,
@@ -230,7 +293,10 @@ def test_frozen_digest_survives_selector_expiry_and_replacement(
         lambda *_a, **_k: pytest.fail("frozen authority must not resolve mutable tags"),
     )
     frozen = resolver.freeze_soperator_release(
-        "4.1.7", cache_root=cache_root, snapshot_sha256=original.snapshot_sha256
+        "4.1.7",
+        target_ref=original.target_ref,
+        cache_root=cache_root,
+        snapshot_sha256=original.snapshot_sha256,
     )
     assert frozen.snapshot == original
     assert observed == ["verified"]
@@ -246,28 +312,42 @@ def test_frozen_digest_missing_or_invalid_never_resolves(
         lambda *_a, **_k: pytest.fail("missing frozen content must stop"),
     )
     with pytest.raises((ValueError, RuntimeError), match="snapshot"):
-        resolver.freeze_soperator_release("4.1.7", cache_root=tmp_path, snapshot_sha256=digest)
+        resolver.freeze_soperator_release(
+            "4.1.7", target_ref="soperator", cache_root=tmp_path, snapshot_sha256=digest
+        )
 
 
-def test_frozen_digest_accepts_only_matching_sealed_selector_content(tmp_path: Path) -> None:
-    original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
-    path = resolver._recent_release_snapshot_path("latest", cache_root=tmp_path)
-    resolver.write_soperator_release_snapshot(
-        path,
-        resolver.seal_soperator_release_snapshot(
-            replace(original, selector="latest", snapshot_sha256="")
-        ),
+@pytest.mark.parametrize("retained", [True, False])
+def test_frozen_latest_digest_survives_exact_release_handoff(
+    tmp_path: Path,
+    retained: bool,
+) -> None:
+    original = resolver.seal_soperator_release_snapshot(
+        replace(_snapshot_with_current_mount_image(), selector="latest")
     )
+    path = resolver._recent_release_snapshot_path(original.request_sha256, cache_root=tmp_path)
+    resolver.write_soperator_release_snapshot(path, original)
+    if retained:
+        resolver._retain_release_snapshot(original, cache_root=tmp_path)
     os.utime(path, (1, 1))
+    if not retained:
+        with pytest.raises((ValueError, RuntimeError), match="snapshot"):
+            resolver._load_frozen_release_snapshot(
+                "4.1.7",
+                original.snapshot_sha256,
+                target_ref=original.target_ref,
+                cache_root=tmp_path,
+            )
+        return
     assert (
         resolver._load_frozen_release_snapshot(
-            "4.1.7", original.snapshot_sha256, cache_root=tmp_path
+            "4.1.7", original.snapshot_sha256, target_ref=original.target_ref, cache_root=tmp_path
         )
         == original
     )
-    with pytest.raises(ValueError, match="snapshot digest differs"):
+    with pytest.raises(ValueError, match="snapshot identity differs"):
         resolver._load_frozen_release_snapshot(
-            "4.1.5", original.snapshot_sha256, cache_root=tmp_path
+            "4.1.5", original.snapshot_sha256, target_ref=original.target_ref, cache_root=tmp_path
         )
 
 
@@ -276,9 +356,7 @@ def test_retained_snapshot_corruption_stops_before_selector_lookup(
     tmp_path: Path, corruption: str
 ) -> None:
     original = resolver.seal_soperator_release_snapshot(_snapshot_with_current_mount_image())
-    selector = resolver._write_recent_release_snapshot(
-        original, selector="4.1.7", cache_root=tmp_path
-    )
+    selector = resolver._write_recent_release_snapshot(original, cache_root=tmp_path)
     path = selector.parent / "by-digest" / f"{original.snapshot_sha256[7:]}.json"
     if corruption == "symlink":
         path.unlink()
@@ -294,7 +372,7 @@ def test_retained_snapshot_corruption_stops_before_selector_lookup(
             )
     with pytest.raises((ValueError, RuntimeError)):
         resolver._load_frozen_release_snapshot(
-            "4.1.7", original.snapshot_sha256, cache_root=tmp_path
+            "4.1.7", original.snapshot_sha256, target_ref=original.target_ref, cache_root=tmp_path
         )
 
 

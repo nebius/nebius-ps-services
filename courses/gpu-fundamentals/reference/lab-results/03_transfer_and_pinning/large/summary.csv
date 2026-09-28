@@ -1,0 +1,17 @@
+variant,metric,case,value,unit
+baseline-trial1,modes_median_seconds,0,0.0039969,s
+baseline-trial1,modes_median_seconds,1,0.0038996,s
+baseline-trial1,modes_median_seconds,2,0.0012269000000000002,s
+baseline-trial1,modes_median_seconds,3,0.0012204,s
+baseline-trial1,modes_effective_gib_per_s,0,16793322127.36,Bps
+baseline-trial1,modes_effective_gib_per_s,1,17212081438.72,Bps
+baseline-trial1,modes_effective_gib_per_s,2,54696408514.56,Bps
+baseline-trial1,modes_effective_gib_per_s,3,54986318807.04,Bps
+candidate-trial1,modes_median_seconds,0,0.0106868,s
+candidate-trial1,modes_median_seconds,1,0.0105513,s
+candidate-trial1,modes_median_seconds,2,0.0024356,s
+candidate-trial1,modes_median_seconds,3,0.0024281000000000003,s
+candidate-trial1,modes_effective_gib_per_s,0,12562779340.8,Bps
+candidate-trial1,modes_effective_gib_per_s,1,12723840614.4,Bps
+candidate-trial1,modes_effective_gib_per_s,2,55104430407.68,Bps
+candidate-trial1,modes_effective_gib_per_s,3,55276229099.52,Bps

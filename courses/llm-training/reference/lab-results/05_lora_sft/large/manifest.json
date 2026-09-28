@@ -1,0 +1,84 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "f70472f687519a032c5cca63f5818c0e3e020d5dfae72fd711ec5191a065f4c8",
+      "sha256": "2cc69d5201fdbbba1655da3bf239749ff2a58ad8931788aa05545fc17ca3b2c0",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "aaf44f7447e231b4c499be5c9475c6baa072acb79220edfd219aab21456fbf5a",
+      "sha256": "85d77a363f716f24625c07d89e222215560920ddd470d8595185cf4995530371",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "6d2ea1ed2db35b89e761dc2c95001922423d2038d99d793718eab932559db10e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "edbe973e782fc4045c9a3dee1477226dbff16766472894403db82849713325f7",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "00e9a61cc809c126edfeabb9fbb46aaba9cfc025615ac21322e0e40df4851291",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "6f9f84b022d63ab3973285615a754373f56bc7960763b96ddac9a2cb779fde5f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view5.png",
+      "sha256": "0006ead4239a1fc99573aa5f74800737c93f9279fd8717214f12bd8fcb79315d",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "fea2de54a2cbfbdb187d56d55ca5a240a44834a1fb395321345cb905cb54965d",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "226aeb3c2b154af5a1d6143801f4455fec0a107084484cd06aeb163bcb599624",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "a32bb18e52930623e8cd67195a8a3359cb68430dd4d6d272dab5ee729691660a",
+      "tool": "compute"
+    }
+  ],
+  "course": "llm-training",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "05_lora_sft",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "unlocked-gpu-clocks"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "47b4b493a3a70ef1a3a6e68f04578f17051ef60c10cae264ba9ebac8e9dcc086",
+  "summary_sha256": "5afc3ad856a7827bada9cca1c784681f42e23b88ff12d5648f4751f866ed3a83"
+}

@@ -1,0 +1,65 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "7983e7bf02c6a1762542967df259fcc6ea633f1824b91bcb4d0bc052c9c943e6",
+      "sha256": "08ad221de4cfdae8cb0c5fc9aae2d529c089355754dff26bc2217b3a8d55cf12",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "f16ace5bc2751af40a56a6b78a234a00b91c367b64d95de12b8f120c8f0bd40c",
+      "sha256": "08ad221de4cfdae8cb0c5fc9aae2d529c089355754dff26bc2217b3a8d55cf12",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-baseline-repeat-qualification.png",
+      "sha256": "0aecd51e96965a87e693678b456b6137965bc0d6e92153809dd0549aaee1148b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-repeat-world-size.png",
+      "sha256": "bb9cec5f03db1a59cce85684025c6aa8848d1ead8fd91ab209bf6c3145c16a7e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-repeat-distinct-host-count.png",
+      "sha256": "fa8c4b5833345ffa5d7d6f9d7ad23d575626a00226a95d5e31b00e8ff51140f3",
+      "tool": "grafana"
+    },
+    {
+      "file": "nsight-systems-baseline-rank0-timeline.png",
+      "sha256": "a5b21aa91aa65fc654ef6c75860e45f446e5044eb17263ced6feac7aa41e4d75",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "03_training_readiness",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "64144a9e60566b1d63bb858b4cedac11101d2cca1f1278dab2788b9e90fa29dc"
+}

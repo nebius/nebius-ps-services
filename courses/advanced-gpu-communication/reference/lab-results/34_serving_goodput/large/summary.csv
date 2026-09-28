@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,goodput_per_second,value,3.500076518754886,reqps
+baseline-trial1,requests_per_second,value,3.500076518754886,reqps
+baseline-trial1,ttft_p99_seconds,value,0.49332148585,s
+baseline-trial1,request_mean_itl_p99_seconds,value,0.0168414522980315,s
+candidate-trial1,goodput_per_second,value,5.6126949068922425,reqps
+candidate-trial1,requests_per_second,value,5.6126949068922425,reqps
+candidate-trial1,ttft_p99_seconds,value,0.9311649983700001,s
+candidate-trial1,request_mean_itl_p99_seconds,value,0.02112223325905512,s

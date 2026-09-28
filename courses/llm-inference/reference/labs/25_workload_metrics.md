@@ -4,7 +4,7 @@ Long inputs and long output sequences stress different parts of an inference wor
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 5 for ISL, OSL, recurrence and the difference between parallel input work and dependent updates. The operator fixture and the operations included in its four timing cases are explained below; it does not generate tokens.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/25_workload_metrics.json).
 
 Use one H100 in the mechanics environment. The four cases combine input lengths 128/2048 with 32/512 recurrent iterations. The `--concurrency` option controls simultaneous batch rows here, not concurrent HTTP requests.
 
@@ -14,21 +14,32 @@ Shape-dependent Tensor Core efficiency and HBM/KV pressure make H100 performance
 
 The program computes a dense projection over all input positions, selects the last projected state, then applies repeated `tanh(state @ weight)` updates. It times projection, one recurrent step, the recurrence sequence, and the joined projection-plus-recurrence workload independently. There is no attention, KV cache, vocabulary head, sampling, or token output; the recurrence count is not a real model's OSL schedule.
 
-## Practice
-
 Given traffic weights of 60 percent at 128/128, 30 percent at 4,096/32, and 10 percent at 128/1,024, use these weights to construct the actual mixed request stream and measure completed output tokens divided by a common wall interval. Do not take a weighted arithmetic mean of isolated throughputs: batching and queueing couple requests, and even serial rate aggregation generally needs a different model. Change the long-prompt share during a scheduled batch window. Expected observation: TTFT and chunked-prefill policy may need a different qualified profile even when daily-average throughput appears unchanged.
 
-Run Lab 25's four input-length/recurrent-work cells at several batch-row counts. It executes projection and recurrent matmuls, not attention, cache growth, vocabulary sampling, or generated tokens. Its operator rates illustrate shape effects only. Use Lab 18 to compare equivalent real-model padded/bucketed prefill prompts, and use the live engine workload generator for actual ISL × OSL × request-concurrency experiments.
+The four input-length/recurrent-work cells execute projection and recurrent matmuls, not attention, cache growth, vocabulary sampling, or generated tokens. Their operator rates illustrate shape effects only; actual input/output-token and request-concurrency measurements require a qualified serving engine.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Compare batch-row counts while keeping the four length/work cells fixed. Begin with the smaller batch and retain all cells rather than selecting only a favorable point.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile smoke --concurrency 1
-sbatch slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile smoke --concurrency 4
+python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1
+python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 4
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 25_workload_metrics --job "$LAB_JOB_ID"
+```
 
 Require four executed cells, declared operator counts, and finite recurrence output. Inspect `projected_input_rows`, `recurrent_row_updates`, phase distributions, joined timing, and row-updates/s. The joined rate uses a directly measured joined interval, not a sum of phase medians. Finiteness is not an independent numerical reference check.
 
@@ -36,17 +47,58 @@ For a separately qualified live-engine workload experiment, record workload dist
 
 Engine comparisons are meaningful only for the same workload matrix and arrival model.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Workload cells / case / input projection / median (seconds) | `workload_cells.*.input_projection.median_ms` | `s` |
+| Workload cells / case / one recurrent step / median (seconds) | `workload_cells.*.one_recurrent_step.median_ms` | `s` |
+| Workload cells / case / joined projection and recurrence / median (seconds) | `workload_cells.*.joined_projection_and_recurrence.median_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 25_workload_metrics \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Which operation grows with input length and which with iteration count? Why can batching improve matrix efficiency while increasing latency per completed batch? Contrast these simplified costs with real attention and cache growth omitted here.
 
 More cells improve representativeness but increase runtime and model-serving cost. Synthetic fixed-length requests isolate mechanisms; natural prompts capture tokenizer and stop behavior. Both are useful when labeled.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Do not interpret row-updates/s as output tokens/s or one recurrent-step duration as ITL. Non-finite states invalidate the cell. Memory exhaustion requires a smaller declared workload, not silently skipped cells.
 
 Avoid benchmarking one convenient prompt and generalizing to every serving workload.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

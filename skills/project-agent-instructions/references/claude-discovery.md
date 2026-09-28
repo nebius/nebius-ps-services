@@ -1,5 +1,9 @@
 # Claude Discovery
 
+This reference governs managed generation only. Explicit human-rule repair
+reads the active native instruction chain and patches the authorized human-owned
+clauses directly; it requires neither an AGENTS import nor helper declarations.
+
 Use the same canonical `AGENTS.md` ownership, managed tail, approval, rendering,
 paired spec receipt, recovery and verification workflow on Claude. Inspect with
 `--agent claude --agent-home <native-home>`; the Codex variant uses

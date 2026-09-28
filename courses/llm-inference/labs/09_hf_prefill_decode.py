@@ -10,13 +10,14 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     resolve_int_override,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 class GenerationStep(NamedTuple):
@@ -62,11 +63,11 @@ def main() -> None:
     require_hf_commit_revision(args.revision)
     new_tokens = resolve_int_override(
         args.new_tokens,
-        32 if args.profile == "smoke" else 128,
+        32 if args.profile == "small" else 128,
         option="--new-tokens",
     )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
     except ImportError as exc:
@@ -89,8 +90,9 @@ def main() -> None:
         .to("cuda")
         .eval()
     )
+    model_forward = annotated_operation(model, "model_forward")
     base_prompt = "Explain in two sentences why GPU benchmarks need warm-up iterations."
-    prompt = base_prompt if args.profile == "smoke" else " ".join([base_prompt] * 64)
+    prompt = base_prompt if args.profile == "small" else " ".join([base_prompt] * 64)
     tokenized = tokenizer(prompt, return_tensors="pt").to("cuda")
     prompt_tokens = int(tokenized.input_ids.shape[1])
     schedule = generation_schedule(prompt_tokens=prompt_tokens, new_tokens=new_tokens)
@@ -119,7 +121,7 @@ def main() -> None:
             end = torch.cuda.Event(enable_timing=True) if record_timings else None
             if start is not None:
                 start.record()
-            output = model(
+            output = model_forward(
                 **inputs,
                 cache_position=cache_position,
                 past_key_values=cache,
@@ -198,4 +200,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

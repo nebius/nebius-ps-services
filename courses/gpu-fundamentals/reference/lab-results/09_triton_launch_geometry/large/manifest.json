@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "11936321df2f28cd024608206e1efa7376b0973c32b18b62d812e8947bb966ea",
+      "sha256": "adeb052b239657a5bd88103e19e871a8a7797df58376466de9d6603ddaf8d478",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "1476e3699343f3d3c55ac9b7c644155f5ffcf15663ca57542c730c2cfae23167",
+      "sha256": "adeb052b239657a5bd88103e19e871a8a7797df58376466de9d6603ddaf8d478",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "58bf1d6c39923ccd226caf551afff59ac999dcb224a3bf416d0a3f0774d5f0ae",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "59612eff51abf99c5ec1135aff3d5a4176623af2540e098e6cf18d32c282c7c2",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "384f810b8b268962a3b74c7f68dd99a7fb2af7bc23b8cd64345d3674a9cab1ce",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "fbac4b7654ea336e4e0d68f5ec06edb49dd65b0876a40d6401caf602066e4dd7",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "49ecd0dc249568c57b90a86aef24eb93afcfc7d27dda270d324175555dba013a",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "09_triton_launch_geometry",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "61c64332af6e0b59fea42c962bff3f9285d00be21bd3b6893b24584717ced363"
+}

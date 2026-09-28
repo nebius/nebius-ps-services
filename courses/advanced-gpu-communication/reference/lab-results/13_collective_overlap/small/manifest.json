@@ -1,0 +1,70 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "a86a625801fe4730d061c87b1a84d247fb107ed9b3362c61864289cae393b953",
+      "sha256": "ec940269c27fbc3669f4d860941353fa7cab4b7f95e993a75185f04d0b67ba1f",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "5e42c2d7bba5e5fdb69c8150efc132fec0f2be15cb0c263c96e75bc946c4c599",
+      "sha256": "f7a82216275716fe9420d1761ad65ad006af288f7043c8c54462efbf66fe6c4e",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-baseline-repeat-trial1-overview.png",
+      "sha256": "93a20566565613a0f3669d58a95fe1e177aa9f4843b9c39c78a9912de9f52600",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-repeat-trial1-serialized-median-seconds-page1.png",
+      "sha256": "0259d156ed44f52941cc5e17831652958bbe74c84f36c930d8d437b00f74f20e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-repeat-trial1-overlapped-median-seconds-page1.png",
+      "sha256": "1dc7182075996ac6acc939abf3f7816b1bc9647887c6b51978d285034b048111",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-baseline-repeat-trial1-serialized-to-overlap-ratio-page1.png",
+      "sha256": "30c6b12d3ac0be342b5c8258d25c5d724376ccb33c64e257460ee628ce4c2424",
+      "tool": "grafana"
+    },
+    {
+      "file": "nsight-systems-baseline-rank0-timeline.png",
+      "sha256": "2f62bd924a9987001f35bdf5ac733536eefe3bd6240bb257462ffc392f49bf75",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "13_collective_overlap",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "b55a9f25dd18a3ba0528e4ca5046052f5693613cd7e0cbb9ac22d08daeb389b0"
+}

@@ -6,6 +6,20 @@ skills repo. It packages the design, templates, and validation workflow needed
 to configure Codex without publishing personal paths, private state, or
 secrets.
 
+The global instruction template reuses task authorization for necessary new
+credentials and secrets, permits only secure operational storage of values,
+and avoids repeated confirmation for the same action. Explicit requests may
+repair restrictive human-owned project rules; generated regions retain their
+owning workflow. Uncovered access expansion, destructive credential replacement
+and secret disclosure remain outside ordinary task authority.
+
+Task authorization covers necessary skill scripts after inspecting their effects;
+users do not need to repeat approval or name the command. Explicit read-only
+limits, skill invocation restrictions, actual tool controls and effects outside
+the authorized task remain binding. When explicitly asked to repair global
+instructions, patch the identified obsolete clause even if it is human-owned
+and outside the managed block; preserve unrelated rules and ordering.
+
 ## What It Does
 
 The skill helps a user create or align this local layout:
@@ -704,3 +718,12 @@ complete hook bundle for Task Implementer and SDLC on Claude.
 Codex configuration reconciliation remains owned by `config-codex`. Its copied
 hook templates require these shared support files even though the configured
 product and user home remain Codex. See the [catalog installation guide](../README.md#skills-installer).
+
+## Headless browser default
+
+The Playwright MCP template uses `@playwright/mcp@0.0.81 --headless --browser
+chrome --isolated`. Install Chrome locally. Isolated session storage is discarded
+on close; this does not connect to a personal Chrome profile. Existing config
+is patch-only and requires an explicit request to change its values. Restart
+the client/MCP session after applying a config change. Agent exploration through
+MCP is separate from required Playwright Test acceptance and its evidence.

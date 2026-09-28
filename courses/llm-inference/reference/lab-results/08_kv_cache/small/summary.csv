@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,recompute_decode_median_seconds,value,0.0027892999999999998,s
+baseline-trial1,cached_decode_median_seconds,value,0.0034432,s
+baseline-trial1,key_value_cache_bytes,value,1310720.0,bytes
+repeat-trial1,recompute_decode_median_seconds,value,0.0027481,s
+repeat-trial1,cached_decode_median_seconds,value,0.0033577,s
+repeat-trial1,key_value_cache_bytes,value,1310720.0,bytes

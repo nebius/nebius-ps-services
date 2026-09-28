@@ -1,0 +1,45 @@
+{
+  "correctness": {
+    "probe_bytes_match": true
+  },
+  "lab": "26_kv_capacity",
+  "measurements": {
+    "cases": {
+      "gqa": {
+        "bytes_per_token": 131072,
+        "ideal_gib": 4.0,
+        "kv_heads": 8
+      },
+      "mha": {
+        "bytes_per_token": 524288,
+        "ideal_gib": 16.0,
+        "kv_heads": 32
+      },
+      "mqa": {
+        "bytes_per_token": 16384,
+        "ideal_gib": 0.5,
+        "kv_heads": 1
+      }
+    },
+    "concurrency": 8,
+    "dtype_bytes": 2,
+    "head_dim": 128,
+    "layers": 32,
+    "query_heads": 32,
+    "runtime_overhead_excluded": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "sequence": 4096
+  },
+  "parameters": {
+    "concurrency": 8,
+    "seed": 17,
+    "sequence": 4096,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

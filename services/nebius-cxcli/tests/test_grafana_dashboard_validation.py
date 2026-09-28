@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from importlib import resources
 
 import pytest
@@ -339,7 +340,8 @@ def test_validate_dashboard_fits_reports_dashboard_level_progress(monkeypatch) -
             ),
         ),
     )
-    monkeypatch.setattr(dashboard_validation, "_grafana_base_url", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(dashboard_validation, "grafana_api_endpoint", lambda *_args, **_kwargs: nullcontext(""))
+    monkeypatch.setattr(dashboard_validation, "grafana_api_environment", lambda env: env)
     monkeypatch.setattr(
         dashboard_validation,
         "_grafana_admin_credentials",

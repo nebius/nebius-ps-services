@@ -1,0 +1,39 @@
+{
+  "correctness": {
+    "expected_token_sequence": true,
+    "no_gradients": true,
+    "parameters_unchanged": true
+  },
+  "lab": "35_inference_basics",
+  "measurements": {
+    "generated_tokens": [
+      null
+    ],
+    "gradients_created": false,
+    "parameters_unchanged": true,
+    "steps": [
+      {
+        "logits": [
+          -2.0,
+          4.0,
+          -2.0,
+          -2.0
+        ],
+        "probabilities": [
+          0.0024604559876024723,
+          0.99261873960495,
+          0.0024604559876024723,
+          0.0024604559876024723
+        ]
+      }
+    ]
+  },
+  "parameters": {
+    "device": "cpu",
+    "max_new_tokens": 1,
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,ttft_p50_seconds,value,0.06308374699437991,s
+baseline-trial1,ttft_p99_seconds,value,0.07630153698846698,s
+baseline-trial1,requests_per_second,value,17.550751648362837,reqps
+candidate-trial1,ttft_p50_seconds,value,0.058028937492053956,s
+candidate-trial1,ttft_p99_seconds,value,0.18802452500676736,s
+candidate-trial1,requests_per_second,value,16.295456021498104,reqps

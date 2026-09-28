@@ -1,0 +1,55 @@
+{
+  "correctness": {
+    "all_outputs_consumed_once": true,
+    "every_output_matches_exact_reference": true
+  },
+  "lab": "20_d2h_pipeline",
+  "measurements": {
+    "batches": 16,
+    "in_flight_destination_capacity_bytes": 33554432,
+    "mode": "pipeline",
+    "slots": 2,
+    "synthetic_sink_ms": 0.0,
+    "whole_loop": {
+      "median_ms": 41.5522,
+      "min_ms": 35.4614,
+      "p90_ms": 50.7604
+    },
+    "whole_loop_samples_ms": [
+      48.9242349867709,
+      50.76036602258682,
+      49.21802697936073,
+      44.0159150166437,
+      53.49248900893144,
+      42.987452005036175,
+      39.87380300532095,
+      36.07635901425965,
+      45.59872401296161,
+      38.87809699517675,
+      36.94470401387662,
+      53.89629301498644,
+      42.429653025465086,
+      38.63425899180584,
+      41.86586200376041,
+      40.15678001451306,
+      41.2386049865745,
+      38.078145997133106,
+      35.46140200342052,
+      39.060459996107966
+    ],
+    "workers": 2
+  },
+  "parameters": {
+    "batches": 16,
+    "iterations": 20,
+    "mode": "pipeline",
+    "seed": 17,
+    "sink_ms": 0.0,
+    "slots": 2,
+    "warmup": 5,
+    "workers": 2,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

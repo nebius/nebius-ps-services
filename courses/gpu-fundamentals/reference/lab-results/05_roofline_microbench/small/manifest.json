@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "d8f391d492dee700fd652398fb440850ccb4d3a9932e98da5b6758b76bf74822",
+      "sha256": "772ef4469407c2432c12c08ae46b6bd8b29be6ca2467f0fa634907eb734098cd",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "7947f5ac05af082d394e5f7376e19c03483e7ebaa767cc9a1ab2d98c40a82683",
+      "sha256": "fb55f9a9fa88594f8bc79c63a888af7927d1a75076a13bd02f81b1ba57f72839",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "15108c0602527bdfaf5dfe7f8dd49bbe17212c5c130a659089fe48b2a472fb4f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "2058176180ed8fc5c194f33766d18bcf625bc0557f39e066ccab3ca1b2dea1d8",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "7aeaaf2b3f030e69b0e49f4162a3e3d86e95c5f5442d7f45d696a6abaff1a20e",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "2f5500f10b32e3741afbb9e819b7ce180cb5ed9f97263824c17214f6d71b87f9",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "ab12a7c863abcee837e9b0dedd443567b156bb264bda5c8d0f37ed2216d9cec8",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "05_roofline_microbench",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "c548e9d3ddfab20a45499497b64ab2133e047a8887ed65ac5b1359887733618d"
+}

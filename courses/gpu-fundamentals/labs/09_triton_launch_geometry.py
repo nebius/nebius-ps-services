@@ -8,12 +8,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 try:
     import triton
@@ -48,7 +49,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     if triton is None or scale_kernel is None:
         raise SystemExit(
@@ -56,7 +57,7 @@ def main() -> None:
             "Linux CUDA PyTorch environment."
         )
 
-    element_count = 8_000_003 if args.profile == "smoke" else 64_000_003
+    element_count = 8_000_003 if args.profile == "small" else 64_000_003
     source = torch.randn(element_count, device="cuda", dtype=torch.float32)
     target = torch.empty_like(source)
     reference = source * 1.25
@@ -115,4 +116,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

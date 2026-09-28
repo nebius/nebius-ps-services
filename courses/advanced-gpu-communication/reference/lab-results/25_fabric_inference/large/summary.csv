@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,batch_median_seconds,value,0.001597483002115041,s
+baseline-trial1,tokens_per_second,value,2564033.5418761666,count:tokens/s
+baseline-trial1,peak_allocated_bytes,value,105512960,bytes
+candidate-trial1,batch_median_seconds,value,0.004850014491239563,s
+candidate-trial1,tokens_per_second,value,844533.5591055414,count:tokens/s
+candidate-trial1,peak_allocated_bytes,value,52428800,bytes

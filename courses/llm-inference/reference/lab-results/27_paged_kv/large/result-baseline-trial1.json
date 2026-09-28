@@ -1,0 +1,219 @@
+{
+  "correctness": {
+    "capacity_failure_detected": true,
+    "capacity_failure_is_atomic": true,
+    "completion_recycles_physical_blocks": true,
+    "growth_preserves_mapping": true,
+    "unrelated_request_mapping_preserved": true
+  },
+  "lab": "27_paged_kv",
+  "measurements": {
+    "block_tokens": 16,
+    "demand_worksheet": {
+      "allocated_tokens": 256,
+      "fits": false,
+      "free_blocks": 0,
+      "internal_waste_tokens": 24,
+      "required_blocks": 16,
+      "shortfall_blocks": 12,
+      "useful_tokens": 232
+    },
+    "lifecycle_events": [
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 0,
+            "fits": true,
+            "free_blocks": 4,
+            "internal_waste_tokens": 0,
+            "required_blocks": 0,
+            "shortfall_blocks": 0,
+            "useful_tokens": 0
+          },
+          "block_tables": {},
+          "free_block_ids": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "lengths": {}
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 16,
+            "fits": true,
+            "free_blocks": 3,
+            "internal_waste_tokens": 0,
+            "required_blocks": 1,
+            "shortfall_blocks": 0,
+            "useful_tokens": 16
+          },
+          "block_tables": {
+            "a": [
+              0
+            ]
+          },
+          "free_block_ids": [
+            1,
+            2,
+            3
+          ],
+          "lengths": {
+            "a": 16
+          }
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 48,
+            "fits": true,
+            "free_blocks": 1,
+            "internal_waste_tokens": 15,
+            "required_blocks": 3,
+            "shortfall_blocks": 0,
+            "useful_tokens": 33
+          },
+          "block_tables": {
+            "a": [
+              0
+            ],
+            "b": [
+              1,
+              2
+            ]
+          },
+          "free_block_ids": [
+            3
+          ],
+          "lengths": {
+            "a": 16,
+            "b": 17
+          }
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 64,
+            "fits": true,
+            "free_blocks": 0,
+            "internal_waste_tokens": 30,
+            "required_blocks": 4,
+            "shortfall_blocks": 0,
+            "useful_tokens": 34
+          },
+          "block_tables": {
+            "a": [
+              0,
+              3
+            ],
+            "b": [
+              1,
+              2
+            ]
+          },
+          "free_block_ids": [],
+          "lengths": {
+            "a": 17,
+            "b": 17
+          }
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 64,
+            "fits": true,
+            "free_blocks": 0,
+            "internal_waste_tokens": 30,
+            "required_blocks": 4,
+            "shortfall_blocks": 0,
+            "useful_tokens": 34
+          },
+          "block_tables": {
+            "a": [
+              0,
+              3
+            ],
+            "b": [
+              1,
+              2
+            ]
+          },
+          "free_block_ids": [],
+          "lengths": {
+            "a": 17,
+            "b": 17
+          }
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 32,
+            "fits": true,
+            "free_blocks": 2,
+            "internal_waste_tokens": 15,
+            "required_blocks": 2,
+            "shortfall_blocks": 0,
+            "useful_tokens": 17
+          },
+          "block_tables": {
+            "b": [
+              1,
+              2
+            ]
+          },
+          "free_block_ids": [
+            0,
+            3
+          ],
+          "lengths": {
+            "b": 17
+          }
+        }
+      },
+      {
+        "state": {
+          "accounting": {
+            "allocated_tokens": 64,
+            "fits": true,
+            "free_blocks": 0,
+            "internal_waste_tokens": 30,
+            "required_blocks": 4,
+            "shortfall_blocks": 0,
+            "useful_tokens": 34
+          },
+          "block_tables": {
+            "b": [
+              1,
+              2
+            ],
+            "c": [
+              0,
+              3
+            ]
+          },
+          "free_block_ids": [],
+          "lengths": {
+            "b": 17,
+            "c": 17
+          }
+        }
+      }
+    ],
+    "total_blocks": 4
+  },
+  "parameters": {
+    "block_tokens": 16,
+    "seed": 17,
+    "total_blocks": 4,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

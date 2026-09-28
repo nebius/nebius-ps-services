@@ -1,2 +1,5 @@
 # Local tool configuration
 /.claude/
+
+# Generated browser automation artifacts
+.playwright-mcp/

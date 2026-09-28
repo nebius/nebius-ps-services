@@ -136,6 +136,18 @@ FORBIDDEN_MANAGED_CONTEXT_SNIPPETS = (
     "remediation attempts or 60 active minutes",
     "remediation attempts or 120 active minutes",
 )
+REQUIRED_SCRIPT_AUTHORIZATION_SNIPPETS = (
+    "Task authorization covers necessary skill scripts, including mutations",
+    "Inspect the script's effects before executing it",
+    "Do not require a separate Run/Execute phrase or repeat an approval already given",
+    "Ask only when its effects exceed existing authorization",
+    "Preserve explicit read-only limits, skill invocation restrictions",
+    "actual tool or sandbox controls",
+)
+OBSOLETE_SCRIPT_APPROVAL_RULE = (
+    "Run mutating skill scripts only when the user explicitly asks to run or "
+    "execute that script."
+)
 REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     "Agents may clean up temporary trees they created during the current task",
     "submit that resolved absolute",
@@ -150,7 +162,13 @@ REQUIRED_MANAGED_CONTEXT_SNIPPETS = (
     "marks the affected trial and dependent evidence as intervened",
     "Recovery authorization never makes that evidence valid proof",
     "Production and unconfirmed targets remain read-only without exact action authorization",
-    "actions require action-specific approval in every environment",
+    "An authorized task includes creating new credentials and secrets necessary",
+    "do not request separate approval solely for that creation",
+    "Store values only in the intended secret store or protected runtime file",
+    "IAM access expansion",
+    "require action-specific approval only when not already covered by the user's authorization",
+    "An explicit request to repair restrictive project instructions authorizes",
+    "Preserve unrelated instructions and use the owning workflow for generated regions",
     "Fix the proven causal owner at its authoritative boundary",
     "before the earliest product divergence or first contaminated boundary, whichever came first",
     "Prove prior writers are quiescent",
@@ -457,6 +475,13 @@ def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None
         fail("AGENTS.md is missing", failures)
         return
     template = template_path.read_text(encoding="utf-8")
+    actual_text = compact_markdown_text(actual)
+    if OBSOLETE_SCRIPT_APPROVAL_RULE in actual_text:
+        fail("AGENTS.md retains an obsolete separate script-approval rule", failures)
+        return
+    if not all(needle in actual_text for needle in REQUIRED_SCRIPT_AUTHORIZATION_SNIPPETS):
+        fail("AGENTS.md managed block is stale or incomplete", failures)
+        return
     if actual == template:
         ok("AGENTS.md matches AGENTS.md.template")
         return

@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "4cdbb3871fe69d33c8e504578949e2410efe6c8ea6d8f328e20cbe6245af3f0d",
+      "sha256": "4c90a3e33e7d9c1153f45e9aac92bbe7402ed89a6d1ac654793c231d72bd2229",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "d1810286f6025de3b61fa6560aeb1bfd962bbd9e71131fc34aab2f168c9cc672",
+      "sha256": "4c90a3e33e7d9c1153f45e9aac92bbe7402ed89a6d1ac654793c231d72bd2229",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "29110b54e626c036829db97331dbda8c4a656880b3b32a8fa6ea9f6764cc725a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "b57e0396ae5008b651403b0d5a030c380ee89123e9db7c19a88e42330a26173b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "948ff2ae6c370a296b5b5fb27b4d9a6aa3a65f29f1e8891a21095e427aecf12f",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "e1baf58f1856994ffa5fa32c6420410146751b73c03f33bb584184952ec91447",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "9fd1ad0bbdc3137a338f9b7b4bbdeea98d1fcb052f86220c8fc9eee45e505d54",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "09_triton_launch_geometry",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "eb3cdb2b59ef6219d65c8a697835060925735b1944f62bbb56ff9f3a79458bc1"
+}

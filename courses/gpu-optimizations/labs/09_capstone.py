@@ -11,12 +11,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -25,9 +26,9 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    size = 2_048 if args.profile == "smoke" else 8_192
+    size = 2_048 if args.profile == "small" else 8_192
     device_a = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
     device_b = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
 
@@ -111,7 +112,7 @@ def main() -> None:
             "independent_variable": "torch.compile fullgraph versus eager",
             "controlled_factors": {
                 "dtype": "bfloat16",
-                "input_residency": "both inputs resident on the same H100",
+                "input_residency": "both inputs resident on the same GPU",
                 "shape": [size, size],
                 "operation": "matmul -> SiLU -> add scalar -> tanh",
             },
@@ -123,7 +124,7 @@ def main() -> None:
                 4,
             ),
             "publication_rule": (
-                "report this scoped H100 observation only with profiler evidence; "
+                "report this scoped GPU observation only with profiler evidence; "
                 "do not generalize it to other shapes or versions"
             ),
         },
@@ -136,4 +137,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

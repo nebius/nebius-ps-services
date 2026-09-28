@@ -10,7 +10,7 @@ import subprocess
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
@@ -46,7 +46,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     versions = {
         "framework": torch.__version__,
         "framework_cuda_runtime": torch.version.cuda,

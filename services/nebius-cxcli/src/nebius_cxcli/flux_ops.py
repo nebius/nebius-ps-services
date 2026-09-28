@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -22,8 +23,10 @@ from uuid import uuid4
 import yaml
 from rich.markup import escape
 
+from . import kubernetes_process
 from .github_secrets import detect_github_repo_slug
 from .managed_tools import FLUX_RELEASES_URL, configured_flux_version, resolve_flux_binary
+from .nsight_history import superseded_nsight_attempt_pods
 from .paths import ProjectPaths
 from .soperator_adapter import (
     SOPERATOR_ADAPTER_LABEL,
@@ -49,7 +52,9 @@ from .soperator_flux_graph import (
     SOPERATOR_GRAPH_LABEL_VALUE,
     SOPERATOR_GRAPH_SCHEMA,
 )
+from .soperator_graph_transition import NativeGraphTransition
 from .soperator_install_retry import collector_install_retry_patch, install_retry_pending
+from .soperator_release_order import execution_release_graph
 from .soperator_upgrade_progress import (
     SoperatorProgressEvent,
     SoperatorProgressSink,
@@ -123,6 +128,7 @@ class FluxWaitTarget:
     source_kind: str = ""
     source_name: str = ""
     source_revision: str = ""
+    repository_type: str = ""
     expected_main_identity: SoperatorMainWorkloadIdentity | None = None
 
 
@@ -245,7 +251,14 @@ def _run(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    subprocess.run(cmd, cwd=cwd, check=True, timeout=timeout, env=env)
+    kubernetes_process.run(cmd, cwd=cwd, check=True, timeout=timeout, env=env)
+
+
+def _target_command_text(cmd: Sequence[str], *, extra_env: Mapping[str, str] | None) -> str:
+    try:
+        return shlex.join(kubernetes_process.target_command(cmd, env=extra_env))
+    except ValueError:
+        return "Select an explicit cluster target before inspecting Kubernetes resources."
 
 
 def _captured_command_error(
@@ -255,7 +268,10 @@ def _captured_command_error(
     stdout: str,
     stderr: str,
 ) -> RuntimeError:
-    detail = stderr or stdout or "no diagnostic output"
+    detail = (
+        sanitized_bounded_command_output("\n".join(value for value in (stderr, stdout) if value))
+        or "no diagnostic output"
+    )
     command_name = Path(cmd[0]).name if cmd else "command"
     return RuntimeError(f"{command_name} failed with exit code {returncode}:\n{detail}")
 
@@ -295,7 +311,7 @@ def _run_captured(
     if extra_env:
         env.update(extra_env)
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             cmd,
             cwd=cwd,
             timeout=timeout,
@@ -342,7 +358,7 @@ def _run_filtered_kubectl_apply(
     if extra_env:
         env.update(extra_env)
     try:
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             cmd,
             cwd=cwd,
             timeout=timeout,
@@ -543,7 +559,7 @@ def prepare_soperator_release_sources(
     owns_cache = cache_dir is None
     try:
         repositories = [item for item in documents if item.get("kind") == "HelmRepository"]
-        apply = subprocess.run(
+        apply = kubernetes_process.run(
             ["kubectl", "--cache-dir", str(effective_cache), "apply", "-f", "-"],
             env=env,
             input=yaml.safe_dump_all(repositories, sort_keys=False),
@@ -584,7 +600,7 @@ def prepare_soperator_release_sources(
             failure: Exception | None = None
             observed: dict[str, Any] | None = None
             try:
-                apply = subprocess.run(
+                apply = kubernetes_process.run(
                     ["kubectl", "--cache-dir", str(effective_cache), "apply", "-f", "-"],
                     env=env,
                     input=yaml.safe_dump(desired, sort_keys=False),
@@ -600,7 +616,7 @@ def prepare_soperator_release_sources(
                     )
                 deadline = time.monotonic() + timeout_seconds
                 while True:
-                    result = subprocess.run(
+                    result = kubernetes_process.run(
                         [
                             "kubectl",
                             "--cache-dir",
@@ -658,7 +674,7 @@ def prepare_soperator_release_sources(
                 failure = exc
             finally:
                 if kind == "HelmChart":
-                    patch = subprocess.run(
+                    patch = kubernetes_process.run(
                         [
                             "kubectl",
                             "--cache-dir",
@@ -686,7 +702,7 @@ def prepare_soperator_release_sources(
                         )
             if failure is not None:
                 raise failure
-            verify = subprocess.run(
+            verify = kubernetes_process.run(
                 [
                     "kubectl",
                     "--cache-dir",
@@ -757,7 +773,7 @@ def prepare_soperator_release_sources(
 def _run_kubectl_json_process(
     command: list[str], *, env: Mapping[str, str], timeout: int = 30
 ) -> dict[str, Any]:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         command,
         env=dict(env),
         capture_output=True,
@@ -785,7 +801,7 @@ def _patch_helmrelease_suspend(
     env: Mapping[str, str],
     allow_missing: bool = False,
 ) -> None:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--cache-dir",
@@ -823,7 +839,7 @@ def _remove_helmrelease_suspend(
     cache_dir: Path,
     env: Mapping[str, str],
 ) -> None:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--cache-dir",
@@ -1228,6 +1244,7 @@ def _wait_for_soperator_release_stage(
     poll_interval_seconds: float,
     main_target: FluxWaitTarget | None = None,
     pending_install_retries: Mapping[tuple[str, str], str] | None = None,
+    native_transition: NativeGraphTransition | None = None,
     freeze_main_workload_authority: (
         Callable[[SoperatorMainWorkloadIdentity], SoperatorMainWorkloadIdentity] | None
     ) = None,
@@ -1305,6 +1322,12 @@ def _wait_for_soperator_release_stage(
                         reason=reason,
                     )
             else:
+                if native_transition is not None:
+                    from .soperator_vmagent_recovery import recover_stage
+
+                    if recover_stage(native_transition, contract, payload):
+                        ready = False
+                        break
                 stalled = _true_condition(payload, "Stalled")
                 retry_pending = install_retry_pending(
                     payload, (pending_install_retries or {}).get((namespace, name))
@@ -1332,7 +1355,20 @@ def _wait_for_soperator_release_stage(
         if ready:
             return
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Soperator HelmRelease stage {stage} did not become Ready")
+            condition = _ready_condition(payload) or {}
+            ready_status = condition.get("status")
+            if ready_status not in {"True", "False", "Unknown"}:
+                ready_status = "Unknown"
+            reason = str(condition.get("reason") or "")
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", reason) is None:
+                reason = "Unknown"
+            # Conditions can contain credentials, endpoints and terminal controls.
+            # Report only the declared resource and bounded structured status.
+            raise RuntimeError(
+                f"Soperator HelmRelease stage {stage} did not become Ready; "
+                f"blocking HelmRelease {namespace}/{name} "
+                f"(Ready={ready_status}, reason={reason})"
+            )
         time.sleep(max(0.1, poll_interval_seconds))
 
 
@@ -1385,7 +1421,7 @@ def _request_collector_install_retry(
         return None
     token, patch = request
     if patch:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             [
                 *base,
                 "-n",
@@ -1531,7 +1567,7 @@ def _restore_soperator_kruise_statefulset_defaults(
                 "metadata": {"resourceVersion": resource_version},
                 "spec": {"updateStrategy": {"rollingUpdate": {"partition": 0}}},
             }
-            result = subprocess.run(
+            result = kubernetes_process.run(
                 [
                     "kubectl",
                     "--cache-dir",
@@ -1820,6 +1856,21 @@ def _soperator_raw_child_rows(
     return tuple(sorted(rows, key=lambda row: row["finalName"]))
 
 
+def stable_soperator_documents(
+    documents: Sequence[dict[str, Any]], releases: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """The authored bundle after the release owner's permanent transformations."""
+    stable = copy.deepcopy(list(documents))
+    outer = _staged_soperator_outer_release(stable, releases)
+    spec = outer.setdefault("spec", {})
+    for action in ("install", "upgrade"):
+        spec.setdefault(action, {})["disableWait"] = True
+    bind_auxiliary_cluster(outer, spec.get("values", {}))
+    _normalize_soperator_outer_post_renderers(outer, releases, suspend_children=False)
+    spec["suspend"] = False
+    return stable
+
+
 def _normalize_soperator_outer_post_renderers(
     outer: dict[str, Any],
     releases: Sequence[Mapping[str, Any]],
@@ -1848,12 +1899,9 @@ def _normalize_soperator_outer_post_renderers(
             row = by_upstream.get(target_name)
             if row is None:
                 continue
-            if target_name in patched:
-                raise ValueError(
-                    f"rendered Soperator child {target_name} has duplicate graph patches"
-                )
             if (
-                str(target.get("group") or "") != "helm.toolkit.fluxcd.io"
+                not isinstance(target, dict)
+                or str(target.get("group") or "") != "helm.toolkit.fluxcd.io"
                 or str(target.get("version") or "") != "v2"
                 or str(target.get("kind") or "") != "HelmRelease"
             ):
@@ -1867,10 +1915,30 @@ def _normalize_soperator_outer_post_renderers(
                 raise ValueError(
                     f"rendered Soperator child {target_name} has an invalid graph patch"
                 )
+            # Routing replaces child values before the graph patch renames it.
+            # Retarget that patch too, without counting it as the required rename.
+            if (
+                len(operations) == 1
+                and set(operations[0]) == {"op", "path", "value"}
+                and operations[0].get("op") == "replace"
+                and operations[0].get("path") == "/spec/values"
+                and isinstance(operations[0].get("value"), Mapping)
+            ):
+                target["name"] = row["rawName"]
+                target.pop("namespace", None)
+                continue
+            if target_name in patched:
+                raise ValueError(
+                    f"rendered Soperator child {target_name} has duplicate graph patches"
+                )
             name_operations = [
                 operation for operation in operations if operation.get("path") == "/metadata/name"
             ]
-            if len(name_operations) != 1 or name_operations[0].get("value") != row["finalName"]:
+            if (
+                len(name_operations) != 1
+                or name_operations[0].get("op") != "replace"
+                or name_operations[0].get("value") != row["finalName"]
+            ):
                 raise ValueError(
                     f"rendered Soperator child {target_name} has an invalid final identity"
                 )
@@ -2085,10 +2153,103 @@ def _existing_soperator_release_frontier(
     return active
 
 
+def restore_fast_soperator_admission(
+    paths: ProjectPaths,
+    *,
+    extra_env: dict[str, str] | None,
+    assert_authority: Callable[[], object],
+    freeze_main_workload_authority: Callable[
+        [SoperatorMainWorkloadIdentity], SoperatorMainWorkloadIdentity
+    ],
+    timeout_seconds: int = 600,
+) -> None:
+    """Restore desired ordinary admission through the umbrella, without restaging children."""
+    contract = _rendered_soperator_graph_contract(paths.flux_dir)
+    if not isinstance(contract, Mapping):
+        raise ValueError("Fast admission has no rendered release graph")
+    contract = execution_release_graph(contract)
+    releases = contract["releases"]
+    env = {**os.environ, **(extra_env or {})}
+    build = kubernetes_process.run(
+        ["kubectl", "kustomize", str(paths.flux_dir)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    documents = stable_soperator_documents(
+        [row for row in yaml.safe_load_all(build.stdout) if isinstance(row, dict)], releases
+    )
+    outer = _staged_soperator_outer_release(documents, releases)
+    from .soperator_deployment_profile import auxiliary_checks_suspended
+
+    if not auxiliary_checks_suspended(outer["spec"].get("values", {})):
+        raise ValueError("Fast admission requires frozen fast deployment coverage")
+    values = [
+        row
+        for row in documents
+        if row.get("kind") == "ConfigMap"
+        and row.get("metadata", {}).get("name") == "terraform-fluxcd-values"
+    ]
+    if len(values) != 1:
+        raise ValueError("Fast admission requires exact values evidence")
+    assert_authority()
+    kubernetes_process.run(
+        ["kubectl", "apply", "-f", "-"],
+        env=env,
+        input=yaml.safe_dump_all([values[0], outer], sort_keys=False),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    with tempfile.TemporaryDirectory(prefix="cxcli-fast-admission-") as directory:
+        cache = Path(directory)
+        while True:
+            assert_authority()
+            observed = _run_kubectl_json_process(
+                [
+                    "kubectl",
+                    "-n",
+                    outer["metadata"]["namespace"],
+                    "get",
+                    "helmrelease",
+                    outer["metadata"]["name"],
+                    "-o",
+                    "json",
+                ],
+                env=env,
+            )
+            if _generation_ready(observed):
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Fast admission umbrella did not converge")
+            time.sleep(2)
+        selected = [row for row in releases if row.get("isMain") is True]
+        targets = [
+            target for target in _flux_wait_targets(paths.flux_dir) if target.is_soperator_main
+        ]
+        if len(selected) != 1 or len(targets) != 1:
+            raise ValueError("Fast admission requires one main workload")
+        _wait_for_soperator_release_stage(
+            {**contract, "releases": selected},
+            int(selected[0].get("stage", 0)),
+            cache_dir=cache,
+            env=env,
+            timeout_seconds=max(1, int(deadline - time.monotonic())),
+            poll_interval_seconds=2,
+            main_target=targets[0],
+            freeze_main_workload_authority=freeze_main_workload_authority,
+        )
+
+
 def apply_staged_soperator_release(
     paths: ProjectPaths,
     *,
     retired_release: Mapping[str, str] | None = None,
+    native_transition: NativeGraphTransition | None = None,
     checks_policy: SoperatorChecksPolicy | None = None,
     checks_installing: bool = False,
     checks_context: ChecksPhaseContext | None = None,
@@ -2111,6 +2272,7 @@ def apply_staged_soperator_release(
     contract = _rendered_soperator_graph_contract(paths.flux_dir)
     if contract is None:
         raise ValueError("rendered Soperator release graph contract is missing")
+    contract = execution_release_graph(contract)
     releases = contract.get("releases")
     if not isinstance(releases, list) or not releases:
         raise ValueError("rendered Soperator release graph contract is empty")
@@ -2139,7 +2301,7 @@ def apply_staged_soperator_release(
     effective_cache = cache_dir or Path(tempfile.mkdtemp(prefix="nebius-cxcli-stage-cache-"))
     owns_cache = cache_dir is None
     try:
-        build = subprocess.run(
+        build = kubernetes_process.run(
             ["kubectl", "kustomize", str(paths.flux_dir)],
             env=env,
             capture_output=True,
@@ -2208,6 +2370,21 @@ def apply_staged_soperator_release(
             ],
             env=env,
         )
+        retiring = (
+            native_transition is not None and native_transition.state["phase"] != "verified-absent"
+        )
+        fenced_retirement: set[tuple[str, str]] = set()
+        if native_transition is not None:
+            current_payload = {
+                **current_payload,
+                "items": native_transition.frontier(current_payload["items"]),
+            }
+            if retiring:
+                # Fence by exact UID/spec/RV, never a name-only suspend patch.
+                fenced_retirement = native_transition.fence()
+            else:
+                native_transition.assert_cleanup()
+                native_transition.suspend_parent(True)
         existing_releases = _existing_soperator_release_frontier(
             current_payload,
             outer=staged_outer,
@@ -2215,6 +2392,11 @@ def apply_staged_soperator_release(
             retired_release=retired_release,
         )
         for namespace, name in sorted(existing_releases):
+            if native_transition is not None and (namespace, name) == (
+                staged_outer_namespace,
+                staged_outer_name,
+            ):
+                continue
             _patch_helmrelease_suspend(
                 name=name,
                 namespace=namespace,
@@ -2225,7 +2407,9 @@ def apply_staged_soperator_release(
         if recover_interrupted_checks is not None:
             recover_interrupted_checks()
         _wait_for_helmrelease_quiescence(
-            existing_releases,
+            (existing_releases - {(staged_outer_namespace, staged_outer_name)} | fenced_retirement)
+            if retiring
+            else existing_releases,
             cache_dir=effective_cache,
             env=env,
             timeout_seconds=timeout_seconds,
@@ -2235,10 +2419,15 @@ def apply_staged_soperator_release(
         )
         outer_spec = staged_outer.setdefault("spec", {})
         outer_spec["suspend"] = False
-        staged_apply = subprocess.run(
+        staged_apply = kubernetes_process.run(
             ["kubectl", "--cache-dir", str(effective_cache), "apply", "-f", "-"],
             env=env,
-            input=yaml.safe_dump_all(staged_documents, sort_keys=False),
+            input=yaml.safe_dump_all(
+                [document for document in staged_documents if document is not staged_outer]
+                if native_transition is not None
+                else staged_documents,
+                sort_keys=False,
+            ),
             capture_output=True,
             text=True,
             timeout=600,
@@ -2248,6 +2437,12 @@ def apply_staged_soperator_release(
             raise RuntimeError(
                 "failed to apply staged Soperator Flux bundle" + (f": {detail}" if detail else "")
             )
+        if retiring:
+            assert native_transition is not None
+            native_transition.publish(staged_outer)
+            native_transition.wait_absent(timeout=timeout_seconds, interval=poll_interval_seconds)
+        elif native_transition is not None:
+            native_transition.publish_parent(staged_outer)
         _wait_for_suspended_child_inventory(
             contract,
             cache_dir=effective_cache,
@@ -2255,25 +2450,28 @@ def apply_staged_soperator_release(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
         )
-        _patch_helmrelease_suspend(
-            name=staged_outer_name,
-            namespace=staged_outer_namespace,
-            suspend=True,
-            cache_dir=effective_cache,
-            env=env,
-        )
-        stable_documents = copy.deepcopy(final_documents)
+        if native_transition is not None:
+            native_transition.suspend_parent(True)
+        else:
+            _patch_helmrelease_suspend(
+                name=staged_outer_name,
+                namespace=staged_outer_namespace,
+                suspend=True,
+                cache_dir=effective_cache,
+                env=env,
+            )
+        stable_documents = stable_soperator_documents(final_documents, releases)
         stable_outer = _staged_soperator_outer_release(stable_documents, releases)
-        _normalize_soperator_outer_post_renderers(
-            stable_outer,
-            releases,
-            suspend_children=False,
-        )
         stable_outer.setdefault("spec", {})["suspend"] = True
-        stable_apply = subprocess.run(
+        stable_apply = kubernetes_process.run(
             ["kubectl", "--cache-dir", str(effective_cache), "apply", "-f", "-"],
             env=env,
-            input=yaml.safe_dump_all(stable_documents, sort_keys=False),
+            input=yaml.safe_dump_all(
+                [document for document in stable_documents if document is not stable_outer]
+                if native_transition is not None
+                else stable_documents,
+                sort_keys=False,
+            ),
             capture_output=True,
             text=True,
             timeout=600,
@@ -2284,6 +2482,8 @@ def apply_staged_soperator_release(
                 "failed to apply stable Soperator control bundle"
                 + (f": {detail}" if detail else "")
             )
+        if native_transition is not None:
+            native_transition.publish_parent(stable_outer)
 
         receipts: list[SoperatorFluxSourceReceipt] = []
         stages = sorted(
@@ -2336,12 +2536,18 @@ def apply_staged_soperator_release(
                                     remediated_install_release["name"],
                                 )
                             ] = retry_token
-                    _remove_helmrelease_suspend(
-                        name=str(item.get("releaseName") or ""),
-                        namespace=str(item.get("namespace") or FLUX_NAMESPACE),
-                        cache_dir=effective_cache,
-                        env=env,
-                    )
+                    if native_transition is not None:
+                        native_transition.resume_child(
+                            str(item.get("namespace") or FLUX_NAMESPACE),
+                            str(item.get("releaseName") or ""),
+                        )
+                    else:
+                        _remove_helmrelease_suspend(
+                            name=str(item.get("releaseName") or ""),
+                            namespace=str(item.get("namespace") or FLUX_NAMESPACE),
+                            cache_dir=effective_cache,
+                            env=env,
+                        )
                 _wait_for_soperator_release_stage(
                     contract,
                     stage,
@@ -2351,6 +2557,7 @@ def apply_staged_soperator_release(
                     poll_interval_seconds=poll_interval_seconds,
                     main_target=main_target,
                     pending_install_retries=pending_install_retries,
+                    native_transition=native_transition,
                     freeze_main_workload_authority=freeze_main_workload_authority,
                 )
                 release_opened = True
@@ -2408,12 +2615,15 @@ def apply_staged_soperator_release(
                 poll_interval_seconds=poll_interval_seconds,
             )
 
-        _remove_helmrelease_suspend(
-            name=staged_outer_name,
-            namespace=staged_outer_namespace,
-            cache_dir=effective_cache,
-            env=env,
-        )
+        if native_transition is not None:
+            native_transition.suspend_parent(False)
+        else:
+            _remove_helmrelease_suspend(
+                name=staged_outer_name,
+                namespace=staged_outer_namespace,
+                cache_dir=effective_cache,
+                env=env,
+            )
         return tuple(receipts)
     finally:
         if owns_cache:
@@ -2470,7 +2680,7 @@ def prepare_soperator_adapter_storage(
     effective_cache = cache_dir or Path(tempfile.mkdtemp(prefix="nebius-cxcli-adapter-cache-"))
     owns_cache = cache_dir is None
     try:
-        apply = subprocess.run(
+        apply = kubernetes_process.run(
             ["kubectl", "--cache-dir", str(effective_cache), "apply", "-f", "-"],
             env=env,
             input=yaml.safe_dump_all([namespace, *documents], sort_keys=False),
@@ -2495,7 +2705,7 @@ def prepare_soperator_adapter_storage(
         while True:
             ready = True
             for name in daemonsets:
-                result = subprocess.run(
+                result = kubernetes_process.run(
                     [
                         "kubectl",
                         "--cache-dir",
@@ -2573,7 +2783,7 @@ def verify_soperator_adapter_storage(
     env.update(extra_env or {})
     identities: list[dict[str, object]] = []
     for name in daemonsets:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             [
                 "kubectl",
                 "-n",
@@ -2650,7 +2860,7 @@ def _kubectl_json(
     env: Mapping[str, str],
     timeout: int = 30,
 ) -> dict[str, Any] | None:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         command,
         env=dict(env),
         capture_output=True,
@@ -2676,7 +2886,9 @@ def _generation_ready(payload: Mapping[str, Any]) -> bool:
     return _condition_is_ready(payload)
 
 
-def _nodeset_available(payload: Mapping[str, Any]) -> bool:
+def _nodeset_available(
+    payload: Mapping[str, Any], *, power_states: Sequence[Mapping[str, Any]] | None = None
+) -> bool:
     """Validate the native Soperator v1alpha1 NodeSet readiness contract."""
 
     metadata = payload.get("metadata")
@@ -2685,13 +2897,20 @@ def _nodeset_available(payload: Mapping[str, Any]) -> bool:
     generation = metadata.get("generation") if isinstance(metadata, Mapping) else None
     desired = spec.get("replicas") if isinstance(spec, Mapping) else None
     ready = status.get("replicas") if isinstance(status, Mapping) else None
+    if power_states is not None:
+        from .soperator_status_health import active_worker_ordinals
+
+        ordinals = active_worker_ordinals(payload, {"soperator_resources": power_states})
+        if ordinals is None:
+            return False
+        desired = len(ordinals)
     if (
         isinstance(generation, bool)
         or not isinstance(generation, int)
         or generation < 1
         or isinstance(desired, bool)
         or not isinstance(desired, int)
-        or desired < 1
+        or desired < (0 if power_states is not None else 1)
         or isinstance(ready, bool)
         or not isinstance(ready, int)
     ):
@@ -2749,20 +2968,75 @@ def _active_check_available(payload: Mapping[str, Any]) -> bool:
     return False
 
 
-def _required_active_checks_available(payloads: object) -> bool:
+def _required_active_checks_available(
+    payloads: object,
+    *,
+    exemptions: Mapping[str, Any] | None = None,
+    readiness_policy: Mapping[str, Any] | None = None,
+) -> bool:
     if not isinstance(payloads, list):
         return False
     checked_count = 0
+    if exemptions and not set(exemptions) <= {
+        str(p.get("metadata", {}).get("name", "")) for p in payloads if isinstance(p, Mapping)
+    }:
+        return False
+    if readiness_policy and set(readiness_policy) != {
+        str(p.get("metadata", {}).get("name", "")) for p in payloads if isinstance(p, Mapping)
+    }:
+        return False
     for payload in payloads:
         if not isinstance(payload, Mapping):
             return False
         spec = payload.get("spec")
         if not isinstance(spec, Mapping):
             return False
+        name = str(payload.get("metadata", {}).get("name", ""))
+        policy = (readiness_policy or {}).get(name)
+        if policy is not None:
+            from .soperator_checks_contract import verify_check_spec
+
+            try:
+                verify_check_spec(policy["execution"], spec)
+            except RuntimeError:
+                return False
+            if not policy["required"] and name not in (exemptions or {}):
+                status = payload.get("status", {})
+                if any(
+                    status.get(key, {}).get(field) in {"Failed", "Error", "Degraded"}
+                    for key, field in (
+                        ("k8sJobsStatus", "lastJobStatus"),
+                        ("slurmJobsStatus", "lastRunStatus"),
+                    )
+                ):
+                    return False
+                continue
         run_after_creation = spec.get("runAfterCreation", True)
         if not isinstance(run_after_creation, bool):
             return False
         if not run_after_creation:
+            continue
+        exempt = (exemptions or {}).get(str(payload.get("metadata", {}).get("name", "")))
+        if exempt:
+            from .soperator_checks_contract import verify_check_spec
+
+            if not exempt.get("uid") or payload.get("metadata", {}).get("uid") != exempt["uid"]:
+                return False
+            try:
+                verify_check_spec(exempt["execution"], spec)
+            except RuntimeError:
+                return False
+            status = payload.get("status", {})
+            prior = exempt["priorStatus"]
+            for key, field in (
+                ("k8sJobsStatus", "lastJobStatus"),
+                ("slurmJobsStatus", "lastRunStatus"),
+            ):
+                observed = status.get(key, {})
+                if observed.get(field) in {"Failed", "Error", "Degraded"} and observed != prior.get(
+                    key, {}
+                ):
+                    return False
             continue
         checked_count += 1
         if not _active_check_available(payload):
@@ -2779,6 +3053,36 @@ def _storage_backend_digest(spec: Mapping[str, Any]) -> tuple[str, str]:
             ).hexdigest()
             return backend, digest
     return "", ""
+
+
+def _pending_optional_check_pods(pods, *, cluster, releases, env, readiness):
+    """Only source-bound native optional jobs may outlive a readiness wait."""
+    if not isinstance(readiness, Mapping):
+        return set()
+    checks = {
+        name: row["execution"] for name, row in readiness.get("acceptanceExemptions", {}).items()
+    }
+    checks.update(
+        {
+            name: row["execution"]
+            for name, row in readiness.get("acceptanceReadinessPolicy", {}).items()
+            if not row["required"]
+        }
+    )
+    if not checks:
+        return set()
+    return terminal_native_check_pods(
+        pods,
+        cluster=cluster,
+        releases=releases,
+        read=lambda resource: _kubectl_json(
+            ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
+        ),
+        pending_checks=checks,
+        pending_check_uids={
+            name: row["uid"] for name, row in readiness.get("acceptanceExemptions", {}).items()
+        },
+    )
 
 
 def _validate_exact_storage_inventory(
@@ -2851,6 +3155,35 @@ def _validate_exact_storage_inventory(
     return True, ""
 
 
+def _fast_readiness_sources(
+    contract: Mapping[str, Any], *, env: Mapping[str, str]
+) -> dict[tuple[str, str], Mapping[str, Any]] | None:
+    """One live snapshot per readiness pass; never cache mutable readiness across passes."""
+    if contract.get("readiness", {}).get("deploymentProfile") != "fast-dev-test":
+        return None
+    payload = _kubectl_json(
+        ["kubectl", "-n", FLUX_NAMESPACE, "get", "ocirepositories,helmcharts", "-o", "json"],
+        env=env,
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("items"), list):
+        return {}
+    result = {}
+    for item in payload["items"]:
+        if not isinstance(item, Mapping):
+            return {}
+        metadata = item.get("metadata", {})
+        key = (str(item.get("kind") or ""), str(metadata.get("name") or ""))
+        if (
+            key in result
+            or not key[1]
+            or metadata.get("namespace") != FLUX_NAMESPACE
+            or key[0] not in {"OCIRepository", "HelmChart"}
+        ):
+            return {}
+        result[key] = item
+    return result
+
+
 def _soperator_product_readiness(
     contract: Mapping[str, Any],
     *,
@@ -2902,8 +3235,17 @@ def _soperator_product_readiness(
     foreign = family_names - set(expected)
     if foreign:
         return False, "unexpected Soperator HelmReleases exist: " + ", ".join(sorted(foreign))
+    batched_sources = _fast_readiness_sources(contract, env=env)
     for name, row in expected.items():
         release = owned[name]
+        if row.get("acceptanceHooks"):
+            from .soperator_acceptance_hooks import HOOK_CONTROL
+
+            if row["acceptanceHooks"] != HOOK_CONTROL or any(
+                release.get("spec", {}).get(action, {}).get("disableHooks") is not True
+                for action in ("install", "upgrade")
+            ):
+                return False, f"HelmRelease {name} acceptance hook ownership changed"
         if not _generation_ready(release):
             return False, f"HelmRelease {name} is not Ready at its observed generation"
         expected_suspended = (
@@ -2922,18 +3264,22 @@ def _soperator_product_readiness(
             return False, f"HelmRelease {name} is not bound to its locked chartRef"
         source_kind = str(row.get("sourceKind") or "")
         resource = "ocirepository" if source_kind == "OCIRepository" else "helmchart"
-        source = _kubectl_json(
-            [
-                "kubectl",
-                "-n",
-                FLUX_NAMESPACE,
-                "get",
-                resource,
-                str(row.get("sourceName") or ""),
-                "-o",
-                "json",
-            ],
-            env=env,
+        source = (
+            batched_sources.get((source_kind, str(row.get("sourceName") or "")))
+            if batched_sources is not None
+            else _kubectl_json(
+                [
+                    "kubectl",
+                    "-n",
+                    FLUX_NAMESPACE,
+                    "get",
+                    resource,
+                    str(row.get("sourceName") or ""),
+                    "-o",
+                    "json",
+                ],
+                env=env,
+            )
         )
         if source is None or not _condition_is_ready(source):
             return False, f"source for HelmRelease {name} is not Ready"
@@ -3070,6 +3416,21 @@ def _soperator_product_readiness(
             ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
         ),
     )
+    history.update(
+        superseded_nsight_attempt_pods(
+            pods["items"],
+            read=lambda resource: _kubectl_json(
+                ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
+            ),
+        )
+    )
+    optional_pods = _pending_optional_check_pods(
+        pods["items"],
+        cluster=cluster,
+        releases=list(owned.values()),
+        env=env,
+        readiness=readiness,
+    )
     for pod in pods["items"]:
         if not isinstance(pod, Mapping):
             return False, "Soperator Pod inventory is invalid"
@@ -3077,8 +3438,14 @@ def _soperator_product_readiness(
         status = pod.get("status")
         name = str(metadata.get("name") or "?") if isinstance(metadata, Mapping) else "?"
         phase = str(status.get("phase") or "") if isinstance(status, Mapping) else ""
-        if phase == "Succeeded" or (
-            phase == "Failed" and isinstance(metadata, Mapping) and metadata.get("uid") in history
+        if (
+            (isinstance(metadata, Mapping) and metadata.get("uid") in optional_pods)
+            or phase == "Succeeded"
+            or (
+                phase == "Failed"
+                and isinstance(metadata, Mapping)
+                and metadata.get("uid") in history
+            )
         ):
             continue
         conditions = status.get("conditions") if isinstance(status, Mapping) else None
@@ -3105,13 +3472,18 @@ def _soperator_product_readiness(
 
     expected_nodesets = readiness.get("nodeSets") if isinstance(readiness, Mapping) else None
     if isinstance(expected_nodesets, list) and expected_nodesets:
+        fast = (
+            isinstance(readiness, Mapping) and readiness.get("deploymentProfile") == "fast-dev-test"
+        )
         nodeset_payload = _kubectl_json(
             [
                 "kubectl",
                 "-n",
                 "soperator",
                 "get",
-                "nodesets.slurm.nebius.ai",
+                "nodesets.slurm.nebius.ai,nodesetpowerstates.slurm.nebius.ai"
+                if fast
+                else "nodesets.slurm.nebius.ai",
                 "-o",
                 "json",
             ],
@@ -3122,15 +3494,26 @@ def _soperator_product_readiness(
         )
         if not isinstance(nodeset_items, list):
             return False, "NodeSet inventory is unavailable"
+        power_states = None
+        if fast:
+            if any(
+                not isinstance(item, Mapping)
+                or item.get("kind") not in {"NodeSet", "NodeSetPowerState"}
+                for item in nodeset_items
+            ):
+                return False, "NodeSet inventory is invalid"
+            power_states = [item for item in nodeset_items if item["kind"] == "NodeSetPowerState"]
+            nodeset_items = [item for item in nodeset_items if item["kind"] == "NodeSet"]
         actual_nodesets = {
             str(item.get("metadata", {}).get("name") or "")
             for item in nodeset_items
             if isinstance(item, Mapping)
         }
-        if actual_nodesets != set(expected_nodesets):
+        if actual_nodesets != set(expected_nodesets) or len(actual_nodesets) != len(nodeset_items):
             return False, "NodeSet inventory differs from the rendered role topology"
         if any(
-            not isinstance(item, Mapping) or not _nodeset_available(item) for item in nodeset_items
+            not isinstance(item, Mapping) or not _nodeset_available(item, power_states=power_states)
+            for item in nodeset_items
         ):
             return False, "required NodeSets are not Available"
 
@@ -3153,7 +3536,11 @@ def _soperator_product_readiness(
         items = active_checks.get("items") if isinstance(active_checks, Mapping) else None
         if not isinstance(items, list) or not items:
             return False, "required Soperator ActiveChecks are unavailable"
-        if not _required_active_checks_available(items):
+        if not _required_active_checks_available(
+            items,
+            exemptions=readiness.get("acceptanceExemptions"),
+            readiness_policy=readiness.get("acceptanceReadinessPolicy"),
+        ):
             return False, "required Soperator ActiveChecks are not Available"
     return True, "complete Soperator release graph and product are Ready"
 
@@ -3218,22 +3605,29 @@ def _soperator_product_readiness_receipt(
         for row in release_rows
         if isinstance(row, Mapping)
     }
+    batched_sources = _fast_readiness_sources(contract, env=env)
     for kind, name in sorted(source_keys):
         resource = "ocirepository" if kind == "OCIRepository" else "helmchart"
-        source = _require_readiness_payload(
-            [
-                "kubectl",
-                "-n",
-                FLUX_NAMESPACE,
-                "get",
-                resource,
-                name,
-                "-o",
-                "json",
-            ],
-            env=env,
-            label=f"{kind} {name}",
+        source = (
+            batched_sources.get((kind, name))
+            if batched_sources is not None
+            else _require_readiness_payload(
+                [
+                    "kubectl",
+                    "-n",
+                    FLUX_NAMESPACE,
+                    "get",
+                    resource,
+                    name,
+                    "-o",
+                    "json",
+                ],
+                env=env,
+                label=f"{kind} {name}",
+            )
         )
+        if source is None:
+            raise RuntimeError("Could not capture exact batched Flux source evidence")
         sources.append(_object_observation(source, default_namespace=FLUX_NAMESPACE))
     daemonsets = _require_readiness_payload(
         [
@@ -3423,7 +3817,10 @@ def _native_soperator_root_version(item: Mapping[str, Any]) -> str:
 
 
 def _native_soperator_observation(
-    *, expected_release: str, env: Mapping[str, str]
+    *,
+    expected_release: str,
+    env: Mapping[str, str],
+    readiness_policy: Mapping[str, Any] | None = None,
 ) -> tuple[bool, str, SoperatorNativeReadinessReceipt | None]:
     helm_payload = _kubectl_json(
         [
@@ -3531,13 +3928,30 @@ def _native_soperator_observation(
             ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
         ),
     )
+    history.update(
+        superseded_nsight_attempt_pods(
+            pod_items,
+            read=lambda resource: _kubectl_json(
+                ["kubectl", "-n", "soperator", "get", resource, "-o", "json"], env=env
+            ),
+        )
+    )
+    optional_pods = _pending_optional_check_pods(
+        pod_items,
+        cluster=cluster,
+        releases=soperator_releases,
+        env=env,
+        readiness={"acceptanceReadinessPolicy": readiness_policy or {}},
+    )
     for pod in pod_items:
         if not isinstance(pod, Mapping):
             return False, "native Soperator Pod inventory is invalid", None
         pod_status = pod.get("status")
         phase = str(pod_status.get("phase") or "") if isinstance(pod_status, Mapping) else ""
-        if phase == "Succeeded" or (
-            phase == "Failed" and pod.get("metadata", {}).get("uid") in history
+        if (
+            pod.get("metadata", {}).get("uid") in optional_pods
+            or phase == "Succeeded"
+            or (phase == "Failed" and pod.get("metadata", {}).get("uid") in history)
         ):
             continue
         conditions = pod_status.get("conditions") if isinstance(pod_status, Mapping) else None
@@ -3565,7 +3979,7 @@ def _native_soperator_observation(
     active_check_items = active_checks.get("items") if isinstance(active_checks, Mapping) else None
     if not isinstance(active_check_items, list) or not active_check_items:
         return False, "native Soperator ActiveChecks are unavailable", None
-    if not _required_active_checks_available(active_check_items):
+    if not _required_active_checks_available(active_check_items, readiness_policy=readiness_policy):
         return False, "native Soperator ActiveChecks are not Available", None
 
     protected_storage: list[tuple[str, str, str]] = []
@@ -3641,6 +4055,7 @@ def _native_soperator_observation(
 def wait_for_native_soperator_release(
     *,
     expected_release: str,
+    readiness_policy: Mapping[str, Any] | None = None,
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 5400,
     poll_interval_seconds: float = 10.0,
@@ -3660,6 +4075,7 @@ def wait_for_native_soperator_release(
         ready, detail, receipt = _native_soperator_observation(
             expected_release=normalized_release,
             env=env,
+            readiness_policy=readiness_policy,
         )
         if ready and receipt is not None:
             if emit:
@@ -3684,11 +4100,29 @@ def wait_for_soperator_release_graph(
     poll_interval_seconds: float = 10.0,
     emit: Callable[[str], None] | None = None,
     include_active_checks: bool = True,
+    acceptance_exemptions: Mapping[str, Any] | None = None,
+    readiness_policy: Mapping[str, Any] | None = None,
     main_workload_identity: SoperatorMainWorkloadIdentity | None = None,
 ) -> SoperatorProductReadinessReceipt | None:
     contract = _rendered_soperator_graph_contract(paths.flux_dir)
     if contract is None:
         return None
+    if acceptance_exemptions:
+        contract = {
+            **contract,
+            "readiness": {
+                **contract.get("readiness", {}),
+                "acceptanceExemptions": dict(acceptance_exemptions),
+            },
+        }
+    if readiness_policy:
+        contract = {
+            **contract,
+            "readiness": {
+                **contract.get("readiness", {}),
+                "acceptanceReadinessPolicy": dict(readiness_policy),
+            },
+        }
     if not include_active_checks:
         contract = dict(contract)
         readiness = contract.get("readiness")
@@ -3767,6 +4201,7 @@ def wait_for_soperator_noop_readiness(
     paths: ProjectPaths,
     *,
     expected_release: str,
+    readiness_policy: Mapping[str, Any] | None = None,
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 5400,
     poll_interval_seconds: float = 10.0,
@@ -3789,6 +4224,7 @@ def wait_for_soperator_noop_readiness(
             timeout_seconds=timeout_seconds,
             poll_interval_seconds=poll_interval_seconds,
             emit=emit,
+            readiness_policy=readiness_policy,
         )
         if receipt is None:
             raise RuntimeError("rendered Soperator graph readiness authority disappeared")
@@ -3799,6 +4235,7 @@ def wait_for_soperator_noop_readiness(
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         emit=emit,
+        readiness_policy=readiness_policy,
     )
 
 
@@ -3934,6 +4371,11 @@ def _flux_wait_targets(
                 source_kind=str((graph_row or {}).get("sourceKind") or ""),
                 source_name=str((graph_row or {}).get("sourceName") or ""),
                 source_revision=str((graph_row or {}).get("revision") or ""),
+                repository_type=(
+                    str(doc.get("spec", {}).get("type", "default"))
+                    if kind == "HelmRepository"
+                    else ""
+                ),
                 expected_main_identity=(
                     main_workload_identity if (graph_row or {}).get("isMain") is True else None
                 ),
@@ -4032,7 +4474,7 @@ def _kubectl_get_target(
         cmd.extend(["-n", target.namespace])
     cmd.extend(["-o", "json"])
     try:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             cmd,
             env=env,
             capture_output=True,
@@ -4235,6 +4677,25 @@ def _format_flux_target_summary(
             ),
         )
 
+    if (
+        target.kind == "HelmRepository"
+        and target.repository_type == "oci"
+        and payload.get("kind") == "HelmRepository"
+        and payload.get("metadata", {}).get("name") == target.name
+        and payload.get("metadata", {}).get("namespace") == target.namespace
+        and not payload.get("metadata", {}).get("deletionTimestamp")
+        and payload.get("spec", {}).get("type") == "oci"
+    ):
+        return FluxTargetStatus(
+            target=target,
+            is_ready=True,
+            has_ready_condition=False,
+            is_terminal_failure=False,
+            failure_reason="",
+            failure_message="",
+            summary=f"[green]{target.kind}[/green] {escape(label)}: "
+            "[green]Available[/green] (OCI data object; no Ready status)",
+        )
     ready = _ready_condition(payload)
     stalled = _stalled_condition(payload)
     if stalled is not None and _condition_status_true(stalled):
@@ -4327,7 +4788,7 @@ def _flux_status_block(
     *,
     env: dict[str, str],
     started_at: float,
-) -> tuple[list[FluxTargetStatus], bool, bool, str]:
+) -> tuple[list[FluxTargetStatus], bool, str]:
     lines: list[str] = []
     ready_count = 0
     statuses: list[FluxTargetStatus] = []
@@ -4374,14 +4835,7 @@ def _flux_status_block(
         f"[bold cyan]Flux status[/bold cyan] [dim][{elapsed_label}][/dim] "
         f"[bold]{ready_count}/{total} Ready[/bold]"
     )
-    non_ready_statuses = [status for status in statuses if not status.is_ready]
-    terminal_failures = [status for status in non_ready_statuses if status.is_terminal_failure]
-    only_sources_pending = (
-        bool(non_ready_statuses)
-        and not terminal_failures
-        and all(status.target.is_source for status in non_ready_statuses)
-    )
-    return statuses, ready_count == total, only_sources_pending, "\n".join([header, *lines])
+    return statuses, ready_count == total, "\n".join([header, *lines])
 
 
 def wait_for_rendered_flux_resources(
@@ -4417,7 +4871,7 @@ def wait_for_rendered_flux_resources(
     last_terminal_failures: list[FluxTargetStatus] = []
 
     while True:
-        statuses, all_ready, only_sources_pending, block = _flux_status_block(
+        statuses, all_ready, block = _flux_status_block(
             targets,
             env=env,
             started_at=started_at,
@@ -4436,15 +4890,6 @@ def wait_for_rendered_flux_resources(
             last_emitted = block
             last_emit_time = now
         if all_ready:
-            return
-        if only_sources_pending:
-            if emit:
-                emit(
-                    "[cyan]NOTE:[/cyan] Rendered HelmRelease workloads are Ready. Skipping the remaining wait for Flux "
-                    "source objects that still have no Ready status.\n"
-                    "Check HelmRelease status with:\n"
-                    "kubectl get helmreleases.helm.toolkit.fluxcd.io -A"
-                )
             return
         last_actionable_status = actionable_status
         last_terminal_failures = terminal_failures
@@ -4514,9 +4959,9 @@ def wait_for_rendered_flux_resources(
     raise RuntimeError(
         guidance
         + "\nInspect with `"
-        + " ".join(describe_cmd)
+        + _target_command_text(describe_cmd, extra_env=extra_env)
         + "` and `"
-        + " ".join(events_cmd)
+        + _target_command_text(events_cmd, extra_env=extra_env)
         + "`."
     )
 
@@ -4534,7 +4979,7 @@ def delete_rendered_flux(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    cluster_check = subprocess.run(
+    cluster_check = kubernetes_process.run(
         ["kubectl", "cluster-info"],
         env=env,
         capture_output=True,
@@ -4624,7 +5069,7 @@ def delete_rendered_flux(
             "--wait=true",
             "--timeout=15m",
         ]
-        completed = subprocess.run(
+        completed = kubernetes_process.run(
             delete_command,
             env=env,
             input=delete_manifest,
@@ -4651,7 +5096,7 @@ def flux_controllers_installed(*, extra_env: dict[str, str] | None = None) -> bo
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(
+    result = kubernetes_process.run(
         ["kubectl", "-n", FLUX_NAMESPACE, "get", "deployment", *FLUX_CORE_DEPLOYMENTS],
         env=env,
         capture_output=True,
@@ -4677,7 +5122,7 @@ def flux_bootstrap_resources_installed(*, extra_env: dict[str, str] | None = Non
         ("kustomization", "flux-system"),
     )
     for kind, name in resources:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["kubectl", "-n", FLUX_NAMESPACE, "get", kind, name],
             env=env,
             capture_output=True,
@@ -4761,7 +5206,7 @@ def _get_namespace_payload(
     if extra_env:
         env.update(extra_env)
     try:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["kubectl", "get", "namespace", namespace, "-o", "json"],
             env=env,
             capture_output=True,
@@ -4788,7 +5233,7 @@ def _get_crd_payload(
     if extra_env:
         env.update(extra_env)
     try:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             ["kubectl", "get", "crd", name, "-o", "json"],
             env=env,
             capture_output=True,
@@ -4885,10 +5330,23 @@ def wait_for_flux_namespace_ready(
             last_detail = _namespace_termination_detail(payload)
         if time.monotonic() >= deadline:
             inspect_cmd = (
-                f"kubectl get namespace {FLUX_NAMESPACE} -o yaml && "
-                f"kubectl -n {FLUX_NAMESPACE} get "
-                + ",".join(_FLUX_NAMESPACE_STUCK_RESOURCE_TYPES)
-                + " -o yaml"
+                _target_command_text(
+                    ["kubectl", "get", "namespace", FLUX_NAMESPACE, "-o", "yaml"],
+                    extra_env=extra_env,
+                )
+                + " && "
+                + _target_command_text(
+                    [
+                        "kubectl",
+                        "-n",
+                        FLUX_NAMESPACE,
+                        "get",
+                        ",".join(_FLUX_NAMESPACE_STUCK_RESOURCE_TYPES),
+                        "-o",
+                        "yaml",
+                    ],
+                    extra_env=extra_env,
+                )
             )
             guidance = (
                 f"Flux namespace {FLUX_NAMESPACE!r} is stuck terminating. "
@@ -5055,15 +5513,19 @@ def _install_flux_controller_manifest(
                 timeout=360,
                 extra_env=extra_env,
             )
-    except BaseException:
+    except BaseException as exc:
         _emit_progress(
             progress,
             SoperatorProgressEvent(
                 phase=rollout_phase,
                 state=SoperatorProgressState.FAILURE,
-                description=f"{phase_label} rollout failed",
+                description=f"{phase_label} rollout failed — {deployment}",
             ),
         )
+        if isinstance(exc, RuntimeError):
+            raise RuntimeError(
+                f"Flux controller {FLUX_NAMESPACE}/{deployment} did not complete rollout: {exc}"
+            ) from None
         raise
     wait_for_flux_crds_ready(extra_env=extra_env)
     _emit_progress(
@@ -5237,7 +5699,7 @@ def wait_for_flux_resource_apis(
                 ]
             )
             try:
-                result = subprocess.run(
+                result = kubernetes_process.run(
                     cmd,
                     env=env,
                     capture_output=True,

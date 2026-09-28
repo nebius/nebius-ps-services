@@ -1,0 +1,73 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "cd3dee30f5c5c42c9b338ca3299fac23afaa26244b6dcd4437b2aa6c48e7781e",
+      "sha256": "434813bde86624ed058e6e7589aba05ad1d7784d513b19c710e39653bdca8d0a",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "dddbba6c6cd520b77bcd3756fa83eff3c0148daab10fb65b007e69f3ab04bbca",
+      "sha256": "3f965b6190514fd9bd92dd156ef5ee70a5085339a51e0721e382b0a54d4bf94c",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "2d3e947f595eba8b4fbf8c0c7484f96b646ea46aa57a147f77a209865621c5d0",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "a23695894f4d2c8fffebe4688362658112deab6a24d7d2ce31828e2dc985c309",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "cee34984c5fe05c2157eeab2e3bdf70e97c0097fb89acbb28803ec99398fbead",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "935d90447e669e7684c6ea5b92c4c43728e7e96aad15ec31471fe79c6689a826",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-baseline-rank-1.png",
+      "sha256": "19a453fea0144d24ef9bf1fd549504dbb48e69677bcb21faf53d4d7c98f1c373",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "c8897220e2fcdd94d0130a998db96b689bcc63163970fe7cf407fda44e5009bc",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-1.png",
+      "sha256": "2f69866ee1e1e0885f63015d7a92b0b5d312374581e9cd7b3e4b6329670cfdc5",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "32_dynamo_disaggregation",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "3b3d16cf86136b3ddd1e3662f230cc9fc7d84fab9f2ff5cea5825d480715ce39",
+  "summary_sha256": "a529b9d2c75d688197cf6ed113de4972cecea25313a622e084c974bdb54afe74"
+}

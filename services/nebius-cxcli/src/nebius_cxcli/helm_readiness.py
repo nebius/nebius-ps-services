@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import yaml
+
+from . import kubernetes_process
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class SubprocessHelmCommandRunner:
         env = os.environ.copy()
         env.update(self._extra_env)
         try:
-            completed = subprocess.run(
+            completed = kubernetes_process.run(
                 list(args),
                 input=input_text,
                 text=True,

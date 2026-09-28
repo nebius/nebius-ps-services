@@ -149,10 +149,14 @@ Before design or planning, apply `prompt-requirements-refinement.md`. Compile
 the full Ask and optional headings into `docs/requirements.md`; inspect
 discoverable facts before asking, allocate stable private `Q-*` IDs only for
 material ambiguity, and keep the refinement ledger outside Git. Omission does
-not delete existing product truth. The private `refinement-verify` helper must
-bind the latest accepted revision and intent digest to the exact current
-canonical specs and publish the shared owner's complete impact receipt before
-the workflow can leave requirements.
+not delete existing product truth. If either canonical document is absent, the
+coordinator routes an inert draft-pair bootstrap to `maintain-project-specs`,
+preserving any existing counterpart. The private read-only `refinement-ready`
+helper binds the latest accepted revision and intent to the exact compiled
+requirements before context/design. After ready design and before planning,
+`refinement-verify` rechecks that binding against the exact current canonical
+specs and publishes the complete impact receipt. The first check grants no
+planning, steering-resolution or execution authority.
 
 Only an `active_steering` revision after `r0001` starts with steering status `pending`.
 `sdlc-auto-steering` records exactly one corresponding inbox entry containing

@@ -1,0 +1,79 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "07_resource_sweep",
+  "measurements": {
+    "cases": [
+      {
+        "active_blocks_per_sm": 32,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005248,
+        "p90_ms": 0.00656,
+        "registers_per_thread": 15,
+        "resident_warps": 64,
+        "state_values": 4,
+        "threads": 64
+      },
+      {
+        "active_blocks_per_sm": 16,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005104,
+        "p90_ms": 0.0056,
+        "registers_per_thread": 15,
+        "resident_warps": 64,
+        "state_values": 4,
+        "threads": 128
+      },
+      {
+        "active_blocks_per_sm": 8,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005152,
+        "p90_ms": 0.005568,
+        "registers_per_thread": 15,
+        "resident_warps": 64,
+        "state_values": 4,
+        "threads": 256
+      },
+      {
+        "active_blocks_per_sm": 4,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005152,
+        "p90_ms": 0.005408,
+        "registers_per_thread": 15,
+        "resident_warps": 64,
+        "state_values": 4,
+        "threads": 512
+      },
+      {
+        "active_blocks_per_sm": 8,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005248,
+        "p90_ms": 0.005664,
+        "registers_per_thread": 19,
+        "resident_warps": 64,
+        "state_values": 16,
+        "threads": 256
+      },
+      {
+        "active_blocks_per_sm": 8,
+        "local_bytes_per_thread": 0,
+        "median_ms": 0.005808,
+        "p90_ms": 0.006048,
+        "registers_per_thread": 19,
+        "resident_warps": 64,
+        "state_values": 64,
+        "threads": 256
+      }
+    ],
+    "elements": 4096,
+    "gpu_compute_capability": 9,
+    "maximum_absolute_error": 0,
+    "sm_count": 132
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

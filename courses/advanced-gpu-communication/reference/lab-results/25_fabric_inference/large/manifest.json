@@ -1,0 +1,69 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "d2d94e09437c9e0688e9a994c735444d3d8c0961d878c065b5e2c6c5c9d1d800",
+      "sha256": "478c0dbe4f14133349952f51c6c9012ce22c9610a9396d9ceb9e710ea2257a38",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "813b12e82803276acef62e8d1d04f915f4388a9a70b9be562402a8e62776f2c6",
+      "sha256": "478eb32753de891e8222cdb4bf7bb602945b633426efcaf4d5547913bd38f26c",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "20b93239746a99cf43c5be7e908164c2da41e5f06dab1cbfaba430b52dfe4435",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "eb7f7b8ee066c666b7ddf24dcea90cecd3fe6b6b76765e8ce389d9d60eac719b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "9f4df19a757ec99638a5e7c2d480d599b28440b16e68bc6c66d63976289dff62",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "1ca7f7cf7a35e1e23a5647f01d2fda93ca979e5241355d6c76f97cebc6f0f66e",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "0285dc1845ff0efc7bf9991fb3bef5dda85619ced829009f73b9cb8364dc6d8c",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "25_fabric_inference",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "e6ee76ed39241f68ccde6b8987f985f898cb60b68e4655429910d3191fda1dc4",
+  "summary_sha256": "82d4888c0eb71d8340c67a98fa1519a4ca0e7d712f06501c0d788e261eccff76"
+}

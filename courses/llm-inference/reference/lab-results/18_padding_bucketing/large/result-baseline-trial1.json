@@ -1,0 +1,31 @@
+{
+  "correctness": {
+    "equivalent_last_token_logits": true
+  },
+  "lab": "18_padding_bucketing",
+  "measurements": {
+    "bucketed_padding_tokens": 1080,
+    "bucketed_rectangle_tokens": 4036,
+    "maximum_last_logit_relative_l2": 0.0,
+    "single_batch_padding_tokens": 3960,
+    "single_padded_batch": {
+      "median_ms": 31.1683,
+      "min_ms": 31.0449,
+      "p90_ms": 31.2157
+    },
+    "single_padded_rectangle_tokens": 6916,
+    "two_length_buckets": {
+      "median_ms": 31.9044,
+      "min_ms": 30.915,
+      "p90_ms": 32.3599
+    }
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -12,9 +12,10 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  sbatch [site options] %s [MODEL] [REVISION]\n' "$0"
+  printf 'Usage:\n  python3 tools/submit_lab.py --lab 15_streaming_client [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
   printf '\nStarts pinned vLLM on loopback, runs a bounded streaming AIPerf profile, and stops the server.\n'
 }
 
@@ -36,7 +37,7 @@ if [[ ! ${revision} =~ ^[0-9a-f]{40}$ ]]; then
   printf 'ERROR: REVISION must be an immutable 40-character Hugging Face commit ID.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 course_python=${COURSE_PYTHON:-python3}
 command -v "${course_python}" >/dev/null 2>&1 || { printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2; exit 2; }
 if [[ -z ${COURSE_RUN_ID:-} ]]; then
@@ -46,14 +47,14 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
   printf 'ERROR: COURSE_RUN_ID must be exactly 12 lowercase hex characters.\n' >&2
   exit 2
 fi
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/15_streaming_client/logs" "${course_dir}/results"
 artifact_dir="${course_dir}/results/aiperf-run-${COURSE_RUN_ID}"
 mkdir -m 700 "${artifact_dir}"
 port=$((20000 + SLURM_JOB_ID % 20000))
-server_log="${course_dir}/logs/aiperf-vllm-server-run-${COURSE_RUN_ID}.log"
+server_log="${course_dir}/results/15_streaming_client/logs/aiperf-vllm-server-run-${COURSE_RUN_ID}.log"
 cd "${course_dir}"
 
-"${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" \
+"${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" python3 tools/profile_lab.py --lab 15_streaming_client --server -- \
   vllm serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 --max-model-len 2048 \
   >"${server_log}" 2>&1 &
@@ -63,7 +64,9 @@ cleanup() {
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
   kill "${pid}" 2>/dev/null || true
-  for _ in {1..50}; do
+  local stop_attempts=50
+  if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
     if ! kill -0 "${pid}" 2>/dev/null; then wait "${pid}" 2>/dev/null || true; return; fi
     sleep 0.1
   done
@@ -91,6 +94,7 @@ for _ in {1..120}; do
 done
 if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 240 seconds.\n' >&2; exit 2; fi
 
+"${course_python}" tools/server_capture.py start "${port}"
 "${COURSE_CONTAINER_RUNNER}" "${AIPERF_IMAGE_DIGEST}" \
   aiperf profile --model "${model}" --tokenizer-revision "${revision}" --url "http://127.0.0.1:${port}" \
   --endpoint-type completions --streaming \
@@ -98,3 +102,6 @@ if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM did not become ready within 24
   --output-tokens-mean 128 --output-tokens-stddev 0 \
   --concurrency 4 --warmup-request-count 4 --request-count 24 \
   --output-artifact-dir "${artifact_dir}" --profile-export-prefix profile
+
+"${course_python}" tools/server_capture.py stop "${port}"
+printf 'AIPerf artifacts: %s\n' "${artifact_dir}"

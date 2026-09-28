@@ -17,6 +17,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - the live profile is POSIX-only
     fcntl = None  # type: ignore[assignment]
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 import uuid
 
 
@@ -137,6 +138,9 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 _load_skill_support('runtime', __file__, 'sdlc-workflow-test/scripts/three_tier_lifecycle.py')
 
 import three_tier_browser  # noqa: E402 — verified bootstrap precedes runtime imports
+import owned_git_origin  # noqa: E402 — private fixture owner
+import three_tier_target  # noqa: E402 — read-only workflow checkout binding
+import three_tier_runtime  # noqa: E402 — owned build/deployment evidence
 from three_tier_reporting import report_text  # noqa: E402 — verified bootstrap precedes runtime imports
 from three_tier_semantics import (  # noqa: E402 — verified bootstrap precedes runtime imports
     REQUIRED_GUI_STEPS as REQUIRED_GUI_STEPS,
@@ -154,15 +158,13 @@ from agent_runtime import agent_home, agent_name  # noqa: E402
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v3"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v4"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
 COMPOSE_LABEL = "com.docker.compose.project"
 PHASE_STATUSES = {"PASS", "PARTIAL", "FAIL", "NOT_RUN"}
 FINAL_STATUSES = {"PASS", "PARTIAL", "FAIL"}
-COMPUTER_USE_STAGES = {"capability-discovery", "evaluate-readiness", "uat-readiness"}
-COMPUTER_USE_OUTCOMES = {"PASS", "ENVIRONMENT_DEFECT", "FAIL"}
 PHASE_RESULT_SCHEMA = "agentic-sdlc/phase-result-v4"
 ALLOWED_PHASES = set(REQUIRED_SDLC_PHASES) | {
     "sdlc-classify-failure",
@@ -172,16 +174,20 @@ ALLOWED_PHASES = set(REQUIRED_SDLC_PHASES) | {
 PHASE_REQUIRED_ASSERTIONS = {
     phase: [f"{phase}:completed", "git-identity-bound"] for phase in ALLOWED_PHASES
 }
+EXECUTION_PHASES = {
+    "sdlc-prepare-execution", "sdlc-tdd", "sdlc-implement-plan",
+    "sdlc-validate-codes", "sdlc-unit-tests", "sdlc-evaluate",
+    "sdlc-update-documents", "align", "sdlc-commit", "local-ship",
+    "sdlc-uat-tests", "post-uat-documents", "sdlc-gui-test",
+}
 RESOURCE_KINDS = ("containers", "networks", "volumes", "images")
 GENERATION_GUARDED_COMMANDS = {
     "record-phase",
     "record-validation",
-    "record-computer-use",
     "record-runtime",
-    "launch-browser",
+    "run-browser-stage",
     "close-browser",
     "prepare-images",
-    "record-browser",
     "record-git",
     "run-compose",
     "finish",
@@ -380,10 +386,11 @@ def require_command(args: list[str], label: str) -> str:
 
 
 def detect_browser() -> tuple[str, str]:
-    executable = three_tier_browser.CHROME_EXECUTABLE
-    if executable.is_file() and not executable.is_symlink():
-        return "chrome", three_tier_browser.BROWSER_NAME
-    raise LifecycleError("Google Chrome is not installed at the canonical path.")
+    node_version = require_command(["node", "--version"], "Node.js")
+    if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", node_version) is None or int(node_version[1:].split(".")[0]) < 20:
+        raise LifecycleError("Headless acceptance requires Node.js 20 or later.")
+    require_command(["npm", "--version"], "npm")
+    return "chrome", three_tier_browser.BROWSER_NAME
 
 
 def load_active(root: Path) -> tuple[Path, dict[str, Any]]:
@@ -404,7 +411,7 @@ def assert_active_generation(root: Path, expected_verification_id: str) -> None:
     if state["verification_id"] != expected_verification_id:
         raise LifecycleError(
             "STALE_THREE_TIER_GENERATION: this workflow was superseded by a "
-            "newer --create invocation; stop without further mutation."
+            "newer --create-live-test invocation; stop without further mutation."
         )
 
 
@@ -474,15 +481,6 @@ def validate_state(root: Path, state: dict[str, Any]) -> None:
             or len(set(identifiers)) != len(identifiers)
         ):
             raise LifecycleError(f"Lifecycle {kind} inventory is invalid.")
-    browser_tab = state.get("browser_tab")
-    if not isinstance(browser_tab, dict) or set(browser_tab) != {
-        "title",
-        "url",
-        "closed",
-    }:
-        raise LifecycleError("Lifecycle browser-tab identity is invalid.")
-    if not isinstance(browser_tab["closed"], bool):
-        raise LifecycleError("Lifecycle browser-tab closed state is invalid.")
     try:
         three_tier_browser.validate_state(
             state.get("browser_instance"), verification_id
@@ -503,40 +501,14 @@ def validate_state(root: Path, state: dict[str, Any]) -> None:
         for validation in validations
     ):
         raise LifecycleError("Lifecycle validation records are invalid.")
-    attempts = state.get("computer_use_attempts")
-    if not isinstance(attempts, list) or any(
-        not isinstance(attempt, dict)
-        or set(attempt)
-        != {
-            "stage",
-            "outcome",
-            "action_attempted",
-            "response",
-            "lock_state",
-            "window_visible",
-            "window_frontmost",
-            "current_space",
-            "dedicated_instance",
-            "recorded_at",
-        }
-        or attempt["stage"] not in COMPUTER_USE_STAGES
-        or attempt["outcome"] not in COMPUTER_USE_OUTCOMES
-        or not isinstance(attempt["action_attempted"], bool)
-        or attempt["response"] not in {"success", "error", "timeout"}
-        or any(
-            attempt[key] not in {"yes", "no", "unknown"}
-            for key in (
-                "lock_state",
-                "window_visible",
-                "window_frontmost",
-                "current_space",
-                "dedicated_instance",
-            )
-        )
-        or not isinstance(attempt["recorded_at"], str)
-        for attempt in attempts
+    stages = state.get("browser_stages")
+    if not isinstance(stages, list) or any(
+        not isinstance(item, dict) or set(item) != {"stage", "outcome", "path", "sha256"}
+        or item["stage"] not in three_tier_browser.STAGES
+        or item["outcome"] not in {"PASS", "FAIL"}
+        for item in stages
     ):
-        raise LifecycleError("Lifecycle Computer Use attempt records are invalid.")
+        raise LifecycleError("Lifecycle browser-stage records are invalid.")
     cleanup = state.get("cleanup")
     if (
         not isinstance(cleanup, dict)
@@ -615,6 +587,11 @@ def prepare(root_value: Path) -> dict[str, Any]:
             + "\n",
             encoding="utf-8",
         )
+        try:
+            baseline = owned_git_origin.create_baseline(run_root / "project")
+            owned_git_origin.initialize(run_root / "project", run_root, verification_id)
+        except owned_git_origin.OriginError as error:
+            raise LifecycleError(str(error)) from error
         state: dict[str, Any] = {
             "schema": LIFECYCLE_SCHEMA,
             "scenario": SCENARIO,
@@ -637,16 +614,16 @@ def prepare(root_value: Path) -> dict[str, Any]:
                 "git": git_version,
                 "browser": browser_key,
                 "browser_name": browser_name,
-                "computer_use": "PENDING_AGENT_PREFLIGHT",
+                "headless_browser": "PENDING_PREFLIGHT",
             },
-            "git": {"baseline_sha": None, "promoted_sha": None},
+            "git": {"baseline_sha": baseline, "promoted_sha": None},
             "endpoints": {},
             "resources": {kind: [] for kind in RESOURCE_KINDS},
-            "browser_tab": {"title": None, "url": None, "closed": False},
             "browser_instance": three_tier_browser.initial_state(verification_id),
             "phases": [],
             "validations": [],
-            "computer_use_attempts": [],
+            "browser_stages": [],
+            "browser_bundle": three_tier_browser.freeze_bundle(run_root),
             "semantic_summary": None,
             "cleanup": {
                 "status": "NOT_RUN",
@@ -715,10 +692,15 @@ def validate_phase_pass_artifact(
     project_root = Path(state["project_root"])
     promoted_sha = state["git"].get("promoted_sha")
     if promoted_sha is None:
-        current_head = require_command(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
-            "Phase Git identity",
-        )
+        if phase in EXECUTION_PHASES:
+            current_head = execution_target(
+                state, require_clean=phase not in {"sdlc-tdd", "sdlc-update-documents", "align"}
+            )["head"]
+        else:
+            current_head = require_command(
+                ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+                "Phase Git identity",
+            )
         if current_head != recorded_head:
             raise LifecycleError(f"Phase Git identity is stale: {phase}")
     ancestry_checks = [(baseline_sha, recorded_head, "baseline")]
@@ -767,6 +749,30 @@ def record_phase(
         normalized_evidence.append(candidate.relative_to(run_root).as_posix())
     if status == "PASS":
         validate_phase_pass_artifact(state, phase, normalized_evidence)
+        try:
+            if phase == "sdlc-start" and "workflow_startup" not in state:
+                if state["phases"]:
+                    raise three_tier_target.TargetError(
+                        "Workflow startup cannot be certified after other phase evidence."
+                    )
+                observation = three_tier_target.observe_startup(
+                    state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name()
+                )
+                observation["observed_at"] = utc_now()
+                relative = "evidence/workflow-startup.json"
+                artifact = run_root / relative
+                if artifact.exists() or artifact.is_symlink():
+                    raise three_tier_target.TargetError(
+                        "Workflow startup evidence already exists; do not overwrite it."
+                    )
+                private_json(artifact, observation)
+                state["workflow_startup"] = {
+                    "path": relative,
+                    "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                }
+            three_tier_target.validate_startup_receipt(state)
+        except three_tier_target.TargetError as error:
+            raise LifecycleError(str(error)) from error
     entry = {
         "phase": phase,
         "status": status,
@@ -777,8 +783,6 @@ def record_phase(
     state["phases"] = [
         existing for existing in state["phases"] if existing.get("phase") != phase
     ] + [entry]
-    if phase == "sdlc-uat-tests" and status in {"PASS", "PARTIAL", "FAIL"}:
-        state["environment"]["computer_use"] = status
     state["status"] = "RUNNING"
     update_state(root, state)
     return state
@@ -814,88 +818,6 @@ def record_validation(
     update_state(root, state)
     return state
 
-
-def record_computer_use(
-    root_value: Path,
-    *,
-    stage: str,
-    outcome: str,
-    action_attempted: bool,
-    response: str,
-    lock_state: str,
-    window_visible: str,
-    window_frontmost: str,
-    current_space: str,
-    window_marker: str,
-) -> dict[str, Any]:
-    root = verification_root(root_value, create=False)
-    _, state = load_active(root)
-    if any(item["response"] == "timeout" for item in state["computer_use_attempts"]):
-        raise LifecycleError(
-            "Computer Use service is unhealthy; no later attempt is allowed."
-        )
-    if any(item["stage"] == stage for item in state["computer_use_attempts"]):
-        raise LifecycleError("Computer Use stage already has a terminal record.")
-    expected_marker = state["browser_instance"]["window_marker"]
-    dedicated_instance = "yes" if window_marker == expected_marker else "no"
-    if action_attempted and dedicated_instance != "yes":
-        raise LifecycleError(
-            "Computer Use actions require the exact dedicated Chrome marker."
-        )
-    if outcome == "PASS" and (
-        response != "success"
-        or lock_state != "no"
-        or window_visible != "yes"
-        or window_frontmost != "yes"
-        or current_space != "yes"
-        or dedicated_instance != "yes"
-    ):
-        raise LifecycleError(
-            "Computer Use PASS requires a successful unlocked, visible, "
-            "frontmost, current-Space capture."
-        )
-    if dedicated_instance == "yes":
-        try:
-            three_tier_browser.assert_owned_running(
-                Path(state["run_root"]),
-                state["verification_id"],
-                state["browser_instance"],
-            )
-        except three_tier_browser.BrowserOwnershipError as error:
-            raise LifecycleError(str(error)) from error
-    if outcome == "ENVIRONMENT_DEFECT" and action_attempted:
-        raise LifecycleError(
-            "Computer Use environment defects must be recorded before any action."
-        )
-    if outcome == "FAIL" and not action_attempted:
-        raise LifecycleError(
-            "Computer Use action failure requires an attempted action."
-        )
-    entry = {
-        "stage": stage,
-        "outcome": outcome,
-        "action_attempted": action_attempted,
-        "response": response,
-        "lock_state": lock_state,
-        "window_visible": window_visible,
-        "window_frontmost": window_frontmost,
-        "current_space": current_space,
-        "dedicated_instance": dedicated_instance,
-        "recorded_at": utc_now(),
-    }
-    candidate = dict(state)
-    candidate["computer_use_attempts"] = [*state["computer_use_attempts"], entry]
-    validate_state(root, candidate)
-    state.update(candidate)
-    state["environment"]["computer_use"] = (
-        "FAIL"
-        if any(
-            attempt["outcome"] != "PASS" for attempt in state["computer_use_attempts"]
-        )
-        else "PASS"
-    )
-    update_state(root, state)
-    return state
 
 
 def resource_identifier_valid(value: str) -> bool:
@@ -1114,7 +1036,24 @@ def discover_owned_resources(state: dict[str, Any]) -> dict[str, list[str]]:
     return discovered
 
 
-def run_owned_compose(state: dict[str, Any], compose_args: list[str]) -> str:
+def execution_target(
+    state: dict[str, Any], *, require_clean: bool = True,
+    worker_task: str | None = None, assignment_digest: str | None = None,
+) -> dict[str, str]:
+    try:
+        return three_tier_target.resolve_target(
+            state, skills_root=Path(__file__).resolve().parents[2], agent=agent_name(),
+            require_clean=require_clean,
+            worker_task=worker_task, assignment_digest=assignment_digest,
+        )
+    except three_tier_target.TargetError as error:
+        raise LifecycleError(str(error)) from error
+
+
+def run_owned_compose(
+    state: dict[str, Any], compose_args: list[str], *,
+    worker_task: str | None = None, assignment_digest: str | None = None,
+) -> str:
     """Run one bounded Compose action under the caller's generation lock."""
     arguments = list(compose_args)
     if arguments and arguments[0] == "--":
@@ -1141,6 +1080,31 @@ def run_owned_compose(state: dict[str, Any], compose_args: list[str]) -> str:
         raise LifecycleError(
             "Owned Compose action cannot override project identity, files, or scale."
         )
+    target = execution_target(
+        state, require_clean=False, worker_task=worker_task,
+        assignment_digest=assignment_digest,
+    )
+    builds = arguments[0] == "build" or (arguments[0] == "up" and "--build" in arguments)
+    restart_before = None
+    if arguments in (["restart"], ["restart", "web", "db"]):
+        receipts = three_tier_browser.validate_receipts(state, require_complete=False)
+        if receipts and receipts[-1]["stage"] == "uat-before-restart":
+            restart_before = receipts[-1]
+            state.pop("browser_restart", None)
+            update_state(Path(state["verification_root"]), state)
+    build_model = None
+    if builds:
+        state["runtime_build"] = None
+        update_state(Path(state["verification_root"]), state)
+        clean = command(["git", "-C", target["path"], "status", "--porcelain", "--untracked-files=all"])
+        canonical_build = arguments in (["build"], ["build", "web"]) or (
+            arguments[0] == "up" and "--build" in arguments and "db" not in arguments
+        )
+        if canonical_build and clean.returncode == 0 and not clean.stdout.strip():
+            try:
+                build_model = three_tier_runtime.compose_build_model(state, target, command)
+            except three_tier_runtime.RuntimeEvidenceError as error:
+                raise LifecycleError(str(error)) from error
     result = command(
         [
             "docker",
@@ -1148,14 +1112,76 @@ def run_owned_compose(state: dict[str, Any], compose_args: list[str]) -> str:
             "--project-name",
             state["compose_project"],
             "--project-directory",
-            state["project_root"],
+            target["path"],
             *arguments,
         ],
         timeout=1800,
     )
     if result.returncode != 0:
         raise LifecycleError("Owned Docker Compose action failed.")
+    if build_model is not None:
+        image_name, model_digest = build_model
+        after = execution_target(state)
+        try:
+            if (three_tier_runtime.source_identity(after) != three_tier_runtime.source_identity(target)
+                    or three_tier_runtime.compose_build_model(state, after, command) != build_model):
+                raise LifecycleError("Owned deployment source changed during build.")
+            image = assert_resource_owned("images", image_name, state)["canonical_id"]
+            relative = "evidence/runtime/build-" + uuid.uuid4().hex + ".json"
+            artifact = Path(state["run_root"]) / relative
+            artifact.parent.mkdir(mode=0o700, exist_ok=True)
+            private_json(artifact, {
+                "schema": "agentic-sdlc/runtime-build-v1", "verification_id": state["verification_id"],
+                "target": three_tier_runtime.source_identity(after), "image_id": image,
+                "compose_sha256": model_digest, "observed_at": utc_now(),
+            })
+            state["runtime_build"] = {"path": relative, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}
+            update_state(Path(state["verification_root"]), state)
+        except three_tier_runtime.RuntimeEvidenceError as error:
+            raise LifecycleError(str(error)) from error
+    if restart_before is not None:
+        refreshed = refreshed_restart_state(state)
+        target = browser_target(refreshed)
+        state["endpoints"] = refreshed["endpoints"]
+        state["browser_restart"] = {"after_attempt": restart_before["attempt_id"],
+            "target": target, "volumes": list(state["resources"]["volumes"]), "observed_at": utc_now()}
+        update_state(Path(state["verification_root"]), state)
     return result.stdout
+
+
+def refreshed_restart_state(state: dict) -> dict:
+    """Observe owned post-restart ports without publishing unvalidated endpoints."""
+    containers = state["resources"].get("containers", [])
+    if len(containers) != 2:
+        raise LifecycleError("Restart requires the exact owned service inventory.")
+    web, database = containers
+    for identifier, role in ((web, "web"), (database, "db")):
+        owner = assert_resource_owned("containers", identifier, state)
+        if owner["labels"].get("com.docker.compose.service") != role:
+            raise LifecycleError("Restart container service identity changed.")
+    bindings = container_ports(web).get("8000/tcp", [])
+    if (not isinstance(bindings, list) or len(bindings) != 1
+            or not isinstance(bindings[0], dict)
+            or bindings[0].get("HostIp") != "127.0.0.1"):
+        raise LifecycleError("Restart requires one IPv4 loopback web binding.")
+    raw_port = bindings[0].get("HostPort", "")
+    if not isinstance(raw_port, str) or not raw_port.isdigit() or not 1 <= int(raw_port) <= 65535:
+        raise LifecycleError("Restart web binding has an invalid port.")
+    assert_port_isolation(web, database, int(raw_port))
+    endpoints = dict(state["endpoints"])
+    for name in ("web", "api", "health"):
+        validate_loopback_url(endpoints.get(name, ""), name)
+        endpoints[name] = urlsplit(endpoints[name])._replace(netloc=f"127.0.0.1:{raw_port}").geturl()
+    return {**state, "endpoints": endpoints}
+
+
+def browser_target(state: dict) -> dict:
+    target = execution_target(state)
+    try:
+        deployment = three_tier_runtime.validate_deployment(state, target, command, assert_resource_owned)
+    except three_tier_runtime.RuntimeEvidenceError as error:
+        raise LifecycleError(str(error)) from error
+    return {**target, "deployment": deployment}
 
 
 def container_ports(identifier: str) -> dict[str, Any]:
@@ -1214,73 +1240,87 @@ def assert_port_isolation(
         raise LifecycleError("Database container must not publish a host port.")
 
 
-def record_browser(
-    root_value: Path, title: str, url: str, closed: bool
-) -> dict[str, Any]:
+def run_browser_stage(root_value: Path, stage: str) -> dict[str, Any]:
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
-    if not title or any(character in title for character in "\r\n"):
-        raise LifecycleError("Browser tab title is invalid.")
-    validate_loopback_url(url, "browser tab URL")
-    verification_ids = parse_qs(urlsplit(url).query).get("verification_id", [])
-    if verification_ids != [state["verification_id"]]:
-        raise LifecycleError(
-            "Browser tab URL must carry the exact verification_id marker."
-        )
-    expected_status = "CLOSED" if closed else "RUNNING"
-    if state["browser_instance"]["status"] != expected_status:
-        raise LifecycleError(
-            f"Browser tab state requires dedicated Chrome to be {expected_status}."
-        )
-    state["browser_tab"] = {"title": title[:200], "url": url, "closed": closed}
-    update_state(root, state)
-    return state
-
-
-def launch_browser(root_value: Path) -> dict[str, Any]:
-    root = verification_root(root_value, create=False)
-    _, state = load_active(root)
-    launched: dict[str, Any] | None = None
+    if stage not in three_tier_browser.STAGES:
+        raise LifecycleError("Unknown browser stage.")
+    completed = [item["stage"] for item in state["browser_stages"]]
+    if completed != list(three_tier_browser.STAGES[:len(completed)]) or len(completed) >= 4 or stage != three_tier_browser.STAGES[len(completed)]:
+        raise LifecycleError("Browser stages require one ordered attempt each; failures require a new trial.")
+    if any(item["outcome"] != "PASS" for item in state["browser_stages"]):
+        raise LifecycleError("A failed browser trial cannot be resumed as passing.")
+    target = {"path": state["project_root"], "head": state["git"]["baseline_sha"]} if stage == "capability-discovery" else browser_target(state)
+    record = None
+    if stage != "capability-discovery":
+        expected_phase = "sdlc-evaluate" if stage == "evaluate" else "sdlc-uat-tests"
+        if target.get("phase") != expected_phase:
+            raise LifecycleError("Browser stage does not match the active workflow phase.")
+        for label in ("web", "api"):
+            validate_loopback_url(state["endpoints"].get(label, ""), label)
+        if stage.startswith("uat-") and target["head"] != state["git"]["promoted_sha"]:
+            raise LifecycleError("UAT requires the clean promoted revision.")
+    if stage == "uat-after-restart":
+        receipts = three_tier_browser.validate_receipts(state, require_complete=False)
+        before = receipts[-1]
+        restart = state.get("browser_restart", {})
+        if (restart.get("after_attempt") != before["attempt_id"] or restart.get("target") != target
+                or restart.get("volumes") != state["resources"]["volumes"]):
+            raise LifecycleError("Post-restart stage requires the owned Compose restart.")
+        record = before["record"]
     try:
-        launched = three_tier_browser.launch(
-            Path(state["run_root"]),
-            state["verification_id"],
-            state["browser_instance"],
-        )
-        state["browser_instance"] = launched
-        update_state(root, state)
+        three_tier_browser.run_stage(state, stage, target,
+            persist=lambda: update_state(root, state),
+            checkpoint=lambda name, value: browser_checkpoint(state, target, name, value),
+            record=record)
     except three_tier_browser.BrowserOwnershipError as error:
         raise LifecycleError(str(error)) from error
-    except (LifecycleError, OSError) as error:
-        if launched is not None and launched.get("status") == "RUNNING":
-            try:
-                three_tier_browser.close(
-                    Path(state["run_root"]),
-                    state["verification_id"],
-                    launched,
-                )
-            except three_tier_browser.BrowserOwnershipError:
-                raise LifecycleError(
-                    "Dedicated Chrome launched but its state could not be "
-                    "persisted or safely rolled back."
-                ) from error
-        if isinstance(error, LifecycleError):
-            raise
-        raise LifecycleError(
-            f"Could not persist dedicated Chrome ownership: {error}"
-        ) from error
     return state
+
+
+def browser_checkpoint(state: dict, target: dict, name: str, record: object) -> None:
+    """Observe the public API and PostgreSQL independently while Playwright waits."""
+    from urllib.request import build_opener, HTTPRedirectHandler, ProxyHandler
+    import time
+    if execution_target(state) != {k: v for k, v in target.items() if k != "deployment"}:
+        raise LifecycleError("Browser checkpoint target changed.")
+    if browser_target(state) != target:
+        raise LifecycleError("Browser checkpoint deployment changed.")
+    database = state["resources"]["containers"][1]
+    assert_resource_owned("containers", database, state)
+    sql = "SELECT COALESCE(json_agg(t ORDER BY id), '[]'::json) FROM (SELECT id, title, completed FROM tasks_task) t;"
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, message, headers, new_url):
+            raise LifecycleError("Independent API observation cannot follow redirects.")
+
+    opener = build_opener(ProxyHandler({}), NoRedirect())
+    deadline = time.monotonic() + 12
+    while True:
+        with opener.open(state["endpoints"]["api"], timeout=5) as response:
+            validate_loopback_url(response.url, "API observation")
+            api = json.loads(response.read(1024 * 1024))
+        result = command(["docker", "exec", database, "sh", "-c",
+            'exec psql -X -qAt -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"', "sh", sql], timeout=10)
+        if result.returncode:
+            raise LifecycleError("Independent PostgreSQL observation failed.")
+        db = json.loads(result.stdout)
+        expected = [] if name == "blank" else [{**record, "id": int(record["id"])}]
+        def normalized(rows):
+            if not isinstance(rows, list):
+                raise LifecycleError("Task API must return an array.")
+            return [{k: row[k] for k in ("id", "title", "completed")} for row in rows]
+        if normalized(api) == expected and normalized(db) == expected:
+            return
+        if time.monotonic() >= deadline:
+            raise LifecycleError("GUI/API/database record correlation failed.")
+        time.sleep(0.1)
 
 
 def close_browser(root_value: Path) -> dict[str, Any]:
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
     try:
-        state["browser_instance"] = three_tier_browser.close(
-            Path(state["run_root"]),
-            state["verification_id"],
-            state["browser_instance"],
-        )
+        three_tier_browser.recover_interrupted_stage(state)
     except three_tier_browser.BrowserOwnershipError as error:
         raise LifecycleError(str(error)) from error
     update_state(root, state)
@@ -1346,6 +1386,15 @@ def record_git(
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
     project_root = Path(state["project_root"])
+    if baseline_sha != state["git"]["baseline_sha"]:
+        raise LifecycleError("The lifecycle's initial Git baseline cannot be replaced.")
+    try:
+        owned_git_origin.validate(
+            project_root, Path(state["run_root"]), state["verification_id"],
+            baseline=baseline_sha,
+        )
+    except owned_git_origin.OriginError as error:
+        raise LifecycleError(str(error)) from error
     git_path = project_root / ".git"
     if not git_path.is_dir() or git_path.is_symlink():
         raise LifecycleError("Three-tier project is not an initialized Git repository.")
@@ -1364,10 +1413,6 @@ def record_git(
         raise LifecycleError(
             "Three-tier project must be clean before recording Git identity."
         )
-    if require_command(
-        ["git", "-C", str(project_root), "remote"], "Git remote inventory"
-    ):
-        raise LifecycleError("Three-tier project must not have a Git remote.")
     if promoted_sha is not None:
         ancestor = command(
             [
@@ -1419,26 +1464,10 @@ def validate_runtime_ready(state: dict[str, Any], *, keep: bool) -> None:
         )
     ):
         raise LifecycleError("PASS requires an internal-only database endpoint.")
-    browser_tab = state["browser_tab"]
-    if (
-        not browser_tab["title"]
-        or not browser_tab["url"]
-        or state["environment"].get("computer_use") != "PASS"
-    ):
-        raise LifecycleError("PASS requires an exact computer-use browser-tab record.")
-    validate_loopback_url(browser_tab["url"], "browser tab URL")
-    expected_browser_status = "RUNNING" if keep else "CLOSED"
-    if state["browser_instance"]["status"] != expected_browser_status:
-        raise LifecycleError(
-            f"PASS requires dedicated Chrome to be {expected_browser_status}."
-        )
-    attempts = {attempt["stage"]: attempt for attempt in state["computer_use_attempts"]}
-    if any(
-        attempts.get(stage, {}).get("outcome") != "PASS"
-        or attempts.get(stage, {}).get("dedicated_instance") != "yes"
-        for stage in ("capability-discovery", "evaluate-readiness", "uat-readiness")
-    ):
-        raise LifecycleError("PASS requires distinct Computer Use readiness gates.")
+    try:
+        three_tier_browser.validate_receipts(state)
+    except three_tier_browser.BrowserOwnershipError as error:
+        raise LifecycleError(str(error)) from error
     phase_map = {
         entry.get("phase"): entry
         for entry in state.get("phases", [])
@@ -1473,8 +1502,10 @@ def finish(root_value: Path, status: str, keep: bool) -> dict[str, Any]:
         raise LifecycleError(f"Unsupported final status: {status}")
     root = verification_root(root_value, create=False)
     _, state = load_active(root)
-    if keep and state["browser_tab"].get("closed"):
-        raise LifecycleError("Keep mode must retain its dedicated browser tab.")
+    try:
+        three_tier_browser.recover_interrupted_stage(state)
+    except three_tier_browser.BrowserOwnershipError as error:
+        raise LifecycleError(str(error)) from error
     state["semantic_summary"] = summarize_semantic_results(state)
     if status == "PASS":
         validate_runtime_ready(state, keep=keep)
@@ -1482,10 +1513,6 @@ def finish(root_value: Path, status: str, keep: bool) -> dict[str, Any]:
             state["semantic_summary"] = validate_semantic_results(state, keep=keep)
         except SemanticEvidenceError as error:
             raise LifecycleError(str(error)) from error
-        if not keep and not state["browser_tab"].get("closed"):
-            raise LifecycleError(
-                "Default create mode must close its dedicated browser tab."
-            )
     state["result"] = status
     state["status"] = "KEPT" if keep else "READY_FOR_CLEANUP"
     if keep:
@@ -1546,32 +1573,14 @@ def remove_resource(kind: str, identifier: str) -> str:
 
 def assert_project_safe_for_destroy(state: dict[str, Any]) -> None:
     project_root = Path(state["project_root"])
-    git_path = project_root / ".git"
-    if git_path.is_symlink() or (git_path.exists() and not git_path.is_dir()):
-        raise LifecycleError("Owned project Git metadata is unsafe before destroy.")
-    if not git_path.exists():
-        if state["status"] == "KEPT":
-            raise LifecycleError(
-                "Kept project lost its Git metadata; destroy fails closed."
-            )
-        return
-    top_level = require_command(
-        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
-        "Owned project Git identity",
-    )
-    if Path(top_level).resolve(strict=False) != project_root:
-        raise LifecycleError("Owned project Git root identity changed before destroy.")
-    if require_command(
-        ["git", "-C", str(project_root), "remote"], "Owned project remote inventory"
-    ):
-        raise LifecycleError("Owned project gained a Git remote; destroy fails closed.")
-    if state["status"] == "KEPT" and require_command(
-        ["git", "-C", str(project_root), "status", "--porcelain"],
-        "Owned project cleanliness",
-    ):
-        raise LifecycleError(
-            "Kept project has uncommitted changes; preserve or revert them before destroy."
+    try:
+        owned_git_origin.validate(
+            project_root, Path(state["run_root"]), state["verification_id"],
+            baseline=state["git"]["baseline_sha"],
+            require_clean=state["status"] == "KEPT",
         )
+    except owned_git_origin.OriginError as error:
+        raise LifecycleError(str(error)) from error
 
 
 def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
@@ -1586,11 +1595,7 @@ def _destroy_active(root: Path) -> tuple[str, dict[str, Any] | None]:
     _, state = load_active(root)
     assert_project_safe_for_destroy(state)
     try:
-        state["browser_instance"] = three_tier_browser.close(
-            Path(state["run_root"]),
-            state["verification_id"],
-            state["browser_instance"],
-        )
+        three_tier_browser.recover_interrupted_stage(state)
     except three_tier_browser.BrowserOwnershipError as error:
         state["status"] = "CLEANUP_FAILED"
         state["cleanup"]["status"] = "FAIL"
@@ -1784,22 +1789,6 @@ def parser() -> argparse.ArgumentParser:
         "--status", choices=sorted(PHASE_STATUSES), required=True
     )
     validation_parser.add_argument("--summary", required=True)
-    computer_use_parser = commands.add_parser("record-computer-use")
-    computer_use_parser.add_argument(
-        "--stage", choices=sorted(COMPUTER_USE_STAGES), required=True
-    )
-    computer_use_parser.add_argument(
-        "--outcome", choices=sorted(COMPUTER_USE_OUTCOMES), required=True
-    )
-    computer_use_parser.add_argument("--action-attempted", action="store_true")
-    computer_use_parser.add_argument(
-        "--response", choices=("success", "error", "timeout"), required=True
-    )
-    for field in ("lock-state", "window-visible", "window-frontmost", "current-space"):
-        computer_use_parser.add_argument(
-            f"--{field}", choices=("yes", "no", "unknown"), required=True
-        )
-    computer_use_parser.add_argument("--window-marker", required=True)
     runtime_parser = commands.add_parser("record-runtime")
     runtime_parser.add_argument("--web-url", required=True)
     runtime_parser.add_argument("--api-url", required=True)
@@ -1810,14 +1799,13 @@ def parser() -> argparse.ArgumentParser:
     for singular in ("network", "volume", "image"):
         runtime_parser.add_argument(f"--{singular}", action="append", required=True)
     commands.add_parser("prepare-images")
-    commands.add_parser("launch-browser")
+    stage_parser = commands.add_parser("run-browser-stage")
+    stage_parser.add_argument("--stage", choices=three_tier_browser.STAGES, required=True)
     commands.add_parser("close-browser")
     compose_parser = commands.add_parser("run-compose")
+    compose_parser.add_argument("--worker-task")
+    compose_parser.add_argument("--assignment-digest")
     compose_parser.add_argument("compose_args", nargs=argparse.REMAINDER)
-    browser_parser = commands.add_parser("record-browser")
-    browser_parser.add_argument("--title", required=True)
-    browser_parser.add_argument("--url", required=True)
-    browser_parser.add_argument("--closed", action="store_true")
     git_parser = commands.add_parser("record-git")
     git_parser.add_argument("--baseline-sha", required=True)
     git_parser.add_argument("--promoted-sha")
@@ -1873,19 +1861,6 @@ def main(argv: list[str]) -> int:
                     arguments.status,
                     arguments.summary,
                 )
-            elif arguments.command == "record-computer-use":
-                record_computer_use(
-                    arguments.verification_root,
-                    stage=arguments.stage,
-                    outcome=arguments.outcome,
-                    action_attempted=arguments.action_attempted,
-                    response=arguments.response,
-                    lock_state=arguments.lock_state,
-                    window_visible=arguments.window_visible,
-                    window_frontmost=arguments.window_frontmost,
-                    current_space=arguments.current_space,
-                    window_marker=arguments.window_marker,
-                )
             elif arguments.command == "record-runtime":
                 record_runtime(
                     arguments.verification_root,
@@ -1905,31 +1880,24 @@ def main(argv: list[str]) -> int:
                     "Public base images ready: "
                     + ", ".join(state["environment"]["public_base_images"])
                 )
-            elif arguments.command == "launch-browser":
-                state = launch_browser(arguments.verification_root)
-                print(
-                    "Dedicated Chrome marker: "
-                    + state["browser_instance"]["window_marker"]
-                )
+            elif arguments.command == "run-browser-stage":
+                run_browser_stage(arguments.verification_root, arguments.stage)
+                print("Headless browser stage passed: " + arguments.stage)
             elif arguments.command == "close-browser":
                 state = close_browser(arguments.verification_root)
                 print(
-                    "Dedicated Chrome status: "
+                    "Owned headless browser status: "
                     + state["browser_instance"]["status"]
                 )
             elif arguments.command == "run-compose":
                 assert root is not None
                 _, state = load_active(root)
-                output = run_owned_compose(state, arguments.compose_args)
+                output = run_owned_compose(
+                    state, arguments.compose_args, worker_task=arguments.worker_task,
+                    assignment_digest=arguments.assignment_digest,
+                )
                 if output:
                     print(output, end="" if output.endswith("\n") else "\n")
-            elif arguments.command == "record-browser":
-                record_browser(
-                    arguments.verification_root,
-                    arguments.title,
-                    arguments.url,
-                    arguments.closed,
-                )
             elif arguments.command == "record-git":
                 record_git(
                     arguments.verification_root,

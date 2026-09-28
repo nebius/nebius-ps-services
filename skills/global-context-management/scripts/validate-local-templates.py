@@ -627,6 +627,10 @@ def assert_doc_contracts(root: Path) -> None:
             raise AssertionError(f"UserPromptSubmit template missing: {needle}")
 
     required_agents_template = (
+        "Task authorization covers necessary skill scripts",
+        "Inspect the script's effects before executing it",
+        "Do not require a separate Run/Execute phrase",
+        "Preserve explicit read-only limits, skill invocation restrictions",
         "Read the durable task-state file injected by global hooks",
         "Keep the parent thread focused on objective, constraints, decisions",
         "Treat that policy request as sufficient\n  authorization",
@@ -642,7 +646,12 @@ def assert_doc_contracts(root: Path) -> None:
         "performs, bypasses, or\n  pre-satisfies",
         "Recovery authorization never makes that evidence\n  valid proof",
         "Production and unconfirmed targets remain read-only",
-        "action-specific approval in every environment",
+        "do not request separate",
+        "approval solely for that creation",
+        "intended secret",
+        "store or protected runtime file",
+        "IAM",
+        "access expansion",
         "Fix the proven causal owner at its authoritative boundary",
         "checkpoint before the earliest product divergence or first contaminated",
         "boundary, whichever came first",

@@ -12,6 +12,7 @@ from nebius_cxcli.soperator_checks_phase import (
 )
 from nebius_cxcli.soperator_checks_policy import SoperatorChecksPolicy, checks_digest
 from nebius_cxcli.soperator_passive_policy import passive_phase_overrides
+from passive_scheduler_fakes import DESIRED_SCHEDULER
 
 
 def test_phase_overlays_keep_desired_policy_immutable():
@@ -94,6 +95,9 @@ def test_passive_compiler_freezes_enabled_proof_roles_into_policy_identity(tmp_p
     for name in enabled:
         (scripts / (name + ".json")).write_text(json.dumps({"name": name, "command": "./" + name}))
     monkeypatch.setattr(module, "REVIEWED_BUNDLES", {module.passive_bundle_digest(chart)})
+    monkeypatch.setattr(
+        module, "_rendered_scheduler", lambda *_args: copy.deepcopy(DESIRED_SCHEDULER)
+    )
     passive = module.compile_passive_policy(tmp_path, {})
     assert passive["proofRoles"] == {
         "boot_disk_full.sh": "required-measurement",

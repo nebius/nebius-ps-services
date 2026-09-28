@@ -215,6 +215,7 @@ components:
           grafana:
             chart_component_id: grafana
             gateway_chart_component_id: gateway-helm
+            database_chart_component_id: postgresql
             enabled_by_default: true
           service_metrics:
             buckets:

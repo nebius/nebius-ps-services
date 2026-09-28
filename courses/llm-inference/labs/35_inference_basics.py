@@ -8,10 +8,11 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def run_experiment(torch: Any, device: str, max_new_tokens: int) -> dict[str, Any]:
@@ -85,11 +86,12 @@ def main() -> None:
     validate_common_args(args)
     torch = load_torch()
     environment = (
-        require_h100(torch)
+        require_course_gpu(torch)
         if args.device == "cuda"
         else {"device": "cpu", "torch_version": torch.__version__}
     )
-    measurements = run_experiment(torch, args.device, args.max_new_tokens)
+    operation = annotated_operation(run_experiment, "lab_workload")
+    measurements = operation(torch, args.device, args.max_new_tokens)
     target = write_result(
         args,
         lab_id="35_inference_basics",

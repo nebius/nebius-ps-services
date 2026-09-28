@@ -1,0 +1,74 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "7773d26f838ec451792f2c5ff25585ed010da63c22aa5876465d1a93eaced7de",
+      "sha256": "771266b1a7fd80c62baa49bad5a7175828a9459e1fc2f3cb861c0ab7f4aac2ce",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "671dac581f693fbbe82ef11cccf172e68aa06a06ccb60de64bfc38a533bc8fef",
+      "sha256": "7c79b25c8ba8151a37f2a94bcf7caea33b5b03b55540aadcffefd2f9559f6601",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "bd190fc630b37d24e06f72a5f53fb29ec7062210582c3dd42ceb8e5bb6a0d041",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "cc202951b7a86bf4c931f18fdd4055b941eca0dfc7346ab051db8f78ff0c866d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "052c0e07db504b9c4f1f580abd864e2a7d70c6467c573ee54bfd45e7059a8230",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "95e44c39bde8057cd37d728a5de02a830976114b2c0ab3c7eb8296cbd2fd543e",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "29e443ee36982bdd43114df1176ae2734031d4ac177fa6ef7b6e4f4eb9c7ef7e",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "f86d3d7a94c6f1c35f38030a85a3b4cf40b2ae0374692fee4661b183642501ab",
+      "tool": "compute"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "24_sdpa_attention",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "unlocked-gpu-clocks"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1666389acd5388ba713d53460f570e066d9ce7b30928bfb671e07c972d3b2dc9",
+  "summary_sha256": "4ceda14f63e6fed6e44b077032e34d0cb2683d9e7a756b6128b4d9dde3411593"
+}

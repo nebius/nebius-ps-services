@@ -12,9 +12,10 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 usage() {
-  printf 'Usage: sbatch %s TARGET_MODEL TARGET_REVISION DRAFT_MODEL DRAFT_REVISION\n' "$0"
+  printf 'Usage: python3 tools/submit_lab.py --lab 33_speculative_engine_client %s TARGET_MODEL TARGET_REVISION DRAFT_MODEL DRAFT_REVISION\n' "$0"
   printf 'Runs three independent, counterbalanced target-only/speculative trials.\n'
 }
 
@@ -39,7 +40,7 @@ if [[ ! ${target_revision} =~ ^[0-9a-f]{40}$ || ! ${draft_revision} =~ ^[0-9a-f]
   printf 'ERROR: target and draft revisions must be immutable 40-character Hugging Face commit IDs.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 course_python=${COURSE_PYTHON:-python3}
 command -v "${course_python}" >/dev/null 2>&1 || {
   printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2
@@ -58,7 +59,7 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
 fi
 export COURSE_RUN_ID
 base_dir="${course_dir}/results/speculative-ab-run-${COURSE_RUN_ID}"
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/33_speculative_engine_client/logs" "${course_dir}/results"
 mkdir -m 700 "${base_dir}"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_pid=""
@@ -69,7 +70,9 @@ stop_server() {
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
   kill "${pid}" 2>/dev/null || true
-  for _ in {1..50}; do
+  local stop_attempts=50
+  if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
     if ! kill -0 "${pid}" 2>/dev/null; then
       wait "${pid}" 2>/dev/null || true
       return
@@ -87,9 +90,9 @@ trap 'handle_signal 143' TERM
 run_trial() {
   local variant=$1
   local trial=$2
-  local server_log="${course_dir}/logs/vllm-speculative-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
+  local server_log="${course_dir}/results/33_speculative_engine_client/logs/vllm-speculative-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   local command=(
-    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}"
+    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" python3 tools/profile_lab.py --lab 33_speculative_engine_client --server --
     vllm serve "${target_model}" --revision "${target_revision}"
     --tokenizer-revision "${target_revision}" --host 127.0.0.1 --port "${port}"
     --dtype bfloat16 --max-model-len 2048
@@ -123,6 +126,7 @@ run_trial() {
     exit 2
   fi
 
+  "${course_python}" tools/server_capture.py start "${port}"
   "${course_python}" labs/33_speculative_engine_client.py \
     --base-url "http://127.0.0.1:${port}" --model "${target_model}" \
     --target-revision "${target_revision}" --draft-model "${draft_model}" \
@@ -141,6 +145,7 @@ run_trial() {
   "${course_python}" -c \
     "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:${port}/metrics', timeout=10).read().decode(), end='')" \
     >"${base_dir}/${variant}-trial-${trial}-metrics.prom"
+  "${course_python}" tools/server_capture.py stop "${port}"
   stop_server
 }
 

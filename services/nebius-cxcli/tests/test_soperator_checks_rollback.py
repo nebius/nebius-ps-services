@@ -97,6 +97,7 @@ def test_accepted_catchup_stage_passes_completed_rollback_authority(
     monkeypatch, tmp_path, rollback
 ):
     expected, live, source = rollback
+    native_transition = object()
     monkeypatch.setattr(
         flux_ops,
         "_run_kubectl_json_process",
@@ -111,6 +112,7 @@ def test_accepted_catchup_stage_passes_completed_rollback_authority(
             self.apply({"checksRelease": expected})
 
     def staged(_paths, **kwargs):
+        assert kwargs["native_transition"] is native_transition
         evidence = {
             k: v
             for k, v in kwargs.items()
@@ -135,6 +137,7 @@ def test_accepted_catchup_stage_passes_completed_rollback_authority(
         source_dir=tmp_path,
         kube_context="lab",
         extra_env={},
+        native_transition=native_transition,
     )
 
 

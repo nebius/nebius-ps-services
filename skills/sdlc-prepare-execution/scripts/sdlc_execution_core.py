@@ -2103,6 +2103,9 @@ def _build_incoming_handoff(
                 "review": dependency_result.get("review"),
             }
         )
+        dependency_wave_record = read_json(wave_path(run_dir, feature_id, dependency_wave))
+        if dependency_wave_record.get("combined_failure") is not None:
+            predecessors[-1]["combined_failure"] = dependency_wave_record["combined_failure"]
     value: dict[str, Any] = {
         "schema": INCOMING_HANDOFF_SCHEMA,
         "feature_id": feature_id,
@@ -2168,7 +2171,7 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
         run_dir,
         Path(str(coordinator["selected_project_root"])),
     )
-    if coordinator["status"] not in {"tdd_sealed", "waves_running"}:
+    if coordinator["status"] not in {"tdd_sealed", "waves_running", "integrated", "repair_required"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "wave preparation is not allowed"
         )
@@ -2177,6 +2180,11 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     if wave_id not in coordinator["wave_ids"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "unknown wave")
     wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    if coordinator["status"] == "integrated" and wave["status"] != "planned":
+        raise ExecutionError(
+            "EXECUTION_STATE_INVALID",
+            "integrated execution can prepare only an appended planned wave",
+        )
     if wave["status"] in {"running", "integrating", "integrated", "done"}:
         active_index = wave.get("active_batch_index")
         task_ids = (
@@ -2195,9 +2203,27 @@ def prepare_wave(run_dir: Path, feature_id: str, wave_id: str) -> list[dict[str,
     if wave["status"] not in {"planned", "preparing", "blocked"}:
         raise ExecutionError("EXECUTION_STATE_INVALID", "wave is not preparable")
     wave_position = coordinator["wave_ids"].index(wave_id)
+    unresolved = []
     for prior in coordinator["wave_ids"][:wave_position]:
-        if read_json(wave_path(run_dir, feature_id, prior)).get("status") != "done":
+        prior_record = read_json(wave_path(run_dir, feature_id, prior))
+        if prior_record.get("status") == "failed" and not _wave_satisfied(run_dir, feature_id, coordinator, prior):
+            unresolved.append(prior_record)
+        elif not _wave_satisfied(run_dir, feature_id, coordinator, prior):
             raise ExecutionError("EXECUTION_STATE_INVALID", "prior wave is incomplete")
+    if unresolved:
+        latest = unresolved[-1]
+        authority = _validated_wave_failure(run_dir, feature_id, latest, active=True)
+        if any(
+            _validated_wave_failure(run_dir, feature_id, item)[key] != authority[key]
+            for item in unresolved for key in ("blocker_key", "oracle")
+        ):
+            raise ExecutionError("REPLAN_REQUIRED", "failed waves require separate repair ownership")
+        for task_id in wave["task_ids"]:
+            task = _task_plan_from_state(read_json(task_path(run_dir, feature_id, wave_id, task_id)))
+            if task.diagnosis_id != authority["diagnosis_id"] or task.regression_oracle != authority["oracle"]:
+                raise ExecutionError("REPLAN_REQUIRED", "unresolved wave requires its authorized corrective task")
+        wave["corrects"] = [item["wave_id"] for item in unresolved]
+        wave["repair_authority"] = authority
     integration = Path(coordinator["integration_worktree"])
     if not clean(integration) or head(integration) != coordinator["integration_head"]:
         raise ExecutionError(
@@ -3901,7 +3927,8 @@ def complete_wave(
 
 
 def _complete_wave_locked(
-    run_dir: Path, feature_id: str, wave_id: str, evidence: str
+    run_dir: Path, feature_id: str, wave_id: str, evidence: str,
+    *, failure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not evidence.strip():
         raise ExecutionError(
@@ -3911,17 +3938,18 @@ def _complete_wave_locked(
     _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
     wave_file = wave_path(run_dir, feature_id, wave_id)
     wave = read_json(wave_file)
+    if failure is None and wave.get("combined_failure") is not None:
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "failed wave cannot be completed as passing")
     if wave["status"] == "done":
-        coordinator["active_wave"] = None
-        coordinator["integration_head"] = wave["integration_head"]
-        if all(
-            read_json(wave_path(run_dir, feature_id, item))["status"] == "done"
-            for item in coordinator["wave_ids"]
-        ):
-            coordinator["status"] = "integrated"
-        else:
-            coordinator["status"] = "waves_running"
-        _save_coordinator(run_dir, feature_id, coordinator)
+        # A historical replay must never rewind a later wave or its active owner.
+        if coordinator.get("active_wave") == wave_id:
+            _resolve_corrected_waves(run_dir, feature_id, coordinator, wave)
+            coordinator["active_wave"] = None
+            coordinator["status"] = "integrated" if all(
+                _wave_satisfied(run_dir, feature_id, coordinator, item)
+                for item in coordinator["wave_ids"]
+            ) else "waves_running"
+            _save_coordinator(run_dir, feature_id, coordinator)
         return wave
     cleanup_retry = (
         wave["status"] == "blocked" and wave.get("blocker") == "CLEANUP_BLOCKED"
@@ -3933,13 +3961,21 @@ def _complete_wave_locked(
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED", "integration evidence tip drifted"
         )
+    if failure is not None:
+        if wave.get("combined_failure") not in (None, failure):
+            raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave evidence changed")
+        wave["combined_failure"] = failure
+        write_json_atomic(wave_file, wave)
+    elif wave.get("corrects"):
+        _repair_authority(run_dir, feature_id, wave["repair_authority"], active=True)
     retained: list[dict[str, str]] = []
     for task_id in reversed(wave["task_ids"]):
         assignment = read_json(assignment_path(run_dir, feature_id, wave_id, task_id))
         worker = Path(assignment["worktree"])
-        task_commit = read_json(result_path(run_dir, feature_id, wave_id, task_id))[
-            "commit"
-        ]
+        result = read_json(result_path(run_dir, feature_id, wave_id, task_id))
+        _validate_assignment_record(assignment)
+        _validate_result_record(result, assignment)
+        task_commit = result["commit"]
         if not _cleanup_internal_resource(
             run_dir=run_dir,
             coordinator=coordinator,
@@ -3964,19 +4000,179 @@ def _complete_wave_locked(
         wave["blocker"] = "CLEANUP_BLOCKED"
         write_json_atomic(wave_file, wave)
         raise ExecutionError("CLEANUP_BLOCKED", "worker resources remain")
-    wave["status"] = "done"
+    wave["status"] = "failed" if failure is not None else "done"
+    wave.pop("blocker", None)
     write_json_atomic(wave_file, wave)
+    if failure is None:
+        _resolve_corrected_waves(run_dir, feature_id, coordinator, wave)
     coordinator["active_wave"] = None
     if all(
-        read_json(wave_path(run_dir, feature_id, item))["status"] == "done"
+        _wave_satisfied(run_dir, feature_id, coordinator, item)
         for item in coordinator["wave_ids"]
     ):
         coordinator["status"] = "integrated"
     else:
-        coordinator["status"] = "waves_running"
+        coordinator["status"] = "repair_required" if failure is not None else "waves_running"
     coordinator["integration_head"] = wave["integration_head"]
     _save_coordinator(run_dir, feature_id, coordinator)
     return wave
+
+
+def _repair_authority(run_dir, feature_id, binding, *, active=False):
+    scripts = Path(__file__).resolve().parents[2] / "sdlc-classify-failure" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from repair_control import RepairControlError, integrated_wave_authority
+    try:
+        authority = integrated_wave_authority(
+            run_dir, feature_id, binding["classification_id"], binding["dispatch_id"],
+            require_active=active,
+        )
+    except (RepairControlError, KeyError) as error:
+        raise ExecutionError("REPLAN_REQUIRED", "canonical wave repair authority is invalid") from error
+    if authority != binding:
+        raise ExecutionError("REPLAN_REQUIRED", "wave repair identity drifted")
+    return authority
+
+
+def _validated_wave_failure(run_dir, feature_id, wave, *, active=False):
+    failure = wave.get("combined_failure")
+    if not isinstance(failure, dict):
+        raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave has no failure receipt")
+    unsigned = dict(failure)
+    digest = unsigned.pop("digest", None)
+    if (
+        digest != sha256_json(unsigned) or failure.get("schema") != "agentic-sdlc/wave-failure-v1"
+        or failure.get("wave_id") != wave["wave_id"]
+        or failure.get("integration_head") != wave["integration_head"]
+    ):
+        raise ExecutionError("EXECUTION_STATE_INVALID", "wave failure receipt is invalid")
+    authority = _repair_authority(run_dir, feature_id, failure["authority"], active=active)
+    if authority["integration_commit"] != wave["integration_head"]:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave commit drifted")
+    return authority
+
+
+def fail_wave(run_dir, feature_id, wave_id, classification_id, dispatch_id, evidence):
+    """Retire an integrated failed wave without certifying successful validation."""
+    with _execution_transition_lock(run_dir, feature_id):
+        coordinator = _load_coordinator(run_dir, feature_id)
+        wave = read_json(wave_path(run_dir, feature_id, wave_id))
+        if wave.get("status") == "failed":
+            authority = _validated_wave_failure(run_dir, feature_id, wave)
+            if (authority["classification_id"], authority["dispatch_id"], wave["combined_evidence"]) != (
+                classification_id, dispatch_id, evidence.strip()
+            ):
+                raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave retry changed identity")
+            if coordinator.get("active_wave") == wave_id:
+                coordinator["active_wave"] = None
+                coordinator["status"] = "repair_required"
+                _save_coordinator(run_dir, feature_id, coordinator)
+            return wave
+        scripts = Path(__file__).resolve().parents[2] / "sdlc-classify-failure" / "scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        from repair_control import RepairControlError, integrated_wave_authority
+        try:
+            authority = integrated_wave_authority(run_dir, feature_id, classification_id, dispatch_id)
+        except RepairControlError as error:
+            raise ExecutionError("REPLAN_REQUIRED", "failed wave lacks canonical repair authority") from error
+        if (
+            coordinator.get("active_wave") != wave_id
+            or authority["integration_commit"] != wave.get("integration_head")
+            or coordinator["integration_head"] != wave.get("integration_head")
+        ):
+            raise ExecutionError("WORKTREE_CONFLICT", "failed wave is not the active integration tip")
+        _reject_sensitive_evidence(evidence)
+        failure = {
+            "schema": "agentic-sdlc/wave-failure-v1", "wave_id": wave_id,
+            "integration_head": wave["integration_head"], "authority": authority,
+            "evidence": evidence.strip(),
+        }
+        failure["digest"] = sha256_json(failure)
+        return _complete_wave_locked(run_dir, feature_id, wave_id, evidence, failure=failure)
+
+
+def _wave_satisfied(run_dir, feature_id, coordinator, wave_id):
+    wave = read_json(wave_path(run_dir, feature_id, wave_id))
+    if wave.get("status") == "done":
+        return True
+    if wave.get("status") != "failed":
+        return False
+    _validated_wave_failure(run_dir, feature_id, wave)
+    resolution = wave.get("failure_resolution")
+    if resolution is None:
+        return False
+    unsigned = dict(resolution)
+    digest = unsigned.pop("digest", None)
+    correcting_id = resolution.get("corrective_wave")
+    if (
+        digest != sha256_json(unsigned)
+        or resolution.get("schema") != "agentic-sdlc/wave-resolution-v1"
+        or resolution.get("failed_digest") != wave["combined_failure"]["digest"]
+        or correcting_id not in coordinator["wave_ids"]
+        or coordinator["wave_ids"].index(correcting_id) <= coordinator["wave_ids"].index(wave_id)
+    ):
+        raise ExecutionError("EXECUTION_STATE_INVALID", "wave resolution identity is invalid")
+    correcting = read_json(wave_path(run_dir, feature_id, correcting_id))
+    expected = _resolution_record(run_dir, feature_id, wave, correcting)
+    if resolution != expected:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "wave resolution proof drifted")
+    return True
+
+
+def _resolution_record(run_dir, feature_id, failed, correcting):
+    if correcting.get("status") != "done" or failed["wave_id"] not in correcting.get("corrects", []):
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective wave is not validated")
+    authority = _repair_authority(run_dir, feature_id, correcting["repair_authority"])
+    failed_authority = _validated_wave_failure(run_dir, feature_id, failed)
+    if any(authority[key] != failed_authority[key] for key in ("blocker_key", "oracle")):
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "correction does not cover failed oracle")
+    proofs = {}
+    coordinator = _load_coordinator(run_dir, feature_id)
+    repository = Path(coordinator["integration_worktree"])
+    if not repository.exists():
+        repository = Path(coordinator["project_root"])
+    if (
+        not _is_ancestor(repository, failed["integration_head"], correcting["integration_head"])
+        or not _is_ancestor(repository, correcting["integration_head"], coordinator["integration_head"])
+    ):
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective integration ancestry drifted")
+    for task_id in correcting["task_ids"]:
+        assignment = read_json(assignment_path(run_dir, feature_id, correcting["wave_id"], task_id))
+        result = read_json(result_path(run_dir, feature_id, correcting["wave_id"], task_id))
+        _validate_assignment_record(assignment)
+        _validate_result_record(result, assignment)
+        if not _is_ancestor(repository, result["commit"], correcting["integration_head"]):
+            raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective task is not integrated")
+        if assignment.get("diagnosis_id") != authority["diagnosis_id"] or assignment.get("regression_oracle") != authority["oracle"]:
+            raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective result has a foreign oracle")
+        proofs[task_id] = result["result_digest"]
+    value = {
+        "schema": "agentic-sdlc/wave-resolution-v1", "failed_digest": failed["combined_failure"]["digest"],
+        "corrective_wave": correcting["wave_id"], "integration_head": correcting["integration_head"],
+        "authority": authority, "result_digests": proofs, "combined_evidence": correcting["combined_evidence"],
+    }
+    value["digest"] = sha256_json(value)
+    return value
+
+
+def _resolve_corrected_waves(run_dir, feature_id, coordinator, wave):
+    for failed_id in wave.get("corrects", []):
+        failed_path = wave_path(run_dir, feature_id, failed_id)
+        failed = read_json(failed_path)
+        value = _resolution_record(run_dir, feature_id, failed, wave)
+        if failed.get("failure_resolution") not in (None, value):
+            raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave already has another resolution")
+        failed["failure_resolution"] = value
+        write_json_atomic(failed_path, failed)
+
+
+def _require_resolved_failures(run_dir, feature_id, coordinator):
+    for item in coordinator["wave_ids"]:
+        wave = read_json(wave_path(run_dir, feature_id, item))
+        if wave.get("combined_failure") and not _wave_satisfied(run_dir, feature_id, coordinator, item):
+            raise ExecutionError("PROMOTION_BLOCKED", "feature has an unresolved failed wave")
 
 
 def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
@@ -4100,6 +4296,7 @@ def _seal_feature_locked(
     _reject_sensitive_evidence(evidence, message)
     coordinator = _load_coordinator(run_dir, feature_id)
     _verify_execution_prompt_impact(run_dir, feature_id, coordinator)
+    _require_resolved_failures(run_dir, feature_id, coordinator)
     if coordinator["status"] == "sealed":
         integration = Path(coordinator["integration_worktree"])
         if head(integration) != coordinator["integration_head"] or not clean(
@@ -4177,6 +4374,7 @@ def promote_feature(run_dir: Path, feature_id: str, evidence: str) -> dict[str, 
     if not evidence.strip():
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     coordinator = _load_coordinator(run_dir, feature_id)
+    _require_resolved_failures(run_dir, feature_id, coordinator)
     _impact(
         "prompt impact execution basis is stale",
         verify_prompt_impact_execution,
@@ -4352,4 +4550,10 @@ def describe_status(run_dir: Path, feature_id: str) -> dict[str, Any]:
         "promoted_head": coordinator["promoted_head"],
         "cleanup_retained": coordinator["cleanup_retained"],
         "worker_liveness": worker_liveness,
+        "failed_waves": [
+            {"wave_id": item, "failure": wave.get("combined_failure"),
+             "resolution": wave.get("failure_resolution")}
+            for item in coordinator["wave_ids"]
+            if (wave := read_json(wave_path(run_dir, feature_id, item))).get("combined_failure")
+        ],
     }

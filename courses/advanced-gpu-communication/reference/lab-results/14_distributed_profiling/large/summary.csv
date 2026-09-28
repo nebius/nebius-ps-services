@@ -1,0 +1,5 @@
+variant,metric,case,value,unit
+baseline-trial1,step_median_seconds,value,0.0032298974983859807,s
+baseline-trial1,step_max_seconds,value,0.006561493035405874,s
+candidate-trial1,step_median_seconds,value,0.002866394992452115,s
+candidate-trial1,step_max_seconds,value,0.004177203983999789,s

@@ -33,7 +33,7 @@ def setup(tmp_path, monkeypatch):
 
     monkeypatch.setattr(validation, "_soperator_product_readiness", readiness)
     monkeypatch.setattr(
-        validation.subprocess, "run", lambda *_a, **_k: pytest.fail("unexpected subprocess")
+        validation.kubernetes_process, "run", lambda *_a, **_k: pytest.fail("unexpected subprocess")
     )
     spec = {
         "kind": "soperator_cluster_smoke",
@@ -47,7 +47,9 @@ def setup(tmp_path, monkeypatch):
 
 def test_deploy_uses_canonical_graph_and_report_contract(setup):
     reports, _, _, spec, calls = setup
-    paths = validation.run_soperator_deploy_validations([spec], reports_dir=reports)
+    paths = validation.run_soperator_deploy_validations(
+        [spec], reports_dir=reports, extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "selected"}
+    )
     assert len(calls) == 1
     report = json.loads(paths[0].read_text())
     assert paths[0].name == "deploy-smoke-report-cluster.json"
@@ -73,7 +75,9 @@ def test_deploy_rejects_unproven_graph_or_product(setup, monkeypatch, change):
     elif change == "context":
         spec["kube_context"] = "expected"
         monkeypatch.setattr(
-            validation.subprocess, "run", lambda *_a, **_k: SimpleNamespace(stdout="foreign")
+            validation.kubernetes_process,
+            "run",
+            lambda *_a, **_k: SimpleNamespace(stdout="foreign"),
         )
     elif change == "drift":
 
@@ -89,7 +93,9 @@ def test_deploy_rejects_unproven_graph_or_product(setup, monkeypatch, change):
             lambda *_a, **_k: (False, "required current check failed"),
         )
     with pytest.raises((ValueError, RuntimeError)):
-        validation.run_soperator_deploy_validations([spec], reports_dir=reports)
+        validation.run_soperator_deploy_validations(
+            [spec], reports_dir=reports, extra_env={"NEBIUS_CXCLI_TARGET_KUBE_CONTEXT": "selected"}
+        )
     assert not calls
     if change == "unready":
         assert not json.loads((reports / spec["report_file"]).read_text())["passed"]
@@ -120,3 +126,12 @@ def test_cli_deploy_batch_routes_to_upstream_validator(tmp_path, monkeypatch):
         == []
     )
     assert calls[0][0] == [{"target_ref": "cluster"}]
+
+
+def test_validation_does_not_reuse_a_previous_spec_context(setup, monkeypatch):
+    reports, _, _, spec, calls = setup
+    monkeypatch.delenv("NEBIUS_CXCLI_TARGET_KUBE_CONTEXT", raising=False)
+    selected = {**spec, "kube_context": "selected"}
+    with pytest.raises(ValueError, match="explicit target context"):
+        validation.run_soperator_deploy_validations([selected, spec], reports_dir=reports)
+    assert len(calls) == 1

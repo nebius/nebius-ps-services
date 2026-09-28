@@ -604,6 +604,10 @@ def _validate_authorization(
             or value.get("owner_evidence_sha256") is not None
         ):
             raise TransactionError("direct commit authorization evidence is invalid")
+    elif owner == "create-pr":
+        _validate_pr_grant(value, root, session_id)
+        if value["allow_default_branch"]:
+            raise TransactionError("PR authorization cannot allow the default branch")
     elif owner == "task-implementer":
         evidence_value = value.get("owner_evidence_path")
         evidence_digest = value.get("owner_evidence_sha256")
@@ -638,6 +642,9 @@ def _validate_claim_owner(
     allow_exact_direct_child: bool = False,
 ) -> None:
     if claim["authorization_owner"] == "direct":
+        return
+    if claim["authorization_owner"] == "create-pr":
+        _validate_pr_grant(claim, root, session_id)
         return
     evidence_path = Path(str(claim["owner_evidence_path"]))
     if not _safe_private_file(evidence_path, _codex_home() / "task-implementer"):
@@ -676,7 +683,7 @@ def _validate_claim_authorization(
         raise TransactionError("commit authorization path is unsafe")
     authorization = _load_json(path, "commit authorization")
     expected_state = (
-        "CONSUMED" if claim["authorization_owner"] == "direct" else "AUTHORIZED"
+        "CONSUMED" if claim["authorization_owner"] in {"direct", "create-pr"} else "AUTHORIZED"
     )
     if (
         authorization.get("schema") != AUTH_SCHEMA
@@ -684,6 +691,8 @@ def _validate_claim_authorization(
         or authorization.get("owner") != claim["authorization_owner"]
     ):
         raise TransactionError("commit claim authorization is stale")
+    if claim["authorization_owner"] == "create-pr":
+        _validate_pr_grant(claim, root, session_id)
     normalized = {**authorization, "state": "AUTHORIZED"}
     if claim["authorization_sha256"] != _digest_bytes(_stable_json(normalized)):
         raise TransactionError("commit claim authorization digest does not match")
@@ -773,7 +782,7 @@ def _validate_claim(value: dict[str, Any], root: Path, path: Path) -> None:
     failure = value.get("failure")
     if failure is not None and (not isinstance(failure, str) or not failure):
         raise TransactionError("commit claim failure state is invalid")
-    if value.get("authorization_owner") not in {"direct", "task-implementer"}:
+    if value.get("authorization_owner") not in {"direct", "task-implementer", "create-pr"}:
         raise TransactionError("commit claim authorization owner is invalid")
     if value.get("authorization_owner") == "direct":
         if (
@@ -1127,7 +1136,7 @@ def _recover_post_commit_for_prepare(
                 },
             )
         raise TransactionError(
-            "repository history moved outside the transaction; run a fresh explicit $commit"
+            "repository history moved outside the transaction; request a fresh commit after resolving the blocker"
         )
     if claim["state"] == "REVIEW_REQUIRED" and (
         claim.get("commit_head") != head or claim.get("commit_tree") != tree
@@ -1145,12 +1154,18 @@ def _recover_post_commit_for_prepare(
         completed = {
             **claim,
             "state": "COMMITTED",
+            "session_sha256": _digest_text(session_id),
+            "turn_sha256": authorization["turn_sha256"],
+            "authorization_sha256": _digest_bytes(_stable_json(authorization)),
+            "authorization_owner": authorization["owner"],
+            "owner_evidence_path": authorization["owner_evidence_path"],
+            "owner_evidence_sha256": authorization["owner_evidence_sha256"],
             "commit_head": head,
             "commit_tree": tree,
             "failure": None,
         }
         _atomic_json(claim_path, completed)
-        if authorization["owner"] == "direct":
+        if authorization["owner"] in {"direct", "create-pr"}:
             _atomic_json(authorization_path, {**authorization, "state": "CONSUMED"})
         return {
             "status": "committed",
@@ -1175,7 +1190,7 @@ def _recover_post_commit_for_prepare(
     }
     _validate_claim(rebound, root, claim_path)
     _atomic_json(claim_path, rebound)
-    if authorization["owner"] == "direct":
+    if authorization["owner"] in {"direct", "create-pr"}:
         _atomic_json(authorization_path, {**authorization, "state": "CONSUMED"})
     return {
         "status": "review-required",
@@ -1188,6 +1203,295 @@ def _recover_post_commit_for_prepare(
     }
 
 
+def _pr_origin_digest(root: Path) -> str:
+    # get-url expands insteadOf/pushInsteadOf and --all includes every destination.
+    destinations = {
+        "fetch": _git_text(root, "remote", "get-url", "--all", "origin"),
+        "push": _git_text(root, "remote", "get-url", "--push", "--all", "origin"),
+    }
+    if not all(destinations.values()):
+        raise TransactionError("PR continuation requires an origin remote")
+    return _digest_bytes(_stable_json(destinations))
+
+
+def _pr_grant_path(root: Path, session_id: str, receipt_digest: str) -> Path:
+    return (expected_authorization_path(root, session_id).parent / "pr-grants"
+            / _ref_key(_identity(root)["ref"]) / f"{receipt_digest}.json")
+
+
+def _validate_pr_grant(
+    evidence: dict[str, Any], root: Path, session_id: str,
+) -> tuple[Path, dict[str, Any]]:
+    private_root = _transaction_root(_common_dir(root))
+    path = Path(str(evidence.get("owner_evidence_path")))
+    if not _safe_private_file(path, private_root):
+        raise TransactionError("PR continuation grant is unsafe")
+    grant = _load_json(path, "PR continuation grant")
+    identity = _identity(root)
+    expected = {
+        "schema": "commit-transaction.pr-grant.v1",
+        **{key: identity[key] for key in ("repo_root", "worktree", "common_dir", "ref")},
+        "session_sha256": _digest_text(session_id),
+        "origin_sha256": _pr_origin_digest(root),
+        "default_ref": _git_text(root, "symbolic-ref", "refs/remotes/origin/HEAD"),
+    }
+    if (
+        set(grant) != {*expected, "receipt_sha256", "turn_sha256", "prompt_sha256",
+                       "initial_head", "base_ref", "base_head", "initial_claim_sha256"}
+        or any(grant.get(key) != value for key, value in expected.items())
+        or any(not isinstance(grant.get(key), str) or not DIGEST_RE.fullmatch(grant[key])
+               for key in ("receipt_sha256", "turn_sha256", "prompt_sha256", "initial_claim_sha256"))
+        or any(not isinstance(grant.get(key), str) or not OBJECT_RE.fullmatch(grant[key])
+               for key in ("initial_head", "base_head"))
+        or path != _pr_grant_path(root, session_id, grant["receipt_sha256"])
+        or evidence.get("owner_evidence_sha256") != _digest_bytes(_stable_json(grant))
+    ):
+        raise TransactionError("PR continuation identity changed")
+    if path.with_suffix(".closed.json").exists() or path.with_suffix(".closed.json").is_symlink():
+        raise TransactionError("PR continuation is closed; a new PR task is required")
+    base_ref = grant["base_ref"]
+    if (not isinstance(base_ref, str) or not base_ref.startswith("refs/remotes/origin/")
+            or _run_git(root, ("check-ref-format", base_ref), check=False).returncode):
+        raise TransactionError("PR continuation base is invalid")
+    if identity["branch"] in {
+        base_ref.removeprefix("refs/remotes/origin/"),
+        grant["default_ref"].removeprefix("refs/remotes/origin/"),
+    }:
+        raise TransactionError("PR continuation requires a non-default feature branch")
+    base_head = _git_text(root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+    if _run_git(root, ("merge-base", "--is-ancestor", grant["base_head"], base_head), check=False).returncode:
+        raise TransactionError("PR continuation base lineage changed")
+    if _managed_worktree_name(_primary_worktree(root), root) is not None:
+        raise TransactionError("PR continuation cannot commit a managed Worktree child")
+    _safety_checks(root, allow_default_branch=False)
+    return path, grant
+
+
+def _pr_merge_chain(root: Path, anchor: str, grant: dict[str, Any]) -> None:
+    """Allow only correctly oriented base merges after an exact owned commit."""
+    current = _identity(root)["head"]
+    base = _git_text(root, "rev-parse", "--verify", f"{grant['base_ref']}^{{commit}}")
+    while current != anchor:
+        parents = _git_text(root, "rev-list", "--parents", "-n", "1", current).split()
+        if (len(parents) != 3
+                or _run_git(root, ("merge-base", "--is-ancestor", parents[2], base), check=False).returncode
+                or _run_git(root, ("merge-base", "--is-ancestor", grant["base_head"], parents[2]), check=False).returncode):
+            raise TransactionError("PR history moved outside its reviewed commits and base merges")
+        current = parents[1]
+
+
+def _bind_pr_intent(arguments: argparse.Namespace, root: Path, path: Path) -> None:
+    """Authorize another exact commit inside one semantically authorized PR task."""
+    digest = arguments.intent_sha256
+    if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
+        raise TransactionError("PR preparation requires its root receipt digest")
+    if path != expected_authorization_path(root, arguments.session_id):
+        raise TransactionError("PR authorization path is not canonical")
+    if arguments.allow_default_branch or not arguments.pr_base:
+        raise TransactionError("PR preparation requires a base and forbids default-branch commits")
+    identity = _identity(root)
+    private_root = _transaction_root(_common_dir(root))
+    claim_path = expected_claim_path(root)
+    if Path(arguments.claim).resolve(strict=False) != claim_path:
+        raise TransactionError("PR claim path is not canonical")
+    existing = None
+    if claim_path.exists() or claim_path.is_symlink():
+        if not _safe_private_file(claim_path, private_root):
+            raise TransactionError("PR predecessor claim is unsafe")
+        existing = _load_json(claim_path, "PR predecessor claim")
+        _validate_claim(existing, root, claim_path)
+    grant_path = _pr_grant_path(root, arguments.session_id, digest)
+    fresh = not (grant_path.exists() or grant_path.is_symlink())
+    if fresh:
+        receipt_path = path.with_name("intent.json")
+        if not _safe_private_file(receipt_path, private_root):
+            raise TransactionError("PR root receipt is unavailable")
+        receipt = _load_json(receipt_path, "PR root receipt")
+        expected = {
+            "schema": "commit-transaction.intent.v1",
+            **{key: identity[key] for key in ("repo_root", "worktree", "common_dir")},
+            "session_sha256": _digest_text(arguments.session_id), "base_head": identity["head"],
+        }
+        default_ref = _git_text(root, "symbolic-ref", "refs/remotes/origin/HEAD")
+        # A newly selected feature branch may start at the receipt's default HEAD.
+        eligible_refs = {identity["ref"], default_ref.replace("refs/remotes/origin/", "refs/heads/", 1)}
+        if (set(receipt) != {*expected, "ref", "turn_sha256", "prompt_sha256"}
+                or any(receipt.get(key) != value for key, value in expected.items())
+                or receipt.get("ref") not in eligible_refs
+                or any(not isinstance(receipt.get(key), str) or not DIGEST_RE.fullmatch(receipt[key])
+                       for key in ("turn_sha256", "prompt_sha256"))
+                or digest != _digest_bytes(_stable_json(receipt))):
+            raise TransactionError("PR receipt does not match the current root request")
+        grant = {
+            "schema": "commit-transaction.pr-grant.v1",
+            **{key: identity[key] for key in ("repo_root", "worktree", "common_dir", "ref")},
+            "session_sha256": _digest_text(arguments.session_id),
+            "receipt_sha256": digest, "turn_sha256": receipt["turn_sha256"],
+            "prompt_sha256": receipt["prompt_sha256"], "initial_head": identity["head"],
+            "origin_sha256": _pr_origin_digest(root), "default_ref": default_ref,
+            "base_ref": f"refs/remotes/origin/{arguments.pr_base}",
+            "base_head": _git_text(root, "rev-parse", "--verify", f"refs/remotes/origin/{arguments.pr_base}^{{commit}}"),
+            "initial_claim_sha256": _digest_bytes(_stable_json(existing)),
+        }
+        if existing is not None and existing["state"] not in {"COMMITTED", "STALE"}:
+            raise TransactionError("an existing commit transaction is still active")
+        if path.exists() or path.is_symlink():
+            if not _safe_private_file(path, private_root):
+                raise TransactionError("PR authorization path is unsafe")
+            prior = _load_json(path, "commit authorization")
+            if prior.get("owner") not in {"direct", "create-pr"}:
+                raise TransactionError("PR intent cannot replace delegated authorization")
+            if (prior.get("turn_sha256") == receipt["turn_sha256"]
+                    and prior.get("prompt_sha256") == receipt["prompt_sha256"]):
+                raise TransactionError("consumed ordinary intent cannot become a PR grant")
+    else:
+        if not _safe_private_file(grant_path, private_root):
+            raise TransactionError("PR continuation grant is unsafe")
+        grant = _load_json(grant_path, "PR continuation grant")
+    evidence = {"owner_evidence_path": str(grant_path),
+                "owner_evidence_sha256": _digest_bytes(_stable_json(grant))}
+    if grant.get("base_ref") != f"refs/remotes/origin/{arguments.pr_base}":
+        raise TransactionError("PR continuation base changed")
+    if fresh:
+        # Validate before publishing grant/authorization or changing either index.
+        if identity["branch"] in {arguments.pr_base, grant["default_ref"].removeprefix("refs/remotes/origin/")}:
+            raise TransactionError("PR continuation requires a non-default feature branch")
+        _safety_checks(root, allow_default_branch=False)
+        if _managed_worktree_name(_primary_worktree(root), root) is not None:
+            raise TransactionError("PR continuation cannot commit a managed Worktree child")
+    else:
+        _validate_pr_grant(evidence, root, arguments.session_id)
+    authorization = {
+        "schema": AUTH_SCHEMA, "state": "AUTHORIZED",
+        **{key: identity[key] for key in ("repo_root", "worktree", "common_dir", "ref")},
+        "base_head": identity["head"], "session_sha256": grant["session_sha256"],
+        "turn_sha256": grant["turn_sha256"], "prompt_sha256": grant["prompt_sha256"],
+        "owner": "create-pr", **evidence, "allow_default_branch": False,
+    }
+    initial_claim = _digest_bytes(_stable_json(existing)) == grant["initial_claim_sha256"]
+    if initial_claim:
+        _pr_merge_chain(root, grant["initial_head"], grant)
+    else:
+        if (existing is None or existing["authorization_owner"] != "create-pr"
+                or existing["session_sha256"] != grant["session_sha256"]
+                or any(existing.get(key) != value for key, value in evidence.items())):
+            raise TransactionError("PR continuation predecessor belongs to another transaction")
+        if not _safe_private_file(path, private_root):
+            raise TransactionError("PR predecessor authorization is unsafe")
+        # prepare may have published this exact successor authorization before
+        # persisting its claim. Resume only that deterministic transition.
+        pending = _load_json(path, "PR predecessor authorization")
+        if pending != authorization:
+            _validate_claim_authorization(existing, root, arguments.session_id)
+        if existing["state"] == "COMMITTED":
+            if (not _exact_direct_child(root, existing["base_head"], existing["commit_head"])
+                    or _git_text(root, "rev-parse", f"{existing['commit_head']}^{{tree}}") != existing["commit_tree"]):
+                raise TransactionError("PR predecessor lacks exact commit proof")
+            _pr_merge_chain(root, existing["commit_head"], grant)
+        elif existing["state"] == "STALE":
+            if existing["commit_head"] is not None or identity["head"] != existing["base_head"]:
+                raise TransactionError("PR failed attempt no longer has its unchanged base")
+        elif existing["state"] in EXECUTABLE_STATES:
+            if identity["head"] != existing["base_head"]:
+                if not _exact_direct_child(root, existing["base_head"], identity["head"]):
+                    raise TransactionError("PR interrupted commit is not an exact direct child")
+            else:
+                candidate, _ = _preview_tree(root, claim_path.parent)
+                same = (_index_tree(root) == existing["initial_index_tree"]
+                        and _digest_bytes(_status(root)) == existing["initial_status_sha256"])
+                staged = _index_tree(root) == candidate and not _has_unstaged_or_untracked(root)
+                if candidate != existing["candidate_tree"] or not (same or staged):
+                    raise TransactionError("an existing commit transaction is still active")
+        else:
+            raise TransactionError("PR predecessor requires explicit commit review")
+    recovering = (existing is not None and existing["state"] in EXECUTABLE_STATES
+                  and identity["head"] != existing["base_head"] and not initial_claim)
+    if not recovering:
+        candidate, _ = _preview_tree(root, claim_path.parent)
+        if candidate == _git_text(root, "rev-parse", "HEAD^{tree}"):
+            raise TransactionError("nothing to commit")
+    if fresh:
+        _atomic_json(grant_path, grant)
+    _validate_pr_grant(evidence, root, arguments.session_id)
+    _atomic_json(path, authorization)
+
+
+def _complete_pr(claim: dict[str, Any], root: Path, session_id: str) -> None:
+    if claim["authorization_owner"] != "create-pr" or claim["state"] != "COMMITTED":
+        raise TransactionError("only a completed PR commit can close continuation")
+    path, grant = _validate_pr_grant(claim, root, session_id)
+    _pr_merge_chain(root, claim["commit_head"], grant)
+    if _status(root):
+        raise TransactionError("PR continuation completion requires a clean checkout")
+    _atomic_json(path.with_suffix(".closed.json"), {
+        "schema": "commit-transaction.pr-completion.v1",
+        "grant_sha256": claim["owner_evidence_sha256"], "head": _identity(root)["head"],
+    })
+
+
+def _bind_direct_intent(
+    arguments: argparse.Namespace, root: Path, path: Path, private_root: Path
+) -> None:
+    """Bind the root agent's semantic decision to a hook-owned turn receipt.
+
+    The receipt proves origin and freshness, not natural-language meaning.
+    The calling root agent owns that judgment under the skill instructions.
+    """
+    action = getattr(arguments, "requested_action", None)
+    if action == "create-pr":
+        _bind_pr_intent(arguments, root, path)
+        return
+    supplied_digest = getattr(arguments, "intent_sha256", None)
+    if action not in {"commit", "commit-push"} or not supplied_digest:
+        raise TransactionError("direct preparation requires a receipt-bound requested action")
+    if path != expected_authorization_path(root, arguments.session_id):
+        raise TransactionError("commit authorization path is not canonical for this session")
+    receipt_path = path.with_name("intent.json")
+    if not _safe_private_file(receipt_path, private_root):
+        raise TransactionError("current root-turn commit intent receipt is unavailable or unsafe")
+    receipt = _load_json(receipt_path, "commit intent receipt")
+    identity = _identity(root)
+    expected = {
+        "schema": "commit-transaction.intent.v1",
+        "repo_root": identity["repo_root"],
+        "worktree": identity["worktree"],
+        "common_dir": identity["common_dir"],
+        "ref": identity["ref"],
+        "base_head": identity["head"],
+        "session_sha256": _digest_text(arguments.session_id),
+    }
+    if (
+        set(receipt) != {*expected, "turn_sha256", "prompt_sha256"}
+        or any(receipt.get(key) != value for key, value in expected.items())
+        or any(not isinstance(receipt.get(key), str) or not DIGEST_RE.fullmatch(receipt[key])
+               for key in ("turn_sha256", "prompt_sha256"))
+        or _digest_bytes(_stable_json(receipt)) != supplied_digest
+    ):
+        raise TransactionError("commit intent receipt does not match the current request and repository")
+    if action == "commit-push" and arguments.allow_default_branch:
+        raise TransactionError("commit-push never authorizes default-branch commits")
+    authorization = {
+        **receipt,
+        "schema": AUTH_SCHEMA,
+        "state": "AUTHORIZED",
+        "owner": "direct",
+        "owner_evidence_path": None,
+        "owner_evidence_sha256": None,
+        "allow_default_branch": bool(arguments.allow_default_branch),
+    }
+    if path.exists() or path.is_symlink():
+        if not _safe_private_file(path, private_root):
+            raise TransactionError("commit authorization path is unsafe")
+        prior = _load_json(path, "commit authorization")
+        if prior.get("owner") not in {"direct", "create-pr"}:
+            raise TransactionError("root intent cannot replace delegated authorization")
+        if prior.get("turn_sha256") == receipt["turn_sha256"]:
+            if prior != authorization:
+                raise TransactionError("commit intent was already consumed or changed within this turn")
+            return
+    _atomic_json(path, authorization)
+
+
 def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     root = _canonical_repo(arguments.repo_root)
     authorization_path = Path(arguments.authorization).resolve(strict=False)
@@ -1195,15 +1499,23 @@ def prepare(arguments: argparse.Namespace) -> dict[str, object]:
     identity = _identity(root)
     with _repository_lock(Path(identity["common_dir"])):
         private_root = _transaction_root(Path(identity["common_dir"]))
+        direct_assertion = bool(
+            getattr(arguments, "requested_action", None)
+            or getattr(arguments, "intent_sha256", None)
+        )
+        if direct_assertion:
+            _bind_direct_intent(arguments, root, authorization_path, private_root)
         if not _safe_private_file(authorization_path, private_root):
             raise TransactionError("commit authorization path is unsafe")
         authorization = _load_json(authorization_path, "commit authorization")
+        if authorization.get("owner") in {"direct", "create-pr"} and not direct_assertion:
+            raise TransactionError("direct preparation requires a receipt-bound requested action")
         _validate_authorization(
             authorization, root, arguments.session_id, authorization_path
         )
         primary = _primary_worktree(root)
         managed_name = _managed_worktree_name(primary, root)
-        if authorization["owner"] == "direct" and managed_name is not None:
+        if authorization["owner"] in {"direct", "create-pr"} and managed_name is not None:
             raise TransactionError(
                 "managed Worktree children require the exact delegated integration flow: "
                 + managed_name
@@ -1326,7 +1638,7 @@ def prepare(arguments: argparse.Namespace) -> dict[str, object]:
             }
         _validate_claim(claim, root, claim_path)
         _atomic_json(claim_path, claim)
-        if authorization["owner"] == "direct":
+        if authorization["owner"] in {"direct", "create-pr"}:
             _atomic_json(
                 authorization_path,
                 {
@@ -1365,7 +1677,7 @@ def _reconcile_committed(
             "HEAD is not the transaction's exact direct child",
         )
         raise TransactionError(
-            "repository history moved outside the transaction; run a fresh explicit $commit"
+            "repository history moved outside the transaction; request a fresh commit after resolving the blocker"
         )
     if tree == claim["candidate_tree"] and not _status(root):
         committed = {
@@ -1482,7 +1794,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
                 "repository identity, index, or status changed",
             )
             raise TransactionError(
-                "commit claim is stale; run a fresh explicit $commit"
+                "commit claim is stale; request a fresh commit after resolving the blocker"
             )
         candidate_tree, candidate_index_sha256 = _preview_tree(root, claim_path.parent)
         if (
@@ -1491,7 +1803,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
         ):
             _mark_claim(claim_path, claim, "STALE", "candidate tree changed")
             raise TransactionError(
-                "commit claim is stale because the candidate changed; run a fresh explicit $commit"
+                "commit claim is stale because the candidate changed; request a fresh commit after resolving the blocker"
             )
         conflicts = _active_worktree_claims(_primary_worktree(root), claim["ref"])
         if conflicts:
@@ -1524,7 +1836,7 @@ def execute(arguments: argparse.Namespace) -> dict[str, object]:
                 return reconciled
             _mark_claim(claim_path, claim, "STALE", "normal-hook git commit failed")
             raise TransactionError(
-                "normal-hook git commit failed; run a fresh explicit $commit"
+                "normal-hook git commit failed; request a fresh commit after resolving the blocker"
             )
         result = _reconcile_committed(root, claim, claim_path)
         if result is None:  # pragma: no cover - commit success must move HEAD
@@ -1560,6 +1872,8 @@ def review(arguments: argparse.Namespace) -> dict[str, object]:
                 raise TransactionError(
                     "reviewed commit does not match the completed claim"
                 )
+            if arguments.complete_pr:
+                _complete_pr(claim, root, arguments.session_id)
             return {
                 "status": "committed",
                 "branch": claim["branch"],
@@ -1593,6 +1907,8 @@ def review(arguments: argparse.Namespace) -> dict[str, object]:
             raise TransactionError("reviewed commit failed git diff --check")
         completed = {**claim, "state": "COMMITTED", "failure": None}
         _atomic_json(claim_path, completed)
+        if arguments.complete_pr:
+            _complete_pr(completed, root, arguments.session_id)
         return {
             "status": "committed",
             "branch": claim["branch"],
@@ -1609,6 +1925,9 @@ def _parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--session-id", required=True)
     prepare_parser.add_argument("--authorization", required=True)
     prepare_parser.add_argument("--claim", required=True)
+    prepare_parser.add_argument("--requested-action", choices=("commit", "commit-push", "create-pr"))
+    prepare_parser.add_argument("--intent-sha256")
+    prepare_parser.add_argument("--pr-base")
     prepare_parser.add_argument("--allow-default-branch", action="store_true")
     execute_parser = subparsers.add_parser("execute")
     execute_parser.add_argument("--repo-root", required=True)
@@ -1624,6 +1943,7 @@ def _parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--token", required=True)
     review_parser.add_argument("--reviewed-commit", required=True)
     review_parser.add_argument("--reviewed-tree", required=True)
+    review_parser.add_argument("--complete-pr", action="store_true")
     return parser
 
 

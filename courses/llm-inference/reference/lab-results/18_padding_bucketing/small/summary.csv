@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,single_padded_batch_median_seconds,value,0.013784300000000001,s
+baseline-trial1,two_length_buckets_median_seconds,value,0.0262675,s
+baseline-trial1,single_batch_padding_tokens,value,711,none
+baseline-trial1,bucketed_padding_tokens,value,207,none
+baseline-trial1,maximum_last_logit_relative_l2,value,0.014752,none
+repeat-trial1,single_padded_batch_median_seconds,value,0.013705700000000001,s
+repeat-trial1,two_length_buckets_median_seconds,value,0.0250768,s
+repeat-trial1,single_batch_padding_tokens,value,711,none
+repeat-trial1,bucketed_padding_tokens,value,207,none
+repeat-trial1,maximum_last_logit_relative_l2,value,0.014752,none

@@ -8,13 +8,13 @@
 
 Create a disposable, local-only three-tier web application named SDLC Task
 Board and ship it through the complete Agentic SDLC workflow. Do not push,
-publish, create a pull request, or use a non-local service.
+publish, create a pull request, or depend on a non-local runtime service.
 
 ## Outcome
 
 Deliver a browser task board backed by a versioned Django/Gunicorn JSON API and
 PostgreSQL. The promoted clean Git revision must run as exactly two healthy
-Docker Compose services and pass semantic, automated, and computer-use UAT.
+Docker Compose services and pass semantic, automated, and headless Playwright Test UAT.
 
 ## Context
 
@@ -44,8 +44,7 @@ manually declare labels in Docker's reserved `com.docker.compose` namespace.
 - Keep scenario evidence and screenshots under `{{EVIDENCE_ROOT}}`.
 - Limit writes to the disposable project `{{PROJECT_ROOT}}`, the private and
   evidence roots, the named Compose project, its exactly labelled resources,
-  loopback HTTP, and one fresh verifier-owned Google Chrome instance with an
-  isolated user-data directory and verification-ID marker.
+  loopback HTTP, and fresh verifier-owned headless Chrome processes and isolated contexts.
 
 ## Acceptance criteria
 
@@ -56,48 +55,76 @@ manually declare labels in Docker's reserved `com.docker.compose` namespace.
   API and PostgreSQL correlation.
 - [ ] Health checks, database readiness, non-root web execution, deterministic
   dependency pins, and a committed migration are present.
-- [ ] Unit, API, PostgreSQL, migration, vertical HTTP, and computer-use GUI UAT
+- [ ] Unit, API, PostgreSQL, migration, vertical HTTP, and headless Playwright Test GUI UAT
   pass against the clean promoted revision.
 - [ ] README and CHANGELOG document local start, endpoint discovery, health,
   browser, reset, and troubleshooting.
 
 ## Verification
 
-Use test-first development. Run framework checks and unit, API, database,
-migration, and vertical HTTP tests. For GUI evaluation and UAT, require
-`computer-use`. Immediately before the first GUI navigation in evaluation and
-again before UAT, require a fresh successful target-browser `get_app_state`
-while the console is unlocked unless the current Codex surface explicitly
-confirms locked Computer Use is enabled for this session. A normal target
-window must be visible, unminimized, foreground, and on the current macOS
-Space. Refresh accessibility state after every successful action. Test blank
-rejection; create a unique task; correlate ID, title, and state through GUI,
-API, and PostgreSQL; refresh; complete; filter active and completed; restart
-both services without deleting the volume; and prove persistence.
+Use test-first development. Product-owned tests remain separate from the
+verifier-owned acceptance bundle. The frozen interface for independent checks is:
 
-If just-in-time capture fails, record `ENVIRONMENT_DEFECT` at
-`pre-navigation-window-capture` and state that no GUI navigation or action was
-attempted. A hung/timed-out call or response loss across browsers means the
-shared Computer Use service is unhealthy: stop all further Computer Use calls,
-preserve the owned runtime, and require fresh-session or service recovery as a
-separate explicitly authorized action.
+- Heading `Task board`; textbox labelled `Task title`; buttons `Add task`,
+  `Active`, and `Completed`; visible `role="alert"` for blank-title validation.
+- Each row has `data-task-id` equal to its positive integer database ID and a
+  checkbox labelled `Complete task` exposing the saved completion state.
+- `GET /api/v1/tasks` returns an array of objects containing `id` (integer),
+  `title` (string), and `completed` (boolean).
+- PostgreSQL table `tasks_task` has `id`, `title`, and `completed` columns.
 
-Capture five distinct sanitized screenshots under `{{EVIDENCE_ROOT}}`: empty
+Use headless Playwright Test with Chrome for required web acceptance. Run
+four fresh owned stages in order: `capability-discovery`, `evaluate`,
+`uat-before-restart`, and `uat-after-restart`. Each stage starts a new process
+and isolated context, records assertions, screenshots, a trace, actual browser
+version and timestamps, and closes its processes even with `--keep`. Native
+desktop capture, an unlocked screen, display selection, and foreground windows
+are not prerequisites. Optional headless isolated Playwright MCP exploration
+is separate from the acceptance oracle and cannot satisfy a required stage.
+
+The verifier freezes its independent test bundle before product implementation;
+never copy it into product TDD tests or alter it to fit an implementation.
+Run evaluation against the clean registered integration revision and UAT against
+the clean promoted revision. The outer lifecycle owner alone restarts Compose
+between the two UAT stages, retaining the original database volume. Rediscover
+the dynamic loopback port, refresh recorded endpoints, then launch a fresh
+post-restart browser against the same task ID/title/completion state.
+Independent API and PostgreSQL checks accompany blank rejection, creation,
+completion, and post-restart persistence. Use the frozen task-board DOM/API/table
+contract in the generated prompt. Before evaluation and separately before UAT,
+use the declared disposable reset to establish an empty database; resets are
+fixture setup, never part of the product acceptance journey. Never reset between
+UAT stages.
+
+A failed stage remains failed and its artifacts are preserved. Correct the
+proven owner and start a new trial; no later success erases the earlier result.
+Resume retained application work with a fresh browser, never a retained tab.
+Laptops must remain awake with Docker and the agent running. A locked-screen
+certification additionally needs independently observed lock intervals and an
+actual agent launching a new stage and collecting evidence before unlock;
+a standalone browser smoke test does not certify agent continuity.
+
+Capture five independently produced sanitized screenshots under `{{EVIDENCE_ROOT}}`: empty
 state, validation error, created task, completed filter, and post-restart. Write
-the `agentic-sdlc/three-tier-results-v2` semantic manifest incrementally to
+the `agentic-sdlc/three-tier-results-v3` semantic manifest incrementally to
 `{{EVIDENCE_ROOT}}/three-tier-results.json`.
 
 ## Live Experiment Environment
 
 The environment is disposable, non-production, and identified by verification
 ID `{{VERIFICATION_ID}}`. Cleanup may remove only the exact owned project,
-private/evidence roots, dedicated browser tab, and Docker resources whose IDs
+private/evidence roots, owned browser processes, and Docker resources whose IDs
 and ownership labels were recorded by the lifecycle helper.
 
 ## Non-goals
 
-- No remote Git operations, pull requests, publication, cloud services, or
-  non-local dependencies beyond pulling the fixed public base images.
+- Git reads may use only the verifier-owned local bare origin through normal
+  SDLC admission. No pushes, external Git operations, pull requests, publication,
+  cloud services, or non-local runtime dependencies. Build-time downloads are
+  limited to the fixed public base images and pinned public Python packages
+  from PyPI and the pinned verifier Playwright packages from npm, including their
+  transitive dependencies. All application behavior
+  must run locally after the build.
 - No host-published PostgreSQL port or additional runtime service.
 - No committed credentials, prompts, raw logs, private state, or screenshots.
 
@@ -112,3 +139,7 @@ and ownership labels were recorded by the lifecycle helper.
 
 No steering is present initially. Apply later corrections through this same
 managed prompt and rerun its prompt-bound `$sdlc-start run` action.
+
+The post-restart screenshot may have identical pixels to the completed state;
+its fresh owned stage receipt proves a separate capture. Do not alter product
+state or copy an earlier image to satisfy screenshot evidence.

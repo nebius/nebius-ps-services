@@ -24,14 +24,26 @@
   marks the trial and dependent evidence as intervened. Changing the declaration
   starts a new trial; recovery permission does not validate earlier evidence.
 - Production and unconfirmed targets remain read-only without exact action
-  authorization. Destructive, credential, IAM, data, exposure, deletion,
-  material-cost and availability actions need action-specific approval.
+  authorization. An authorized task includes creating new credentials and secrets necessary
+  for its identified target and intended access scope; do not request separate
+  approval solely for that creation. Store values only in the intended secret
+  store or protected runtime file, never in chat, logs, Git, documentation, task
+  state, or other artifacts. Reuse authorization already given. Destructive or
+  irreversible actions, replacement or revocation of existing credentials, IAM
+  access expansion, unrelated data changes, public exposure, deletion, or material
+  availability or cost impact require action-specific approval only when not
+  already covered by the user's authorization.
 - Repair the proven causal owner, then replay from before the earliest product
   divergence or contamination. Verify prior writers are quiescent and observe
   the product transition before claiming a verified fix.
 
 ## Nested Project Instructions
 
+- An explicit request to repair restrictive project instructions authorizes
+  focused edits to the affected human-owned rules in the selected projects.
+  Preserve unrelated instructions and use the owning workflow for generated
+  regions. Do not ask again for the same rule change; system/developer policy
+  and authority outside the requested repair remain binding.
 - Before modifying a project, read the applicable CLAUDE.md and CLAUDE.local.md
   files along its directory hierarchy, plus applicable .claude rules and any
   explicit imports. Claude loads ancestor and project instructions together;

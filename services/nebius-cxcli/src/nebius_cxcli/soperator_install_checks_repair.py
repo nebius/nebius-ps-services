@@ -5,13 +5,13 @@ from __future__ import annotations
 import copy
 import json
 import re
-import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .paths import ProjectPaths
 from .project_bundle_transaction import ProjectBundleTransaction
 from .soperator_adapter import _MOUNT_GATE_SCRIPT, _REST_JWT_CONFIG_GATE_SCRIPT
@@ -182,6 +182,7 @@ def prepare_install_input_repair(
 ) -> Mapping[str, Any] | None:
     from .soperator_install_cpu_mask_repair import prepare_install_cpu_mask_repair
     from .soperator_install_docker_repair import prepare_install_docker_repair
+    from .soperator_install_docker_storage_repair import prepare_install_docker_storage_repair
     from .soperator_install_gpu_repair import prepare_install_gpu_maintenance_repair
     from .soperator_install_runtime_repair import prepare_install_runtime_repair
     from .soperator_install_storage_repair import prepare_install_storage_repair
@@ -190,6 +191,29 @@ def prepare_install_input_repair(
 
     paths = kwargs["paths"]
     target_ref = kwargs["target_ref"]
+    from .soperator_install_observability_repair import (
+        historical_observability_repair,
+        prepare_install_observability_repair,
+    )
+
+    if (
+        paths.reports_dir / f"soperator-install-observability-repair-{target_ref}.json"
+    ).exists() and historical_observability_repair(
+        paths=paths,
+        target_ref=target_ref,
+        scheduling_journal=kwargs["scheduling_journal"],
+        env=kwargs["env"],
+        kube_context=kwargs["kube_context"],
+        assert_authority=kwargs["assert_authority"],
+    ):
+        return None
+
+    observability = prepare_install_observability_repair(**kwargs, slurm=slurm)
+    if observability is not None:
+        return observability
+    private_storage_repair = prepare_install_docker_storage_repair(**kwargs, slurm=slurm)
+    if private_storage_repair is not None:
+        return private_storage_repair
     if (paths.reports_dir / f"soperator-install-cpu-mask-repair-{target_ref}.json").exists():
         return prepare_install_cpu_mask_repair(**kwargs, slurm=slurm)
     if (paths.reports_dir / f"soperator-install-topology-repair-{target_ref}.json").exists():
@@ -590,7 +614,7 @@ def _prepare_install_binding_repair(
             kube_context=kube_context,
             assert_authority=assert_authority,
         )
-    rendered = subprocess.run(
+    rendered = kubernetes_process.run(
         [
             "helm",
             "template",
@@ -753,7 +777,7 @@ def terminate_admitted_wait_hook(
         {"op": "add", "path": "/spec/activeDeadlineSeconds", "value": 1},
     ]
     assert_authority()
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",

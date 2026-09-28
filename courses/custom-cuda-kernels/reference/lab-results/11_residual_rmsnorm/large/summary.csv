@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,kernel_median_seconds,value,1.1008e-05,s
+baseline-trial1,elements,value,1048576,none
+baseline-trial1,epsilon,value,1e-05,none
+repeat-trial1,kernel_median_seconds,value,1.1008e-05,s
+repeat-trial1,elements,value,1048576,none
+repeat-trial1,epsilon,value,1e-05,none

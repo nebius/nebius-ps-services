@@ -11,13 +11,20 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .soperator_checks_binding import bind_checks_jail
+import yaml
+
+from .soperator_checks_binding import bind_checks_gpu_allocation, bind_checks_jail
+from .soperator_deployment_profile import (
+    apply_deployment_profile,
+    deployment_profile,
+    validate_profile_workers,
+)
 from .soperator_enroot import enroot_profile_document
 from .soperator_jail_mounts import (
     JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS,
     validate_retained_home_layout,
 )
-from .soperator_release import SoperatorReleaseSnapshot
+from .soperator_release import SoperatorReleaseSnapshot, VerifiedSoperatorSource
 from .soperator_rest_contract import materialize_soperator_rest
 
 SOPERATOR_ADAPTER_LABEL = "soperator.nebius.ai/managed-by"
@@ -34,11 +41,13 @@ _DNS_TOKEN_RE = re.compile(r"[^a-z0-9-]+")
 _DEVICE_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _NFS_SERVER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
 _IMMUTABLE_IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
-_PROTECTED_UPGRADE_GENERATED_VOLUME_SOURCE_NAMES = frozenset({"controller-spool", "jail"})
 SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS = frozenset(
     {
         "sha256:20cf96ba24157f4c2cd4248906613b041680cf7d0275add50c2f1a92e72be073",
         "sha256:6a94b6dcf232e1b3358cb7fd40861750e55f4510883ab43f168bc6c4d8363dea",
+        "sha256:b2cea9e81578e50e779a86b6426129175fafc1d3e8d96259b6fb9ffbd6612100",
+        "sha256:3bd979e84f4c7e5356cc6b6546f51e0719f0b531c9f1eb1376851a8d1c34b93f",
+        "sha256:71a2c115845e403e8c6a24ade3a4d29c5aa2cbfc5a1cdd1728af91b1ca1dc1cd",
     }
 )
 SOPERATOR_VM_STACK_CLEANUP_HOOK_DISABLED_PACKAGES = frozenset(
@@ -174,6 +183,7 @@ _PARENT_ONLY_KEYS = {
     "clusterType",
     "controllerManager",
     "customContainer",
+    "deploymentProfile",
     "externalNfs",
     "fullnameOverride",
     "gpuDriverJail",
@@ -193,7 +203,6 @@ _PARENT_ONLY_KEYS = {
     "soperator-activechecks",
     "soperator-backup-config",
     "soperator-checks",
-    "soperator-dcgm-exporter",
     "soperator-notifier",
     "storage",
     "storageClass",
@@ -408,9 +417,8 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _soperator_monitoring_dashboards_requested(values: Mapping[str, Any]) -> bool:
-    dcgm = _mapping(values.get("soperator-dcgm-exporter"))
     observability = _mapping(values.get("observability"))
-    return dcgm.get("enabled") is True or observability.get("enabled") is True
+    return observability.get("enabled") is True
 
 
 def soperator_monitoring_dashboards_require_post_flux(
@@ -691,6 +699,8 @@ def _service_storage_contract(
 
 
 def _jail_contract(values: Mapping[str, Any]) -> dict[str, Any]:
+    from .soperator_jail_protection import retained_rootfs_generations
+
     rootfs = _mapping(values.get("jailRootfs"))
     if str(rootfs.get("strategy") or "activePassive") != "activePassive":
         raise ValueError("jailRootfs.strategy must be activePassive")
@@ -759,11 +769,20 @@ def _jail_contract(values: Mapping[str, Any]) -> dict[str, Any]:
         "filesystem_id": filesystem_id
         or f"{str(jail_volume.get('type') or 'filestore').strip()}:{jail_device_tag}",
         "slots": slots,
+        "retained_generations": [
+            {
+                "volume_name": row["volumeSourceName"],
+                "pv_name": row["pvName"],
+                "pvc_name": row["pvcName"],
+                "local_path": row["localPath"],
+            }
+            for row in retained_rootfs_generations(values)
+        ],
     }
 
 
 def resolve_soperator_jail_image_authority(
-    values: Mapping[str, Any], *, release: SoperatorReleaseSnapshot
+    values: Mapping[str, Any], *, release: SoperatorReleaseSnapshot | VerifiedSoperatorSource
 ) -> SoperatorJailImageAuthority:
     """Resolve the only supported target rootfs-image precedence path."""
 
@@ -820,6 +839,24 @@ def rendered_soperator_jail_image_authority(
     )
 
 
+def soperator_persistent_mount_volume_names(item: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Resolve authored or implicit storage identities through one naming contract."""
+    mount_path = _absolute_path(item.get("mountPath"), label="jailPersistentMounts.mountPath")
+    suffix = _dns_token(mount_path.strip("/").replace("/", "-"), label="mountPath")
+    volume_name = _dns_token(
+        str(item.get("name") or f"jail-persistent-{suffix}"), label="jailPersistentMounts.name"
+    )
+    return (
+        volume_name,
+        _dns_token(
+            str(item.get("pvName") or f"{volume_name}-pv"), label="jailPersistentMounts.pvName"
+        ),
+        _dns_token(
+            str(item.get("pvcName") or f"{volume_name}-pvc"), label="jailPersistentMounts.pvcName"
+        ),
+    )
+
+
 def _persistent_mounts(
     values: Mapping[str, Any], *, contract: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
@@ -839,11 +876,7 @@ def _persistent_mounts(
         if mount_path in seen_paths:
             raise ValueError(f"duplicate persistent mount path {mount_path}")
         seen_paths.add(mount_path)
-        suffix = _dns_token(mount_path.strip("/").replace("/", "-"), label="mountPath")
-        volume_name = _dns_token(
-            str(item.get("name") or f"jail-persistent-{suffix}"),
-            label=f"jailPersistentMounts[{index}].name",
-        )
+        volume_name, pv_name, pvc_name = soperator_persistent_mount_volume_names(item)
         mounts.append(
             {
                 "name": volume_name,
@@ -853,14 +886,8 @@ def _persistent_mounts(
                     root=str(contract["mount_path"]),
                     label=f"jailPersistentMounts[{index}].localPath",
                 ),
-                "pv_name": _dns_token(
-                    str(item.get("pvName") or f"{volume_name}-pv"),
-                    label=f"jailPersistentMounts[{index}].pvName",
-                ),
-                "pvc_name": _dns_token(
-                    str(item.get("pvcName") or f"{volume_name}-pvc"),
-                    label=f"jailPersistentMounts[{index}].pvcName",
-                ),
+                "pv_name": pv_name,
+                "pvc_name": pvc_name,
                 "create_dir": mount_path in JAIL_MANDATORY_PERSISTENT_MOUNT_PATHS,
             }
         )
@@ -926,27 +953,6 @@ def _pvc_volume_source(name: str, pvc_name: str) -> dict[str, Any]:
         "size": "",
         "persistentVolumeClaim": {"claimName": pvc_name, "readOnly": False},
     }
-
-
-def prepare_soperator_upgrade_adapter_handoff(
-    values: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Remove current-chart aliases that the direct-upstream adapter regenerates."""
-
-    prepared = copy.deepcopy(dict(values))
-    volume_sources = prepared.get("volumeSources")
-    if not isinstance(volume_sources, list):
-        return prepared
-    prepared["volumeSources"] = [
-        source
-        for source in volume_sources
-        if not (
-            isinstance(source, Mapping)
-            and str(source.get("name") or "").strip()
-            in _PROTECTED_UPGRADE_GENERATED_VOLUME_SOURCE_NAMES
-        )
-    ]
-    return prepared
 
 
 def mount_gate_init_container(
@@ -1046,6 +1052,12 @@ def _validate_adapter_identities(contract: Mapping[str, Any], mounts: list[dict[
     if contract["accounting"]["enabled"]:
         pvs.append(str(contract["accounting"]["pv_name"]))
         pvcs.append(str(contract["accounting"]["pvc_name"]))
+    for retained in contract["retained_generations"]:
+        if retained in contract["slots"].values():
+            continue
+        sources.append(retained["volume_name"])
+        pvs.append(retained["pv_name"])
+        pvcs.append(retained["pvc_name"])
     for label, names in (("volume source", sources), ("PV", pvs), ("PVC", pvcs)):
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
@@ -1157,8 +1169,7 @@ def _compile_slurm_values(
     )
     controller_spool = contract["controller_spool"]
     sources.append(_pvc_volume_source("controller-spool", str(controller_spool["pvc_name"])))
-    for slot in ("slot-a", "slot-b"):
-        item = contract["slots"][slot]
+    for item in contract["slots"].values():
         sources.append(_pvc_volume_source(item["volume_name"], item["pvc_name"]))
     sources.append(_pvc_volume_source("jail", str(contract["active_pvc"])))
     for mount in mounts:
@@ -1243,6 +1254,24 @@ def _compile_slurm_values(
     return result
 
 
+def _worker_jail_submounts(
+    existing: Any, generated: list[dict[str, Any]], *, label: str
+) -> list[dict[str, Any]]:
+    """Keep private runtime storage alongside adapter-owned persistent bindings."""
+    if not isinstance(existing, list) or any(not isinstance(m, Mapping) for m in existing):
+        raise ValueError(f"{label} jail submounts must be a list of mappings")
+    names = {m["name"] for m in generated}
+    paths = {m["mountPath"] for m in generated}
+    for mount in existing:
+        name = _dns_token(str(mount.get("name") or ""), label=f"{label} jail submount name")
+        path = _absolute_path(mount.get("mountPath"), label=f"{label} jail submount path")
+        if name in names or path in paths:
+            raise ValueError(f"{label} jail submount collides with another volume or mount path")
+        names.add(name)
+        paths.add(path)
+    return [*copy.deepcopy(existing), *generated]
+
+
 def _compile_nodesets_values(
     values: Mapping[str, Any],
     *,
@@ -1279,7 +1308,7 @@ def _compile_nodesets_values(
             image=gate_image,
         )
         if mounts:
-            volumes["jailSubMounts"] = [
+            generated_mounts = [
                 {
                     "name": mount["name"],
                     "mountPath": mount["mount_path"],
@@ -1288,6 +1317,11 @@ def _compile_nodesets_values(
                 }
                 for mount in mounts
             ]
+            volumes["jailSubMounts"] = _worker_jail_submounts(
+                volumes.get("jailSubMounts", []),
+                generated_mounts,
+                label=f"nodesets[{item.get('name') or '?'}]",
+            )
             for mount in mounts:
                 if mount["local_path"]:
                     _append_mount_gate(
@@ -1348,10 +1382,15 @@ def _compile_nodesets_values(
 
 
 def compile_upstream_soperator_values(
-    values: Mapping[str, Any], *, release: SoperatorReleaseSnapshot
+    values: Mapping[str, Any], *, release: SoperatorReleaseSnapshot | VerifiedSoperatorSource
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return upstream umbrella values and the normalized adapter contract."""
 
+    from .soperator_values import validate_observability_values
+
+    profile = deployment_profile(values)
+    validate_profile_workers(values)
+    validate_observability_values(values)
     pinned = release
     contract = _jail_contract(values)
     jail_image = resolve_soperator_jail_image_authority(values, release=pinned)
@@ -1388,19 +1427,15 @@ def compile_upstream_soperator_values(
     umbrella: dict[str, Any] = {
         "ns": {
             "enabled": True,
-            "version": pinned.third_party_charts["namespaceRaw"].version,
         },
         "certManager": {
             "enabled": True,
-            "version": pinned.third_party_charts["certManager"].version,
         },
         "mariadbOperator": {
             "enabled": True,
-            "version": pinned.third_party_charts["mariadbOperator"].version,
         },
         "securityProfilesOperator": {
             "enabled": True,
-            "version": pinned.third_party_charts["securityProfilesOperator"].version,
         },
         "slurmCluster": {
             "enabled": True,
@@ -1420,12 +1455,15 @@ def compile_upstream_soperator_values(
         },
         "nfsServer": {"enabled": False},
         "backup": {"enabled": False, "config": {"enabled": False}},
-        "observability": {"enabled": False},
+        "observability": _mapping(values.get("observability")),
         "storageClasses": {"enabled": False},
     }
     checks = _mapping(values.get("soperator-checks"))
     activechecks = bind_checks_jail(
         _mapping(values.get("soperator-activechecks")), str(contract["active_pvc"]), mounts
+    )
+    activechecks = bind_checks_gpu_allocation(
+        activechecks, values.get("nodesets") or [], allow_mixed=profile == "fast-dev-test"
     )
     unsupported_checks = {"waitForChecks", "srunReadyPartition"} & activechecks.keys()
     if unsupported_checks:
@@ -1434,7 +1472,6 @@ def compile_upstream_soperator_values(
         )
     notifier = _mapping(values.get("soperator-notifier"))
     backup = _mapping(values.get("soperator-backup-config"))
-    dcgm = _mapping(values.get("soperator-dcgm-exporter"))
     cert_manager = _mapping(values.get("certManager"))
     monitoring_dashboards_requested = _soperator_monitoring_dashboards_requested(values)
     if cert_manager:
@@ -1442,7 +1479,6 @@ def compile_upstream_soperator_values(
         cert_manager_enabled = cert_manager.pop("enabled", True) is True
         umbrella["certManager"] = {
             "enabled": cert_manager_enabled,
-            "version": pinned.third_party_charts["certManager"].version,
             "overrideValues": cert_manager or None,
         }
     operator_values: dict[str, Any] = {}
@@ -1459,7 +1495,6 @@ def compile_upstream_soperator_values(
         "overrideValues": operator_values or None,
         "kruise": {
             "enabled": True,
-            "version": pinned.third_party_charts["kruise"].version,
         },
         "soperatorChecks": {"enabled": True},
         "nodeConfigurator": {
@@ -1480,6 +1515,7 @@ def compile_upstream_soperator_values(
         "version": pinned.release,
         "overrideValues": activechecks or None,
     }
+    apply_deployment_profile(umbrella, profile)
     umbrella["customConfigmaps"] = {"enabled": True, "version": pinned.release}
     if "soperator-notifier" in values:
         umbrella["notifier"] = {
@@ -1499,23 +1535,22 @@ def compile_upstream_soperator_values(
     observability = _mapping(values.get("observability"))
     chart_exceptions: list[dict[str, Any]] = []
     if monitoring_dashboards_requested:
-        vm_stack_exception = soperator_vm_stack_cleanup_exception(pinned)
+        # Source compilation selects dependencies. Only acquired package identity
+        # can authorize the existing package-specific transformations.
+        vm_stack_exception = (
+            None
+            if isinstance(pinned, VerifiedSoperatorSource)
+            else soperator_vm_stack_cleanup_exception(pinned)
+        )
         vm_stack_values = observability.get("vmStack")
         vm_stack_enabled = not (
             isinstance(vm_stack_values, Mapping) and vm_stack_values.get("enabled") is False
         )
         if vm_stack_exception is not None and vm_stack_enabled:
             chart_exceptions.append(vm_stack_exception)
-        umbrella["observability"] = {
-            **observability,
-            "enabled": observability.pop("enabled", True) is True,
-            "dcgmExporter": {
-                "enabled": dcgm.pop("enabled", False) is True,
-                "version": pinned.release,
-                "overrideValues": dcgm or None,
-            },
-        }
-        if not soperator_monitoring_dashboards_require_post_flux(values, release=pinned):
+        if isinstance(
+            pinned, VerifiedSoperatorSource
+        ) or not soperator_monitoring_dashboards_require_post_flux(values, release=pinned):
             soperator["monitoringDashboards"] = {
                 "enabled": True,
                 "version": pinned.release,
@@ -1525,7 +1560,6 @@ def compile_upstream_soperator_values(
         install_operator = mariadb.pop("installOperator", None)
         umbrella["mariadbOperator"] = {
             "enabled": install_operator is not False,
-            "version": pinned.third_party_charts["mariadbOperator"].version,
             "overrideValues": mariadb or None,
         }
     kruise = _mapping(values.get("kruise"))
@@ -1819,6 +1853,14 @@ def _filesystem_id(values: Mapping[str, Any], key: str) -> str:
     ).strip()
 
 
+def load_soperator_adapter_documents(flux_dir: Path) -> list[dict[str, Any]]:
+    return [
+        doc
+        for doc in yaml.safe_load_all((flux_dir / "soperator-nebius-adapter.yaml").read_text())
+        if isinstance(doc, dict)
+    ]
+
+
 def render_soperator_adapter_documents(
     values: Mapping[str, Any], *, release: SoperatorReleaseSnapshot
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1856,8 +1898,9 @@ def render_soperator_adapter_documents(
             "volumeBindingMode": "WaitForFirstConsumer",
         },
     ]
-    for slot in ("slot-a", "slot-b"):
-        item = contract["slots"][slot]
+    generations = list(contract["slots"].values())
+    generations.extend(row for row in contract["retained_generations"] if row not in generations)
+    for item in generations:
         docs.extend(
             _local_pv_pvc(
                 name=item["pv_name"],
@@ -1930,6 +1973,10 @@ def render_soperator_adapter_documents(
             "filesystem_id": _filesystem_id(values, "accounting"),
         },
     }
+    # An unused retention feature must not change an existing adapter-state
+    # digest and invalidate the application's immutable deployment checkpoint.
+    if contract["retained_generations"]:
+        state["retainedGenerations"] = contract["retained_generations"]
     state_json = json.dumps(state, sort_keys=True, separators=(",", ":"))
     state_digest = hashlib.sha256(state_json.encode()).hexdigest()
     docs.extend(
@@ -1968,11 +2015,9 @@ def render_soperator_adapter_documents(
         ]
     )
     slot_dirs = [
-        str(PurePosixPath(path).relative_to(PurePosixPath(contract["mount_path"])))
-        for path in (
-            contract["slots"]["slot-a"]["local_path"],
-            contract["slots"]["slot-b"]["local_path"],
-        )
+        str(PurePosixPath(row["local_path"]).relative_to(PurePosixPath(contract["mount_path"])))
+        for row in contract["slots"].values()
+        if row not in contract["retained_generations"]
     ]
     create_dirs = [
         *slot_dirs,
@@ -1989,6 +2034,10 @@ def render_soperator_adapter_documents(
         for item in contract["persistent_mounts"]
         if item["local_path"] and not item["create_dir"]
     ]
+    verify_dirs.extend(
+        str(PurePosixPath(row["local_path"]).relative_to(PurePosixPath(contract["mount_path"])))
+        for row in contract["retained_generations"]
+    )
     docs.append(
         _mount_daemonset(
             name="nebius-cxcli-soperator-jail-mount",
@@ -2057,7 +2106,6 @@ __all__ = [
     "SoperatorPersistentMountBinding",
     "compile_upstream_soperator_values",
     "mount_gate_init_container",
-    "prepare_soperator_upgrade_adapter_handoff",
     "soperator_adapter_state_from_documents",
     "rendered_soperator_jail_image_authority",
     "render_soperator_adapter_documents",
@@ -2066,5 +2114,6 @@ __all__ = [
     "soperator_monitoring_dashboards_require_post_flux",
     "soperator_persistent_mount_bindings",
     "soperator_persistent_mount_bindings_from_adapter_state",
+    "soperator_persistent_mount_volume_names",
     "soperator_vm_stack_cleanup_exception",
 ]

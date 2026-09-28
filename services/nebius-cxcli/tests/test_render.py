@@ -52,10 +52,9 @@ from nebius_cxcli.render import (
 )
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
 from nebius_cxcli.soperator_adapter import SOPERATOR_MONITORING_DASHBOARDS_POST_FLUX_DIGESTS
-from nebius_cxcli.soperator_flux_graph import expected_soperator_release_names
 from nebius_cxcli.soperator_release import seal_soperator_release_snapshot
 from nebius_cxcli.terraform_provider import build_provider_module_name
-from soperator_fixtures import sample_snapshot
+from soperator_fixtures import expected_soperator_release_names, sample_snapshot
 
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
@@ -118,6 +117,37 @@ def test_terraform_runtime_promotion_preserves_provider_symlink(tmp_path):
     promote_staged_generated_paths(staged, paths)
     assert link.is_symlink() and link.readlink() == provider
     assert provider.read_text() == "cached-provider\n"
+
+
+@pytest.mark.parametrize("error_type", [OSError, KeyboardInterrupt])
+def test_generated_promotion_restores_previous_bundle_on_failed_swap(
+    tmp_path, monkeypatch, error_type
+):
+    paths = resolve_project_paths(tmp_path / "config.yaml")
+    paths.infra_dir.mkdir(parents=True)
+    state = paths.infra_dir / "terraform.tfstate"
+    state.write_text("current-state\n")
+    manifest = paths.infra_dir / "main.tf"
+    manifest.write_text("previous-generation\n")
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    (staged.infra_dir / "main.tf").write_text("next-generation\n")
+    rename = Path.rename
+
+    def fail_staged_rename(source, destination):
+        if source == staged.generated_dir:
+            assert not paths.generated_dir.exists()
+            assert len(list(paths.project_dir.glob(".generated-backup-*"))) == 1
+            raise error_type("interrupted swap")
+        return rename(source, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_staged_rename)
+    with pytest.raises(error_type, match="interrupted swap"):
+        promote_staged_generated_paths(staged, paths)
+    assert state.read_text() == "current-state\n"
+    assert manifest.read_text() == "previous-generation\n"
+    assert not staged.generated_dir.exists()
+    assert not any(paths.project_dir.glob(".generated-backup-*"))
 
 
 def test_terraform_runtime_promotion_rejects_conflicting_staged_state(tmp_path):
@@ -190,6 +220,12 @@ def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_r
     observability_receipt.write_text("{}\n", encoding="utf-8")
     repair_receipt = final_paths.reports_dir / "soperator-install-render-repair-cluster-a.json"
     repair_receipt.write_text("{}\n", encoding="utf-8")
+    destroy_receipts = [
+        final_paths.reports_dir / name
+        for name in ("destroy-cloud-id-digest.json", "soperator-destroy-cluster-a.json")
+    ]
+    for path in destroy_receipts:
+        path.write_text("unsupported receipt must remain untouched\n", encoding="utf-8")
     staged_paths = staged_generated_paths(final_paths)
     staged_paths.infra_dir.mkdir(parents=True)
     replacement = staged_paths.infra_dir / "main.tf"
@@ -208,6 +244,9 @@ def test_project_generation_plan_writes_full_postimage_and_preserves_lifecycle_r
     assert preserved not in plan.removals
     assert observability_receipt not in plan.removals
     assert repair_receipt not in plan.removals
+    for path in destroy_receipts:
+        assert path not in plan.removals and path not in plan.writes
+        assert path.read_text() == "unsupported receipt must remain untouched\n"
     assert plan.sha256.startswith("sha256:")
     assert plan.preimage_sha256.startswith("sha256:")
 
@@ -250,6 +289,7 @@ def test_project_generation_plan_ignores_operation_receipts_created_after_admiss
     validation_reports = tuple(
         final_paths.reports_dir / name
         for name in (
+            "compatibility-admission.json",
             "cluster-inventory-report-mk8s.json",
             "deploy-smoke-report-soperator.json",
             "acceptance-smoke-report-mk8s.json",
@@ -279,6 +319,38 @@ def test_project_generation_plan_ignores_operation_receipts_created_after_admiss
     assert reconcile not in recovered.removals
     assert all(report not in recovered.removals for report in validation_reports)
     assert lock_path not in recovered.removals
+
+
+def test_validation_refresh_preserves_committed_render_generation(tmp_path: Path) -> None:
+    from nebius_cxcli.project_bundle_transaction import ProjectBundleTransaction
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("old: true\n")
+    paths = resolve_project_paths(config_path)
+    paths.reports_dir.mkdir(parents=True)
+    report = paths.reports_dir / "compatibility-admission.json"
+    report.write_text('{"admitted": true, "observation": "before"}\n')
+    staged = staged_generated_paths(paths)
+    staged.infra_dir.mkdir(parents=True)
+    (staged.infra_dir / "main.tf").write_text("terraform {}\n")
+    plan = build_project_generation_plan(
+        final_paths=paths,
+        staged_paths=staged,
+        config_path=config_path,
+        config_content="new: true\n",
+    )
+    transaction = ProjectBundleTransaction(paths.project_dir)
+    transaction.commit(
+        plan.writes,
+        removals=plan.removals,
+        expected_preimages=plan.expected_preimages,
+        generation_sha256=plan.sha256,
+    )
+    assert report.exists()
+    report.write_text('{"admitted": true, "observation": "after"}\n')
+    assert transaction.current_generation_sha256() == plan.sha256
+    (paths.infra_dir / "main.tf").write_text("unexpected change\n")
+    assert transaction.current_generation_sha256() is None
 
 
 def test_project_generation_plan_rebases_an_exact_project_root_alias(tmp_path: Path) -> None:
@@ -372,7 +444,32 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 def _freeze_soperator_release_for_render_tests(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from nebius_cxcli import soperator_release_graph
+    from soperator_fixtures import sample_selected_graph
+
+    monkeypatch.setattr(
+        soperator_release_graph,
+        "render_soperator_release_graph",
+        lambda lock, _source, values, **_kwargs: sample_selected_graph(lock, values),
+    )
     source_root = tmp_path / "render-source"
+    umbrella = source_root / "helm/soperator-fluxcd"
+    umbrella.mkdir(parents=True)
+    (umbrella / "values.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "observability": {
+                    "enabled": True,
+                    "publicEndpointEnabled": True,
+                    "publicEndpointTokenKind": "secret",
+                    "dcgmExporter": {"enabled": True, "values": {"validateToolkit": True}},
+                    "vmLogs": {"enabled": True},
+                    "vmStack": {"enabled": True, "tsaToken": {"writer": {"enabled": True}}},
+                    "opentelemetry": {"enabled": True},
+                }
+            }
+        )
+    )
     chart = source_root / "helm/soperator-activechecks"
     chart.mkdir(parents=True)
     (chart / "values.yaml").write_text("checks: {}\n")
@@ -387,7 +484,7 @@ def _freeze_soperator_release_for_render_tests(
                     "notifier": {"enabled": True},
                     "observability": {
                         "enabled": True,
-                        "dcgmExporter": {"enabled": True},
+                        "dcgmExporter": {"enabled": True, "values": {"validateToolkit": True}},
                         "opentelemetry": {
                             "enabled": True,
                             "logs": {"values": {"jailLogs": {"enabled": True}}},
@@ -420,17 +517,26 @@ def _freeze_soperator_release_for_render_tests(
         "soperator-fluxcd-security-profiles-operator": "securityProfilesOperator",
     }
 
-    def _freeze(selector: str) -> SimpleNamespace:
+    def _freeze(selector: str, **kwargs) -> SimpleNamespace:
         return SimpleNamespace(
             source=SimpleNamespace(source_dir=str(source_root)),
+            source_context=SimpleNamespace(
+                source=SimpleNamespace(source_dir=str(source_root)),
+                umbrella=sample_snapshot().umbrella,
+            ),
             snapshot=sample_snapshot(
                 release=selector,
+                target_ref=kwargs["request"].target_ref if "request" in kwargs else "mk8s",
                 release_names=release_names,
                 third_party_release_chart_keys=third_party,
             ),
         )
 
     monkeypatch.setattr(flux_render_module, "freeze_soperator_release", _freeze)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_release_artifacts.verify_soperator_release_artifacts",
+        lambda *a, **k: None,
+    )
 
 
 def _project_config_path(base: Path) -> Path:
@@ -455,7 +561,13 @@ def _load_soperator_upstream_values(paths, target_ref: str = "mk8s") -> dict:
 def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> dict:
     app_entries = component_entries("apps")
     if "soperator" in selected_apps:
-        app_entries = (*app_entries, soperator_install_entry("4.1.7"))
+        app_entries = (
+            *app_entries,
+            soperator_install_entry(
+                "4.1.7",
+                chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd",
+            ),
+        )
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -1379,7 +1491,7 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     assert not mk8s_inputs.get("gpu_clusters")
     node_groups = mk8s_inputs["node_groups"]
     assert sorted(node_groups) == ["accounting", "controller", "login", "system", "worker-cpu"]
-    assert node_groups["worker-cpu"]["node_count"] == 1
+    assert node_groups["worker-cpu"]["node_count"] == 2
     soperator_row = next(row for row in persisted["apps"]["charts"] if row["id"] == "soperator")
     values = soperator_row["values"]
     assert soperator_row["placements"]["worker"] == ["worker-cpu"]
@@ -1473,7 +1585,8 @@ def test_render_soperator_uses_upstream_umbrella_graph_and_thin_adapter(tmp_path
         "mk8s_cluster_id": "mk8s",
         "soperator_release": "4.1.7",
     }
-    assert observability["vmStack"]["values"]["grafana"] == {"enabled": False}
+    assert "grafana" not in observability["vmStack"]["values"]
+    assert observability["dcgmExporter"]["enabled"] is True
 
     adapter_documents = [
         item
@@ -1516,6 +1629,20 @@ def test_render_soperator_externalizes_the_known_broken_dashboard_chart(
         )
     )
     source_root = tmp_path / "official-source"
+    umbrella = source_root / "helm/soperator-fluxcd"
+    umbrella.mkdir(parents=True)
+    (umbrella / "values.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "observability": {
+                    "enabled": True,
+                    "dcgmExporter": {"enabled": True, "values": {"validateToolkit": True}},
+                    "vmStack": {"enabled": True, "tsaToken": {"writer": {"enabled": True}}},
+                    "opentelemetry": {"enabled": True},
+                }
+            }
+        )
+    )
     checks_dir = source_root / "helm/soperator-activechecks"
     checks_dir.mkdir(parents=True)
     (checks_dir / "values.yaml").write_text("checks: {}\n")
@@ -1535,12 +1662,16 @@ def test_render_soperator_externalizes_the_known_broken_dashboard_chart(
             json.dumps({"title": name, "uid": Path(name).stem}) + "\n",
             encoding="utf-8",
         )
+    source = SimpleNamespace(source_dir=str(source_root))
     frozen = SimpleNamespace(
         snapshot=snapshot,
-        source=SimpleNamespace(source_dir=str(source_root)),
+        source=source,
+        source_context=SimpleNamespace(source=source, umbrella=snapshot.umbrella),
     )
-    monkeypatch.setattr(flux_render_module, "current_frozen_soperator_release", lambda _v: None)
-    monkeypatch.setattr(flux_render_module, "freeze_soperator_release", lambda _v: frozen)
+    monkeypatch.setattr(
+        flux_render_module, "current_frozen_soperator_release", lambda _v, **kw: None
+    )
+    monkeypatch.setattr(flux_render_module, "freeze_soperator_release", lambda _v, **kw: frozen)
 
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1625,6 +1756,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         True
     )
     mk8s_row = next(row for row in payload["infra"]["components"] if row["id"] == "mk8s")
+    mk8s_row["inputs"]["cluster"]["cluster_name"] = "mk8s"
     mk8s_row.setdefault("inputs", {})["soperator"] = {
         "system_node_count": 2,
         "system_autoscaling": {
@@ -1761,7 +1893,7 @@ def test_local_helm_chart_render_rejects_hooks_only_output(
         flux_render_module, "_build_local_helm_chart_dependencies", lambda _chart: None
     )
     monkeypatch.setattr(
-        flux_render_module.subprocess,
+        flux_render_module.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=("helm", "template"),
@@ -1995,7 +2127,7 @@ def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
     def fail_run(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("helm dependency build should not run when archives are packaged")
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fail_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fail_run)
 
     _build_local_helm_chart_dependencies(str(chart_dir))
 
@@ -2058,7 +2190,7 @@ data:
             )
         return Result()
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fake_run)
 
     rendered = flux_render_module._render_local_helm_chart(
         release_name="release",
@@ -2124,7 +2256,7 @@ def test_build_local_helm_chart_dependencies_rebuilds_missing_file_dependencies(
         calls.append(command)
         return Result()
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fake_run)
 
     _build_local_helm_chart_dependencies(str(parent_dir))
 
@@ -2174,7 +2306,7 @@ def test_build_local_helm_chart_dependencies_reports_missing_packaged_dependency
     def fake_run(_command: list[str], **_kwargs: object) -> Result:
         return Result()
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fake_run)
 
     with pytest.raises(ValueError) as excinfo:
         _build_local_helm_chart_dependencies(str(chart_dir))
@@ -2233,7 +2365,7 @@ def test_build_local_helm_chart_dependencies_adds_remote_repositories(
         calls.append(command)
         return Result()
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fake_run)
 
     _build_local_helm_chart_dependencies(str(chart_dir))
 
@@ -2325,7 +2457,7 @@ def test_build_local_helm_chart_dependencies_filters_unrelated_repository_config
             seeded_configs.append(yaml.safe_load(repo_config.read_text(encoding="utf-8")))
         return Result()
 
-    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+    monkeypatch.setattr("nebius_cxcli.flux_render.kubernetes_process.run", fake_run)
 
     _build_local_helm_chart_dependencies(str(chart_dir))
 
@@ -3510,8 +3642,10 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     ) < kustomization_doc["resources"].index("./helmrelease-platform-envoy-gateway.yaml")
 
 
+@pytest.mark.parametrize("ordinary_only", [False, True])
 def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     tmp_path: Path,
+    ordinary_only: bool,
 ) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -3526,7 +3660,7 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     validate_path_alignment(config, paths)
     paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
-    written = render_flux(config, paths)
+    written = render_flux(config, paths, ordinary_only=ordinary_only)
 
     dashboard_dir = paths.generated_dir / "grafana_dashboards" / "mk8s" / "nebius-kubernetes"
     dashboard_files = {
@@ -3552,6 +3686,8 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     assert vm_dashboard_dir / "vm-metrics.json" in written
 
     flux_dir = _target_flux_dir(paths)
+    if ordinary_only:
+        flux_dir /= "ordinary"
     configmap = flux_dir / "configmap-grafana-nebius-kubernetes-dashboards.yaml"
     vm_configmap = flux_dir / "configmap-grafana-nebius-vm-dashboards.yaml"
     release = flux_dir / "helmrelease-observability-grafana.yaml"
@@ -3561,17 +3697,33 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     assert release.exists()
 
     configmap_doc = yaml.safe_load(configmap.read_text(encoding="utf-8"))
-    assert configmap_doc["metadata"] == {
+    assert {key: configmap_doc["metadata"][key] for key in ("name", "namespace")} == {
         "name": "grafana-nebius-kubernetes-dashboards",
         "namespace": "observability",
     }
     assert set(configmap_doc["data"]) == dashboard_files
     vm_configmap_doc = yaml.safe_load(vm_configmap.read_text(encoding="utf-8"))
-    assert vm_configmap_doc["metadata"] == {
+    assert {key: vm_configmap_doc["metadata"][key] for key in ("name", "namespace")} == {
         "name": "grafana-nebius-vm-dashboards",
         "namespace": "observability",
     }
     assert set(vm_configmap_doc["data"]) == vm_dashboard_files
+
+    for folder, document in (
+        (dashboard_dir, configmap_doc),
+        (vm_dashboard_dir, vm_configmap_doc),
+    ):
+        for name, data in document["data"].items():
+            exported = (folder / name).read_text(encoding="utf-8")
+            assert json.loads(exported) == json.loads(data)
+            assert exported == data
+        assert set(document["metadata"]) == {"name", "namespace"} | (
+            {"annotations"} if ordinary_only else set()
+        )
+        if ordinary_only:
+            annotations = document["metadata"]["annotations"]
+            assert set(annotations) == {"cxcli.nebius.com/app-owner"}
+            assert annotations["cxcli.nebius.com/app-owner"]
 
     release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
     values = release_doc["spec"]["values"]
@@ -5076,3 +5228,163 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     )
     assert release_doc["spec"]["values"]["replicaCount"] == 2
     assert release_doc["spec"]["values"]["image"]["tag"] == "stable"
+
+
+def test_upstream_observability_binding_preserves_native_switches_and_custom_labels():
+    from nebius_cxcli.flux_render import _materialize_soperator_observability_values
+
+    values = {
+        "observability": {
+            "enabled": True,
+            "publicEndpointEnabled": False,
+            "opentelemetry": {"enabled": False, "namespace": "custom-logs"},
+            "vmStack": {
+                "enabled": False,
+                "namespace": "custom-metrics",
+                "tsaToken": {"writer": {"enabled": False}},
+                "values": {"vmagent": {"spec": {"externalLabels": {"custom": "kept"}}}},
+            },
+        }
+    }
+    _materialize_soperator_observability_values(
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-test",
+                    "project_id": "project-test",
+                    "region_id": "eu-north1",
+                }
+            }
+        },
+        values=values,
+        target_ref="cluster",
+        release="4.1.8",
+        resolved_component_outputs={},
+    )
+    native = values["observability"]
+    assert native["enabled"] is True
+    assert native["publicEndpointEnabled"] is False
+    assert native["opentelemetry"]["enabled"] is False
+    assert native["vmStack"]["enabled"] is False
+    assert native["vmStack"]["tsaToken"]["writer"]["enabled"] is False
+    assert native["vmStack"]["tsaToken"]["writer"]["namespaces"] == [
+        "custom-metrics",
+        "custom-logs",
+    ]
+    assert native["vmStack"]["values"]["vmagent"]["spec"]["externalLabels"]["custom"] == "kept"
+
+
+@pytest.mark.parametrize("ordinary_only", [False, True])
+@pytest.mark.parametrize("grafana_id", ["grafana", "dashboards"])
+@pytest.mark.parametrize("replay", [False, True])
+def test_api_import_declarations_survive_load_and_render_without_provisioning(
+    tmp_path, monkeypatch, ordinary_only, grafana_id, replay
+):
+    from grafana_fakes import dashboard
+    from nebius_cxcli.grafana_dashboards import content_digest, json_bytes
+    from nebius_cxcli.runtime_config import to_plain_data
+
+    if grafana_id != "grafana":
+        original = load_component_sources()
+        sources = replace(
+            original,
+            tf_modules=tuple(
+                replace(
+                    module,
+                    observability=replace(
+                        module.observability,
+                        grafana=replace(
+                            module.observability.grafana, chart_component_id=grafana_id
+                        ),
+                    ),
+                )
+                if module.module == "mk8s"
+                else module
+                for module in original.tf_modules
+            ),
+            helm_charts=tuple(
+                replace(chart, name=grafana_id) if chart.name == "grafana" else chart
+                for chart in original.helm_charts
+            ),
+        )
+        reset_component_sources_cache()
+        reset_component_entry_cache()
+        monkeypatch.setattr(
+            component_sources, "_load_sources_from_path", lambda *_a, **_kw: sources
+        )
+
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    payload["deploy"]["targets"][0]["observability"]["enabled"] = True
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    # Materialize the source-owned Grafana row through the real config loader.
+    config = load_config(config_path)
+    normalized = to_plain_data(config)
+    strip_app_chart_target_refs(normalized)
+    row = next(item for item in normalized["apps"]["charts"] if item["id"] == grafana_id)
+    value = dashboard("imported-board")
+    source = config_path.parent / "dashboards" / "imported-board.json"
+    source.parent.mkdir()
+    source.write_bytes(json_bytes(value))
+    row["dashboard_imports"] = [
+        {
+            "uid": value["uid"],
+            "json_file": "dashboards/imported-board.json",
+            "sha256": content_digest(value),
+        }
+    ]
+    if not replay:
+        row["dashboard_imports"][0].update(replay=False, management_sha256="a" * 64)
+    else:
+        row["dashboard_imports"].append(
+            {
+                "uid": "manual-copy",
+                "json_file": "absent-manual.json",
+                "sha256": "a" * 64,
+                "replay": False,
+                "management_sha256": "b" * 64,
+            }
+        )
+    config_path.write_text(yaml.safe_dump(normalized, sort_keys=False))
+    loaded = load_config(config_path, persist_normalized=False)
+    paths = resolve_project_paths(config_path)
+    paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    written = render_flux(loaded, paths, ordinary_only=ordinary_only)
+    asset = (
+        paths.generated_dir
+        / "grafana_dashboards"
+        / "mk8s"
+        / "cxcli-api-imports"
+        / "imported-board.json"
+    )
+    if replay:
+        assert asset in written and json.loads(asset.read_bytes()) == value
+    else:
+        assert asset not in written and not asset.exists()
+    target_dir = _target_flux_dir(paths) / "ordinary" if ordinary_only else _target_flux_dir(paths)
+    release = yaml.safe_load((target_dir / "helmrelease-observability-grafana.yaml").read_bytes())
+    owner = release["metadata"]["annotations"]["cxcli.nebius.com/app-owner"]
+    assert owner
+    assert {"name": "postgresql", "namespace": "observability"} in release["spec"]["dependsOn"]
+    database = yaml.safe_load(
+        (target_dir / "helmrelease-observability-postgresql.yaml").read_bytes()
+    )
+    assert database["metadata"]["annotations"]["cxcli.nebius.com/app-owner"] == owner
+    assert (
+        database["spec"]["values"]["persistence"]["annotations"]["cxcli.nebius.com/app-owner"]
+        == owner
+    )
+    assert "SELECT 1" in database["spec"]["postRenderers"][0]["kustomize"]["patches"][0]["patch"]
+    assert (
+        release["spec"]["values"]["grafana.ini"]["database"]["host"]
+        == "postgresql.observability.svc:5432"
+    )
+    assert "dashboard_imports" not in release["spec"]["values"]
+    assert "imported-board" not in yaml.safe_dump(release)
+    source.write_bytes(json_bytes({**value, "title": "Changed after import"}))
+    if replay:
+        with pytest.raises(ValueError, match="changed"):
+            render_flux(loaded, paths, ordinary_only=ordinary_only)
+    else:
+        render_flux(loaded, paths, ordinary_only=ordinary_only)

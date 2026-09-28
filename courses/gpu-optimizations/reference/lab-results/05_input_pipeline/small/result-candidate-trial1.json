@@ -1,0 +1,87 @@
+{
+  "correctness": {
+    "all_batches_pinned": true,
+    "checksum": true
+  },
+  "lab": "05_input_pipeline",
+  "measurements": {
+    "batches": 100,
+    "variants": {
+      "num_workers_0": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 0,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.2234,
+            "min_ms": 0.2091,
+            "p90_ms": 0.2463,
+            "sample_count": 100
+          },
+          "device_consumption": {
+            "median_ms": 0.0343,
+            "min_ms": 0.03,
+            "p90_ms": 0.0456,
+            "sample_count": 100
+          },
+          "end_to_end": {
+            "median_ms": 0.3066,
+            "min_ms": 0.2813,
+            "p90_ms": 0.3392,
+            "sample_count": 100
+          },
+          "h2d": {
+            "median_ms": 0.018,
+            "min_ms": 0.0161,
+            "p90_ms": 0.0242,
+            "sample_count": 100
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": null
+      },
+      "num_workers_4": {
+        "all_batches_pinned": true,
+        "non_blocking": true,
+        "num_workers": 4,
+        "phases": {
+          "batch_ready_gap": {
+            "median_ms": 0.2223,
+            "min_ms": 0.0652,
+            "p90_ms": 0.4318,
+            "sample_count": 100
+          },
+          "device_consumption": {
+            "median_ms": 0.1752,
+            "min_ms": 0.0457,
+            "p90_ms": 0.279,
+            "sample_count": 100
+          },
+          "end_to_end": {
+            "median_ms": 0.6508,
+            "min_ms": 0.2381,
+            "p90_ms": 0.9656,
+            "sample_count": 100
+          },
+          "h2d": {
+            "median_ms": 0.0755,
+            "min_ms": 0.0269,
+            "p90_ms": 0.1421,
+            "sample_count": 100
+          }
+        },
+        "pin_memory": true,
+        "prefetch_factor": 2
+      }
+    }
+  },
+  "parameters": {
+    "batches": 100,
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

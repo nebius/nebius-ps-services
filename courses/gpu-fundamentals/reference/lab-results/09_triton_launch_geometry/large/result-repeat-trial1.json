@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "block_128_exact": true,
+    "block_256_exact": true,
+    "block_512_exact": true
+  },
+  "lab": "09_triton_launch_geometry",
+  "measurements": {
+    "elements": 64000003,
+    "sweeps": {}
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -1,0 +1,28 @@
+{
+  "correctness": {
+    "finite_output": true,
+    "numerically_equivalent": true
+  },
+  "lab": "14_profiler_bottlenecks",
+  "measurements": {
+    "checksum": 0.0664623,
+    "compiled_first_call_ms": null,
+    "elements": 262144,
+    "mode": "baseline",
+    "pointwise_steps": 12,
+    "timing": {
+      "median_ms": 0.2095,
+      "min_ms": 0.1972,
+      "p90_ms": 0.2292
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "mode": "baseline",
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

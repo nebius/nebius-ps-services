@@ -1,0 +1,35 @@
+{
+  "correctness": {
+    "backward_outside_fp8_autocast": true,
+    "finite_outputs_gradients_and_errors": true,
+    "gradient_relative_l2_within_declared_threshold": true,
+    "output_relative_l2_within_declared_threshold": true
+  },
+  "lab": "22_transformer_engine_fp8",
+  "measurements": {
+    "amax_history_len": 16,
+    "bf16_incremental_peak_above_baseline_mib": 20.0,
+    "bf16_median_device_region_ms": 0.4775,
+    "bf16_steady_state_allocated_mib": 38.0,
+    "fp8_incremental_peak_above_baseline_mib": 22.0,
+    "fp8_median_device_region_ms": 0.8559,
+    "fp8_steady_state_allocated_mib": 38.0,
+    "hidden_size": 1024,
+    "max_gradient_relative_l2": 0.052774,
+    "max_output_relative_l2": 0.037408,
+    "median_gradient_relative_l2": 0.052774,
+    "median_output_relative_l2": 0.037408,
+    "numerical_sample_count": 9,
+    "rows": 1024
+  },
+  "parameters": {
+    "iterations": 10,
+    "max_gradient_relative_l2": 0.3,
+    "max_output_relative_l2": 0.2,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

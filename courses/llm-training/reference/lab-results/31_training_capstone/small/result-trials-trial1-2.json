@@ -1,0 +1,47 @@
+{
+  "correctness": {
+    "full_update_close": true
+  },
+  "lab": "31_training_capstone",
+  "measurements": {
+    "candidate_matmul_utilization_percent": null,
+    "candidate_minimum_step_tflops": 0.3552,
+    "candidate_tokens_per_second": 1354855.78,
+    "incremental_peak_bytes": {
+      "baseline": 2228736,
+      "candidate": 2228736
+    },
+    "input_requires_grad": false,
+    "iterations": 10,
+    "minimum_step_flops": 134217728,
+    "peak_tflops_reference": null,
+    "shape": [
+      512,
+      256
+    ],
+    "timing": {
+      "baseline": {
+        "median_ms": 0.3873,
+        "min_ms": 0.37,
+        "p90_ms": 0.4033
+      },
+      "candidate": {
+        "median_ms": 0.3779,
+        "min_ms": 0.3379,
+        "p90_ms": 0.4305
+      }
+    },
+    "variant_order": "candidate-first",
+    "warmup": 3
+  },
+  "parameters": {
+    "iterations": 10,
+    "peak_tflops": null,
+    "seed": 18,
+    "variant_order": "candidate-first",
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

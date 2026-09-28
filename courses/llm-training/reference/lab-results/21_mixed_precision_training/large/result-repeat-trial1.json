@@ -1,0 +1,126 @@
+{
+  "correctness": {
+    "all_modes_finite": true,
+    "all_modes_update_parameters": true,
+    "bf16_and_fp16_match_fp32_within_declared_thresholds": true,
+    "fp16_uses_dynamic_gradient_scaling": true,
+    "parameters_remain_fp32": true
+  },
+  "lab": "21_mixed_precision_training",
+  "measurements": {
+    "identical_initial_state_and_batch": true,
+    "model_shape": {
+      "batch": 8,
+      "heads": 16,
+      "hidden": 1024,
+      "layers": 6,
+      "sequence": 512
+    },
+    "modes": {
+      "bf16": {
+        "one_step_numerical_acceptance": {
+          "finite_loss_gradients_and_update": true,
+          "gradient_relative_l2_vs_fp32": 0.0031245510318014193,
+          "gradient_scale_after_step": 1.0,
+          "loss_relative_error_vs_fp32": 8.524704281127282e-06,
+          "parameter_update_l2": 2.7747843609519505,
+          "parameters_remain_fp32": true,
+          "pre_update_loss": 9.173568725585938,
+          "unclipped_gradient_l2": 0.8533372787390464,
+          "update_relative_l2_vs_fp32": 0.0563354244896202,
+          "uses_dynamic_gradient_scaling": false
+        },
+        "warmed_timing": {
+          "end_to_end_tokens_per_second": 450989.3,
+          "final_gradient_norm": 0.339558,
+          "final_gradient_scale": 1.0,
+          "final_measured_loss": 0.409142,
+          "first_timed_loss_after_warmup": 6.216084,
+          "median_device_region_ms": 9.0548,
+          "median_end_to_end_step_ms": 9.0813,
+          "p90_end_to_end_step_ms": 9.1007,
+          "parameter_delta_l2": 4.436341,
+          "parameters_remain_fp32": true,
+          "peak_allocated_mib": 2592.3,
+          "peak_reserved_mib": 2676.0,
+          "uses_dynamic_gradient_scaling": false
+        }
+      },
+      "fp16": {
+        "one_step_numerical_acceptance": {
+          "finite_loss_gradients_and_update": true,
+          "gradient_relative_l2_vs_fp32": 0.0004007755170481638,
+          "gradient_scale_after_step": 65536.0,
+          "loss_relative_error_vs_fp32": 1.559397124596454e-06,
+          "parameter_update_l2": 2.7747832868989177,
+          "parameters_remain_fp32": true,
+          "pre_update_loss": 9.173504829406738,
+          "unclipped_gradient_l2": 0.8532661290747454,
+          "update_relative_l2_vs_fp32": 0.01302460445710812,
+          "uses_dynamic_gradient_scaling": true
+        },
+        "warmed_timing": {
+          "end_to_end_tokens_per_second": 425190.1,
+          "final_gradient_norm": 0.340395,
+          "final_gradient_scale": 65536.0,
+          "final_measured_loss": 0.409071,
+          "first_timed_loss_after_warmup": 6.216094,
+          "median_device_region_ms": 9.6097,
+          "median_end_to_end_step_ms": 9.6345,
+          "p90_end_to_end_step_ms": 9.6547,
+          "parameter_delta_l2": 4.436424,
+          "parameters_remain_fp32": true,
+          "peak_allocated_mib": 2592.3,
+          "peak_reserved_mib": 2676.0,
+          "uses_dynamic_gradient_scaling": true
+        }
+      },
+      "fp32": {
+        "one_step_numerical_acceptance": {
+          "finite_loss_gradients_and_update": true,
+          "gradient_relative_l2_vs_fp32": 0.0,
+          "gradient_scale_after_step": 1.0,
+          "loss_relative_error_vs_fp32": 0.0,
+          "parameter_update_l2": 2.7747830109979534,
+          "parameters_remain_fp32": true,
+          "pre_update_loss": 9.173490524291992,
+          "unclipped_gradient_l2": 0.8532000745393182,
+          "update_relative_l2_vs_fp32": 0.0,
+          "uses_dynamic_gradient_scaling": false
+        },
+        "warmed_timing": {
+          "end_to_end_tokens_per_second": 82426.6,
+          "final_gradient_norm": 0.340163,
+          "final_gradient_scale": 1.0,
+          "final_measured_loss": 0.409057,
+          "first_timed_loss_after_warmup": 6.216079,
+          "median_device_region_ms": 49.6478,
+          "median_end_to_end_step_ms": 49.6811,
+          "p90_end_to_end_step_ms": 49.7656,
+          "parameter_delta_l2": 4.436435,
+          "parameters_remain_fp32": true,
+          "peak_allocated_mib": 3240.3,
+          "peak_reserved_mib": 3256.0,
+          "uses_dynamic_gradient_scaling": false
+        }
+      }
+    },
+    "numerical_thresholds": {
+      "max_gradient_relative_l2": 0.2,
+      "max_loss_relative_error": 0.05,
+      "max_update_relative_l2": 0.2
+    },
+    "vocab_size": 8192
+  },
+  "parameters": {
+    "iterations": 10,
+    "max_gradient_relative_l2": 0.2,
+    "max_loss_relative_error": 0.05,
+    "max_update_relative_l2": 0.2,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -7,8 +7,10 @@
 
 set -euo pipefail
 umask 077
+export COURSE_CAPTURE=1
+export COURSE_PROFILE_TOOL=ncu
 if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 2 ]]; then
-  printf 'Usage: sbatch [site options] %s OUTPUT_FILE EXECUTABLE [arguments]\n' "$0" >&2
+  printf 'Usage: python3 tools/submit_lab.py --lab 03_tiled_transpose [Slurm --name=value options] %s OUTPUT_FILE EXECUTABLE [arguments]\n' "$0" >&2
   exit 2
 fi
 : "${CUDA_IMAGE_DIGEST:?set the exact qualified CUDA development image digest}"

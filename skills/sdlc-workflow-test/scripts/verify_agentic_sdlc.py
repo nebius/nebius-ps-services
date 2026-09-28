@@ -133,6 +133,9 @@ _load_skill_support('runtime', __file__, 'sdlc-workflow-test/scripts/verify_agen
 from agent_runtime import agent_home, agent_name, installed_skills_dir, runtime_environment  # noqa: E402
 
 
+# The verifier is also loaded by file location from outside its scripts directory.
+# Resolve the semantic validator's sibling modules from this exact catalog copy.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 SEMANTICS_PATH = Path(__file__).resolve().with_name("three_tier_semantics.py")
 SEMANTICS_SPEC = importlib.util.spec_from_file_location(
     "sdlc_workflow_test_three_tier_semantics", SEMANTICS_PATH
@@ -141,6 +144,14 @@ if SEMANTICS_SPEC is None or SEMANTICS_SPEC.loader is None:
     raise RuntimeError("Could not load the three-tier semantic validator.")
 three_tier_semantics = importlib.util.module_from_spec(SEMANTICS_SPEC)
 SEMANTICS_SPEC.loader.exec_module(three_tier_semantics)
+
+ORIGIN_SPEC = importlib.util.spec_from_file_location(
+    "sdlc_workflow_test_owned_git_origin", Path(__file__).with_name("owned_git_origin.py")
+)
+if ORIGIN_SPEC is None or ORIGIN_SPEC.loader is None:
+    raise RuntimeError("Could not load the owned Git origin validator.")
+owned_git_origin = importlib.util.module_from_spec(ORIGIN_SPEC)
+ORIGIN_SPEC.loader.exec_module(owned_git_origin)
 
 REQUIRED_SDLC_SKILLS = (
     "sdlc-auto-steering",
@@ -244,7 +255,7 @@ DESIGN_REQUIRED_TERMS = (
     "predefined runtime operational criterion",
     "non-Grafana provenance",
     "installed `nebius-grafana-query`",
-    "project lifecycle evidence is advisory",
+    "missing, stale, contended, or invalid lifecycle evidence never blocks an SDLC phase",
     "publication-only mode",
     "findings-and-readiness-only mode",
     'phase: "create-pr"',
@@ -272,8 +283,8 @@ LIVE_LANES = (
     "steering-continuation",
 )
 GOLDEN_PHASE_SEQUENCE = (
-    "sdlc-create-requirements",
     "sdlc-start",
+    "sdlc-create-requirements",
     "sdlc-gather-context",
     "sdlc-create-design",
     "sdlc-auto-steering",
@@ -374,7 +385,7 @@ SKILL_REQUIRED_ASSERTIONS = {
     ],
     "sdlc-evaluate": ["cross_layer_evaluation", "gui_api_database_correlation"],
     "sdlc-gather-context": ["source_traceability", "boundary_context_recorded"],
-    "sdlc-gui-test": ["computer_use_harness", "semantic_gui_assertions"],
+    "sdlc-gui-test": ["headless_playwright_harness", "semantic_gui_assertions"],
     "sdlc-implement-plan": ["worker_contract_tests", "scoped_integration"],
     "sdlc-merge-pr": ["merge_guardrails_tested", "no_real_merge_performed"],
     "sdlc-prepare-execution": ["execution_scheduler_tests", "recovery_contract_tests"],
@@ -397,7 +408,7 @@ EVIDENCE_PROFILES = {
 }
 PROFILE_SOURCE_SCHEMAS = {
     "lightweight": "agentic-sdlc/prompt-binding-v2",
-    "three-tier": "agentic-sdlc/three-tier-results-v2",
+    "three-tier": "agentic-sdlc/three-tier-results-v3",
 }
 SKILL_REQUIRED_PROFILES = {
     skill: [
@@ -571,7 +582,6 @@ class Context:
     fixture_host_home: Path
     live_evidence_path: Path
     agent: str = field(default_factory=agent_name)
-    three_tier_results_path: Path | None = None
     checks: list[Check] = field(default_factory=list)
 
     def add(
@@ -600,6 +610,7 @@ def validated_profile_claims(
     source_artifacts: list[Path],
     *,
     verification_id_value: str,
+    source_identity: str,
     baseline: str,
     final: str,
 ) -> set[str] | None:
@@ -615,9 +626,7 @@ def validated_profile_claims(
         return validated_three_tier_claims(
             ctx,
             source_artifacts,
-            verification_id_value=verification_id_value,
-            baseline=baseline,
-            final=final,
+            source_identity=source_identity,
         )
     return None
 
@@ -640,34 +649,53 @@ def validated_three_tier_claims(
     ctx: Context,
     sources: list[Path],
     *,
-    verification_id_value: str,
-    baseline: str,
-    final: str,
+    source_identity: str,
 ) -> set[str] | None:
-    canonical = ctx.three_tier_results_path
-    if (
-        canonical is None
-        or canonical.is_symlink()
-        or not canonical.is_file()
-        or canonical.stat().st_nlink != 1
-        or (os.name == "posix" and canonical.stat().st_mode & 0o077)
+    if re.fullmatch(r"[0-9a-f]{32}", source_identity) is None:
+        return None
+    root = ctx.verification_root
+    run_root = root / "three-tier-live" / "runs" / source_identity
+    canonical = run_root / "evidence" / "three-tier-results.json"
+    active_state = root / "three-tier-live" / "active.json"
+    if any(
+        has_symlink_component(path, root)
+        or not path.is_file()
+        or path.stat().st_nlink != 1
+        or path.stat().st_uid != os.getuid()
+        or path.stat().st_mode & 0o077
+        for path in (active_state, canonical)
     ):
         return None
     canonical_digest = file_sha256(canonical)
-    if canonical_digest is None:
+    if canonical_digest is None or len([
+        path for path in sources if file_sha256(path) == canonical_digest
+    ]) != 1:
         return None
-    matching = [path for path in sources if file_sha256(path) == canonical_digest]
-    if len(matching) != 1:
-        return None
-    run_root = canonical.parent.parent
-    active_state = run_root.parent.parent / "active.json"
     try:
-        state = json.loads(active_state.read_text(encoding="utf-8"))
+        # The lifecycle owner validates markers, paths, native host and exact
+        # generation. This status action is read-only and performs no recovery.
+        result = run(
+            [sys.executable, str(Path(__file__).with_name("three_tier_lifecycle.py")),
+             "--verification-root", str(root), "status"],
+            env=runtime_environment(ctx.agent), timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        state = json.loads(result.stdout)
+        if state.get("environment", {}).get("headless_browser") != "PASS":
+            return None
+        baseline = state["git"]["baseline_sha"]
+        promoted = state["git"]["promoted_sha"]
         if (
             state.get("run_root") != str(run_root)
-            or state.get("verification_id") != verification_id_value
-            or state.get("git") != {"baseline_sha": baseline, "promoted_sha": final}
+            or state.get("verification_id") != source_identity
+            or not isinstance(promoted, str) or SHA_RE.fullmatch(promoted) is None
+            or promoted == baseline
         ):
+            return None
+        project = run_root / "project"
+        owned_git_origin.validate(project, run_root, source_identity, baseline=baseline, require_clean=True)
+        if git_output(project, "rev-parse", "HEAD") != promoted:
             return None
         keep = state.get("cleanup", {}).get("status") == "KEPT"
         three_tier_semantics.validate_semantic_results(state, keep=keep)
@@ -678,6 +706,7 @@ def validated_three_tier_claims(
         TypeError,
         UnicodeError,
         json.JSONDecodeError,
+        owned_git_origin.OriginError,
         three_tier_semantics.SemanticEvidenceError,
     ):
         return None
@@ -694,6 +723,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     repo_root = skills_root.parent
     parser = argparse.ArgumentParser(
         description="Run safe Agentic SDLC static and hook preflight verification.",
+        allow_abbrev=False,
     )
     parser.add_argument("--agent", choices=("codex", "claude"), default=agent_name())
     parser.add_argument("--skills-root", type=Path, default=skills_root)
@@ -716,13 +746,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--live-evidence",
         type=Path,
         default=None,
-        help="Private full-run results manifest; defaults to <verification-root>/live-results.json.",
-    )
-    parser.add_argument(
-        "--three-tier-results",
-        type=Path,
-        default=None,
-        help="Canonical retained three-tier-results.json used to validate the copied three-tier profile source.",
+        help="Private aggregate live-results manifest; owned Docker/browser results are resolved from its profile identity. Defaults to <verification-root>/live-results.json.",
     )
     args = parser.parse_args(argv)
     args.host_home = args.host_home or agent_home(args.agent)
@@ -933,11 +957,6 @@ def setup_context(ns: argparse.Namespace) -> Context:
             ns.live_evidence.expanduser().absolute()
             if ns.live_evidence is not None
             else verification_root / "live-results.json"
-        ),
-        three_tier_results_path=(
-            ns.three_tier_results.expanduser().resolve(strict=False)
-            if ns.three_tier_results is not None
-            else None
         ),
     )
 
@@ -1324,7 +1343,7 @@ def check_vertical_slice_contract(ctx: Context) -> None:
         "sdlc-validate-codes skill": (
             ctx.skills_root / "sdlc-validate-codes" / "SKILL.md",
             [
-                "locked-slice boundary validation",
+                "against the locked plan and its End-To-End Slice",
                 "End-To-End Slice",
                 "implementation stayed inside the planned layers",
             ],
@@ -1364,7 +1383,7 @@ def check_vertical_slice_contract(ctx: Context) -> None:
         "sdlc-evaluate skill": (
             ctx.skills_root / "sdlc-evaluate" / "SKILL.md",
             [
-                "planned end-to-end slice",
+                "When the locked plan defines an end-to-end slice",
                 "Layer-isolated checks alone",
                 "Planned end-to-end slice observation",
                 "$nebius-grafana-query",
@@ -1431,9 +1450,9 @@ def check_vertical_slice_contract(ctx: Context) -> None:
         "align skill": (
             ctx.skills_root / "align" / "SKILL.md",
             [
-                "requirements, architecture/design, implementation",
-                "Review alignment and build the smallest repair set",
-                "Run focused validators, tests, linters",
+                "Compare implementation against tests, CLI help, examples, workflows, and documentation",
+                "Make the smallest effective change only when the issue is clear",
+                "Run the mandatory changed-scope quality gate",
             ],
         ),
     }
@@ -1444,7 +1463,10 @@ def check_vertical_slice_contract(ctx: Context) -> None:
                 "Environment checked", name, "FAIL", f"Missing or unreadable: {path}"
             )
             continue
-        missing = [term for term in terms if term not in text]
+        normalized_text = " ".join(text.split())
+        missing = [
+            term for term in terms if " ".join(term.split()) not in normalized_text
+        ]
         status = "PASS" if not missing else "FAIL"
         detail = f"Vertical slice contract terms present in {path}."
         if missing:
@@ -2251,6 +2273,11 @@ def setup_disposable_project(ctx: Context) -> None:
             )
             return
     project.mkdir(parents=True, exist_ok=True)
+    try:
+        owned_git_origin.preflight(project)
+    except owned_git_origin.OriginError as error:
+        ctx.add("Disposable SDLC golden-path run results", "Git configuration", "FAIL", str(error))
+        return
     files = {
         DISPOSABLE_FIXTURE_MARKER: DISPOSABLE_FIXTURE_MARKER_CONTENT,
         "README.md": "# Disposable SDLC Verification Project\n",
@@ -2331,7 +2358,6 @@ def setup_disposable_project(ctx: Context) -> None:
     )
     owned_fixture = (
         existing_repository
-        and not remotes
         and read_text(project / DISPOSABLE_FIXTURE_MARKER)
         == DISPOSABLE_FIXTURE_MARKER_CONTENT
     )
@@ -2346,7 +2372,7 @@ def setup_disposable_project(ctx: Context) -> None:
                 "Existing disposable project is dirty; unknown changes were preserved.",
             )
             return
-        if remotes or not (old_fixture or owned_fixture):
+        if not (old_fixture or owned_fixture):
             ctx.add(
                 "Disposable SDLC golden-path run results",
                 "Disposable project",
@@ -2354,6 +2380,19 @@ def setup_disposable_project(ctx: Context) -> None:
                 "Existing clean Git repository is not a canonical verifier-owned fixture; no project files were changed.",
             )
             return
+        if remotes or any(
+            (ctx.verification_root / name).exists()
+            or (ctx.verification_root / name).is_symlink()
+            for name in (owned_git_origin.ORIGIN, owned_git_origin.RECEIPT)
+        ):
+            try:
+                owned_git_origin.validate(project, ctx.verification_root, "lightweight")
+            except owned_git_origin.OriginError as error:
+                ctx.add(
+                    "Disposable SDLC golden-path run results", "Owned local Git origin",
+                    "FAIL", str(error),
+                )
+                return
     for rel, content in files.items():
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2370,28 +2409,14 @@ def setup_disposable_project(ctx: Context) -> None:
             except OSError:
                 pass
     if not existing_repository:
-        init = git(project, "init", "-b", "main")
-        if init.returncode != 0:
-            git(project, "init")
-            git(project, "branch", "-m", "main")
-        git(project, "config", "user.email", "sdlc-verification@example.invalid")
-        git(project, "config", "user.name", "SDLC Verification")
-        git(project, "add", ".")
+        try:
+            owned_git_origin.create_baseline(project)
+        except owned_git_origin.OriginError as error:
+            ctx.add("Disposable SDLC golden-path run results", "Git baseline", "FAIL", str(error))
+            return
         commit_message = "initial disposable verification project"
     else:
-        git(
-            project,
-            "add",
-            "-A",
-            "--",
-            "README.md",
-            DISPOSABLE_FIXTURE_MARKER,
-            "pyproject.toml",
-            "src",
-            "tests",
-            "docs",
-            "services",
-        )
+        git(project, "add", "-A")
         commit_message = "align disposable nested project fixture"
     staged = git(project, "diff", "--cached", "--quiet")
     if staged.returncode == 1:
@@ -2426,6 +2451,21 @@ def setup_disposable_project(ctx: Context) -> None:
 
     baseline_head = git_output(project, "rev-parse", "HEAD")
     if baseline_head and SHA_RE.fullmatch(baseline_head):
+        try:
+            origin = owned_git_origin.initialize(
+                project, ctx.verification_root, "lightweight"
+            )
+        except owned_git_origin.OriginError as error:
+            ctx.add(
+                "Disposable SDLC golden-path run results", "Owned local Git origin",
+                "FAIL", str(error),
+            )
+            return
+        ctx.add(
+            "Disposable SDLC golden-path run results", "Owned local Git origin",
+            "PASS", "Exactly one owned local origin retains its frozen baseline.",
+        )
+        fixture_baseline = origin["baseline_sha"]
         context_path = ctx.verification_root / "verification-context.json"
         try:
             existing_context: Any = json.loads(context_path.read_text(encoding="utf-8"))
@@ -2451,7 +2491,7 @@ def setup_disposable_project(ctx: Context) -> None:
                 )
             else:
                 write_private_json(
-                    context_path, expected_verification_context(ctx, baseline_head)
+                    context_path, expected_verification_context(ctx, fixture_baseline)
                 )
     else:
         ctx.add(
@@ -2615,6 +2655,14 @@ def check_capability_regressions(ctx: Context) -> None:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHON_COLORS"] = "0"
     suites = {
+        "project-specs": (
+            [
+                sys.executable, "-m", "unittest", "discover", "-v",
+                "-s", str(ctx.skills_root / "maintain-project-specs" / "scripts"),
+                "-p", "test_project_specs*.py",
+            ],
+            ctx.skills_root,
+        ),
         "prompt": (
             [
                 sys.executable,
@@ -2753,13 +2801,21 @@ def check_capability_regressions(ctx: Context) -> None:
         "verifier": (
             [
                 sys.executable,
+                "-m",
+                "unittest",
+                "-v",
                 str(
                     ctx.skills_root
                     / "sdlc-workflow-test"
                     / "scripts"
                     / "test_verify_agentic_sdlc.py"
                 ),
-                "-v",
+                str(
+                    ctx.skills_root
+                    / "sdlc-workflow-test"
+                    / "scripts"
+                    / "test_collect_live_evidence.py"
+                ),
             ],
             ctx.skills_root,
         ),
@@ -2772,6 +2828,8 @@ def check_capability_regressions(ctx: Context) -> None:
                 "sdlc-workflow-test/scripts/test_three_tier_prompt.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
+                "sdlc-workflow-test/scripts/test_owned_git_origin.py",
+                "sdlc-workflow-test/scripts/test_three_tier_target.py",
             ],
             ctx.skills_root,
         ),
@@ -2789,6 +2847,27 @@ def check_capability_regressions(ctx: Context) -> None:
         "three-tier.harness": (
             "Three-tier prompt and lifecycle harness",
             (
+                ("three-tier", "test_aggregate_profile_resolves_its_owned_lifecycle_and_independent_identity"),
+                ("three-tier", "test_cleanup_signals_only_owned_runner_and_chrome"),
+                ("three-tier", "test_cleanup_refuses_reused_pid"),
+                ("three-tier", "test_recovery_preserves_interrupted_attempt_and_is_idempotent"),
+                ("three-tier", "test_browser_stages_reject_out_of_order_and_failed_trial"),
+                ("three-tier", "test_fresh_post_restart_capture_may_match_persisted_pixels"),
+                ("three-tier", "test_browser_checkpoint_correlates_api_and_database"),
+                ("three-tier", "test_browser_stage_rejects_stale_deployment_before_launch"),
+                ("three-tier", "test_deployment_rechecks_running_image_mounts_and_endpoint"),
+                ("three-tier", "test_owned_build_records_image_and_rejects_failed_rebuild"),
+                ("three-tier", "test_owned_restart_refreshes_dynamic_port_before_deployment_check"),
+                ("three-tier", "test_restart_endpoint_refresh_rejects_unowned_or_public_binding"),
+                ("three-tier", "test_build_model_rejects_external_context_and_web_mounts"),
+                ("three-tier", "test_fresh_specs_admit_without_early_commit_and_target_real_integration"),
+                ("three-tier", "test_target_rejects_foreign_checkpoint_and_unregistered_worktree"),
+                ("three-tier", "test_completed_execution_targets_exact_promoted_checkout"),
+                ("three-tier", "test_owned_origin_is_idempotent_and_remains_frozen_after_project_commit"),
+                ("three-tier", "test_remote_and_hook_configuration_tampering_is_rejected"),
+                ("three-tier", "test_inherited_filter_is_rejected_before_baseline_or_origin_mutation"),
+                ("three-tier", "test_inherited_transport_command_and_environment_are_rejected"),
+                ("three-tier", "test_interrupted_receipt_publication_is_not_adopted"),
                 (
                     "three-tier",
                     "test_rendered_starter_is_accepted_as_a_new_managed_run",
@@ -2804,11 +2883,11 @@ def check_capability_regressions(ctx: Context) -> None:
                 ),
                 (
                     "three-tier",
-                    "test_uat_phase_failure_updates_computer_use_report_status",
+                    "test_phase_record_cannot_overwrite_browser_failure",
                 ),
                 (
                     "three-tier",
-                    "test_computer_use_jit_readiness_contract_is_mirrored",
+                    "test_headless_browser_contract_is_mirrored",
                 ),
                 ("three-tier", "test_semantic_rejects_out_of_order_gui_steps"),
                 (
@@ -2845,6 +2924,18 @@ def check_capability_regressions(ctx: Context) -> None:
         "repair.control-contract": (
             "Evidence-guided repair-control contract",
             (
+                (
+                    "execution",
+                    "test_integrated_failed_wave_correction_preserves_failure_and_blocks_bypass",
+                ),
+                (
+                    "execution",
+                    "test_failed_wave_cleanup_refusal_and_retry_preserve_original_evidence",
+                ),
+                (
+                    "execution",
+                    "test_failed_wave_rejects_inactive_or_tampered_dispatch_without_cleanup",
+                ),
                 (
                     "repair-control",
                     "test_ambiguous_evaluation_routes_to_troubleshoot_exactly_once",
@@ -2902,6 +2993,10 @@ def check_capability_regressions(ctx: Context) -> None:
                 ("prompt", "test_ready_feature_with_placeholder_is_rejected"),
                 ("prompt", "test_unknown_requirement_mapping_is_rejected"),
                 ("prompt", "test_foreign_owner_marker_is_rejected"),
+                ("prompt", "test_requirements_ready_admits_design_without_settling_impact"),
+                ("prompt", "test_requirements_ready_rejects_stale_or_unresolved_refinement"),
+                ("prompt", "test_missing_pair_bootstrap_preserves_adapter_ownership"),
+                ("project-specs", "test_bootstrap_missing_specs_publishes_pending_pair_and_preserves_counterpart"),
             ),
         ),
         "prompt.history": (
@@ -3067,6 +3162,14 @@ def check_capability_regressions(ctx: Context) -> None:
         "interop.outer-lease-v4": (
             "Managed outer-worktree lease lifecycle",
             (
+                (
+                    "worktree",
+                    "test_add_serializes_lifecycle_selection_and_activation",
+                ),
+                (
+                    "worktree",
+                    "test_concurrent_directory_bootstrap_revalidates_winner",
+                ),
                 (
                     "worktree",
                     "test_task_lease_blocks_integration_until_release",
@@ -3255,6 +3358,8 @@ def check_capability_regressions(ctx: Context) -> None:
         "verifier.self-tests": (
             "Verifier contract self-tests",
             (
+                ("verifier", "test_live_evidence_is_the_only_public_evidence_option"),
+                ("verifier", "test_public_live_action_is_renamed_without_a_legacy_alias"),
                 ("verifier", "test_any_deterministic_failure_forces_fail"),
                 ("verifier", "test_source_phase_contract_rejects_bad_source_prefix"),
                 ("verifier", "test_source_catalog_validation_rejects_missing_reference"),
@@ -3319,6 +3424,17 @@ def check_capability_regressions(ctx: Context) -> None:
                     "verifier",
                     "test_capability_requirements_resolve_to_declared_tests",
                 ),
+                (
+                    "verifier",
+                    "test_golden_path_intake_precedes_coordinator_only_requirements",
+                ),
+                ("verifier", "test_collects_every_required_skill_owner"),
+                ("verifier", "test_support_skill_outside_evidence_matrix_is_rejected"),
+                ("verifier", "test_design_contract_accepts_current_canonical_source"),
+                ("verifier", "test_vertical_slice_contract_accepts_current_canonical_sources"),
+                ("verifier", "test_vertical_slice_contract_normalizes_whitespace"),
+                ("verifier", "test_vertical_slice_contract_rejects_missing_operational_clauses"),
+                ("verifier", "test_readiness_matrix_reports_canonical_owner_receipt_result"),
             ),
         ),
     }
@@ -3960,6 +4076,7 @@ def load_live_results(ctx: Context) -> dict[str, dict[str, Any]] | None:
             profile,
             profile_source_artifacts,
             verification_id_value=value["verification_id"],
+            source_identity=result_value["source_identity"],
             baseline=baseline,
             final=final,
         )
@@ -4370,8 +4487,8 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Source catalog structure", "source.catalog-structure"),
         ("Canonical spec ownership", "spec.ownership-contract"),
         (
-            "Canonical project-spec owner dependency",
-            "runtime.project-spec-owner-dependency",
+            "Canonical project-spec validation receipt",
+            "spec.validation-receipt",
         ),
         ("Installed worktree dependency", "runtime.worktree-dependency"),
         ("Source-installed parity", "runtime.skill-parity"),
@@ -4517,7 +4634,7 @@ def report(ctx: Context) -> str:
             "- `python3 task-implementer/scripts/test-task-waves.py -v`",
             "- `python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py -v`",
             "- `python3 sdlc-evaluate/scripts/test_observability_contract.py -v`",
-            "- `python3 sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py -v`",
+            "- `python3 -m unittest -v sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py sdlc-workflow-test/scripts/test_collect_live_evidence.py`",
         ]
     )
     lines.extend(["", "## Skipped live or external checks", ""])

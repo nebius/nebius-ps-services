@@ -7,28 +7,33 @@ is the immutable authority persisted by an executing operation.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import stat
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
 from .soperator_receipt_io import read_owner_only_json, write_owner_only_json
 
-SOPERATOR_RELEASE_SNAPSHOT_SCHEMA = "nebius-cxcli.soperator-release-snapshot.v2"
+if TYPE_CHECKING:
+    from .soperator_release_source import SoperatorSourceReceipt
+
+SOPERATOR_RELEASE_SNAPSHOT_SCHEMA = "nebius-cxcli.soperator-release-snapshot.v3"
+SOPERATOR_ARTIFACT_POLICY = "nebius-cxcli.soperator-artifact-admission.v1"
 SOPERATOR_MAIN_RELEASE_NAME = "soperator-fluxcd-slurm-cluster"
 SOPERATOR_UPSTREAM_REPOSITORY = "https://github.com/nebius/soperator"
 SOPERATOR_UPSTREAM_API = "https://api.github.com/repos/nebius/soperator"
-SOPERATOR_UPSTREAM_REGISTRY = "oci://cr.eu-north1.nebius.cloud/soperator"
 SOPERATOR_UPSTREAM_UMBRELLA_CHART = "helm-soperator-fluxcd"
 SOPERATOR_UPSTREAM_CHART_ROLES = (
     ("helm-soperator-fluxcd-bootstrap", "bootstrap"),
@@ -118,9 +123,107 @@ class SoperatorChartSnapshot:
     source_path: str
     source_tree_sha256: str
 
+
+@dataclass(frozen=True)
+class SoperatorSourceChart:
+    """Git-verified chart metadata; deliberately carries no package digest."""
+
+    name: str
+    version: str
+    source_path: str
+    source_tree_sha256: str
+
+
+@dataclass(frozen=True)
+class VerifiedSoperatorSource:
+    metadata: SoperatorReleaseMetadata
+    source: SoperatorSourceReceipt
+    registry: str
+    charts: Mapping[str, SoperatorSourceChart]
+    capability_contract: str
+    capability_sha256: str
+    populate_jail_image: str
+    jail_cuda_version: str
+    mount_image: str = SOPERATOR_ADAPTER_MOUNT_IMAGE
+
     @property
-    def oci_url(self) -> str:
-        return f"{SOPERATOR_UPSTREAM_REGISTRY}/{self.name}"
+    def identity_sha256(self) -> str:
+        material = (
+            self.metadata.release,
+            self.metadata.commit,
+            self.metadata.tree,
+            self.source.manifest_sha256,
+        )
+        return (
+            "sha256:"
+            + hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
+        )
+
+    @property
+    def release(self) -> str:
+        return self.metadata.release
+
+    @property
+    def umbrella(self) -> SoperatorSourceChart:
+        return self.charts["umbrella"]
+
+    def chart_oci_url(self, key: str) -> str:
+        return f"{self.registry}/{self.charts[key].name}"
+
+
+@dataclass(frozen=True)
+class SoperatorArtifactRequest:
+    """Requested target intent, before infrastructure outputs are materialized."""
+
+    target_ref: str
+    values: Mapping[str, Any]
+    stages: Mapping[str, Mapping[str, Any]]
+    routing: Mapping[str, Any] = field(default_factory=dict)
+    post_render_patches: tuple[Mapping[str, Any], ...] = ()
+
+    def fingerprint(self, source_manifest_sha256: str) -> str:
+        if not self.target_ref or not self.stages or "desired" not in self.stages:
+            raise ValueError("Soperator admission requires a target and desired stage")
+        payload = {
+            "policy": SOPERATOR_ARTIFACT_POLICY,
+            "source": source_manifest_sha256,
+            "target": self.target_ref,
+            "values": self.values,
+            "stages": self.stages,
+            "routing": self.routing,
+            "patches": self.post_render_patches,
+        }
+        return (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            ).hexdigest()
+        )
+
+    @classmethod
+    def deployment(
+        cls,
+        target_ref: str,
+        values: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        post_render_patches: Sequence[Mapping[str, Any]] = (),
+    ) -> SoperatorArtifactRequest:
+        from .soperator_observability_routing import ROUTING_KEY, bind_routing
+
+        routed: dict[str, Any] = {"observability": {}}
+        if payload is not None:
+            bind_routing(payload, target_ref, routed)
+        return cls(
+            target_ref,
+            copy.deepcopy(dict(values)),
+            {
+                stage: copy.deepcopy(dict(values))
+                for stage in ("desired", "initial", "maintenance", "acceptance")
+            },
+            copy.deepcopy(routed.get(ROUTING_KEY, {})),
+            tuple(copy.deepcopy(post_render_patches)),
+        )
 
 
 @dataclass(frozen=True)
@@ -146,6 +249,11 @@ class SoperatorReleaseGraphNode:
 @dataclass(frozen=True)
 class SoperatorReleaseSnapshot:
     schema: str
+    target_ref: str
+    request_sha256: str
+    stage_graphs: Mapping[str, tuple[SoperatorReleaseGraphNode, ...]]
+    auxiliary_artifacts: Mapping[str, tuple[str, ...]]
+    post_render_patches: tuple[Mapping[str, Any], ...]
     selector: str
     release: str
     repository: str
@@ -178,11 +286,46 @@ class SoperatorReleaseSnapshot:
     def umbrella(self) -> SoperatorChartSnapshot:
         return self.charts["umbrella"]
 
+    def chart_oci_url(self, key: str) -> str:
+        return f"{self.registry}/{self.charts[key].name}"
+
     def canonical_payload(self, *, include_digest: bool = True) -> dict[str, Any]:
         payload = asdict(self)
         if not include_digest:
             payload.pop("snapshot_sha256", None)
         return payload
+
+
+def validate_soperator_registry(value: str) -> str:
+    """Validate a source-owned OCI authority without maintaining hostname aliases."""
+    parsed = urllib.parse.urlsplit(str(value or "").strip().rstrip("/"))
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("upstream Soperator registry URL is invalid") from exc
+    if (
+        parsed.scheme != "oci"
+        or not parsed.hostname
+        or not parsed.path.strip("/")
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(part in {".", ".."} for part in parsed.path.split("/"))
+    ):
+        raise ValueError("upstream Soperator registry must be a credential-free OCI URL")
+    return urllib.parse.urlunsplit(parsed)
+
+
+def soperator_upstream_registry(source_root: Path) -> str:
+    """Read the registry from the Git-verified release, never from local overrides."""
+    payload = yaml.safe_load((source_root / "helm/soperator-fluxcd/values.yaml").read_text())
+    repositories = payload.get("helmRepository") if isinstance(payload, Mapping) else None
+    repository = repositories.get("soperator") if isinstance(repositories, Mapping) else None
+    if not isinstance(repository, Mapping) or repository.get("type") != "oci":
+        raise ValueError("upstream Soperator source has no supported OCI registry contract")
+    return validate_soperator_registry(str(repository.get("url") or ""))
 
 
 def normalize_soperator_release_selector(value: str | None) -> str:
@@ -468,6 +611,20 @@ def resolve_soperator_release(
     )
 
 
+def soperator_documentation_link_blob(relative: str, target: str) -> bytes:
+    """Represent a root Markdown alias as inert Git blob bytes, never a link.
+
+    Runtime/chart/script links remain unsupported. Callers must also prove that
+    the target is a distinct regular root document in the same source tree.
+    """
+
+    if relative == target or any(
+        not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", value) for value in (relative, target)
+    ):
+        raise ValueError(f"unsupported release documentation link: {relative!r}")
+    return target.encode("utf-8")
+
+
 def verify_soperator_source_git_tree(
     source_root: Path,
     metadata: SoperatorReleaseMetadata,
@@ -478,21 +635,26 @@ def verify_soperator_source_git_tree(
     expected = {
         entry.path: entry
         for entry in metadata.tree_entries
-        if entry.object_type == "blob" and entry.mode != "120000"
+        if entry.object_type == "blob" and entry.mode in {"100644", "100755", "120000"}
     }
     unsupported = [
         entry.path
         for entry in metadata.tree_entries
-        if entry.object_type in {"commit"} or entry.mode == "120000"
+        if entry.object_type != "tree" and entry.path not in expected
     ]
     if unsupported:
         raise ValueError(
             "Soperator release uses unsupported links or submodules: "
             + ", ".join(sorted(unsupported)[:5])
         )
-    observed_paths = {
-        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
-    }
+    observed_paths = set()
+    for path in root.rglob("*"):
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            continue
+        if not stat.S_ISREG(mode):
+            raise ValueError("Soperator source tree contains a non-regular file")
+        observed_paths.add(path.relative_to(root).as_posix())
     if observed_paths != expected.keys():
         missing = sorted(expected.keys() - observed_paths)
         unexpected = sorted(observed_paths - expected.keys())
@@ -507,6 +669,12 @@ def verify_soperator_source_git_tree(
         ).hexdigest()
         if git_blob != entry.sha or (entry.size is not None and len(content) != entry.size):
             raise ValueError(f"Soperator source blob differs from Git tree: {relative}")
+        if entry.mode == "120000":
+            target = content.decode("utf-8")
+            soperator_documentation_link_blob(relative, target)
+            target_entry = expected.get(target)
+            if target_entry is None or target_entry.mode not in {"100644", "100755"}:
+                raise ValueError("release documentation link target must be a regular document")
 
 
 def classify_soperator_release_capabilities(source_root: Path) -> tuple[str, str]:
@@ -681,7 +849,25 @@ def seal_soperator_release_snapshot(
     """Validate and seal a fully resolved operation snapshot."""
 
     if snapshot.schema != SOPERATOR_RELEASE_SNAPSHOT_SCHEMA:
-        raise ValueError(f"Soperator snapshot schema must be {SOPERATOR_RELEASE_SNAPSHOT_SCHEMA}")
+        raise ValueError(
+            "Unsupported Soperator snapshot schema; finish any unfinished operation with its "
+            "previous cxcli binary before upgrading, otherwise render a new generation"
+        )
+    if not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", snapshot.target_ref
+    ) or not _SHA256_RE.fullmatch(snapshot.request_sha256):
+        raise ValueError("Soperator snapshot requires exact target and admission request identity")
+    if "desired" in snapshot.stage_graphs:
+        raise ValueError("The desired Soperator graph must not be duplicated as an extra stage")
+    if len(snapshot.stage_graphs) > 16 or not isinstance(snapshot.post_render_patches, tuple):
+        raise ValueError("Soperator snapshot has an invalid transformation contract")
+    if any(
+        not isinstance(patch, Mapping)
+        or set(patch) - {"patch", "target", "options"}
+        or not isinstance(patch.get("patch"), str)
+        for patch in snapshot.post_render_patches
+    ):
+        raise ValueError("Soperator snapshot requires inline consumer patches")
     normalize_soperator_release_selector(snapshot.release)
     if snapshot.repository != SOPERATOR_UPSTREAM_REPOSITORY:
         raise ValueError("Soperator snapshot repository is not the official upstream")
@@ -699,6 +885,8 @@ def seal_soperator_release_snapshot(
     ):
         if not _SHA256_RE.fullmatch(digest):
             raise ValueError(f"Soperator snapshot {label} must use an exact SHA-256")
+    if validate_soperator_registry(snapshot.registry) != snapshot.registry:
+        raise ValueError("Soperator snapshot registry is not canonical")
     if not snapshot.charts or "umbrella" not in snapshot.charts:
         raise ValueError("Soperator snapshot has no verified upstream umbrella chart")
     if not snapshot.release_graph:
@@ -749,6 +937,29 @@ def seal_soperator_release_snapshot(
             raise ValueError(
                 f"Soperator release graph node {node.release_name} has unknown dependencies"
             )
+    pending = {node.release_name: set(node.dependencies) for node in snapshot.release_graph}
+    completed: set[str] = set()
+    while pending:
+        ready = {name for name, dependencies in pending.items() if dependencies <= completed}
+        if not ready:
+            raise ValueError("Soperator snapshot graph contains a dependency cycle")
+        completed.update(ready)
+        for name in ready:
+            del pending[name]
+    for stage, nodes in snapshot.stage_graphs.items():
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", stage) or not nodes:
+            raise ValueError("Soperator snapshot has an invalid operation stage")
+        # Validate each graph independently; mutually exclusive edges are never merged.
+        seal_soperator_release_snapshot(
+            replace(snapshot, release_graph=nodes, stage_graphs={}, snapshot_sha256="")
+        )
+    for key, reasons in snapshot.auxiliary_artifacts.items():
+        if key not in snapshot.charts and key not in snapshot.third_party_charts:
+            raise ValueError("Soperator auxiliary consumer has no verified artifact")
+        if not reasons or any(
+            not re.fullmatch(r"[a-zA-Z0-9:-]{1,160}", reason) for reason in reasons
+        ):
+            raise ValueError("Soperator auxiliary artifact needs explicit bounded reasons")
     canonical = snapshot.canonical_payload(include_digest=False)
     digest = (
         "sha256:"
@@ -763,8 +974,18 @@ def seal_soperator_release_snapshot(
 
 def load_soperator_release_snapshot(path: Path) -> SoperatorReleaseSnapshot:
     payload = read_owner_only_json(path, label="Soperator release snapshot")
+    return soperator_release_snapshot_from_payload(payload)
+
+
+def soperator_release_snapshot_from_payload(payload: object) -> SoperatorReleaseSnapshot:
+    """Validate captured snapshot content through the same parser as local receipts."""
     if not isinstance(payload, Mapping):
         raise ValueError("Soperator release snapshot must be a JSON object")
+    if payload.get("schema") != SOPERATOR_RELEASE_SNAPSHOT_SCHEMA:
+        raise ValueError(
+            "Unsupported Soperator snapshot schema; finish any unfinished operation with its "
+            "previous cxcli binary before upgrading, otherwise render a new generation"
+        )
     charts_payload = payload.get("charts")
     third_party_payload = payload.get("third_party_charts")
     graph_payload = payload.get("release_graph")
@@ -778,8 +999,36 @@ def load_soperator_release_snapshot(path: Path) -> SoperatorReleaseSnapshot:
         raise ValueError("Soperator release snapshot third-party chart inventory is invalid")
     if any(not isinstance(value, Mapping) for value in graph_payload):
         raise ValueError("Soperator release snapshot graph contains an invalid node")
+    stage_graphs = payload.get("stage_graphs")
+    auxiliary = payload.get("auxiliary_artifacts")
+    if not isinstance(stage_graphs, Mapping) or not isinstance(auxiliary, Mapping):
+        raise ValueError("Soperator snapshot stage and auxiliary inventories are invalid")
+    if any(
+        not isinstance(nodes, (list, tuple)) or any(not isinstance(node, Mapping) for node in nodes)
+        for nodes in stage_graphs.values()
+    ):
+        raise ValueError("Soperator snapshot stage graph is invalid")
+    if any(
+        not isinstance(reasons, (list, tuple))
+        or any(not isinstance(reason, str) for reason in reasons)
+        for reasons in auxiliary.values()
+    ):
+        raise ValueError("Soperator snapshot auxiliary reasons are invalid")
     snapshot = SoperatorReleaseSnapshot(
         schema=str(payload.get("schema") or ""),
+        target_ref=str(payload.get("target_ref") or ""),
+        request_sha256=str(payload.get("request_sha256") or ""),
+        stage_graphs={
+            str(stage): tuple(
+                SoperatorReleaseGraphNode(
+                    **{**dict(node), "dependencies": tuple(node["dependencies"])}
+                )
+                for node in nodes
+            )
+            for stage, nodes in stage_graphs.items()
+        },
+        auxiliary_artifacts={str(key): tuple(reasons) for key, reasons in auxiliary.items()},
+        post_render_patches=tuple(payload.get("post_render_patches") or ()),
         selector=str(payload.get("selector") or ""),
         release=str(payload.get("release") or ""),
         repository=str(payload.get("repository") or ""),
@@ -841,7 +1090,6 @@ __all__ = [
     "SOPERATOR_MAIN_RELEASE_NAME",
     "SOPERATOR_UPSTREAM_API",
     "SOPERATOR_UPSTREAM_CHART_ROLES",
-    "SOPERATOR_UPSTREAM_REGISTRY",
     "SOPERATOR_UPSTREAM_REPOSITORY",
     "SOPERATOR_UPSTREAM_UMBRELLA_CHART",
     "SoperatorChartSnapshot",
@@ -856,6 +1104,7 @@ __all__ = [
     "normalize_soperator_release_selector",
     "resolve_soperator_release",
     "seal_soperator_release_snapshot",
+    "soperator_release_snapshot_from_payload",
     "soperator_release_snapshot_path",
     "verify_soperator_source_git_tree",
     "write_soperator_release_snapshot",

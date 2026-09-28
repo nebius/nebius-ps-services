@@ -427,6 +427,55 @@ class WorktreeManagerTest(unittest.TestCase):
             1,
         )
 
+    def test_concurrent_directory_bootstrap_revalidates_winner(self) -> None:
+        original_mkdir = Path.mkdir
+        for component in ("parent", "state"):
+            for replacement in ("directory", "file", "symlink"):
+                with self.subTest(component=component, replacement=replacement):
+                    primary = self.root / f"bootstrap-{component}-{replacement}"
+                    primary.mkdir()
+                    primary = primary.resolve()
+                    parent = primary.parent / f"{primary.name}-worktrees"
+                    target = parent
+                    if component == "state":
+                        parent.mkdir()
+                        target = parent / ownership_state.STATE_DIRECTORY
+                    redirected = primary / "redirected"
+                    redirected.mkdir(mode=0o755)
+                    redirected_mode = stat.S_IMODE(redirected.stat().st_mode)
+                    injected = False
+
+                    def racing_mkdir(path: Path, *args: object, **kwargs: object) -> None:
+                        nonlocal injected
+                        if path == target and not injected:
+                            injected = True
+                            if replacement == "directory":
+                                original_mkdir(path)
+                            elif replacement == "file":
+                                path.write_text("foreign file\n", encoding="utf-8")
+                            else:
+                                path.symlink_to(redirected, target_is_directory=True)
+                        original_mkdir(path, *args, **kwargs)
+
+                    operation = (
+                        ownership_state.checked_worktree_parent
+                        if component == "parent"
+                        else ownership_state.checked_state_directory
+                    )
+                    with mock.patch.object(Path, "mkdir", new=racing_mkdir):
+                        if replacement == "directory":
+                            self.assertEqual(operation(primary, create=True), target)
+                        else:
+                            with self.assertRaises(ownership_state.StateError):
+                                operation(primary, create=True)
+                    self.assertTrue(injected)
+                    self.assertEqual(list(redirected.iterdir()), [])
+                    self.assertEqual(
+                        stat.S_IMODE(redirected.stat().st_mode), redirected_mode
+                    )
+                    if replacement == "directory" and component == "state":
+                        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+
     def test_add_rejects_default_and_detached_head(self) -> None:
         git("switch", "-q", "main", cwd=self.repo)
         with self.assertRaisesRegex(wm.WorktreeError, "non-default source branch"):

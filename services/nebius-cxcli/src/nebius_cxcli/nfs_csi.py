@@ -120,6 +120,75 @@ def nfs_instance_id_for_target(payload: Mapping[str, Any], *, target_ref: str) -
     return ""
 
 
+def require_rendered_nfs_csi_bindings(
+    payload: Mapping[str, Any], *, target_ref: str, documents: list[dict[str, Any]]
+) -> None:
+    """Reject an initial render that deferred its required NFS output binding."""
+    from .flux_render import _local_chart_path_from_entry
+
+    if not nfs_instance_id_for_target(payload, target_ref=target_ref):
+        return
+    entry = next(entry for entry in component_entries("apps") if entry.id == NFS_CSI_APP_ID)
+    for raw in _app_chart_rows(payload):
+        if (
+            not isinstance(raw, Mapping)
+            or component_type_id(raw) != NFS_CSI_APP_ID
+            or not raw.get("enabled", False)
+            or component_instance_id(raw) != target_ref
+        ):
+            continue
+        row = resolve_component_defaults(
+            component_node=raw, entry=entry, preserve_existing_literal=True, include_shared=False
+        )
+        desired = _mapping(_mapping(row.get("values")).get("storageClass"))
+        if desired.get("create") is False:
+            continue
+        local = not row.get("repo") and bool(_local_chart_path_from_entry(entry))
+        if local:
+            driver_name = _mapping(_mapping(row.get("values")).get("driver")).get(
+                "name", "nfs.csi.k8s.io"
+            )
+            matches = [
+                doc
+                for doc in documents
+                if doc.get("kind") == "StorageClass"
+                and doc.get("apiVersion") == "storage.k8s.io/v1"
+                and doc.get("metadata", {}).get("name") == desired.get("name")
+                and isinstance(driver_name, str)
+                and driver_name.strip()
+                and doc.get("provisioner") == driver_name
+            ]
+            binding = matches[0] if len(matches) == 1 else {}
+        else:
+            matches = [
+                doc
+                for doc in documents
+                if doc.get("kind") == "HelmRelease"
+                and doc.get("metadata", {}).get("name")
+                == (row.get("release-name") or entry.default_release_name or entry.id)
+                and doc.get("metadata", {}).get("namespace")
+                == (row.get("namespace") or entry.default_namespace or entry.id)
+            ]
+            spec = _mapping(matches[0].get("spec")) if len(matches) == 1 else {}
+            binding = _mapping(_mapping(spec.get("values")).get("storageClass"))
+            if binding.get("create") is not True or spec.get("valuesFrom"):
+                binding = {}
+        parameters = _mapping(binding.get("parameters"))
+        options = binding.get("mountOptions", [])
+        if (
+            any(
+                not isinstance(parameters.get(key), str) or not parameters[key].strip()
+                for key in ("server", "share")
+            )
+            or not isinstance(options, list)
+            or any(not isinstance(option, str) or not option.strip() for option in options)
+        ):
+            raise ValueError(
+                f"NFS StorageClass binding is unresolved for target '{target_ref}'; "
+                "run deploy to resolve required outputs, then retry"
+            )
+
+
 def nfs_csi_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     payload = _as_payload(payload_or_config)
     refs: list[str] = []

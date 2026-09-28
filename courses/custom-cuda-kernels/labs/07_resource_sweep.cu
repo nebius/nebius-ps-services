@@ -57,10 +57,10 @@ void report_case(const float* input, float* output, std::size_t count, int threa
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 07_resource_sweep [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 07_resource_sweep [--profile small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 4096, 1U << 24);
-    const auto properties = require_h100();
+    const auto properties = require_course_gpu();
     std::vector<float> input(count, 0.01F);
     DeviceBuffer<float> device_input(count), output(count);
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
@@ -71,6 +71,8 @@ int main(int argc, char** argv) {
     report_case<16>(device_input.get(), output.get(), count, 256);
     report_case<64>(device_input.get(), output.get(), count, 256);
     std::cout << "sm_count=" << properties.multiProcessorCount << "\ninspect_compiler_resource_usage=true\n";
+    std::cout << "elements=" << count << '\n';
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

@@ -13,14 +13,14 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: sbatch %s [--profile smoke|h100] [other Lab 31 options]\n' "$0"
+  printf 'Usage: python3 tools/submit_lab.py --lab 31_training_capstone %s [--profile small|large] [other Lab 31 options]\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then
   printf 'ERROR: submit with sbatch so SLURM_JOB_ID is numeric.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 course_python=${COURSE_PYTHON:-python3}
 command -v "${course_python}" >/dev/null 2>&1 || {
   printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2

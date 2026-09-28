@@ -9,7 +9,7 @@ import statistics
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
@@ -135,7 +135,7 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     prompts = [64, 2048, 128, 1024]
     outputs = [128, 32, 256, 64]
     arrivals = [0, 0, 1, 3]

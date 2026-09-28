@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from .soperator_adapter import mount_gate_init_container
-from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE, sync_jail_volume_sources
+from .soperator_jail_mounts import JAIL_LEGACY_ACTIVE_SOURCE, normalize_jail_storage_intent
 from .soperator_release import SOPERATOR_ADAPTER_MOUNT_IMAGE
 
 POPULATE_JAIL_REFRESH_MODES = frozenset({"auto", "force", "manual"})
@@ -279,7 +279,7 @@ def switch_active_passive_jail_rootfs_values(values: Mapping[str, Any]) -> dict[
             slurmd = _mutable_mapping(nodeset, "slurmd")
             volumes = _mutable_mapping(slurmd, "volumes")
             volumes["jail"] = {"persistentVolumeClaim": {"claimName": slots.passive_pvc}}
-    return sync_jail_volume_sources(patched)
+    return normalize_jail_storage_intent(patched)
 
 
 def active_passive_populate_jail_job_manifest(

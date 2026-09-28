@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .soperator_checks import SoperatorChecksExecution, _identifier
 from .soperator_checks_policy import checks_digest
 
@@ -157,7 +157,7 @@ def capture_storage_cause(
     started = datetime.fromisoformat(failure["executionInterval"]["start"])
     if datetime.fromisoformat(manager["state"]["running"]["startedAt"].removesuffix("Z")) > started:
         raise RuntimeError("storage cause controller did not exist during the failure")
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",

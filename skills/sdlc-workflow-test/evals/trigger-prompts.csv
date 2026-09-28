@@ -1,7 +1,7 @@
 id,should_trigger,prompt
 sdlc-workflow-test-positive-01,true,$sdlc-workflow-test
-sdlc-workflow-test-positive-02,true,$sdlc-workflow-test --create
-sdlc-workflow-test-positive-03,true,$sdlc-workflow-test --create --keep
+sdlc-workflow-test-positive-02,true,$sdlc-workflow-test --create-live-test
+sdlc-workflow-test-positive-03,true,$sdlc-workflow-test --create-live-test --keep
 sdlc-workflow-test-positive-04,true,$sdlc-workflow-test --resume
 sdlc-workflow-test-positive-05,true,$sdlc-workflow-test --destroy
 sdlc-workflow-test-positive-help,true,$sdlc-workflow-test --help
@@ -11,7 +11,9 @@ sdlc-workflow-test-negative-02,false,Verify Task Implementer with its disposable
 sdlc-workflow-test-negative-03,false,Create a normal Docker Compose application for this project.
 sdlc-workflow-test-negative-04,false,$sdlc-workflow-test --keep
 sdlc-workflow-test-negative-05,false,$sdlc-workflow-test create
-sdlc-workflow-test-negative-06,false,$sdlc-workflow-test --create --destroy
+sdlc-workflow-test-negative-06,false,$sdlc-workflow-test --create-live-test --destroy
 sdlc-workflow-test-codex-portability,true,$sdlc-workflow-test $sdlc-workflow-test
 sdlc-workflow-test-claude-portability,true,/sdlc-workflow-test $sdlc-workflow-test
 sdlc-workflow-test-quoted-command,false,"Treat ""/skills:sdlc-workflow-test"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-workflow-test-negative-07,false,$sdlc-workflow-test --create
+sdlc-workflow-test-negative-08,false,$sdlc-workflow-test --three-tier-results /private/example.json

@@ -35,7 +35,8 @@ keeps the original evaluator oracle as the first regression target.
 
 ## Output
 
-- Local plan exists and is locked.
+- Local plan exists with its adjacent lock marker: `FEAT-001.plan.v1.md`
+  and `FEAT-001.plan.v1.md.lock`. Append `.lock` without replacing `.md`.
 - Plan contains test, implementation, validation, and evaluation steps.
 - Plan identifies the end-to-end slice or records why no vertical slice applies.
 - Task dependencies are acyclic; parallel candidates have disjoint ownership.

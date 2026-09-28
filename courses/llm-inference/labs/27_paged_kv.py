@@ -7,7 +7,7 @@ import argparse
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
@@ -157,7 +157,7 @@ def main() -> None:
             "--block-tokens must be positive; --total-blocks must be at least 4"
         )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     demonstration = lifecycle_demo(args.block_tokens, args.total_blocks)
     if not all(demonstration["checks"].values()):
         raise SystemExit("Paged-KV lifecycle correctness failed")

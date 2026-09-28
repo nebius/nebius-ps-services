@@ -1,0 +1,42 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "3009041ced3f7067563fb6f4af7a59ff0c08adc12d5e71ed4e58a51221c63db3",
+      "sha256": "441b489f35baf723a0b6489d3c88fa2916334a390bec996c891ecdbf2e9e6e11",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "abe5d6c0e59a67fd059575a85531a985385df0ca2de6fc8bd60d4245f0818f27",
+      "sha256": "604bb10d0427b415f1cc323b6bdbe510a5bd6e12970b50d044e3a1689ba58def",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "9f57fa236e09b58e0a8e1b3a3e6eef3fda061ef1981d5664d46bbddc282e3d4f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "90335b113f121c4be397d648060b37ee64aa323c2ee72d4e48c19cf4714ee1c7",
+      "tool": "grafana"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "27_rdma_latency",
+  "limitations": [],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "ba2e715d935f5d9b70bfe31c1c75dcc557f0467968cb5cf12aef9eaf465bc3c2",
+  "summary_sha256": "f99082fcde0e73b2c08eb8eb44d2162f84ea79e736e0e6a12be2b3ecf7cb51bc"
+}

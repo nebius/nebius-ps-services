@@ -121,6 +121,7 @@ from sdlc_execution_core import (  # noqa: E402 — verified bootstrap precedes 
     complete_wave,
     describe_status,
     finish_task,
+    fail_wave,
     heartbeat_task,
     integrate_wave,
     prepare_execution,
@@ -314,6 +315,14 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--wave", required=True)
     complete.add_argument("--evidence", required=True)
 
+    failed = sub.add_parser("wave-fail")
+    failed.add_argument("--run-dir", type=Path, required=True)
+    failed.add_argument("--feature", required=True)
+    failed.add_argument("--wave", required=True)
+    failed.add_argument("--classification", required=True)
+    failed.add_argument("--dispatch", required=True)
+    failed.add_argument("--evidence", required=True)
+
     seal = sub.add_parser("seal-feature")
     seal.add_argument("--run-dir", type=Path, required=True)
     seal.add_argument("--feature", required=True)
@@ -442,6 +451,8 @@ def execute(args: argparse.Namespace) -> Any:
         return integrate_wave(args.run_dir, args.feature, args.wave)
     if args.command == "wave-complete":
         return complete_wave(args.run_dir, args.feature, args.wave, args.evidence)
+    if args.command == "wave-fail":
+        return fail_wave(args.run_dir, args.feature, args.wave, args.classification, args.dispatch, args.evidence)
     if args.command == "seal-feature":
         return seal_feature(args.run_dir, args.feature, args.evidence, args.message)
     if args.command == "promote":

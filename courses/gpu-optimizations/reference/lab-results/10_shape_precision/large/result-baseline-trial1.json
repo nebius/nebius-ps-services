@@ -1,0 +1,55 @@
+{
+  "correctness": {
+    "all_numerically_acceptable": true,
+    "all_results_finite": true
+  },
+  "lab": "10_shape_precision",
+  "measurements": {
+    "cases": [
+      {
+        "dtype": "bfloat16",
+        "effective_tflops": 729.506,
+        "numerically_acceptable": true,
+        "relative_l2_error": 0.00287853,
+        "timing": {
+          "median_ms": 0.1884,
+          "min_ms": 0.1867,
+          "p90_ms": 0.1912
+        },
+        "width": 4096
+      },
+      {
+        "dtype": "bfloat16",
+        "effective_tflops": 143.434,
+        "numerically_acceptable": true,
+        "relative_l2_error": 0.00287709,
+        "timing": {
+          "median_ms": 0.9533,
+          "min_ms": 0.9492,
+          "p90_ms": 0.9595
+        },
+        "width": 4089
+      },
+      {
+        "dtype": "float32",
+        "effective_tflops": 51.157,
+        "numerically_acceptable": true,
+        "relative_l2_error": 0.0,
+        "timing": {
+          "median_ms": 2.6866,
+          "min_ms": 2.684,
+          "p90_ms": 2.6896
+        },
+        "width": 4096
+      }
+    ]
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

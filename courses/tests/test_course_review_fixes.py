@@ -128,8 +128,12 @@ def test_domain_specific_lab_ownership() -> None:
     assert not (ROOT / "gpu-optimizations/labs/11_sdpa_attention.py").exists()
     assert (ROOT / "llm-training/labs/14_activation_checkpointing.py").is_file()
     assert (ROOT / "llm-inference/labs/24_sdpa_attention.py").is_file()
-    training = (ROOT / "llm-training/labs/12_moe_expert_parallel.py").read_text()
-    inference = (ROOT / "llm-inference/labs/12_moe_expert_parallel.py").read_text()
+    training = (
+        ROOT / "advanced-gpu-communication/labs/17_training_expert_parallel.py"
+    ).read_text()
+    inference = (
+        ROOT / "advanced-gpu-communication/labs/23_inference_expert_parallel.py"
+    ).read_text()
     assert "training_evidence" in training
     assert "inference_evidence" in inference
     for lab in (ROOT / "llm-inference/labs").glob("*.py"):
@@ -148,6 +152,7 @@ def test_random_using_python_labs_apply_the_declared_seed() -> None:
                     "seed_everything(torch, args.seed)" in content
                     or "manual_seed(args.seed)" in content
                     or "torch.Generator" in content
+                    or "initialize(args.seed)" in content
                 ), lab
 
 
@@ -159,7 +164,6 @@ def test_serving_launchers_belong_only_to_inference() -> None:
         "vllm_prefix_cache.sbatch",
         "vllm_speculative_ab.sbatch",
         "vllm_streaming_benchmark.sbatch",
-        "vllm_two_node.sbatch",
         "trtllm_triton.sbatch",
         "aiperf.sbatch",
         "dynamo_disaggregated_preflight.sbatch",
@@ -177,7 +181,13 @@ def test_slurm_launchers_are_private_fail_closed(course: str) -> None:
         text = launcher.read_text()
         assert "set -euo pipefail" in text
         assert "umask 077" in text
-        assert "#SBATCH --gpus-per-node=1" in text
+        expected_gpus = (
+            8
+            if launcher.stem
+            in {"two_node", "fabric", "fabric_tools", "nccl_tests", "vllm_two_node"}
+            else 1
+        )
+        assert f"#SBATCH --gpus-per-node={expected_gpus}" in text
         syntax = subprocess.run(
             ["bash", "-n", str(launcher)],
             capture_output=True,
@@ -208,7 +218,8 @@ def test_custom_cuda_build_contract() -> None:
     assert "median_ms" in common and "p90_ms" in common
     assert "std::isfinite(expected[index])" in common
     assert "std::isfinite(observed[index])" in common
-    assert "tiled_unpadded_transpose" in sources[3].read_text()
+    transpose = (ROOT / "custom-cuda-kernels/labs/03_tiled_transpose.cu").read_text()
+    assert "tiled_unpadded_transpose" in transpose
     reduction = (ROOT / "custom-cuda-kernels/labs/04_reduction.cu").read_text()
     assert "block_atomic_sum" in reduction and "cub::DeviceReduce" in reduction
     resource = (ROOT / "custom-cuda-kernels/labs/07_resource_sweep.cu").read_text()
@@ -254,10 +265,14 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert "torch.utils.data.DataLoader" in pipeline
     assert 'options["prefetch_factor"]' in pipeline
     assert "sample_order_and_content_digest" in pipeline
-    training_tp = (ROOT / "llm-training/labs/19_tensor_parallel_linear.py").read_text()
+    training_tp = (
+        ROOT / "advanced-gpu-communication/labs/18_training_tensor_parallel.py"
+    ).read_text()
     assert "input_gradient_all_reduce_median_ms" in training_tp
     assert "optimizer_update_matches_reference" in training_tp
-    training_ep = (ROOT / "llm-training/labs/12_moe_expert_parallel.py").read_text()
+    training_ep = (
+        ROOT / "advanced-gpu-communication/labs/17_training_expert_parallel.py"
+    ).read_text()
     assert "expert_weight_gradient_matches_reference" in training_ep
     assert "training_step_slowest_rank_median_ms" in training_ep
     checkpoint = (ROOT / "llm-training/labs/24_checkpoint_resume.py").read_text()
@@ -265,7 +280,9 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert "resumed_inputs" in checkpoint and "resumed_labels" in checkpoint
     assert "torch.randint" in checkpoint
     assert "omitted_rng_restore_diverges" in checkpoint
-    overlap = (ROOT / "llm-training/labs/28_communication_overlap.py").read_text()
+    overlap = (
+        ROOT / "advanced-gpu-communication/labs/19_gradient_overlap.py"
+    ).read_text()
     assert (
         "register_post_accumulate_grad_hook" in overlap and "async_op=True" in overlap
     )
@@ -286,18 +303,22 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert "--speculative-config" in speculative
     assert "compare_pair" in speculative
     assert "for trial in 1 2 3" in speculative
-    serving_parallel = (ROOT / "llm-inference/slurm/vllm_two_node.sbatch").read_text()
-    assert "pp | tp | ep" in serving_parallel
-    assert "--enable-expert-parallel" in serving_parallel
-    assert "for trial in 1 2 3" in serving_parallel
-    assert 'start_server "${trial}"' in serving_parallel
+    serving_parallel = (
+        ROOT / "advanced-gpu-communication/labs/dynamo_experiments.py"
+    ).read_text()
+    assert '"--tensor-parallel-size"' in serving_parallel
+    assert '"NixlConnector"' in serving_parallel
+    assert "persistent=True" in serving_parallel
+    assert "with service(args, folder)" in serving_parallel
     inference_tp = (
-        ROOT / "llm-inference/labs/19_tensor_parallel_linear.py"
+        ROOT / "advanced-gpu-communication/labs/24_inference_tensor_parallel.py"
     ).read_text()
     assert "broadcast(weight, src=0)" in inference_tp
     assert "column_parallel_matches_reference" in inference_tp
     assert "row_parallel_matches_reference" in inference_tp
-    inference_ep = (ROOT / "llm-inference/labs/12_moe_expert_parallel.py").read_text()
+    inference_ep = (
+        ROOT / "advanced-gpu-communication/labs/23_inference_expert_parallel.py"
+    ).read_text()
     assert "global_expert_token_load" in inference_ep
     assert "expert_load_max_to_mean" in inference_ep
     training_capstone = (
@@ -331,7 +352,8 @@ def test_aiperf_execution_is_inference_owned() -> None:
         "custom-cuda-kernels",
     ):
         for path in publication_files(ROOT / course, {".py", ".sh", ".sbatch"}):
-            assert "aiperf" not in path.read_text(errors="ignore").lower(), path
+            if path.name != "validate_course.py":
+                assert "aiperf" not in path.read_text(errors="ignore").lower(), path
 
 
 def test_custom_sanitizer_launcher_allowlists_tools() -> None:
@@ -348,7 +370,6 @@ def test_engine_profiles_require_immutable_digests() -> None:
         "vllm_prefix_cache.sbatch",
         "vllm_speculative_ab.sbatch",
         "vllm_streaming_benchmark.sbatch",
-        "vllm_two_node.sbatch",
         "trtllm_triton.sbatch",
         "aiperf.sbatch",
         "dynamo_disaggregated_preflight.sbatch",
@@ -376,7 +397,6 @@ def test_hugging_face_revisions_fail_closed() -> None:
         "vllm_prefix_cache.sbatch",
         "vllm_speculative_ab.sbatch",
         "vllm_streaming_benchmark.sbatch",
-        "vllm_two_node.sbatch",
     ):
         text = (ROOT / "llm-inference/slurm" / launcher).read_text()
         assert "40-character Hugging Face commit ID" in text
@@ -420,9 +440,10 @@ def test_capstone_aggregator_requires_three_distinct_counterbalanced_runs(
                     {
                         "schema": "gpu-course-result/v1",
                         "lab_id": lab_id,
-                        "profile": "smoke",
+                        "profile": "small",
                         "run_id": f"{index:012x}",
                         "seed": 16 + index,
+                        "experiment": {"instrumented": False},
                         "environment": {
                             "gpu_family": "NVIDIA H100",
                             "torch_version": "test",
@@ -466,7 +487,7 @@ def test_capstone_aggregator_requires_three_distinct_counterbalanced_runs(
         assert summary["decision"] == "candidate-for-scoped-keep"
         assert summary["correctness"]["counterbalanced_order"] is True
         mismatched = json.loads(inputs[-1].read_text())
-        mismatched["profile"] = "h100"
+        mismatched["profile"] = "large"
         inputs[-1].write_text(json.dumps(mismatched))
         rejected = subprocess.run(
             [

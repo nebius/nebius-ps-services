@@ -87,10 +87,13 @@ Validate the full product, not just individual features, before PR creation.
 - Use `assets/templates/uat-report.md.template` for the report.
 - Build a UAT matrix from acceptance criteria.
 - Select GUI, TUI, API, service, or mixed harness.
-- When a UAT matrix row declares `computer-use`, route the GUI journey through
-  `sdlc-gui-test` with that exact harness and the declared browser. Browser or
-  Playwright evidence cannot substitute. Require fresh accessibility state
-  after each action and record an ordered action/observation ledger.
+- Default web GUI rows to `sdlc-gui-test` with `harness: playwright-test`,
+  `headless: true`, a fresh owned Chrome process/context and repeatable
+  assertions. Optional headless isolated Playwright MCP exploration is separate.
+  Record actual browser version, target SHA, trace, screenshots and cleanup.
+  No native desktop capture, monitor selection or unlocked-screen gate applies.
+- Honor explicitly required native desktop behavior as a separate contract;
+  do not silently substitute web evidence for it.
 - Use the Live Experiment Environment only when it is marked provided, has
   explicit non-production or disposable confirmation, and the UAT actions fit
   the recorded allowed operations and reset process. If unavailable or unsafe,

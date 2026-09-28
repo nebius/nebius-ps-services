@@ -1,0 +1,25 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair1-view3.png",
+    "grafana-pair1-view4.png",
+    "grafana-pair1-view5.png",
+    "grafana-pair1-view6.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "grafana-pair2-view3.png",
+    "grafana-pair2-view4.png",
+    "grafana-pair2-view5.png",
+    "grafana-pair2-view6.png",
+    "manifest.json",
+    "result-cpu-repeat-trial1.json",
+    "result-cpu-trial1.json",
+    "result-cuda-repeat-trial1.json",
+    "result-cuda-trial1.json",
+    "summary.csv",
+    "systems-cuda-rank-0.png"
+  ],
+  "identity": "38aba4437f50f4ce",
+  "schema": "run-labs-owned/v1"
+}

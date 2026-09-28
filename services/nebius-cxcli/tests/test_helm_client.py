@@ -10,6 +10,7 @@ import pytest
 from nebius_cxcli.helm_client import (
     HelmChartReference,
     HelmClient,
+    _chart_cli_contract_findings_cached,
     _materialize_chart_dir,
     _resolve_show_ref,
     _run_git_clone,
@@ -119,7 +120,7 @@ def test_resolve_show_ref_github_tree_chart_name_supported(
 def test_run_git_clone_requires_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("nebius_cxcli.helm_client.shutil.which", lambda _name: None)
     monkeypatch.setattr(
-        "nebius_cxcli.helm_client.subprocess.run",
+        "nebius_cxcli.helm_client.kubernetes_process.run",
         lambda *_args, **_kwargs: pytest.fail("git clone should not run when git is missing"),
     )
 
@@ -139,7 +140,7 @@ def test_search_repo_skips_oci_sources(monkeypatch: pytest.MonkeyPatch) -> None:
         invoked["value"] = True
         raise AssertionError("subprocess.run should not be called for OCI repo search")
 
-    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fail_if_called)
+    monkeypatch.setattr("nebius_cxcli.helm_client.kubernetes_process.run", _fail_if_called)
 
     client = HelmClient()
     result = client.search_repo(chart_name="gateway-helm", chart_repo="oci://docker.io/envoyproxy")
@@ -156,7 +157,7 @@ def test_search_repo_uses_stable_repo_alias(monkeypatch: pytest.MonkeyPatch) -> 
         commands.append(args)
         return SimpleNamespace(returncode=0, stdout="[]", stderr="")
 
-    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+    monkeypatch.setattr("nebius_cxcli.helm_client.kubernetes_process.run", _fake_run)
 
     repo = "https://charts.example.test/team"
     result = HelmClient().search_repo(chart_name="soperator", chart_repo=f"{repo}/")
@@ -179,7 +180,7 @@ def test_run_helm_show_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) 
         )
 
     monkeypatch.setenv("NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS", "321")
-    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+    monkeypatch.setattr("nebius_cxcli.helm_client.kubernetes_process.run", _fake_run)
 
     output = _run_helm_show("chart", "oci://docker.io/example/demo", version="1.0.0")
 
@@ -218,7 +219,7 @@ def test_chart_cli_contract_findings_accepts_minimal_chart_layout(
         "nebius_cxcli.helm_client._materialize_chart_dir",
         lambda _reference: _yield_path(chart_dir),
     )
-    chart_cli_contract_findings.cache_clear()
+    _chart_cli_contract_findings_cached.cache_clear()
 
     issues, warnings = chart_cli_contract_findings(
         chart_name="gateway-helm",
@@ -241,7 +242,7 @@ def test_chart_cli_contract_findings_reports_missing_layout(
         "nebius_cxcli.helm_client._materialize_chart_dir",
         lambda _reference: _yield_path(chart_dir),
     )
-    chart_cli_contract_findings.cache_clear()
+    _chart_cli_contract_findings_cached.cache_clear()
 
     issues, warnings = chart_cli_contract_findings(
         chart_name="gateway-helm",
@@ -253,7 +254,7 @@ def test_chart_cli_contract_findings_reports_missing_layout(
     assert any("missing templates/" in issue for issue in issues)
     assert not any("missing README.md" in warning for warning in warnings)
 
-    chart_cli_contract_findings.cache_clear()
+    _chart_cli_contract_findings_cached.cache_clear()
     _issues, warnings = chart_cli_contract_findings(
         chart_name=str(chart_dir),
         chart_repo="",
@@ -281,7 +282,7 @@ def test_render_chart_template_documents_parses_rendered_yaml(
         )
 
     monkeypatch.setattr("nebius_cxcli.helm_client._materialize_chart_dir", _materialized)
-    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+    monkeypatch.setattr("nebius_cxcli.helm_client.kubernetes_process.run", _fake_run)
 
     documents = render_chart_template_documents(
         chart_name=str(chart_dir),

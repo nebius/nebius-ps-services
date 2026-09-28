@@ -1,0 +1,42 @@
+{
+  "correctness": {
+    "loss_matches_global_reference": true,
+    "update_matches_global_reference": true
+  },
+  "lab": "22_fabric_training",
+  "measurements": {
+    "accumulation": 2,
+    "global_batch": 128,
+    "loss": 1.0425487756729126,
+    "peak_allocated_bytes": 88898048,
+    "ranks": 16,
+    "samples_per_second": 47722.268051500956,
+    "step": {
+      "max_ms": 3.7537369644269347,
+      "median_ms": 2.6821860155905597,
+      "min_ms": 2.530483001464745,
+      "samples_ms": [
+        3.7537369644269347,
+        3.4621600061655045,
+        3.080034046433866,
+        2.6133200008189306,
+        2.598325001599733,
+        2.545040002587484,
+        2.5605219998396933,
+        2.530483001464745,
+        2.751052030362189,
+        2.782453000691021
+      ]
+    },
+    "width": 512
+  },
+  "parameters": {
+    "iterations": 10,
+    "microbatch": 4,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 16
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

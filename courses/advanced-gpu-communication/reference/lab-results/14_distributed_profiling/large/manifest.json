@@ -1,0 +1,65 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "cdb1880bc48953046fc248c775ed4f1894231ce9f5a1871827dbd93cf4cad62d",
+      "sha256": "fc581c51d96d28bfeffa01781fe64c496a43815caedadbbeeda968bad60cb7e8",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "fcb4854442c9d9ab1350786db60ae9a961a35ac007865cbf0651e5e7301d6e95",
+      "sha256": "4d1c19ee7f290d46433a4c1c9127efb7bfd0c5a92a5d1fb1efd9879911ba938d",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "e1581a053f764884925e64cd4c40495fd470594ea685ffc384ea1660a9499625",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "512f7994e37435bc4dd1b6d5f15dd928dde2b67130489fb40b08fee995773792",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "0add797555907f05702e06bfa406cc58357ea9b57b683b886fff93f315a39241",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "61dfedb43d2ada5223dedb086a206567c59425f33b37bbf3aa02704b91f0258d",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "14_distributed_profiling",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "6ef426168b9dceb1982416ec07d1a2886f0b91020f729384b121cdd70959410b"
+}

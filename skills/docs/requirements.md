@@ -934,19 +934,28 @@ projection; static text tests alone do not prove runtime investigation quality.
 
 #### User Story
 
-Codex users need one explicit `$commit` invocation to commit the complete local
+Users need one semantically explicit commit request to commit the complete local
 repository diff even when related changes span multiple project folders,
 without weakening repository instructions, Task Implementer, Worktree,
 Agentic SDLC, or transaction-owned safety.
 
 #### Acceptance Criteria
 
-- AC-001: Direct commit mutation requires an explicit current-turn invocation,
-  expressed either as a leading `$commit` token or as a bounded leading
-  directive such as `run`, `apply`, `execute`, `invoke`, or `use` immediately
-  followed by `$commit`; optional leading politeness does not weaken that
-  binding. The authorization preserves the public whole-repository, local-only
-  workflow with repository-root `git add -A`, normal hooks, and no push.
+- AC-001: The root agent interprets explicit user intent semantically, including
+  natural-language action requests and skill mentions anywhere in a request.
+  Neither a leading token nor a repeated magic phrase is required. The hook
+  records only nonauthorizing current-turn metadata. Direct preparation requires
+  the agent's action assertion bound to that exact receipt before creating a
+  single-use authorization. Skill selection alone grants no authority. Local
+  commit retains repository-root `git add -A`, normal hooks, and no push;
+  commit-push owns its separate bounded publication workflow.
+- AC-001a: Eligible root capture failures emit fixed, nonblocking diagnostics
+  for unavailable native identity, prompt, repository identity or receipt
+  publication. They emit no usable receipt digest and never change existing
+  authorizations or claims. Validation failures preserve the prior receipt; a
+  publication error may follow atomic replacement. Excluded generated events
+  remain inert.
+  Source and installed-fixture checks do not establish native hook dispatch.
 - AC-002: The reviewed candidate tree is computed from the current real index
   plus the complete tracked and untracked worktree delta before the real index
   is changed, then bound to the exact common Git directory, worktree, ref,
@@ -993,6 +1002,17 @@ Agentic SDLC, or transaction-owned safety.
   commit, ref movement, or identity drift become stale without reset, amend,
   unstage, or duplicate commit.
 
+- AC-007: An explicitly authorized unmanaged `create-pr` task may prepare,
+  stage, commit and push successive validated branch-owned repairs until its
+  GitHub checks finish, without another user turn for each commit. Its private
+  continuation grant binds the native session, repository, feature ref,
+  effective fetch/push origin, base lineage and original root receipt. Every
+  commit retains a fresh exact-tree claim and normal hooks. Completed claims
+  or unchanged-base failed attempts may advance; uncertain commits require
+  explicit review. Only correctly oriented base merges may intervene.
+  Ordinary commit and commit-push requests remain single-use. Closing the PR
+  task prevents receipt replay; active SDLC stays publication-only.
+
 #### Negative Criteria
 
 - NC-001: Raw `git add`, path-scoped staging, `git add .`, composed or wrapped
@@ -1007,10 +1027,12 @@ Agentic SDLC, or transaction-owned safety.
 - NC-003: The transaction must not persist prompt bodies, diff contents,
   secrets, private endpoints, commit messages, or repository file contents in
   private authorization and claim state.
-- NC-004: Casual mentions, questions, quoted examples, help requests, later
-  prose references, subagent turns, and Stop or system continuations must not
-  mint commit authorization merely because they contain `$commit` or an
-  invocation verb.
+- NC-004: Discussion, quoted examples, help, negation, and skill repair requests
+  must not authorize Git mutation. Polite action questions may authorize it.
+  Root-turn receipts alone never authorize effects, and subagent, Stop, system,
+  or compaction events never create root receipts. Replaying a consumed ordinary commit receipt
+  cannot mint another authorization; a scoped active PR grant is the only
+  repeated-commit path; unrelated turns preserve active claims.
 
 #### Validation Method
 
@@ -1027,8 +1049,8 @@ Cover root and sibling project changes, pre-staged and untracked files,
 renames/deletions, linked worktrees, default/protected branches, conflicts,
 secret-like content, malformed commands and managed state, merge commits, drift
 at each transition, commit-hook mutation, duplicate execution, Task Implementer
-and Worktree delegation, active/released Agentic SDLC state, accepted leading
-directive forms, and rejected conversational or quoted mentions.
+and Worktree delegation, active/released Agentic SDLC state, receipt-bound semantic action assertions, replay rejection, and nonauthorizing
+conversational or quoted turns.
 Also cover contradictory explicit origin markers and repository-shaping Git
 environment without changing either the real index or an alternate index.
 
@@ -2089,9 +2111,9 @@ lifecycle classification or weakening publication safety.
   only when no active pre-push or reference-transaction hook can introduce
   hidden project effects.
 - AC-004: A dirty `commit-push` workflow obtains its local commit through the
-  existing claim-bound whole-repository commit transaction. Its explicit
-  invocation can authorize that transaction without admitting raw `git add` or
-  `git commit`.
+  existing claim-bound whole-repository commit transaction. A semantically
+  explicit user action binds the current root-turn receipt to that transaction
+  without admitting raw `git add` or `git commit`.
 - AC-005: Force, delete, mirror, all, tags, wildcard, arbitrary-remote,
   arbitrary-refspec, URL-targeted, dynamic, composed, hook-bearing, or otherwise
   ambiguous fetch and push commands remain denied by the publication workflow
@@ -2516,15 +2538,55 @@ guidance and apply them to new subjects without inheriting one domain's stack.
   source, installed skill, fresh routing and output-quality evidence remain
   distinct. The source update does not install or publish the skill.
 
-- AC-007: Every lesson uses a concise concept title and four sections in order:
+- AC-007: Every lesson uses a concise concept title and four teaching sections in order:
   Objective, How it works, Practice, Mental model. Objective states the outcome;
   How it works defines and connects concepts, prerequisites, purpose, mechanism,
-  examples and limitations; Mental model ends with a concise synthesis.
+  examples and limitations; Mental model closes teaching with a concise synthesis.
 - AC-008: Every How it works contains at least one explanatory diagram of that
   lesson's core relationships. Unfamiliar abbreviations are expanded at first
   meaningful use and explained in context; common audience vocabulary need not
   be mechanically expanded. Titles and explanation quality require semantic
   review as well as structural checks.
+
+- AC-009: Permitted full-course browser verification defaults to owned headless
+  Playwright Test with Chrome and isolated state. Retain desktop, 390px and
+  320px rendering, keyboard, zoom/reflow, mobile TOC, local scroller and diagram
+  checks, artifact/browser identity, assertions, screenshots/traces and cleanup
+  evidence. Optional isolated headless MCP exploration is a separate lane.
+- AC-010: Screen unlock, monitor selection and foreground windows are not web
+  verification prerequisites. Unavailable or denied browser execution leaves
+  required evidence pending while permitted authoring may continue; review-only
+  and lesson-only requests do not gain implicit browser work.
+
+- AC-011: Every complete course has exactly one independent course-wide Glossary.
+  Include taught key terms and abbreviations with concise definitions and full
+  expansions where applicable, sorted A–Z by displayed key ignoring case.
+  Consolidate repeated entries while preserving distinct meanings. Lessons and
+  supporting guides contain no local glossary sections; optional lesson References
+  follow Mental model and remain last. Preserve first-use explanations.
+  A lesson-only revision updates the owning course glossary where available
+  without creating an unrequested full course or a duplicate glossary.
+
+- AC-012: Every complete course has exactly one independent Where to Go Next
+  section, shared by all lessons and supporting guides, followed by the single
+  Glossary and final Official references. Give concrete optional onward learning
+  steps tied to completed course competencies, one option per bullet. Do not
+  create lesson-local next-step sections or add unrequested prerequisites,
+  installations, runtime dependencies or completion gates. A lesson-only revision
+  updates the owning course section where available without creating an
+  unrequested course package; a standalone lesson keeps onward guidance in
+  its handoff rather than adding either course appendix inside the lesson.
+
+- AC-013: Use one shared typography and semantic heading hierarchy across courses.
+  Official references use numbered lists; every Where to Go Next separates
+  options into bullets. Glossary is one independent section shared by all lessons
+  and supporting guides. Do not render Syllabus or Course mission sections or
+  navigation entries; retain planning sources and move unique audience,
+  prerequisites, readiness, outcomes and safety context into the orientation
+  or owning teaching before removing those presentation sections.
+
+- AC-014: Distinguish self-contained reading from linked companion downloads and separately delivered runtime sources; avoid redundant lab kits. Explicitly declared local links remain bounded by a publication root.
+- AC-015: Supply a generic executable build scaffold with directory-independent build/check wrapper, course-owned renderer adapter, deterministic explicit-inventory ZIPs, path validation, configured exact-byte budgets and atomic per-file outputs. No GPU assumptions, installed-skill runtime dependency or implicit dependency installation.
 
 #### Negative Criteria
 
@@ -2534,6 +2596,9 @@ guidance and apply them to new subjects without inheriting one domain's stack.
   material during consolidation, or claim target execution from static checks.
 - NC-003: Do not copy private material or force GPU/runtime machinery into
   unrelated courses; no backward-compatibility wrappers are required.
+- NC-004: Browser defaults do not authorize dependency installation, external
+  publication, live labs, personal-profile reuse or bypassing a denied action.
+  Browser assertions and screenshots do not replace semantic visual review.
 
 #### Validation Method
 
@@ -2762,5 +2827,309 @@ Compare changed instruction behavior against captured working bytes in clean
 native contexts when available; disclose unavailable model lanes independently.
 
 <!-- /REQUIREMENT: REQ-032 -->
+
+<!-- REQUIREMENT: REQ-033 status=active priority=P1 type=feature -->
+### REQ-033: Exercise normal SDLC Git admission with one owned local origin
+
+#### User Story
+
+As a workflow maintainer, I want disposable lightweight and three-tier tests
+to use normal Git-backed SDLC startup without granting external Git access or
+weakening ownership checks during validation and cleanup.
+
+#### Acceptance Criteria
+
+- AC-001: Each canonical test fixture has exactly one remote named `origin`,
+  pointing to one verifier-created bare repository at its predetermined local
+  path outside the project checkout and inside the same private owned scope.
+- AC-002: A private receipt binds project, owner scope, generation identity,
+  immutable baseline and default branch. Creation, evidence recording, resume
+  and cleanup validate the same ownership contract.
+- AC-003: Normal prompt intake and worktree admission succeed against that
+  origin. Local implementation may advance the project while the origin's
+  default and references remain frozen at the recorded baseline.
+- AC-004: Creation is serialized and unchanged replay is idempotent. Unknown,
+  interrupted or tampered origin state is preserved and rejected before Git
+  transport, browser cleanup or Docker mutation.
+- AC-005: Three-tier fixture preparation establishes its clean Git baseline and
+  owned origin before phase execution. Cleanup removes only exact owned state.
+
+#### Negative Criteria
+
+- NC-001: Reject external or additional remotes, multiple URLs, push URL
+  overrides, effective URL redirection, symlink or hardlink escapes, foreign
+  receipts, non-bare origins and changed baseline/default references.
+- NC-002: Do not push or publish. Reject borrowed object stores, inherited Git
+  identity overrides and configuration that disables the owned push guard.
+- NC-003: Do not bypass normal SDLC promotion, treat non-Git prompt parsing as
+  Git admission proof, or weaken source-installed and live-evidence gates.
+
+#### Validation Method
+
+Run real local Git fixture, normal prompt/worktree admission and lifecycle
+regressions, then the full deterministic verifier. Keep installed parity and
+live Docker/browser evidence separate.
+
+#### Test Method
+
+Use isolated canonical fixtures for creation, replay, descendant commits,
+resume/replacement/cleanup, configuration and ownership tampering, unsafe
+storage, rejected pushes and interrupted initialization.
+
+#### Evaluation Method
+
+Prove ordinary Git-backed startup and worktree admission without patched
+promotion helpers; independently confirm a frozen owned origin and rejection
+before external or destructive effects. Complete live acceptance separately.
+
+<!-- /REQUIREMENT: REQ-033 -->
+
+<!-- REQUIREMENT: REQ-034 status=active priority=P1 type=feature -->
+### REQ-034: Expose one explicit live-test action and one evidence input
+
+#### User Story
+
+As a workflow maintainer, I want an explicit live-test action and a single
+live-evidence path so I can run and verify the core SDLC without supplying
+redundant paths to the same owned trial.
+
+#### Acceptance Criteria
+
+- AC-001: The public creation action is `--create-live-test`, optionally with
+  `--keep`; resume and destroy retain their existing meanings and exclusivity.
+- AC-002: `--live-evidence PATH` is the only public evidence input. It accepts
+  the aggregate live-results manifest, whose profile identifies the owned
+  three-tier lifecycle and its canonical semantic evidence automatically.
+- AC-003: Aggregate and lifecycle identities and Git histories are validated
+  independently at their respective owners. A collected three-tier source
+  must match the owned canonical result and pass existing semantic checks.
+- AC-004: Help, metadata, examples, tests and design use the same interface.
+
+#### Negative Criteria
+
+- NC-001: Reject retired `--create` and `--three-tier-results` options without
+  aliases, abbreviations, compatibility paths or silent inference.
+- NC-002: Do not accept arbitrary canonical result locations, unrelated or
+  superseded lifecycle identities, unsafe evidence paths, or a copied result
+  without its owned canonical lifecycle. Missing proof cannot become PASS.
+- NC-003: Hosted Git authentication, external network failures, publication,
+  PRs and merging remain outside the local core-workflow live acceptance.
+
+#### Validation Method
+
+Check public-interface contracts and run aggregate, collector and lifecycle
+regressions with independent outer and inner identities.
+
+#### Test Method
+
+Cover default and explicit evidence paths, retired-option rejection, positive
+owned profile validation, stale identity, unsafe files and digest mismatch.
+
+#### Evaluation Method
+
+Run the normal core SDLC and Docker/browser UAT using the renamed action;
+verify semantic evidence before cleanup and preserve sanitized results.
+
+<!-- /REQUIREMENT: REQ-034 -->
+
+<!-- REQUIREMENT: REQ-035 status=active priority=P1 type=feature -->
+### REQ-035: Verify local web workflows without a visible desktop
+
+#### User Story
+
+As a laptop user, I want Agentic SDLC web acceptance to continue while the
+computer remains awake but its screen is locked, with real browser evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Required web acceptance uses repeatable headless Playwright tests
+  with fresh owned Chrome processes. Optional agent exploration uses headless
+  Playwright MCP; native desktop capture is not a web prerequisite.
+- AC-002: Browser stages bind run, attempt, checkout, endpoint and artifacts;
+  preserve failed attempts and require successful exact-process cleanup.
+- AC-003: Keep retains the application, database, project and evidence, but
+  closes browsers. Resume creates fresh browser contexts.
+- AC-004: Real UI journeys retain independent API/database correlation, five
+  independently captured screenshots, and persistence across an owner-controlled
+  restart. A fresh post-restart capture may match the completed-state pixels;
+  the four pre-restart states must remain visually distinct.
+- AC-005: Configuration defaults are pinned, headless, Chrome-specific and
+  isolated. Public live-test flags retain their existing spelling.
+- AC-006: Locked-screen certification requires observed lock boundaries and
+  actual agent-launched execution and screenshots inside that interval.
+
+#### Negative Criteria
+
+- NC-001: Do not borrow personal browsers, weaken ownership, relabel native
+  evidence, hide failed attempts or silently fall back to desktop capture.
+- NC-002: Independent verifier tests do not pre-satisfy product TDD steps.
+  Exploration cannot mutate acceptance state during its declared trial.
+- NC-003: Screen lock support does not promise operation during system sleep,
+  shutdown, exhausted batteries or network loss.
+
+#### Validation Method
+
+Run focused ownership, lifecycle, evidence, configuration and prompt tests,
+then source/installed parity and the deterministic verifier.
+
+#### Test Method
+
+Exercise stage isolation, failed readiness, stale artifacts, crash cleanup,
+keep/resume, port rediscovery, and unchanged personal browser processes.
+
+#### Evaluation Method
+
+Run fresh Docker-backed core SDLC acceptance. Test lock during a journey and
+agent launch after lock, with independent timestamps; separately test MCP.
+Report unobserved native/runtime lanes explicitly as unverified.
+
+<!-- /REQUIREMENT: REQ-035 -->
+<!-- REQUIREMENT: REQ-036 status=active priority=P1 type=feature -->
+### REQ-036: Recover a failed integrated SDLC wave without false success
+
+#### User Story
+
+Agentic SDLC users need a failed combined validation after task integration to
+reach an authorized corrective task while preserving the failed evidence.
+
+#### Acceptance Criteria
+
+- AC-001: An integrated wave can record its exact classified failure and retire
+  only clean, reachable worker resources without becoming a passing wave.
+- AC-002: Corrective dispatch requires the canonical failure, diagnosis,
+  classification and counted repair attempt, preserving immutable task history.
+- AC-003: Successful correction proves the original oracle at the corrected
+  integration revision; unresolved failures block ordinary work and promotion.
+
+#### Negative Criteria
+
+- NC-001: Do not reopen committed tasks, hand-edit coordinator state, label
+  failed combined validation as passed, or bypass cleanup ownership checks.
+- NC-002: Stale, foreign or tampered repair identities cannot authorize work.
+
+#### Validation Method
+
+Exercise real Git execution transitions and the repair-control owner together.
+
+#### Test Method
+
+Reproduce integrated validation failure, authorized corrective dispatch,
+non-force cleanup, replay, stale identity rejection and promotion blocking.
+
+#### Evaluation Method
+
+Replay the observed disposable live failure from its unchanged integrated
+checkpoint, then rerun affected tests and all downstream acceptance gates.
+
+<!-- /REQUIREMENT: REQ-036 -->
+<!-- REQUIREMENT: REQ-037 status=active priority=P0 type=constraint -->
+### REQ-037: Reuse task authority for credentials and instruction repair
+
+#### User Story
+
+Maintainers need agents to create credentials required by authorized work and
+repair obsolete project instructions without repeated approval requests.
+
+#### Acceptance Criteria
+
+- AC-001: An authorized task includes creating necessary new credentials and
+  secrets for its identified target and intended access scope. No extra
+  confirmation is required solely because the operation creates a secret.
+- AC-002: Store secret values only in the intended secret store or protected
+  runtime file; never expose values in output, Git, logs, specs or task state.
+- AC-003: Reuse existing action authorization. Ask only for missing authority,
+  access expansion, destructive replacement or another uncovered consequence.
+- AC-004: An explicit instruction-repair request authorizes focused repair of
+  conflicting human-owned rules in selected projects. Generated regions retain
+  their ownership, digest and recovery checks; no dormant override is created.
+- AC-005: Spec maintenance records the accepted policy and routes explicit
+  instruction repair without acting as a credential or instruction writer.
+- AC-006: Task authorization covers necessary skill scripts after inspection
+  of their effects; do not require the user to name a command or repeat an
+  approval. Read-only constraints, explicit skill invocation and actual
+  tool/sandbox controls remain binding; uncovered consequences need authority.
+
+#### Negative Criteria
+
+- NC-001: Routine project work cannot silently rewrite instructions, grant
+  unrelated IAM access, disclose secrets or bypass system/developer policy.
+- NC-002: Missing ownership, ambiguous scope and concurrent changes cannot be
+  treated as approval or repaired by deleting recovery evidence.
+
+#### Validation Method
+
+Check aligned source templates, installed instruction bytes and owner guidance.
+
+#### Test Method
+
+Run focused template, instruction ownership and spec transaction tests; include
+obsolete-policy rejection and authorized-versus-uncovered-action cases.
+
+#### Evaluation Method
+
+Review the Grafana admin-secret creation case, secret disclosure countercase,
+explicit human-rule repair, managed ownership conflict and ordinary-work case.
+Fresh native-session behavior remains a separate evaluation claim.
+
+<!-- /REQUIREMENT: REQ-037 -->
+
+<!-- REQUIREMENT: REQ-038 status=active priority=P1 type=feature -->
+### REQ-038: Ground design in implemented code with explicit execution boundaries
+
+#### User Story
+
+Users need new designs to fit the selected project's existing implementation,
+with visible documentation conflicts and a planning default that does not
+silently implement changes or take over canonical specification ownership.
+
+#### Acceptance Criteria
+
+- AC-001: Before proposing a solution, read the selected project's design and
+  requirements documents when present, then inspect relevant implemented code,
+  callers, interfaces, configuration and tests, including prototype code.
+- AC-002: When design prose conflicts with implemented code, code wins as the
+  current baseline. Report the document claim, actual implementation, source
+  references, and impact; route corrections to maintain-project-specs.
+- AC-003: Redesign unintended conflicts before finalizing the plan. Identify
+  intentional requested changes and unresolved material conflicts explicitly.
+- AC-004: Confirm no users or dependent consumers before treating an existing
+  prototype as unused greenfield. A proven anti-pattern may be replaced through
+  a planned prerequisite refactor with one canonical implementation and no
+  compatibility shims unless the user explicitly requests them.
+- AC-005: Design defaults to non-mutating planning. Explicit implementation
+  requests permit continuation after design through suitable implementation
+  skills only when the active host mode and permissions allow it.
+- AC-006: maintain-project-specs remains the sole canonical document owner;
+  design returns decisions and evidence without directly publishing project
+  requirements or design documents. Preserve existing specialist and SDLC routes.
+
+#### Negative Criteria
+
+- NC-001: Do not substitute a sibling project's design, infer greenfield from
+  missing docs, or change code solely to match conflicting design prose.
+- NC-002: Code precedence does not authorize an unsafe action, certify a bug
+  as correct, or prohibit an explicitly requested change to the baseline.
+- NC-003: A request for design alone, a plan handoff, or quoted implementation
+  text must not authorize code writes or override actual host Plan Mode.
+
+#### Validation Method
+
+Validate skill structure, metadata, canonical spec traceability, evaluation
+schemas and fixture containment; review changed instructions and resources.
+
+#### Test Method
+
+Use scoped Markdown/Python checks and disposable installation parity checks.
+Keep runtime activation and output-quality comparisons separate from static checks.
+
+#### Evaluation Method
+
+Exercise project selection, code/document drift, proposal redesign, missing
+specs, greenfield refactoring, existing or unknown usage, compatibility opt-in,
+non-mutating planning, explicit execution and document-owner handoffs. Verify
+host Plan Mode and read order with actual host context and traces when available.
+
+<!-- /REQUIREMENT: REQ-038 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

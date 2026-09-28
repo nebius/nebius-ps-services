@@ -1,0 +1,61 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "9e4315ed6fdc676dda962455c89b5e76592ad4064fa4fd520e56f64850cdc06d",
+      "sha256": "3e78b328cd517fa52fe372c88c06a07bba66971e46e588e3e945993a42c77731",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "179ee2844ab2cd12e5a83e55befdd42169b0b115e4337931d983d111dac69a91",
+      "sha256": "89290478c1e002a2d89aed6ffaf7169b1f5db74abb370da1ed8046a166212b00",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "658a4f59b975ae1abf747a0040b61b3c3996e50343b4df973d1f36a368918dbb",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "f56d043532bed0aa2ed8923e9ee2b4353eea8b52508b44b16880f59f15362371",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "518301a98eda90d004e58806978bb68dee9be2f2107cf6d42c0d5852c2044c1c",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "81d76eae7dd1508247bc4d84cd29455b10384e0cbc57b44c75a886a1643662e5",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "04_layout_and_coalescing",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "3fb5053b8af07c7175955f325b003c1f750bdc550ad2df1af2e65b20298f0c31"
+}

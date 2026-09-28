@@ -111,7 +111,8 @@ def main() -> None:
                 args.triton_max_token_field: args.max_tokens,
             },
         )
-        response_valid = bool(response.get("text_output"))
+        text_output = response.get("text_output")
+        response_valid = isinstance(text_output, str) and bool(text_output)
     elapsed_ms = (time.perf_counter() - start) * 1000
     if not response_valid:
         raise SystemExit(f"{args.protocol} response did not contain generated text.")

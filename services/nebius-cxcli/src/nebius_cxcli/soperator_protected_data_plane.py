@@ -307,6 +307,15 @@ def protected_job_pod_identity(
     actual_spec = copy.deepcopy(pod.get("spec"))
     if not isinstance(expected_spec, Mapping) or not isinstance(actual_spec, dict):
         raise RuntimeError("protected Soperator Job/Pod spec is incomplete")
+    # PodTopologyLabels copies these two Node labels during scheduling. They
+    # are runtime metadata only when the admitted template did not declare them.
+    if actual_spec.get("nodeName"):
+        expected_labels = expected_metadata_map.get("labels", {})
+        actual_labels = actual_metadata.get("labels", {})
+        if isinstance(expected_labels, Mapping) and isinstance(actual_labels, dict):
+            for label in ("topology.kubernetes.io/region", "topology.kubernetes.io/zone"):
+                if label not in expected_labels:
+                    actual_labels.pop(label, None)
     actual_spec.pop("nodeName", None)
     for field, default in (
         ("enableServiceLinks", True),
@@ -507,13 +516,13 @@ def resolve_admitted_protected_data_plane_baseline(
         baseline = protected_data_plane_receipt_from_payload(journal_receipt_payload)
         if baseline.receipt_sha256 != admitted_sha256:
             raise RuntimeError(
-                "recovery-required: protected data-plane journal differs from the admitted "
-                "preimage"
+                "recovery-required: protected data-plane journal differs from the admitted preimage"
             )
         raw_infrastructure = journal_receipt_payload.get("infrastructure")
-        normalize_journal = not isinstance(raw_infrastructure, Mapping) or not str(
-            raw_infrastructure.get("receipt_sha256") or ""
-        ).strip()
+        normalize_journal = (
+            not isinstance(raw_infrastructure, Mapping)
+            or not str(raw_infrastructure.get("receipt_sha256") or "").strip()
+        )
     elif admitted_baseline is not None:
         baseline = admitted_baseline
     else:
@@ -526,9 +535,7 @@ def resolve_admitted_protected_data_plane_baseline(
         before=baseline,
         after=observed_receipt,
         require_retained=False,
-        allow_home_mount_transport_transition=(
-            allow_home_mount_transport_transition
-        ),
+        allow_home_mount_transport_transition=(allow_home_mount_transport_transition),
     )
     return baseline, normalize_journal
 
@@ -549,9 +556,7 @@ def readmit_unbound_protected_data_plane_baseline(
         field="previous admitted protected data-plane receipt SHA-256",
     )
     if str(operation_spec_sha256 or "").strip():
-        raise RuntimeError(
-            "recovery-required: a bound operation cannot re-admit protected state"
-        )
+        raise RuntimeError("recovery-required: a bound operation cannot re-admit protected state")
     if scheduling_actions:
         raise RuntimeError(
             "recovery-required: scheduling mutations prevent protected-state re-admission"
@@ -1380,8 +1385,7 @@ def _is_protected_secret_name(name: str) -> bool:
     if normalized.endswith("-slurmdbd-configs"):
         return False
     return any(
-        token in normalized
-        for token in ("mariadb", "munge", "password", "ssh", "slurm", "acct")
+        token in normalized for token in ("mariadb", "munge", "password", "ssh", "slurm", "acct")
     )
 
 

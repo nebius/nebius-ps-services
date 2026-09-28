@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "a29457a7769730b0a16c3450ca4d75abd4e9a9113d5a1535b18e648447c2544d",
+      "sha256": "4a5c140aa7432a55c4b06a27cdb1749d9ea8728151fc3b50fb3f9e218c3068d4",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "a272d085b6ebee40bc2be7de5b97ca406dcb9c3f0b7654e2bfd9d1daf9139939",
+      "sha256": "b7029f7972e065b952b2bd6ad9f66cb99d337aa5d4bbdb0ad7296164a2600625",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "3e058faf065a948d29bb1b8fff9d2c725cd8bfc33d08ca1fd06cfda8d6297c64",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "dade6733155e0acd187a38cad4bd308c67b737317c5e0520937858056583b40e",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "a726639ffbd86da58d7bd15324d79dfc61d3b80c253f4e2a5c054832fa94bc2f",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "7c870e28e7949d98b20b3de47b3998449a3914abf88834565f2139b73d6ea2ce",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "e2844d01c494b699210755b242f59ec6f7562ccb5fe7a75c40f1b9b4d0e739e8",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "02_sync_trap",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a9250a8c5f62518225ab966445945257d3c022014ef8c8d7188a962f8e12f3ad",
+  "summary_sha256": "6bdb7f0b9656a336f37e1016d8b6f38b14c4918ec0c9ad9426a9ef6895c1f9cb"
+}

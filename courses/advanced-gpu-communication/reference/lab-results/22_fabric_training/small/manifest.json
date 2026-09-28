@@ -1,0 +1,74 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "5f58895ee35d73f4769a396072a5afb42a1a49312ecfd2738c4f33312f271d64",
+      "sha256": "51aaadfb3e58a9a813a9bf564d34b421ed073622689e383f23239db0773d94e1",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "325a1d11c5766f358a7c9b70d351b4e16dcd2f839aba2a4e733e78ce842796db",
+      "sha256": "8fcc850e3cdd84393a906787193d1f012f07411300244de7d79090fcaaa98f85",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "460e2082f4b6d0b34345174712cf4b2c070add1928995413e2673cf43a36d907",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "0cd4d24906b1b94186f8ae1ea04168f390d931ce9db6cc828efa9ca85695a818",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "69c0297d716de785a73bc9603a102d80b0c672997c918e3b57da3ea0296b3f1b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "015b9ba1daad5aadb3251ebe3ff5d31d6353efc39e06269a3504fa88f56437dc",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "17cd95e9ea8f405620fabf8a23f46c0dbcd502ed5207ea9091956241121a1fa0",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "a0c3a05168cce32d2f51a74b43c899e9d1befc77457276f205a34adf7f40f47c",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "22_fabric_training",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "7e03061153e2daf407558d85eed2e9e4d2a1f5cc5d27c1514b0cd05ddc341dfc"
+}

@@ -1,0 +1,24 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "11_residual_rmsnorm",
+  "measurements": {
+    "elements": 1048576,
+    "epsilon": 1e-05,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.011008,
+    "kernel_min_ms": 0.010496,
+    "kernel_p90_ms": 0.011872,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 5.96046e-07,
+    "rows": 4096,
+    "warmup_samples": 5,
+    "width": 256
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

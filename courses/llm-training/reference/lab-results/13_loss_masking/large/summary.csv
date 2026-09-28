@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,trained_tokens,value,7,none
+baseline-trial1,ignored_tokens,value,7,none
+baseline-trial1,masked_loss,value,5.125,none
+baseline-trial1,unmasked_loss,value,5.0,none
+repeat-trial1,trained_tokens,value,7,none
+repeat-trial1,ignored_tokens,value,7,none
+repeat-trial1,masked_loss,value,5.125,none
+repeat-trial1,unmasked_loss,value,5.0,none

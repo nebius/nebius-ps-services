@@ -1,0 +1,53 @@
+{
+  "correctness": {
+    "every_batch_matches_exact_reference": true,
+    "pipeline_drained": true
+  },
+  "lab": "19_h2d_pipeline",
+  "measurements": {
+    "batches": 16,
+    "gemms_per_batch": 4,
+    "mode": "pipeline",
+    "pinned_pool_bytes": 1048576,
+    "slots": 1,
+    "whole_loop": {
+      "median_ms": 3.1618,
+      "min_ms": 2.8276,
+      "p90_ms": 3.2558
+    },
+    "whole_loop_samples_ms": [
+      3.175988997099921,
+      3.0917469994165003,
+      3.147662995615974,
+      3.2346019870601594,
+      3.1986039830371737,
+      3.252586000598967,
+      3.196664998540655,
+      3.189237992046401,
+      3.189818002283573,
+      3.260956989834085,
+      3.255779010942206,
+      3.11613199301064,
+      2.8620969969779253,
+      2.930724003817886,
+      2.866902999812737,
+      2.9588229954242706,
+      3.341931995237246,
+      3.0995190027169883,
+      2.8550690039992332,
+      2.827583986800164
+    ]
+  },
+  "parameters": {
+    "batches": 16,
+    "iterations": 20,
+    "mode": "pipeline",
+    "seed": 17,
+    "slots": 1,
+    "warmup": 5,
+    "work": 4,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

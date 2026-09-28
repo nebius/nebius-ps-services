@@ -133,7 +133,7 @@ def test_storage_cause_binds_native_controller_lineage_and_unchanged_container(
         assert command[5:9] == ["logs", "checks-pod", "-c", "manager"]
         return SimpleNamespace(stdout="2026-01-01T00:00:59Z " + json.dumps(record()))
 
-    monkeypatch.setattr(cause.subprocess, "run", logs)
+    monkeypatch.setattr(cause.kubernetes_process, "run", logs)
     failure = {
         "eviction": {"time": "2026-01-01T00:01:00"},
         "executionInterval": {"start": "2026-01-01T00:00:00"},

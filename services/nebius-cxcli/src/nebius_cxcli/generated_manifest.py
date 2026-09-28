@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from .deploy_targets import normalize_generated_deploy_target
+from .frozen_catalog import freeze_catalog
 from .paths import ProjectPaths
 from .project_bundle_transaction import recover_project_bundle
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
+from .terraform_backend import backend_settings_from_config
 
 GENERATED_MANIFEST_FILENAME = "nebius-cxcli-manifest.json"
-GENERATED_MANIFEST_SCHEMA = "nebius-cxcli-generated/v1"
+GENERATED_MANIFEST_SCHEMA = "nebius-cxcli-generated/v2"
 
 
 def _repo_relative_path(path: Path, *, root: Path) -> str:
@@ -37,6 +40,8 @@ def build_generated_manifest(
     terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
     terraform_version: str | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    application_files: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
@@ -56,6 +61,7 @@ def build_generated_manifest(
 
     return {
         "schema": GENERATED_MANIFEST_SCHEMA,
+        "execution": {"backend": asdict(backend_settings_from_config(config))},
         "source_contract": {
             "config_path": _repo_relative_path(paths.config_path, root=paths.repo_root),
         },
@@ -76,6 +82,10 @@ def build_generated_manifest(
         },
         "quota": dict(quota_report or {}),
         "render": {
+            "inputs": freeze_catalog(payload),
+            "source_config_sha256": source_config_digest(paths.config_path),
+            "compatibility": dict(compatibility or {}),
+            "application_files": dict(application_files or {}),
             "source_profile": str(source_profile or "").strip(),
             "module_sources": [dict(item) for item in module_sources],
             "terraform_tfvars": dict(terraform_tfvars or {}),
@@ -109,6 +119,8 @@ def write_generated_manifest_to_path(
     terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
     terraform_version: str | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    application_files: Mapping[str, Any] | None = None,
 ) -> Path:
     manifest = build_generated_manifest(
         config=config,
@@ -123,6 +135,8 @@ def write_generated_manifest_to_path(
         terraform_tfvars=terraform_tfvars,
         flux_version=flux_version,
         terraform_version=terraform_version,
+        compatibility=compatibility,
+        application_files=application_files,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -143,6 +157,8 @@ def write_generated_manifest(
     terraform_tfvars: Mapping[str, Any] | None = None,
     flux_version: str | None = None,
     terraform_version: str | None = None,
+    compatibility: Mapping[str, Any] | None = None,
+    application_files: Mapping[str, Any] | None = None,
 ) -> Path:
     return write_generated_manifest_to_path(
         manifest_path_for_generated_dir(paths.generated_dir),
@@ -158,11 +174,22 @@ def write_generated_manifest(
         terraform_tfvars=terraform_tfvars,
         flux_version=flux_version,
         terraform_version=terraform_version,
+        compatibility=compatibility,
+        application_files=application_files,
     )
 
 
 def load_generated_manifest(generated_dir: Path) -> dict[str, Any]:
-    recover_project_bundle(generated_dir.parent)
+    from .deployment_recovery import is_deployment_preview
+
+    if not is_deployment_preview():
+        recover_project_bundle(generated_dir.parent)
+    else:
+        from .project_bundle_transaction import ProjectBundleTransaction
+
+        ProjectBundleTransaction(generated_dir.parent).snapshot_preimages(
+            [manifest_path_for_generated_dir(generated_dir)], read_only=True
+        )
     path = manifest_path_for_generated_dir(generated_dir)
     if not path.exists():
         raise ValueError(
@@ -175,6 +202,8 @@ def load_generated_manifest(generated_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"Unsupported generated manifest schema in {path}: {payload.get('schema')!r}"
         )
+    if not isinstance(payload.get("execution", {}).get("backend"), dict):
+        raise ValueError("Generated manifest is missing its frozen execution backend; rerender")
     return payload
 
 
@@ -193,3 +222,12 @@ def terraform_tfvars_from_manifest(manifest: Mapping[str, Any]) -> dict[str, Any
     if not isinstance(payload, Mapping):
         raise ValueError("Generated manifest is missing render.terraform_tfvars")
     return dict(payload)
+
+
+def source_config_digest(path: Path) -> str:
+    """Bind authored intent without storing a second copy of user values."""
+    import yaml
+
+    from .compatibility_matrix import digest
+
+    return digest(yaml.safe_load(path.read_text())) if path.is_file() else ""

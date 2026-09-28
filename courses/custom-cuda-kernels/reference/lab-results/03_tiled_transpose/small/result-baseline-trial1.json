@@ -1,0 +1,37 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "03_tiled_transpose",
+  "measurements": {
+    "columns": 1020,
+    "elements": 1023060,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.007952,
+    "kernel_min_ms": 0.007424,
+    "kernel_p90_ms": 0.008544,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 0,
+    "naive_median_ms": 0.021472,
+    "naive_min_ms": 0.020864,
+    "naive_p90_ms": 0.021952,
+    "naive_samples": 20,
+    "padded_shared_columns": 33,
+    "rows": 1003,
+    "tiled_padded_median_ms": 0.007952,
+    "tiled_padded_min_ms": 0.007424,
+    "tiled_padded_p90_ms": 0.008544,
+    "tiled_padded_samples": 20,
+    "tiled_unpadded_median_ms": 0.011712,
+    "tiled_unpadded_min_ms": 0.011264,
+    "tiled_unpadded_p90_ms": 0.012128,
+    "tiled_unpadded_samples": 20,
+    "unpadded_shared_columns": 32,
+    "warmup_samples": 5
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

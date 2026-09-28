@@ -1,8 +1,10 @@
-# LLM Training and GPU Optimization on NVIDIA H100
+# Course mission
 
 Teach engineers to preserve the learning objective while improving training
 correctness, recoverability, memory, precision, data flow, communication, and
-throughput on one or two H100 GPUs.
+throughput through single-GPU experiments and distributed-training concepts.
 
-The two-node exercises prove bounded mechanics only; they do not claim
-production-scale NVLink, NVSwitch, expert, pipeline, or context performance.
+Local practice uses one H100. Distributed practical work belongs to the
+advanced communication course on two eight-H100 workers. Its bounded
+mechanics and synthetic workloads do not establish production convergence
+or large-model scaling.

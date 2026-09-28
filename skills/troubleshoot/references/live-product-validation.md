@@ -91,9 +91,15 @@ Classify the owner from the accepted product contract and causal evidence:
 
 Existing authority remains unchanged. Confirmed non-production may receive
 bounded reversible changes. Production and unconfirmed targets remain
-read-only without exact authorization. Destructive, irreversible, credential,
-IAM, data, public-exposure, deletion, material-cost, and material-availability
-changes require action-specific approval in every environment.
+read-only without exact authorization. An authorized task includes creating new credentials and secrets necessary
+for its identified target and intended access scope; do not request separate
+approval solely for that creation. Store values only in the intended secret
+store or protected runtime file, never in chat, logs, Git, documentation, task
+state, or other artifacts. Reuse authorization already given. Destructive or
+irreversible actions, replacement or revocation of existing credentials, IAM
+access expansion, unrelated data changes, public exposure, deletion, or material
+availability or cost impact require action-specific approval only when not
+already covered by the user's authorization.
 
 ## Establish A Clean Replay
 

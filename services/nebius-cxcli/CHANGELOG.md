@@ -6,6 +6,1112 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Wait for authenticated PostgreSQL queries after restart and volume reuse in
+  the disposable Grafana persistence check, avoiding stale Grafana health-cache
+  results without replaying imports or renewing the saved login session.
+- Invalidate a Terraform root's cached initialization and validation before
+  reinitializing it, including when a recreated directory reuses its inode or
+  an initializer fails with different settings. Preserve other roots' reuse.
+- Normalize ANSI styling in CLI flag assertions so the same checks work on
+  color-enabled CI runners.
+- Align workflow validation with the setup-uv v10.2.0 action pin from the base
+  branch.
+- Isolate mocked interactive progress consoles from the runner's terminal type
+  so deployment, destroy, Grafana and Nsight tests also run under `TERM=dumb`.
+  Align application-publication mocks with the current signature and returned
+  manifest contract.
+
+### Nsight installation progress
+
+- Keep kubeconfig notices and handoff warnings on the progress console so they
+  do not leave partial spinner lines beside the completed green-check row.
+- Show descriptive spinners and elapsed time for profiling preparation, login
+  Secret checks/creation, shared-jail package steps and final verification.
+  Redirected output emits bounded `START`/`OK`/`FAILED` lines. Stop the display
+  for credential input and hand terminal control to viewer deployment.
+
+### Nsight login wizard
+
+- Finish password-retrieval output with a newline so zsh does not display its
+  partial-line `%` marker beside the password. Preserve the password bytes and
+  decoder failure status.
+- Default profiling installation to a login wizard for a missing Secret, with
+  username `admin` and a masked, confirmed password. Retry blank passwords while
+  preserving valid password characters. Existing credentials are reused without
+  prompts or rotation; automation uses `--no-interactive` or `--password-stdin`.
+- Print a copyable password-retrieval command after successful installation and
+  on successful reruns, bound to the verified persistent kubeconfig and context.
+  Cxcli never runs the command or prints the password itself.
+
+### Native Soperator graph retirement and recovery
+
+- Correct Grafana's native image digest value so the pinned chart emits one
+  `sha256:` prefix. Reject malformed SHA-256 container image references during
+  chart admission and assert the complete image in pinned-chart regressions.
+- Publish resolved application files and compatibility metadata atomically so
+  retries validate the same effective inputs. Recover stale private metadata only
+  for checkpoint-proven target resources; retain strict authored replay, stage
+  isolation and unchanged partial-install behavior.
+- Admit native graph removals before checks and scheduling maintenance across
+  deploy, Grafana installation and upgrade campaigns. Qualify the upstream
+  telemetry token writer by exact ownership, source, Helm revision and workload
+  inventory; reject unsupported removals before disruption.
+- Resume the retiring child before its parent prunes it, using checkpointed
+  identity-checked updates. Wait for Helm uninstall and Pod cleanup while retaining
+  credentials and storage. Replay staged and stable parent publication safely.
+- Recover an exact same-release failed-apply checkpoint through a sealed successor
+  that preserves frozen inputs, controls, maintenance preimages and history.
+  Recheck source writers and held-job identities; never use a same-release failure
+  as fresh-install repair authority.
+- Preserve the saved source configuration on resume instead of feeding generated
+  Grafana and collector defaults back into admission. Carry native retirement
+  authority through later campaign checks and catch-up recovery phases.
+- Qualify later routing changes independently of completed retirement history;
+  unfinished operations continue to require their exact recorded identities.
+- Materialize explicit empty child values maps that server-side apply leaves null
+  after pruning their old entries. Bind the conditional write to the suspended
+  child and parent Helm publication, journal it before mutation, and recover
+  interruptions before another parent publication. Other drift still fails closed;
+  ordinary first-install staging is unchanged.
+- Recover the corresponding typed VMAgent empty-map rejection after an exact
+  failed SSA upgrade and successful rollback. Authenticate the desired manifest
+  against the frozen chart and effective values, change only the owned field
+  under suspension, and issue one journaled Flux reset. Recheck full resource
+  identity and postimages across interruption; reject drift and repeated failure.
+- Check active worker registration before maintenance restoration without
+  requiring scheduling to be open prematurely. Preserve exact restoration
+  ownership and strict schedulability checks before ordinary-user smoke.
+- Accept retained Fast Dev/Test bootstrap checks without requiring native hook
+  reports from waived diagnostic jobs. Reuse completed receipts, verify current
+  passive policy and worker coverage, and retain mandatory final ordinary-user
+  smoke. Standard diagnostic evidence requirements remain unchanged.
+- Preserve identical frozen compatibility observations across midnight during
+  lifecycle recovery while still running fresh support checks. Changed evidence
+  remains subject to admission. Keep Fast readiness receipts outside render
+  replacement so later replay retains their original proof.
+- Preserve the outer operation authority during nested Grafana datasource
+  verification, avoiding recursive fence callbacks while still stopping on
+  authority loss.
+
+- Compare effective Soperator settings during initial deployment observation,
+  reusing final verification's selector and restored-partition semantics. Avoid
+  needless reconciliation from unresolved outputs or equivalent default syntax
+  while preserving real drift, storage checks and first-install ordering.
+
+### Grafana chart admission
+
+- Use the pinned Grafana chart's Pod IP binding without generating a duplicate
+  environment variable that blocks Helm installation. Keep alerting peer addresses
+  and database credentials unchanged.
+- Reject duplicate environment names in native rendered workload containers
+  before deployment, with resource-scoped errors that omit values. Preserve
+  optional empty lists, separate container scopes and custom resource data.
+
+- Admit a failed first PostgreSQL-backed Grafana install with no Deployment only
+  after proving its exact terminal Helm revision, stored backend and retained
+  credentials. Preserve SQLite rejection and ordinary retry ownership; do not
+  reset Helm, alter history or recreate credentials.
+
+### Terraform failure diagnostics
+
+- Explain token-exchange DNS failures with connectivity guidance instead of
+  recommending module repairs based only on a resource's source filename.
+  Remove terminal color escapes from errors and preserve separate diagnoses
+  when Terraform reports multiple failures. Deployment and retry behavior are
+  unchanged.
+
+### Grafana release-source reuse
+
+- Reuse verified Soperator datasource defaults across one Grafana installation,
+  including configuration reloads, saving and pre-render normalization. Avoid
+  redundant GitHub lookups after successful preview verification; clear the
+  context when the command finishes, fails or is cancelled. Preserve full
+  required-package admission, release identity checks and frozen deploy snapshots.
+
+### Deployment verification and timing output
+
+- Remove the redundant full Soperator graph-readiness check during final
+  observation. The desired-state verifier retains readiness and receipt freshness
+  checks before storage, settings and final acceptance verification.
+- Remove the fifteen-minute target-overrun message from deployment output. Keep
+  elapsed duration, outcome, report path and structured timing measurements.
+
+### Soperator wizard worker counts
+
+- Default CPU and GPU worker totals to two hosts in the MK8s wizard and bundled
+  Soperator profiles, including two of each shape for mixed profiles. Preserve
+  explicit worker counts and existing nodes-per-group and autoscaling settings.
+
+### Bounded deployment execution
+
+- Reuse one Terraform observation for drift classification and admission, and
+  cache successful initialization/static validation within an unchanged execution
+  root. Restore recovery inputs before preflight; retain fresh execution plans,
+  resource-scope checks and independent convergence verification.
+- Reuse immutable release candidate preparation without caching authentication or
+  live authority. Display same-version changes as reconciliation, and reserve
+  dry-run wording for user previews.
+- Stop permanent and unknown failures promptly instead of repeating whole release
+  or campaign validation. Keep forward-only recovery, scheduling journals and
+  original operation identities; retry only recognized safe transport reads with
+  three attempts. Report sanitized causes before command/path context.
+- Record interrupted campaigns as recovery-required while preserving active
+  maintenance and completed work. Keep the original interruption if stop reporting
+  fails, and resume without repeating completed mutations.
+- Separate filenames and contents in preparation fingerprints so different
+  Terraform file sets cannot share an ambiguously encoded input identity.
+
+### Deployment input delivery and progress
+
+- Fix supervised Helm rendering timing out when a values payload cannot fit in
+  stdin during the first polling interval. Drain input and both output pipes
+  together while retaining cancellation, deadlines and process cleanup.
+- Keep the purpose in numbered Terraform plan inspection rows and show elapsed
+  progress during Soperator observation, frozen-input checks, admission rendering
+  and recovery replay. Plan numbers count snapshots, not failed attempts.
+
+### Soperator Grafana routing identity validation
+
+- Fix `grafana install` failing with `invalid final identity` when a collector
+  routing patch precedes its child-release rename. Normalize both patches to the
+  rendered child name, preserve routing values and order, and still reject
+  missing, duplicate, or incorrect graph renames.
+
+### Soperator required artifact admission
+
+- Resolve verified source defaults before the `soperator create` wizard and admit
+  the completed selection before saving. Validation, render, and Grafana use the
+  same required-chart selection; disabled unused NFS charts cannot block them.
+- Verify selected packages, dependencies, adapter consumers, operation phases,
+  and final patched child values against official source without masking registry
+  differences. Reject missing artifacts and graph drift.
+- Bind v3 snapshots and the short-lived admission cache to each target and request.
+  Deploy/retry use captured digests and patches. Reject older snapshots without
+  migration; finish unfinished operations with the previous binary, or rerender
+  when none remains.
+
+### Current configuration deployment and local recovery
+
+- Remove shared S3 deployment checkpoints, execution leases, `operation status`
+  and `--lease-wait`. Terraform keeps native S3 state and locking. Obsolete cxcli
+  backend objects are ignored without migration or deletion.
+- Render current configuration with overwrite confirmation and preserve local
+  command checkpoints. Deploy the latest complete rendered snapshot against fresh
+  infrastructure and cluster observations. Matching local attempts resume;
+  changed artifacts or semantic options select independent local attempts.
+- Preserve dedicated Soperator upgrade, migration, reconciliation and destroy
+  checkpoints and recovery rules. Serialize local writers with kernel locks and
+  supervise contained processes. Use CI or operator scheduling across machines.
+- Run Grafana installation end to end as save, render and normal project deploy,
+  including pending changes and normal approvals. Unchanged setup reruns converge
+  again without rewriting saved configuration.
+- Keep completed profiling and ordinary Apps aligned with later deployments,
+  preserve unselected targets in local completion reports, and keep malformed
+  optional reports from failing a completed deployment. Recover pre-promotion
+  Nsight failures from their exact local deployment attempt and failed Job UID.
+
+### Soperator deployment profile clarity
+
+- Explain Standard and Fast choices and show compact summaries of saved intent,
+  published Soperator renders, and frozen deployment inputs. Distinguish native
+  defaults from recorded overrides and reduced diagnostic coverage; Fast warnings
+  no longer claim that waived passive diagnostics resume.
+- Reject unsupported Standard one-GPU workers before saving project configuration
+  or rendering. Keep existing profile policy, flags, defaults and recovery formats.
+
+- Bind deployment release admission and execution to the generation snapshot,
+  including its exact digest and embedded content. Prevent same-release
+  reconciliation from looking up changed OCI tags before application rendering,
+  and retain source/package, identity, and downgrade checks.
+
+### Frozen deployment release identity
+
+- Preserve every enabled Soperator target's frozen source and chart snapshot
+  when deployment resolves application outputs, including ordinary reconciliation
+  and target-scoped stages. This prevents unchanged version tags from selecting
+  different packages during deploy; exact source/package verification stays
+  mandatory and invalid snapshot evidence never falls back to discovery.
+
+### Guided Grafana installation
+
+- Explain selected native collectors, automatically configure datasource
+  connections, and preserve stable datasource identity and authentication on reruns.
+- After confirmation, always render current settings and run normal project
+  deployment. A previous cancelled deployment is not a prerequisite.
+
+### Fast deployment orchestration
+
+- Avoid recovery-cache capture and backend publication for timing-only updates in
+  an explicitly frozen, exclusively selected fast Dev/Test Soperator deployment.
+  Keep ordinary/standard and mixed-target behavior, real receipt checkpoints,
+  authority checks and required readiness unchanged.
+
+### Developer quality checks
+
+- Resolve Soperator test source by exact top-level function name instead of
+  imported line numbers, preventing wrong-function assertions after source lines
+  shift. Preserve lifecycle assertions and reject missing or duplicate definitions.
+- Clarify the documented quality gates and remove the stale formatting-backlog
+  count. Align deployment and observability formatting with Ruff and make
+  observability's local types explicit without changing runtime behavior or
+  weakening the quality baselines.
+
+### CLI confirmation policy
+
+- Share the fast-deploy configuration prompt between Soperator creation and the
+  generic wizard while preserving the generic wizard's Yes default and explicit
+  action approvals without defaults. Classify confirmation-policy tests by named
+  owner instead of global call count, with regressions for blank input,
+  cancellation and both callers.
+
+### Soperator creation mode
+
+- Default non-interactive `soperator create` to Standard unless a mode flag or
+  values-file profile selects Fast. Interactive creation always asks, using a
+  supplied mode as its initial selection and saving the final answer. Without
+  a supplied mode, blank Enter reprompts. Update command help and preserve other
+  commands, generic wizard behavior and existing deployment configurations.
+
+### Deployment regression fixes
+
+- Make fast Dev/Test admission independent of release-version and chart-digest
+  allowlists. Verify rendered active/passive suppression and retain setup,
+  operational hooks and immutable source identities. Allow unrelated custom
+  Slurm settings while rejecting conflicting controls. Regression coverage includes
+  4.1.9, 4.1.11 and future-version/image/disabled-script changes.
+- Remove the generated health-check enable override that conflicted with new
+  fast deployment defaults; standard deployments retain upstream health checks
+  and explicit conflicting user overrides still fail validation.
+- Validate target selection before writing timing reports and preserve original
+  deployment errors when timing publication also fails. Restore timing context
+  after failed writes so subsequent operations remain independent.
+- Update wizard input, readiness callback and frozen-value fixtures for the
+  current deployment-profile contract without bypassing production validation.
+- Derive app target references before observability reconciliation so configuring
+  another cluster does not duplicate existing cluster app rows.
+
+### Local-first Grafana observability
+
+- Add `grafana install --config PATH --target TARGET` and shared Apps wizard
+  configuration for independent local, remote or dual metrics/logs/traces storage.
+  Persist typed read connections separately from write destinations and auth.
+- Add VictoriaMetrics, VictoriaLogs, VictoriaTraces, conditional OpenTelemetry
+  collectors and optional Pushgateway as separate catalog Apps. Reuse native
+  Soperator telemetry and frozen service identities; keep course files unchanged.
+- Replace VMAgent destinations completely, including inherited URL/auth flags,
+  and reject ambiguous positional queue transitions. Guard installation against
+  unrelated changes and resume matching frozen operations without rerendering.
+- Verify reconciled VMAgent URLs and Grafana connections. Document storage,
+  collector, dashboard import and explicit cutover boundaries in
+  [Observability](docs/observability.md).
+
+- Apply shared private/local defaults to headless Grafana selection and existing
+  standalone backend configurations. Remove wizard-added routing and dependencies
+  when observability is disabled by backtracking.
+- Allow explicit Grafana Apps selection to save native routing intent while keeping
+  full deployment admission mandatory. Honor Pushgateway service overrides and
+  remove stale external node-log pipelines when selecting local-only storage.
+
+### Transient cloud provisioning events
+
+- Keep waiting when a reconciling node group reports a recurrent
+  `ComputeInstanceCreationFailed / UNAVAILABLE` event. Show the provisioning
+  retry in deploy status instead of aborting Terraform before the cloud retries.
+  Permanent errors, quota failures and existing operation timeouts remain enforced.
+
+### Fast Soperator deployment for Dev/Test
+
+- Replace the one-GPU diagnostic exception with `values.deploymentProfile:
+  fast-dev-test|standard`. `soperator create --fast-deploy/--no-fast-deploy`
+  selects a mode explicitly; non-interactive creation defaults to Standard and
+  interactive creation always asks. Existing missing profiles remain standard;
+  retired keys fail clearly.
+- Keep required setup and operational hooks while disabling reviewed active and
+  passive diagnostics in fast mode. Fresh installs avoid four full graph policy
+  sweeps and finish with an owned ordinary-user Slurm smoke on active workers.
+  Frozen recovery preserves profile, graph, coverage and exact job ownership.
+  Bind active-check waivers to the reviewed chart bundle and reject custom
+  diagnostic execution. Coordinated updates defer smoke to the parent after
+  scheduling restoration; completed proof verification never submits or cancels.
+- Derive vmagent write queues from worker capacity for both profiles, preserving
+  explicit overrides and resizing new rendered generations without changing
+  authored values. Keep telemetry alerting enabled.
+- Persist structured deployment timings outside the execution cache, including
+  nested exclusive duration and failure/interruption outcomes. The fifteen-minute
+  two-worker target is measured, not an installation deadline.
+- Preserve standard eight-GPU diagnostic coverage and one/eight-GPU Slurm GPU
+  allocation checks. Recognize empty optional GPU-cluster maps during destroy.
+
+### Managed worker GPU device defaults
+
+- Derive missing Slurm GPU device lists from the selected worker preset instead
+  of retaining an eight-device template on one-GPU workers.
+- Track generated device lists alongside worker sizing defaults so wizard preset
+  changes update them. Preserve explicit or untracked lists, registered topology
+  and frozen deployment inputs; this does not add interrupted-install recovery.
+
+### Deployment IAM identity recovery
+
+- Defer service-account naming in the real Soperator creation wizard until the
+  cluster name is selected, preventing temporary `mk8s` names from becoming saved
+  project-wide identities.
+- Check planned service-account creates for existing project identities before
+  applying infrastructure. Report exact addresses and IDs for verified state
+  recovery, and stop on inconclusive lookups without adopting or deleting accounts.
+- Clarify backend retention through teardown and why deleting a cluster or state
+  bucket does not clean up separate IAM resources.
+
+### Soperator deployment recovery
+
+- Offer exact-attempt interactive retirement for expired, unresolved fast smoke
+  submissions after fresh queue/accounting checks. Preserve the original intent
+  and an audited unknown outcome, checkpoint retirement before a new job, and
+  require fresh smoke proof with no late active retired work before acceptance.
+- Accept equivalent wait and refresh duration spellings during deploy recovery
+  without rewriting saved controls or relaxing actual execution policy changes.
+- Resolve the ordinary user's actual account home for fast Slurm smoke output
+  and its explicit job working directory. Preserve canceled, unsubmitted intents
+  during recovery; reject changed identities or homes for submitted job evidence.
+- Start the fast-smoke scheduling budget after workspace preparation and the
+  submission authority check. Avoid redundant authority checks around read-only
+  polling while retaining fenced proof publication and cancellation. Record a
+  proven pre-transport deadline rejection without reclassifying uncertain saved
+  submissions or extending their deadlines.
+- Recheck smoke-job submission authority after checkpoint publication so a
+  delayed checkpoint cannot submit work after the operation loses its fence.
+- Publish resolved, admitted application files directly during deploy recovery,
+  avoiding drift from a second render of mutable execution configuration.
+  Preserve target isolation, immutable chart bindings and publication checks.
+- Restore frozen OCI chart bindings before validating recovered lifecycle files,
+  including checkpoints captured between native rendering and artifact binding.
+- Accept ordering-only differences in Soperator node-filter `In`/`NotIn`
+  selector values during final deployment verification. Keep rejecting changed
+  membership, selector keys/operators and unrelated value drift.
+- Include the reviewed Soperator 4.1.9 and 4.1.11 monitoring-dashboard charts in the existing
+  digest-bound source adapter. Preserve all seven upstream JSON dashboards while
+  avoiding the invalid document separators rejected by Helm 4.1.1 post-rendering.
+- Admit the exact pre-main dashboard repair through shared deploy checkpoints.
+  Authenticate predecessor files and cluster admission, preserve failed history,
+  and recover interruption between file and application-journal publication.
+- Remove both generated dashboard child patches during that repair, validating
+  ownership labels against the frozen graph and release. Keep unrelated wiring
+  unchanged and reject missing, duplicated or altered child patch pairs.
+- Admit the canonical failed pre-main dashboard apply checkpoint as well as an
+  interrupted apply. Validate failure evidence and bind its stage-plan hash to
+  the frozen standard or fast Dev/Test profile.
+- Name the blocking HelmRelease and bounded Ready reason in stage timeout errors,
+  without including raw condition messages.
+
+### Deployment Object Storage transport
+
+- Replace per-request AWS CLI processes with persistent Boto3 workers and
+  independent lease/state connections. Bound startup, IPC and body reads by
+  request deadlines; stop timed-out workers before ownership-aware recovery.
+  Disable hidden SDK retries and keep conditional writes, object keys, generation
+  identities and Terraform's native state/lock protocol unchanged.
+- Reject filesystem buckets and anonymous policies overlapping backend authority;
+  allow disjoint public prefixes and warn on disabled versioning without changing
+  bucket settings. Clear inherited session tokens when exporting static Nebius
+  credentials, including for Terraform, and report sanitized structured S3 errors.
+
+### Persistent PostgreSQL-backed Grafana
+
+- Pin Grafana chart 13.2.5/application 13.2.2 and add PostgreSQL chart 0.20.6 with
+  PostgreSQL 18.6, a retained 10Gi RWO PVC, private SCRAM connectivity and
+  NetworkPolicy. Automatically select/order PostgreSQL with Grafana per target.
+- Default Grafana to two replicas with shared database/encryption credentials,
+  disruption budget and alerting peer discovery. Bootstrap runtime-only Secrets,
+  reuse owned credentials and reject missing credentials against retained state.
+  Standalone PostgreSQL receives its own bootstrap. Reject existing SQLite;
+  provide no migration or compatibility path.
+- Make imported API dashboards editable. Restore missing dashboards during deploy
+  while preserving existing UI edits; explicit import --overwrite replaces edits.
+  Qualify pinned charts, APIs and disposable PostgreSQL replica persistence.
+- Reject alternate Grafana startup/configuration paths and mismatched pending
+  HelmRelease bindings before mutation; inspect the actually mounted configuration
+  so unused ConfigMaps cannot mask another database.
+
+### Explicit Kubernetes target selection
+
+- Require explicit Kubernetes target contexts across kubectl, Helm and Flux
+  process boundaries; remove ambient current-context and inherited GPU context
+  fallbacks, reject targetless cluster workflows and ambiguous context history,
+  and verify reused contexts against the selected cluster's API endpoint and CA.
+  Preserve source-relative credential paths in isolated kubeconfig copies.
+- Identify the failed Flux controller on rollout timeout and retain bounded,
+  sanitized diagnostics from both output streams. Preserve existing wait limits.
+
+### GPU capacity handling
+
+- Let deploy continue through temporary GPU Capacity Dashboard shortages while
+  enforcing actual tenant/project quota allowances, including shared GPU demand
+  and unavailable capacity telemetry. Show recognized provisioning schedule
+  timeouts as pending cloud capacity without aborting Terraform early; retain
+  terminal API errors, execution deadlines and truthful readiness acceptance.
+
+### Soperator offline regression fixtures
+
+- Restore onboarding and upgrade tests after source-owned registry handling
+  changed: supply registry metadata, use typed frozen snapshots, and include the
+  frozen repository in interrupted-admission fixtures. Preserve region,
+  ownership, publication, authority-loss and recovery assertions without
+  changing production validation or enabling network access.
+
+### Authentication retry diagnostics
+
+- Render SDK token-refresh timeouts as concise warnings during commands,
+  including Python timeouts with empty messages. Preserve SDK retry limits,
+  terminal request failures, and unrelated error diagnostics; restore logging
+  filters on completion or interruption. Stale GPU capacity remains unresolved.
+
+### Adaptive Soperator release discovery
+
+- Accept the reviewed ActiveChecks waiter after a registry hostname change,
+  fixing manifest generation for Soperator 4.1.9. Keep the image repository and
+  version, executable template and complete install/upgrade hook inventory
+  strictly checked without changing the frozen upstream chart.
+- Follow the selected upstream release's verified OCI registry through creation,
+  validation, upgrade and immutable Flux sources. Fix the 4.1.9 backup chart
+  being misclassified after upstream changed its registry hostname.
+- Discover additive source-owned and third-party charts from the verified release
+  graph and select enabled children from its Helm render with effective values.
+  Preserve adapter roles, immutable artifacts, required structural interfaces,
+  dependency checks and frozen recovery; unused source-only charts are not pulled.
+- Include default-enabled children hidden by optional features and remote nested
+  chart dependencies in artifact discovery. Keep alternative configurations'
+  dependency ordering separate during effective graph validation.
+
+### Automatic project authentication
+
+- Make normal project commands, including `create`, reconcile confirmed managed
+  IAM permission drift automatically through the operator's IAM authority.
+  Reuse the canonical service account and healthy authorized key, verify the
+  repaired permissions with canonical credentials, and keep healthy reruns free
+  of IAM writes. Preserve strict ownership checks and read-only preview/CI import
+  behavior; provider failures do not trigger permission repair.
+
+- Keep normalized configuration in memory during context loading; persist changes
+  only through explicit writers.
+
+### Grafana dashboard workflows
+
+- Allow `grafana import --overwrite` to update editable classic file-provisioned
+  dashboards while preserving their UID, folder and management/source metadata.
+  Warn that provisioning may replace the edit; reject other managers, denied
+  edits, folder moves and managed catalog attachment before prompts or writes.
+  Save managed cluster copies as manual-only declarations with bound provenance;
+  exclude them from catalog suppression and automatic deployment replay.
+- Keep identical imports free of saved API writes, version bumps and local file
+  rewrites. Preserve completed receipts on no-ops, start fresh version-bound intent
+  after subsequent remote edits, and retain interrupted-write conflict guards.
+- Reuse renewable Kubernetes authentication setup
+  across selection and fetch discovery inventory once; retain fresh locked
+  admission, credentials, Grafana connection and datasource/ownership checks.
+- Show Grafana import stages with a spinner and elapsed time during access,
+  validation, publication and installation. Pause for datasource selection;
+  keep redirected progress on stderr and report success after session cleanup.
+- Recognize `KeyAlreadyExists` conditional-create responses for Deployment
+  leases so expired leases reach guarded takeover and active owners remain blocked.
+- Replace free-text datasource UID prompts during interactive API import with a
+  searchable selection of compatible existing datasources. Show names, types and
+  UIDs, require Enter for a single choice, reuse mappings across the batch and
+  recheck availability before publication. Preserve explicit mappings for
+  automation and cancel cleanly before new-batch writes.
+- Add eight labeled examples to `grafana --help`, covering file/directory imports
+  with and without attachment, external token and manual SSO import, cluster
+  export, and offline validation. Explain target IDs and immediate installation
+  independently of catalog attachment.
+- Replace the old Grafana export/attach flags and top-level dashboard validator with `grafana import`, `grafana export`, and `grafana validate`, without aliases.
+- Install file or directory imports immediately; cluster imports save project desired state and optionally attach reusable catalog JSON. Bind cluster access to accepted identity and the existing admin Secret; external APIs require explicit token selection, while interactive SSO prepares a manual browser import.
+- Guard dashboard ownership and versions, preserve mixed datasources, recover interrupted local publication, reconcile repeated imports, and replay frozen declarations after application readiness. Use persistent PostgreSQL for new managed installations as described above.
+- Add digest-pinned Grafana API qualification and command/publication/replay regression coverage.
+- Fix CI and release workflow tests to account for the Grafana API qualification
+  command and verify its locked execution and release condition.
+- Reject attachments that would duplicate an existing catalog UID under a different provider or key, including folder moves, before publishing project state or installing dashboards.
+- Honor the catalog-selected Grafana component ID when validating, saving and rendering dashboard imports. Add copyable cluster, token and SSO examples to Grafana command help.
+
+- Preserve rendered Grafana dashboard exports as JSON identical to the installed
+  ConfigMap data. Restrict ordinary-app ownership annotations and YAML
+  serialization to Kubernetes resources in the Flux bundle.
+
+- Bound portable recovery caches to current project state and the staged files
+  required by a pending transaction, preserving local historical copies and the
+  64 MiB object limit. Retain ordinary-app acceptance baselines and rendered
+  dashboard JSON during recovery,
+  reject incomplete pending generations, and allow completed journals to verify
+  current targets without historical staged directories.
+
+- Carry the admitted infrastructure plan digest into the Soperator no-op and
+  completed-release application handoffs, so full deployment can verify and seal
+  the operation after release reconciliation without weakening identity checks.
+
+- Exclude retained failed Nsight attempts from Soperator service readiness only
+  after verifying their admitted Job/Pod identity and a terminal successful
+  successor for the same operation, stage and PVC. Keep unresolved attempts and
+  unrelated unhealthy services blocking, without deleting diagnostic history.
+
+- Keep sanitized command failure output visible in bounded Soperator supervisor
+  messages even when the failed patch command exceeds the display limit.
+
+- Preserve the mutable compatibility-admission report outside render generations,
+  so fresh validation does not invalidate a committed Soperator upgrade on retry.
+  Resume completed render publications using their original transaction and
+  preimage digests, independently checking current render-owned files without
+  rewriting operation identity or replaying completed deletions. Carry the checks
+  proposal from the immutable deployment inputs through release recovery.
+  Recheck the accepted jail projection on resume, matching the effective inputs
+  admitted on the first run before restoring mutable execution files.
+  Apply the existing shared-resource rules when combining protected and ordinary
+  desired-resource inventories, preserving the protected namespace declaration
+  and rejecting conflicting labels, annotations, or specifications.
+  Compare unbound Soperator Helm values independently of YAML mapping order,
+  while preserving scalar types, sequence order and bound bundle identities.
+
+- Derive new managed Soperator worker CPU and memory defaults from the selected
+  VM preset using the Nebius reference deployment's system and sidecar reserves.
+  Preserve explicit numeric settings, reject impossible allocations, and describe
+  physical CPU topology independently of the container quota. Remove the small
+  fixed worker defaults and obsolete sizing fallback; registered workers and
+  frozen recovery generations retain their existing ownership.
+
+- Apply ordinary Flux bundles server-side with kubectl's default field manager so
+  large Grafana dashboard ConfigMaps do not exceed the client-side apply
+  annotation limit while retaining client-side ownership migration. Preserve
+  ownership checks and fail on field conflicts
+  without forcing another manager's changes.
+
+- Align installation recovery guards: finish omission repair with verification
+  only, reject missing accepted OCI consumers, and recheck ownership fences after
+  completion preparation and historical-record reads before cluster mutation.
+  Cover composed repair execution and authority loss at those boundaries.
+
+- Make repeated profiling installation reuse completed stages, reserve bounded
+  successors for proven terminal standalone installer failures, and restore only
+  receipt-owned missing regular files from admitted cached archives. Preserve
+  credentials, report data, conflicting files and failed attempt history.
+- Reconcile stale accepted initial-install records inside existing profiling and
+  ordinary app workflows after fresh identity, ownership, storage, readiness and
+  writer checks. Resume partial metadata updates through immutable backend
+  receipts without inventing historical success. Bind future terminal operation
+  receipts to the exact desired application bundle before deployment acceptance.
+  Preserve running read-only report viewers while rejecting unknown shared-root
+  writers and verifying persistent Slurm adapter ownership.
+- Preserve chart-source ownership metadata when binding OCI digests. Ordinary
+  apply may reuse an unchanged, ready, accepted digest-pinned source as a read-only
+  prerequisite only through the same accepted and owned Helm consumers; it never
+  adopts or relabels that source. Reject changed or ambiguous sources.
+
+- Fix ordinary app deployment on accepted Soperator clusters by calling the
+  baseline validator from its owning module during live target observation.
+  Cover the real observation path in public application-dispatch regressions.
+- Seal the Soperator reconcile operation anchor after target postconditions
+  under the current deployment fence, before completing installation. Reject
+  missing anchors and preserve incomplete status after validation or fencing
+  failure, so successful deploys do not leave ordinary apps blocked by an
+  unfinished operation record.
+
+- Support HTTP/HTTPS Helm repositories alongside OCI in shared deployment and
+  application admission. Require exact HTTP chart identity and compare a fresh
+  download with the rendered content snapshot before effects; reject drift and
+  unavailable sources. Preserve native Flux ownership and OCI digest pinning.
+  Document HTTP's publisher-trust boundary after admission; no registry mirror
+  or new credentials are required for public HTTP repositories.
+
+- Use Grafana's official community OCI chart at the existing pinned version,
+  allowing shared deployment admission to bind its assessed artifact digest.
+  Support mixed HTTP and OCI app bundles through their respective source checks.
+
+- Add Nsight Systems and Compute viewer Apps with guided PVC/Secret selection,
+  private ClusterIP defaults and complete laptop port-forward output. Add
+  `soperator profiling install` for pinned shared CLI installation, fenced
+  recovery and separate customization verification before jail promotion.
+  Preserve administrator profile symlinks, reject missing recorded Jobs before
+  replacement, and direct active profiling recovery to its original command.
+  Add explicit `soperator profiling recover` for exact terminal failed Jobs in
+  initial installation and passive jail customization, with read-only admission,
+  immutable three-Job stage budgets and original-command continuation. Freeze
+  package/profile preimages, authenticate partial package states and use cached
+  archives only. Tighten viewer values and naming; add official-chart rendering
+  and native Ubuntu/architecture package CI. Missing Jobs remain blocked.
+  Name missing viewer login Secrets and required data keys in prerequisite
+  errors, distinguish read failures without exposing subprocess output, and
+  document existing credentials in profiling install help. Add a masked
+  `--interactive` login wizard, `--password-stdin` automation and default username
+  `admin`, preserving existing credentials on repeated installation. Configure
+  AppArmor explicitly for private mount setup and add an exact, history-preserving
+  `--repair runtime-mounts` recovery for pre-admission mount denial.
+  Pin the main package-job runtime to Ubuntu independently of the population
+  image and add exact `--repair runtime-image` recovery for its BusyBox mismatch.
+  Native package CI now uses that production runtime and capability boundary.
+  Activate pinned tools after Soperator's CUDA PATH setup through one owned late
+  shell hook; add exact `--repair profile-order` recovery without changing frozen
+  package installer bytes. Test native fixtures with competing CUDA tool paths.
+  Accept standard node topology labels added to scheduled protected Job Pods
+  while preserving checks on declared labels and execution settings.
+  Remove Helm 4's obsolete `list --all` flag from the viewer/app ownership check;
+  require Helm 4 before inventory so older clients cannot omit pending releases.
+  Retain checks against releases in every status before applying resources.
+
+- Bind upgrade planning to its original configuration and reject concurrent edits
+  before desired-state publication. Keep discovery provider errors sanitized,
+  remove unreachable legacy discovery helpers, and direct interrupted campaign
+  recovery through `deploy` consistently in status, runtime guidance and docs.
+  Status distinguishes known frozen Slurm options from deployment controls that
+  cannot be reconstructed from local receipts.
+
+- Align the canonical deploy help snapshot with guarded recovery, retain failed
+  outcomes after final deployment verification or acceptance, and preserve the
+  primary exception if report publication or footer output fails.
+- Extract protected-directory observation from the CLI without changing storage
+  guards, and include every integration-marked test in the Make integration lane.
+
+- Show activity during final live-cluster and acceptance verification, and keep
+  follow-up commands pointed at the original generated bundle after execution
+  cache cleanup.
+
+- Scope completed observability repair history to its original operation.
+  Verify the sealed completed successor and exact later install inputs before
+  resuming a separate installation without reattaching the old repair.
+
+- Keep Slurm action identities stable across tuple/list JSON persistence and
+  repair only the proven node-tuple hash defect during exact install recovery.
+  Require the frozen install receipt, matching journals and gate scope, retain original events, and persist
+  the correction through the fenced journal owner before restoration.
+- Restore diagnostic reservations through their recorded owner, including
+  install reconciliations using the existing scheduling journal. Preserve the
+  accepted checks and release intent on resume.
+- Keep known unsupported passive policies enabled from the first maintenance
+  apply, fail immediately on enabled-policy drift, and restore the native
+  acceptance phase label after staged configuration.
+- Compare Helm values using client-side apply's null-map deletion semantics
+  while still rejecting extra keys and stale non-null settings. Pause live
+  progress while prompting for extended acceptance, then restore it on answer
+  or interruption.
+- Preserve frozen ordinary OCI chart sources during the post-Terraform refresh
+  and reject unrelated application drift before cluster writes, allowing sealed
+  install recovery to retain its exact replacement-file identity.
+- Resume one proven initial Docker image-download connection reset per worker
+  through the existing Soperator deployment, preserving the failed native Job,
+  operation, reservation and successful peer evidence. Verify ownership, runtime
+  health and exact drain attribution before one distinct native replacement.
+- Replace repeated acceptance poll lines with elapsed heartbeats, distinguish
+  application resolution phases, expose terminal Slurm job identity/state/exit,
+  avoid duplicate terminal completion redraws, and retain projected deployment
+  summaries after failure cleanup.
+- Label skipped GPU probes accurately and recognize statusless OCI
+  HelmRepository objects without bypassing readiness for other Flux sources.
+
+- Change the Soperator acceptance hint to "Ctrl+G interrupts extended testing
+  safely" and color Ctrl+G green and Ctrl+C red in color-capable terminals.
+
+- Use frozen upstream Soperator observability defaults and its DCGM exporter.
+  Accept native `values.observability`; reject the removed
+  `values.soperator-dcgm-exporter` subtree. Keep bundled Grafana disabled and
+  remote Nebius Grafana as the default UI.
+- Keep the extra observability agent opt-in on Soperator, default its
+  infrastructure scraping off, preserve explicit signal/custom-target settings,
+  and isolate GPU exporter and node-label handling from ordinary MK8s targets.
+- Report upstream Soperator telemetry configuration separately from optional
+  apps and unverified live readiness/ingestion.
+
+- Publish onboarding app-only acceptance after successful deployment registration,
+  bind the exact generation, and keep admission closed after a concurrent source edit.
+
+- Support guarded Soperator ordinary-app rendering and Flux apply without Terraform
+  reconciliation or Slurm maintenance, fenced by accepted deployment and target identity.
+- Support catalog-declared internal Prometheus datasources without cloud headers and
+  private Grafana API checks through temporary loopback port-forwards.
+- Bind ordinary baseline publication to the executed generation and reject stale
+  bundle preimages before publishing app-only acceptance.
+
+### Added
+
+- Ask whether to protect additional rootFS directories on every interactive
+  `soperator upgrade`. Preserve existing folders through retained PVC mounts
+  without copying or moving data. Pin physical rootFS generations that contain
+  protected folders and allocate fresh backing when their logical slots are
+  reused. Freeze selections and storage identities through shared deployment
+  and recovery; dry-run leaves desired configuration unchanged.
+
+- Consolidate MK8s deletion under `destroy CONFIG --target CLUSTER_ID`, for
+  managed and onboarded clusters with or without Soperator. Require the immutable
+  Nebius cluster ID even for one cluster; support `--yes` after identical checks.
+  Remove the nested Soperator teardown command with no alias or compatibility
+  layer. Preserve generic teardown only for projects without MK8s, and guard
+  low-level Terraform destroy against MK8s config, generated targets and state.
+- SDK-only `destroy` for managed and onboarded MK8s clusters, with one
+  cluster-delete request and no Kubernetes teardown dependency. Delete dedicated
+  GPU clusters and cluster-owned attached/detached PVC disks through the SDK by
+  default; `--preserve-pvc-disks` retains PVC disks. Block shared GPU references,
+  unproven disk ownership, protection and locks before cluster deletion; bound
+  disk deletion to eight in-flight operations with resumable receipts. Preserve SFS by
+  default; `--delete-sfs` deletes only confirmed attached, dedicated storage after
+  detachment, while respecting deletion protection. Add backend-authoritative `nebius-cxcli.destroy.v1`
+  recovery, operation correlation, durable mutation admission and frozen normal
+  Terraform reconciliation before publishing the remaining project generation.
+  Reconcile SDK-deleted GPU clusters as absent in Terraform. Support only current-format
+  destroy receipts; reject older local/backend records in every status without
+  compatibility, import, archival or migration.
+
+- `soperator status --show-checks` for full recorded check history. Default output
+  summarizes outcomes and shows at most five recorded failures or cancellations;
+  unavailable history warns without changing verified current health or exit status.
+
+- Soperator status progress with a spinner, current activity and elapsed time;
+  colored component readiness and bounded read-only Slurm health queries; and
+  a final overall-health summary. Healthy details are empty, while other rows
+  describe issues and operational impact. Partial or unhealthy live reports exit
+  nonzero; idle lifecycle wording and one installed-release line remove ambiguity.
+
+- Shared Soperator `--acceptance readiness|full` profiles, a default-No terminal
+  prompt after required readiness, and an unattended full default. Ctrl+G
+  durably requests safe finishing across targets; Ctrl+C preserves interruption.
+  Exit success remains gated on required work, restored Active/Passive checks,
+  reopened scheduling and released maintenance. Record skipped/cancelled tests
+  separately from passed diagnostics.
+- Packaged `compatibility-matrix.yaml` with exact profile version sets, strict
+  evidence rules, native Helm dependency constraints, Terraform/provider
+  admission and intermediate upgrade assessments. Unknown support warns;
+  known incompatibility, missing hard evidence and integrity failure block.
+- Frozen selected catalog/chart inputs for output hydration and recovery, OCI
+  digest binding, and operation-owned compatibility reports. HTTP chart
+  admission verifies exact identity and freshly fetched contents against the
+  rendered snapshot; Git chart execution remains unsupported.
+
+### Fixed
+
+- Format the Nsight protected-job calls without changing their Python AST.
+  Refresh REQ-028's criterion-level offline evidence and verify FEAT-030,
+  with regression coverage for fresh prerequisite ordering, upstream Grafana
+  preservation, and absence of implicit dashboard API imports. Keep live and
+  native AMD64 qualification separate from source and package checks.
+
+- Reject obsolete Soperator values in generated deployment bundles before
+  authentication, backend setup, and Terraform preflight. Retain strict native
+  values validation and require a fresh render after correcting source inputs.
+
+- Reject changed frozen Soperator bundles on interrupted install recovery even
+  before the first application journal entry. Replay saved inputs without
+  current Terraform outputs and preserve deterministic NFS and secret bindings.
+
+- Preserve the saved application bundle when resuming an installation without
+  retained rootfs generations. Omit unused retention metadata instead of
+  changing the adapter-state hash and incorrectly entering Docker-storage
+  repair admission. Exact repair and checkpoint validation remain unchanged.
+
+- Preserve activated jail storage through campaign growth, final publication,
+  recovery and subsequent upgrade intake. Seal effective application bytes before
+  publication, persist immutable effective generations before atomic acceptance,
+  and reject conflicting storage edits or missing accepted jail-state authority.
+  Verify both local and NFS-backed mounts without copying protected data.
+  Align the shared deployment design with campaign v8 and receipt v6.
+
+- Reconstruct the admitted physical rootFS allocation when resuming an upgrade
+  that replaces a retained inactive slot. Validate the reconstructed transition
+  against its frozen receipt instead of switching back to the retained PVC.
+
+- Keep deploy progress visible after Terraform apply or a no-change plan while
+  resolving application manifests and compatibility, refreshing Flux inputs,
+  connecting to targets, acquiring authority and admitting application inputs.
+  Use timed terminal spinners and plain stderr outcomes; failures and Ctrl+C
+  clear the active display without reporting success.
+
+- Admit the immutable rendered generation before restoring an interrupted deploy's
+  execution cache, preventing hydrated or maintenance values from causing repeated
+  compatibility rerender errors. Preserve fresh admission evidence and prepare
+  runtime inputs plus Terraform initialization/validation from the restored state.
+
+- Wait for controller-created Soperator check CronJobs during initial readiness
+  before restoring scheduling; report exact deferral resource/field conflicts
+  and retain strict maintenance guards. Evaluate deploy job policy in the Slurm
+  workload namespace rather than the Helm storage namespace.
+- Drain Terraform JSON events without a remote fencing call per queued line,
+  retaining periodic and final authority checks and subprocess cancellation.
+  Coalesce apply status bursts, suppress elapsed-only duplicates, preserve
+  resource instance keys and stop aging completed API operations. Reuse the
+  initialized Terraform root for post-apply application output reads.
+
+- Show each deploy Terraform plan's purpose and elapsed progress while inspecting
+  saved plans. Reuse completed preflight inputs in the same execution and skip
+  the ineffective verification plan before a simple stage has executed. Retain
+  execution refresh, stage admission, fencing and independent convergence checks.
+  Reuse the prepared backend and remove duplicate campaign
+  Terraform initialization. Describe no-change plans without claiming an
+  unobserved completed checkpoint.
+
+- Keep required native Slurm smoke enabled in new CPU, GPU and mixed Soperator
+  configurations. Set `ensure-healthy-nodes.runAfterCreation` to `true` in every
+  profile and retain its enabled state for CPU workers.
+
+- Apply bounded chart-download retries to OCI package capture during render
+  manifest preparation. Retain verified bytes through capture, clean every
+  attempt, recognize subprocess timeouts, and keep consumer and integrity
+  failures outside transport retries.
+
+- Accept native Helm-rendered CRD enum values containing bare `=` during ordinary
+  and bundled Soperator chart inspection. Keep safe YAML parsing and immutable
+  chart packages unchanged.
+- Show render stages with a terminal spinner and elapsed time after pre-render
+  validation, with plain-text stage outcomes on stderr in captured logs. Preserve
+  inherited progress ownership, report failures and skipped provider locks, and
+  clean up unfinished staging artifacts on errors or Ctrl-C during preparation.
+
+- Keep component compatibility tables and routine assessment, transition and
+  provider summaries internal across validation, deployment, upgrade and status.
+  Preserve admission checks, complete stored evidence, progress, operational
+  plans and actionable blocking errors; plain validation adds no report files.
+
+- Accept omitted or empty optional Helm `kubeVersion` constraints during render,
+  including metadata projected from enabled child charts. Record them as
+  undeclared; malformed or incompatible declared constraints still block.
+
+- Keep `render` independent of destroy receipts and remote lifecycle state.
+  Normalize source configuration in memory and publish generated artifacts under
+  the local project lock; deploy retains backend admission and remote fencing.
+  Align render help and SSH-key documentation with source-preserving rendering.
+
+- Keep saved projects and next-step guidance when advisory post-create validation
+  fails, including `soperator create`; explicit validation still rejects unresolved
+  sources. Bound Helm metadata, values, and chart-download retries to three
+  attempts for connection resets and timeouts, and redact signed download URLs
+  and raw timeout chains. Isolate and clean up each download attempt, avoid
+  caching materialization failures, and omit unsupported source-check bypass
+  advice from `soperator create` errors.
+
+- Canonicalize private execution roots before Terraform saved-plan checks. Destroy
+  can resume managed cleanup after cluster/SFS deletion on systems with aliased
+  temporary directories, while retaining plan containment and identity safeguards.
+
+- Show the actual cluster or filesystem ID in MK8s destroy's deletion wait
+  progress. Keep provider operation IDs in the receipt for polling and recovery.
+
+- Accept Terraform refresh observations for exact same-identity resources already
+  scheduled for Soperator deletion, including ancillary refresh after SDK deletion.
+  Keep retained-resource drift, changed identities and unapproved actions blocked.
+  Capture destroy's Terraform output and suppress raw provider failure diagnostics
+  while retaining phase progress, saved-plan checks and execution fencing.
+
+- Rebuild unapproved current-format destroy previews with fresh inventory and confirmation.
+  Remove legacy preview recognition and reject unsupported receipt schemas before
+  cloud work. Preserve previews on planning failure and reject concurrent cache
+  changes before replacement.
+
+- Keep validation and quota diagnostics independent of destroy mutation authority.
+  Treat an explicitly missing backend bucket as uninitialized, while refusing
+  permission and transport failures. Recover pending project generations only
+  inside the local write lock, and reject source changes during acquisition
+  or recovery before publication. Align the remaining receipt and ownership
+  documentation with SDK destroy v1, default GPU/PVC cleanup, and independent
+  PVC preservation and SFS deletion flags.
+
+- Retain destroy's terminal-interactivity check from its paused confirmation
+  boundary. Resuming Rich progress no longer causes a false noninteractive
+  rejection after accepting the exact phrase; first approval still requires a
+  terminal and the matching inventory phrase unless explicit `--yes` is supplied.
+
+- Refresh unapproved destroy previews from cloud inventory before confirmation;
+  freeze approved cluster, node-group and SFS scope while allowing worker turnover.
+  Dry-run is optional and does not grant mutation authority. Resume interrupted
+  publication by restoring the approved final files even after local cache loss.
+
+- Align installed-wheel status smoke with sanitized failure output. Verify exact
+  callback reachability, nonzero exit and overall Error independently, and
+  reject raw exception disclosure instead of requiring it for smoke success.
+
+- Show MK8s destroy phase progress from startup through inventory and
+  cleanup, with a terminal spinner and elapsed time or plain stderr records.
+  Pause the display for inventory and confirmation, and close it on failure.
+
+- Resolve destroy identity consistently from exact target metadata, deployment
+  handoff and the selected managed Terraform resource; mismatched IDs stop before
+  deletion. Cluster access and Kubernetes storage bindings are no longer required.
+
+- Match Soperator operator and NodeConfigurator ownership against the Helm target
+  namespace instead of Flux's storage namespace. Keep missing or ambiguous
+  expected NodeConfigurators visible as Unknown. Label check timestamps by their
+  actual meaning and omit missing timestamps.
+
+- Align command help, flag descriptions, and example comments with current
+  quota, Terraform lock, Flux target selection, Grafana export, bootstrap,
+  upgrade, discovery, and Soperator recovery behavior. Add status/destroy
+  examples and document conditional flags and local preview receipts.
+- Keep sentence punctuation and explanatory prose outside displayed command
+  examples. Check every public help surface and parse all displayed examples
+  without executing product callbacks.
+
+- Reject chart upgrade preparation if its loaded manifest no longer matches
+  the publication snapshot, preserving concurrent manifest edits.
+- Reject unresolved rendered NFS StorageClass and MysteryBox secret bindings
+  before application effects. Check local chart resources and every declared
+  secret mapping while preserving explicit NFS opt-out and target scope.
+- Admit direct `flux apply` against frozen application inputs before any target
+  effects, then execute captured artifacts using the inspected cluster context.
+- Stage and assess generic Helm upgrades before atomic publication. Dry-run now
+  performs compatibility and operator-transition checks; retries retain artifact
+  and cluster identities. Preserve Soperator protected files and ordinary app
+  evidence, and bind shared OCI sources to their exact chart artifact URLs.
+- Check Helm Kubernetes constraints against the control plane during rolling
+  upgrades, while retaining node versions in support assessment.
+- Require worker and GPU readiness smoke from the desired NodeSet inventory,
+  even when optional diagnostic creation flags are disabled.
+- Authenticate optional pending checks against frozen CronJob, Job, Pod and
+  Slurm script execution before exempting them from readiness. Preserve only
+  recognized Kubernetes admission defaults; auxiliary pending work stays gated.
+
+- Retain campaign workload authority during final maintenance restoration after
+  all upgrade segments complete. Preserve callback-owned authority and recovery
+  evidence across restoration events, interruptions, and terminal receipt writes.
+- Keep passive worker evidence in the private lifecycle-report namespace so
+  receipt writes do not invalidate configuration authority and render or recovery
+  cannot drop accepted worker progress. Preserve operation and policy bindings.
+- Compare passive worker resource-health and volume-mount status using Kubernetes
+  map-list keys, preventing harmless entry reordering from looking like a worker
+  replacement. Preserve checks for actual health, identity, readiness, and resource
+  changes, and reject malformed or duplicate identities.
+- Keep coordinated application prerequisite rendering in a disposable resolved
+  bundle; leave generated-file publication with the receipt-owned release
+  workflow so Terraform output hydration does not invalidate parent authority.
+- Identify mismatched recovery controls, including target selection and job
+  timeouts, instead of reporting every mismatch as a job-policy error.
+- Store shared deployment plans in the excluded Terraform runtime directory so final
+  Soperator reconciliation does not mistake its own Terraform plan for config
+  drift. Preserve strict configuration checks and private plan-file permissions.
+- Exclude Terraform reads and no-op events from completed resource-change
+  counts, and count replacements consistently with planned adds and removals.
+
+- Extend the digest-bound dashboard source adapter to the reviewed Soperator
+  4.1.8 package whose malformed document separators fail Flux rendering. Keep
+  all seven dashboards and their verified upstream JSON content.
+
+- Bind coordinated-stage preflight manifests to their temporary Flux directory
+  through the portable generation owner, preserving frozen content identity
+  and strict target-path validation.
+
+- Export canonical source configuration for coordinated deployment admission,
+  release handoff, and stage publication. Preserve frozen component values and
+  instance identity while removing derived runtime aliases; keep public source
+  validation strict.
+- Remove the release-child retry hint that omitted required platform selectors
+  from the public coordinated upgrade command.
+
+- Preserve the admitted release snapshot when a `latest` selection is handed
+  to an exact-release upgrade stage. Verify its original digest and resolved
+  version without rewriting selector provenance.
+
+- Accept official release root Markdown aliases as inert, Git-verified text
+  during source acquisition and recovery. Keep filesystem links, runtime
+  aliases, hard links, submodules, and unsafe archive paths rejected.
+
+- Compare restored Slurm partition settings and Kubernetes storage quantities
+  semantically during final deployment verification. Recognize API-added
+  workload defaults and omitted empty values while retaining strict checks for
+  owned settings, list membership, removed fields, and resource identities.
+
+- Verify current Soperator passive scheduler, mounted policy, and prolog/epilog
+  restoration at install and upgrade completion, including enabled fallback and
+  resumed handoffs. Freeze rendered chart defaults and recognize indexed native
+  hooks without rerunning previously accepted diagnostics.
+
+- Retain sealed install-repair receipts in portable deployment recovery. Accept
+  only the final SIGTERM/SIGKILL accounting signal for an already recorded
+  timeout, preserving exact job identity and requiring fresh native acceptance.
+- Preserve each worker's private Docker image cache when compiling persistent
+  jail mounts; reject conflicting mount identities. Add sealed first-install
+  recovery for the exact shared Docker metadata defect, preserving terminal
+  native outcomes, storage, and maintenance before fresh acceptance.
+- Resolve live Soperator status from exact remote deployment identity during
+  interrupted installation, without requiring a final local handoff or reading
+  Terraform state; reject conflicting identities and report unpublished identity.
+- Report unavailable Slurm workers before native acceptance submission and
+  during result polling; preserve existing diagnostic jobs, health drains and
+  scheduling isolation for recovery instead of waiting for a generic timeout.
+- Show release-stage progress during Soperator maintenance, acceptance, and
+  scheduling restoration, including interrupted deployment recovery.
+- Bind passive diagnostic probes to the selected Slurm worker when invoked
+  through `kubectl exec`, where Slurm hook environment variables may be absent;
+  retain conflicting-identity and pod/container replacement checks.
+
+- Enforce exact Helm chart versions in both catalog validation and rendering;
+  reject ranges, wildcards, incomplete versions, and `latest` before writing a
+  deployment bundle.
+- Preserve the bound infrastructure identity when resuming an interrupted
+  Soperator install after a fresh no-op Terraform plan; retain complete
+  immutable-input checks against the existing scheduling journal.
+- Order managed cert-manager readiness before Security Profiles Operator in
+  staged Soperator installation and upgrade, including downstream consumers.
+- Wire the Soperator application runtime ownership guard into the CLI so
+  deployment and upgrade can continue from infrastructure to application setup.
+- Preserve saved zero-surge rollout settings through shared Soperator upgrade
+  admission without passing the resolved zero as a safe-surge-only CLI option.
+- Bound generated Soperator filesystem mount tags to the virtio-fs device's
+  36-byte UTF-8 limit, which is stricter than Compute API admission, and
+  reject overlong explicit tags in the wizard and configuration validation.
+  Count stored whitespace in authored configuration; preserve wizard trimming
+  before validating the saved value.
+- Allow fresh Soperator deployment and preview through the public loader without
+  requiring an ordinary-application baseline from an earlier installation.
+- Include recreated Terraform dependencies in coordinated stage admission and bind
+  recovery to original and replacement resource identities.
+- Publish desired values during onboarded Soperator campaigns; verify exact
+  maintenance-phase settings and recheck restored settings before completion.
+- Deploy every selected application target after Soperator scheduling restoration,
+  retain incomplete progress on failure, and preserve unselected acceptance evidence.
+- Apply and verify ordinary sibling bundles, handle statusless OCI HelmRepository
+  objects, and resolve Terraform-derived application values during no-op retries.
+  Reject unsupported whole-resource removals before deployment begins.
+
+- Recheck the shared deployment fence after planning and apply preflight, before
+  Terraform starts, and during streamed apply. Preserve that fence for ordinary
+  targets as well as Soperator targets.
+- Align Soperator error guidance and customer CI documentation with the
+  create/configuration and common validate/render/deploy workflow.
+
+### Changed
+
+- Record completed Soperator 4.1.5/Kubernetes 1.35 installation and 4.1.8/1.36
+  upgrade through supported resumes, with independently verified checks,
+  scheduling, node groups, and preserved storage. Retain earlier failed trials,
+  operational recovery, and documented vendor compatibility limits separately.
+
+- Document a proposed shared `compatibility-matrix.yaml` with exact version
+  sets, distribution-scoped evidence, intermediate upgrade checks, and frozen
+  recovery. Include the MK8s/Soperator implementation plan and current YAML
+  ownership inventory; distinguish chart application metadata from controller
+  image tags and verified binary versions. Runtime integration is not
+  implemented yet.
+
+- Split Soperator configuration authoring into `soperator create --release latest|X.Y.Z`; remove `soperator install`.
+- Route complete rendered Soperator deployments through `deploy`, with optional preview,
+  private local generations, automatic matching recovery, and coordinated topology/platform stages.
+- Use the common validate/render/validate-generated/deploy pipeline in generated CI workflows,
+  including config changes and non-cancelling deployment concurrency.
+
+- Scope generated Soperator node service-account names to the configured MK8s
+  cluster and node group, deferring allocation while the wizard has no cluster
+  name. Preserve saved account mappings when surviving worker groups are rebuilt
+  for scaling changes; do not adopt colliding accounts or rewrite frozen plans.
+- Require missing root SSH key selection before optional Soperator customization,
+  so accepting default `n` completes SSH setup and passes the existing save guard.
+  Preserve explicit key lists and cancellation behavior, and avoid a duplicate
+  key prompt when detailed customization follows selection.
+- Default upstream Soperator configuration to `n` during installation, so Enter
+  retains the previewed settings and frozen release while `y` opens the fields.
+- Fix the Soperator wizard grouping test to request backtracking from the current
+  required-integration customization prompt and verify that the step is revisited.
+- Default required Soperator integration customization to `n`, keeping GPU and
+  Network Operators enabled with their previewed settings unless explicitly
+  customized. Compile completed fresh-install values before project publication.
+- Give the adapter sole ownership of generated jail and controller-spool volume
+  sources. Normalize install, adoption, and slot-switch storage intent without
+  generating conflicting aliases; remove the obsolete upgrade alias-stripping
+  handoff while preserving strict custom-source conflict checks.
+
+- Ask Create new or Use existing before configuring each Soperator accounting,
+  controller-spool, and jail filesystem. Require project-list selection for
+  reuse, skip irrelevant properties and lookups, preserve visible backtracking,
+  and summarize creation or reuse before leaving SFS configuration. Incomplete
+  fresh-install wizards now stop before config publication or planning even when
+  defaults satisfy required fields.
 - Reject unfinished root-key selection before saving or planning a fresh
   Soperator installation, and reject check mount-path aliases that could hide
   retained home directories.
@@ -482,7 +1588,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Repurpose `soperator discover` as a config-independent, information-only
   pre-onboarding command with parser-required tenant/project/cluster identity,
   optional verified region/context/access, and atomic JSON/Markdown reports.
-  Align the six-command help order, paired interactive flags, existing-config
+  Align the five-command help order, paired interactive flags, existing-config
   onboard validation, region semantics, documentation, tests, installed-wheel
   smoke, and the v4 CLI contract with explicit option order and conditional
   requirements. Keep onboarding discovery evidence internal and independently
@@ -532,7 +1638,7 @@ All notable changes to this project are tracked here. This changelog follows
   the sealed materialization receipt and exact completed Jobs instead of
   incorrectly applying the pre-write consumer gate to the now-active PVC.
 - Align the Soperator README and design contract with the current code: use
-  registration v3 and destroy receipt v2, keep hardware replacement exclusively
+  registration v3 and destroy receipt v1, keep hardware replacement exclusively
   under `migrate node-group`, document disabled and partial lifecycle-marker
   guards, state the real Helm/kubectl requirements, replace the drifting manual
   test list with the complete Soperator lane, and distinguish current onboarded
@@ -754,7 +1860,7 @@ All notable changes to this project are tracked here. This changelog follows
   replanning; validate a replacement Terraform plan separately, publish a new
   approval fingerprint only after validation, and preserve the prior saved
   plan/receipt if replacement planning or publication fails. Bind the exact
-  six-command order and exercise every callback from the installed wheel.
+  five-command order and exercise every callback from the installed wheel.
 - Make SecretStash primary-version promotion snapshot the canonical config,
   generated manifest, and tfvars before Terraform output reads, then commit the
   exact changed subset with compare-and-swap preimages so concurrent operator
@@ -801,7 +1907,7 @@ All notable changes to this project are tracked here. This changelog follows
   and per-command option-rejection regressions. Verify from the installed wheel
   that a missing non-interactive install release fails before configuration or
   provider work, and align FEAT-015 with read-only discover/status behavior.
-- Finalize one root group with exactly six public commands and pin every group,
+- Finalize one root group with exactly five public commands and pin every group,
   command, argument, and option description in the built-wheel contract v3;
   cover fresh-install forwarding, replan, upgrade job-control and approval
   forwarding, and both managed command routes. Make `--no-interactive` select a
@@ -823,24 +1929,22 @@ All notable changes to this project are tracked here. This changelog follows
   may omit its selector while non-interactive recovery must repeat the frozen
   requested selector. Reject install-resume release, identity, profile, network,
   subnet, and overwrite overrides, enforce the complete official-release capability matrix
-  through `make test-integration`, and verify the exact six-command option/help
+  through `make test-integration`, and verify the exact five-command option/help
   contract from the built wheel during `make all`.
-- Reject generic render, deploy, destroy, Terraform, Flux, and component-target
+- Reject protected Terraform, Flux teardown, and component-target
   removal paths for every Soperator app row or registration marker, including
   disabled and partial state. Run the lifecycle guard before canonical auth,
   generated tfvars/report materialization, or provider work so rejected generic
   commands are side-effect free.
-- Complete the six-command Soperator lifecycle with the dedicated
-  `soperator destroy CONFIG --target TARGET [--dry-run]` path for managed and
-  onboarded clusters. Add immutable resumable destroy receipts, exact
-  destroy/preserve inventories, TTY plus cluster-ID confirmation, saved
-  target-scoped Terraform teardown for managed MK8s, exact Nebius API deletion
-  for onboarded MK8s, and post-delete proof that physical SFS/PVC backing or
-  VM-NFS infrastructure remains. Fence against concurrent operations, refresh
-  the full workload and PVC/PV/CSI inventory before cleanup, persist only safe
-  failure classifications, and bind the post-cleanup config digest for
-  crash-safe terminal rendering without overwriting later edits. Route generic
-  destructive paths to `soperator destroy`.
+- Complete cluster retirement with global
+  `destroy CONFIG --target CLUSTER_ID [--dry-run] [--yes] [--delete-sfs]` for
+  managed and onboarded clusters. Use immutable backend receipts, exact cloud
+  destroy/preserve inventories, exact confirmation or `--yes`, one SDK cluster-delete
+  request and constrained ancillary Terraform reconciliation. Default to SFS
+  preservation; explicit SFS deletion requires dedicated, detached, unprotected
+  storage. Preserve independent VM-NFS resources, fence concurrent operations,
+  and bind the final project generation for recoverable publication. Route generic
+  destructive paths to `destroy`.
 - Move Soperator registration and protected-storage evidence to fail-fast v2
   contracts. Onboarding now proves verified official Helm-render equivalence
   plus live persistent object identity and rendered-field equivalence while
@@ -858,7 +1962,7 @@ All notable changes to this project are tracked here. This changelog follows
   Keep the lifecycle-managed upstream Soperator contract authoritative, add
   final task-oriented contents, and bind general documentation restoration to
   its current heading and body contract.
-- Align Soperator documentation and CLI help with the exact six-command
+- Align Soperator documentation and CLI help with the exact five-command
   surface, distinguish the four lifecycle-changing commands from read-only discovery and
   status, and clarify that interrupted upgrades recover through the same
   approved upgrade command rather than a separate resume command or flag.
@@ -929,13 +2033,13 @@ All notable changes to this project are tracked here. This changelog follows
   offline authority, or release-unpacking installer is supported.
 - Keep migration planning, protected-state handling, scaling decisions, and
   recovery in the common capability-based operation engine.
-- Keep only the canonical `soperator install`, `soperator onboard`,
-  `soperator upgrade`, `soperator destroy`, `soperator discover`, and
-  `soperator status` implementation in runtime and package artifacts.
+- Keep the canonical `soperator create`, `soperator onboard`,
+  `soperator upgrade`, `soperator discover`, `soperator status`, and global
+  `destroy` implementation in runtime and package artifacts.
 - Harden Soperator operation, release, recovery, and destroy receipts with one
   owner-only atomic writer and symlink-rejecting reader; align generic render,
   destroy, Flux teardown, lifecycle diagrams, and job-monitoring guidance with
-  the dedicated six-command Soperator surface.
+  the five-command Soperator surface and global destroy.
 - Preserve an onboarded cluster's non-secret, release-neutral live Slurm
   topology through an explicit projection and render its generated handoff
   immediately after the registration config is committed. Target profile

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from . import kubernetes_process
 from .soperator_checks import _identifier
 
 JournalReader = Callable[[str, datetime, datetime], Sequence[Mapping[str, Any]]]
@@ -23,7 +23,7 @@ def read_worker_journal(
     kube_context: str,
 ) -> list[Mapping[str, Any]]:
     worker = _identifier(worker)
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "kubectl",
             "--context",

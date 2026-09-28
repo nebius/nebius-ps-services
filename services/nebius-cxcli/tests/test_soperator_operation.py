@@ -21,6 +21,7 @@ from nebius_cxcli.soperator_operation import (
     build_soperator_operation_spec,
     complete_soperator_release_intent,
     load_active_soperator_release_intent,
+    load_completed_soperator_release_intent,
     load_local_active_soperator_release_intent,
     soperator_operation_anchor_status,
 )
@@ -492,6 +493,9 @@ def test_completed_release_intent_is_not_recovered(tmp_path: Path) -> None:
         operation_spec_sha256="sha256:" + "5" * 64,
     )
     complete_soperator_release_intent(paths=paths, target_ref="cluster-a")
+    completed = load_completed_soperator_release_intent(paths=paths, target_ref="cluster-a")
+    assert completed is not None and completed.status == "complete"
+    assert completed.operation_spec_sha256 == "sha256:" + "5" * 64
 
     assert (
         load_active_soperator_release_intent(

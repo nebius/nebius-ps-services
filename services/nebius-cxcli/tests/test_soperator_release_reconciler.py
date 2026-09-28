@@ -33,7 +33,7 @@ from nebius_cxcli.soperator_release_source import (
     SOPERATOR_SOURCE_CACHE_SCHEMA,
     SoperatorSourceReceipt,
 )
-from nebius_cxcli.soperator_strategy import SoperatorStrategyPlan
+from nebius_cxcli.soperator_strategy import SoperatorStrategy, SoperatorStrategyPlan
 from soperator_fixtures import sample_snapshot
 
 
@@ -51,6 +51,9 @@ def _paths(tmp_path: Path) -> ProjectPaths:
         path_project_folder="project",
     )
     paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").write_text(
+        yaml.safe_dump({"apiVersion": "v1", "kind": "ConfigMap", "data": {"values.yaml": "{}"}})
+    )
     graph = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -181,6 +184,7 @@ def _callbacks(calls: list[str]) -> SoperatorReconcileCallbacks:
         retire_legacy_owners=action("retire-source"),
         rollback_before_frontier=action("rollback-source"),
         completed_postconditions={
+            "reconcile-sources-and-wait-flux-graph": verify("verify-noop-readiness"),
             "validate-target-active-checks": verify("verify-checks"),
             "restore-steady-check-policy": verify("verify-checks-restored"),
             "establish-boot-storage-barrier": verify("verify-storage"),
@@ -932,18 +936,39 @@ def test_static_worker_rollout_reapplies_after_failed_pre_restore_readiness(
     assert successor_calls.count("apply") == 1
 
 
+@pytest.mark.parametrize(
+    ("current_release", "profile"),
+    [("1.22.0", "standard"), (None, "standard"), (None, "fast-dev-test")],
+)
 def test_repair_successor_reapplies_after_failed_declarative_release(
     tmp_path: Path,
+    current_release,
+    profile,
 ) -> None:
     snapshot = sample_snapshot()
     paths = _paths(tmp_path)
+    if profile == "fast-dev-test":
+        from nebius_cxcli.soperator_deployment_profile import _coverage
+
+        (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").write_text(
+            yaml.safe_dump(
+                {"data": {"values.yaml": yaml.safe_dump({"cxcliDiagnostics": _coverage()})}}
+            )
+        )
     strategy = resolve_soperator_reconcile_strategy(
-        current_release="1.22.0",
+        current_release=current_release,
         target_release=snapshot.release,
-        source_contract="protected-data-plane-v1",
+        source_contract="protected-data-plane-v1" if current_release else None,
         target_contract=snapshot.capability_contract,
     )
-    predecessor_spec = _spec(snapshot, strategy, paths)
+    predecessor_spec = replace(
+        _spec(snapshot, strategy, paths),
+        stage_plan_sha256=soperator_reconcile_stage_plan_sha256(
+            strategy=strategy.strategy.value,
+            rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+            deployment_profile=profile,
+        ),
+    )
     predecessor_calls: list[str] = []
 
     def fail_apply() -> None:
@@ -994,7 +1019,9 @@ def test_repair_successor_reapplies_after_failed_declarative_release(
             predecessor_receipt=predecessor,
             previous_operation_spec_sha256=soperator_sha256(asdict(predecessor_spec)),
             resume_phase="apply-declarative-release",
-            reason="controller-storage-render-contract-v2",
+            reason="controller-storage-render-contract-v2"
+            if current_release
+            else "install-dashboard-source-delivery-v1",
         ),
     )
 
@@ -1005,7 +1032,8 @@ def test_repair_successor_reapplies_after_failed_declarative_release(
         == "failed-declarative-release-after-quiescence"
     )
     assert "passive-rootfs" not in successor_calls
-    assert "verify-passive-rootfs" in successor_calls
+    if current_release:
+        assert "verify-passive-rootfs" in successor_calls
     assert successor_calls.count("apply") == 1
 
 
@@ -1344,7 +1372,7 @@ def test_unknown_capability_transition_fails_closed() -> None:
         )
 
 
-def test_forward_policy_runs_one_attempt_for_the_outer_supervisor_without_rollback(
+def test_forward_policy_stops_after_one_attempt_without_rollback(
     tmp_path: Path,
 ) -> None:
     snapshot = sample_snapshot()
@@ -1377,8 +1405,7 @@ def test_forward_policy_runs_one_attempt_for_the_outer_supervisor_without_rollba
             operation_spec=_spec(snapshot, strategy, paths),
             emit=events.append,
             execution_policy=SoperatorReconcileExecutionPolicy(
-                forward_until_complete=True,
-                sleep=sleeps.append,
+                forward_only=True,
             ),
         )
 
@@ -1387,7 +1414,7 @@ def test_forward_policy_runs_one_attempt_for_the_outer_supervisor_without_rollba
     assert sleeps == []
 
 
-def test_forward_policy_propagates_safety_pause_to_outer_supervisor(tmp_path: Path) -> None:
+def test_forward_policy_propagates_safety_pause_without_replay(tmp_path: Path) -> None:
     snapshot = sample_snapshot()
     paths = _paths(tmp_path)
     strategy = resolve_soperator_reconcile_strategy(
@@ -1416,13 +1443,13 @@ def test_forward_policy_propagates_safety_pause_to_outer_supervisor(tmp_path: Pa
             callbacks=replace(callbacks, resolve_sources=resolve_with_temporary_authority_gap),
             operation_spec=_spec(snapshot, strategy, paths),
             emit=events.append,
-            execution_policy=SoperatorReconcileExecutionPolicy(forward_until_complete=True),
+            execution_policy=SoperatorReconcileExecutionPolicy(forward_only=True),
         )
 
     assert calls.count("sources-attempt") == 1
 
 
-def test_forward_supervisor_stops_only_for_typed_main_component_failure(
+def test_forward_policy_preserves_typed_main_component_failure(
     tmp_path: Path,
 ) -> None:
     snapshot = sample_snapshot()
@@ -1466,10 +1493,7 @@ def test_forward_supervisor_stops_only_for_typed_main_component_failure(
             callbacks=replace(callbacks, apply_desired_state=fail_main_component),
             operation_spec=_spec(snapshot, strategy, paths),
             execution_policy=SoperatorReconcileExecutionPolicy(
-                forward_until_complete=True,
-                retry_initial_seconds=0,
-                retry_max_seconds=0,
-                sleep=lambda _seconds: pytest.fail("terminal failure must not retry"),
+                forward_only=True,
             ),
         )
 
@@ -1477,3 +1501,132 @@ def test_forward_supervisor_stops_only_for_typed_main_component_failure(
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert calls.count("main-component-terminal") == 1
     assert payload["status"] == "recovery-required"
+
+
+def test_fast_install_graph_has_one_apply_and_resumes_without_bootstrap_replay(tmp_path):
+    from nebius_cxcli.soperator_deployment_profile import _coverage
+
+    snapshot = sample_snapshot()
+    paths = _paths(tmp_path)
+    value_path = paths.flux_dir / "configmap-terraform-fluxcd-values.yaml"
+    value_path.write_text(
+        yaml.safe_dump({"data": {"values.yaml": yaml.safe_dump({"cxcliDiagnostics": _coverage()})}})
+    )
+    strategy = resolve_soperator_reconcile_strategy(
+        current_release=None,
+        target_release=snapshot.release,
+        source_contract=None,
+        target_contract=snapshot.capability_contract,
+    )
+    spec = replace(
+        _spec(snapshot, strategy, paths),
+        stage_plan_sha256=soperator_reconcile_stage_plan_sha256(
+            strategy=strategy.strategy.value,
+            rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+            deployment_profile="fast-dev-test",
+        ),
+    )
+    calls = []
+    callbacks = _callbacks(calls)
+    callbacks = replace(
+        callbacks,
+        completed_postconditions={
+            **callbacks.completed_postconditions,
+            "wait-final-service-and-slurm-smoke": lambda _: calls.append("verify-fast-smoke"),
+            "open-ordinary-user-admission": lambda _: calls.append("verify-fast-admission"),
+        },
+    )
+    args = dict(
+        paths=paths,
+        target_ref="cluster-a",
+        ownership="managed",
+        strategy=strategy,
+        snapshot=snapshot,
+        source=_source(snapshot),
+        artifacts=_artifacts(snapshot),
+        callbacks=callbacks,
+        operation_spec=spec,
+    )
+    receipt = reconcile_soperator_release(**args)
+    phases = [row["phase"] for row in json.loads(receipt.read_text())["transitions"]]
+    assert phases[-1] == "wait-final-service-and-slurm-smoke"
+    assert "open-ordinary-user-admission" in phases
+    assert "validate-target-active-checks" not in phases
+    assert calls.count("apply") == 1
+    assert not {"accept-checks", "restored-product", "post-requeue"} & set(calls)
+    calls.clear()
+    reconcile_soperator_release(**args)
+    assert "apply" not in calls
+    assert "verify-apply" in calls
+    assert "verify-fast-smoke" in calls
+    # Changing the declared profile never rewrites an old operation or receipt.
+    value_path.write_text(yaml.safe_dump({"data": {"values.yaml": "{}"}}))
+    with pytest.raises(ValueError, match="operation spec"):
+        reconcile_soperator_release(**args)
+
+
+@pytest.mark.parametrize("strategy", list(SoperatorStrategy))
+def test_every_fast_strategy_journals_mutating_final_smoke(strategy):
+    from nebius_cxcli.soperator_release_reconciler import TransitionMode, _transition_plan
+
+    plan = _transition_plan(strategy, "fast-dev-test")
+    final = [row for row in plan if row[2] == "wait_final_product"]
+    assert len(final) == 1
+    assert final[0][0] == "wait-final-service-and-slurm-smoke"
+    assert final[0][1] is TransitionMode.RECONCILE_FORWARD
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_completed_fast_noop_or_update_requires_original_smoke_proof(tmp_path, changed):
+    from nebius_cxcli.soperator_deployment_profile import _coverage
+
+    snapshot = sample_snapshot()
+    paths = _paths(tmp_path)
+    (paths.flux_dir / "configmap-terraform-fluxcd-values.yaml").write_text(
+        yaml.safe_dump({"data": {"values.yaml": yaml.safe_dump({"cxcliDiagnostics": _coverage()})}})
+    )
+    strategy = resolve_soperator_reconcile_strategy(
+        current_release=snapshot.release,
+        target_release=snapshot.release,
+        source_contract=snapshot.capability_contract,
+        target_contract=snapshot.capability_contract,
+        desired_state_changed=changed,
+    )
+    spec = replace(
+        _spec(snapshot, strategy, paths),
+        stage_plan_sha256=soperator_reconcile_stage_plan_sha256(
+            strategy=strategy.strategy.value,
+            rendered_graph_sha256=soperator_stage_plan_sha256(paths),
+            deployment_profile="fast-dev-test",
+        ),
+    )
+    calls = []
+    callbacks = _callbacks(calls)
+
+    def missing_proof(_):
+        raise RuntimeError("Completed fast readiness has no durable smoke proof")
+
+    callbacks = replace(
+        callbacks,
+        completed_postconditions={
+            **callbacks.completed_postconditions,
+            "wait-final-service-and-slurm-smoke": missing_proof,
+        },
+    )
+    args = dict(
+        paths=paths,
+        target_ref="cluster-a",
+        ownership="managed",
+        strategy=strategy,
+        snapshot=snapshot,
+        source=_source(snapshot),
+        artifacts=_artifacts(snapshot),
+        callbacks=callbacks,
+        operation_spec=spec,
+    )
+    reconcile_soperator_release(**args)
+    assert calls.count("final-product") == 1
+    calls.clear()
+    with pytest.raises(RuntimeError, match="durable smoke proof"):
+        reconcile_soperator_release(**args)
+    assert "final-product" not in calls

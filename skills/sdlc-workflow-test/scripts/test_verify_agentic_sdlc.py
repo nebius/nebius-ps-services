@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import ast
+from contextlib import redirect_stderr
 import importlib.util
 import inspect
+from io import StringIO
 import json
 import os
 from dataclasses import replace
@@ -25,6 +27,26 @@ assert SPEC and SPEC.loader
 verifier = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = verifier
 SPEC.loader.exec_module(verifier)
+
+
+class VerifierImportTests(unittest.TestCase):
+    def test_file_location_import_resolves_siblings_from_unrelated_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+            environment.pop("PYTHONPATH", None)
+            code = (
+                "import importlib.util,sys; "
+                "s=importlib.util.spec_from_file_location('verifier_import_probe',sys.argv[1]); "
+                "m=importlib.util.module_from_spec(s); sys.modules[s.name]=m; "
+                "s.loader.exec_module(m); print(m.three_tier_semantics.RESULTS_SCHEMA)"
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(MODULE_PATH)],
+                cwd=directory, env=environment, text=True, capture_output=True,
+                timeout=30, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "agentic-sdlc/three-tier-results-v3")
 
 
 def git(cwd: Path, *arguments: str) -> str:
@@ -161,6 +183,7 @@ class VerifierContractTests(unittest.TestCase):
         self.project = self.verification_root / "disposable-project"
         self.selected = self.project / "services" / "resource-validator"
         self.selected.mkdir(parents=True)
+        self.verification_root.chmod(0o700)
         verifier.write_private_json(
             self.verification_root / verifier.VERIFICATION_ROOT_MARKER,
             {"schema": verifier.VERIFICATION_ROOT_MARKER_SCHEMA},
@@ -200,6 +223,28 @@ class VerifierContractTests(unittest.TestCase):
             design_path=source_root / verifier.DESIGN_RELATIVE,
         )
 
+    def test_live_evidence_is_the_only_public_evidence_option(self) -> None:
+        default = verifier.setup_context(verifier.parse_args([
+            "--verification-root", str(self.verification_root)
+        ]))
+        self.assertEqual(default.live_evidence_path, self.verification_root / "live-results.json")
+        explicit = verifier.setup_context(verifier.parse_args([
+            "--verification-root", str(self.verification_root),
+            "--live-evidence", str(self.verification_root / "custom.json"),
+        ]))
+        self.assertEqual(explicit.live_evidence_path, self.verification_root / "custom.json")
+        for flag in ("--three-tier-results", "--live-evid"):
+            with self.subTest(flag=flag), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                verifier.parse_args([flag, "example.json"])
+
+    def test_public_live_action_is_renamed_without_a_legacy_alias(self) -> None:
+        root = MODULE_PATH.parents[1]
+        skill = (root / "SKILL.md").read_text()
+        self.assertIn("`--create-live-test`", skill)
+        self.assertIn("Retired `--create` and `--three-tier-results`", skill)
+        self.assertIn("are rejected without aliases or abbreviation", skill)
+        self.assertIn("--create-live-test", (root / "agents/openai.yaml").read_text())
+
     def test_slow_aggregate_suites_have_measured_timeout_headroom(self) -> None:
         self.assertEqual(verifier.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
         self.assertEqual(
@@ -211,7 +256,7 @@ class VerifierContractTests(unittest.TestCase):
         with mock.patch.object(verifier, "run", return_value=completed) as runner:
             verifier.check_capability_regressions(self.ctx)
 
-        self.assertEqual(len(runner.call_args_list), 15)
+        self.assertEqual(len(runner.call_args_list), 16)
         for call in runner.call_args_list:
             command = " ".join(str(value) for value in call.args[0])
             if "test-worktree-manager.py" in command:
@@ -232,6 +277,71 @@ class VerifierContractTests(unittest.TestCase):
 
         checks = [check for check in self.ctx.checks if check.name == "Design contract"]
         self.assertEqual([check.status for check in checks], ["PASS"])
+
+    def test_design_contract_accepts_current_canonical_source(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_design(ctx)
+        self.assertEqual([check.status for check in ctx.checks], ["PASS"])
+
+    def test_readiness_matrix_reports_canonical_owner_receipt_result(self) -> None:
+        for status in ("PASS", "FAIL"):
+            with self.subTest(status=status):
+                ctx = replace(self.ctx, checks=[])
+                ctx.add(
+                    "Capability regression results",
+                    "Owner-issued project-spec validation receipt",
+                    status,
+                    "Fixture result for the canonical receipt capability.",
+                    capability_id="spec.validation-receipt",
+                )
+                matrix = dict(verifier.summarize_matrix(ctx))
+                self.assertEqual(
+                    matrix.get("Canonical project-spec validation receipt"), status
+                )
+
+    def test_vertical_slice_contract_accepts_current_canonical_sources(self) -> None:
+        ctx = self.source_contract_context()
+        verifier.check_vertical_slice_contract(ctx)
+        self.assertTrue(ctx.checks)
+        self.assertEqual(
+            [(check.name, check.detail) for check in ctx.checks if check.status != "PASS"],
+            [],
+        )
+
+    def test_vertical_slice_contract_normalizes_whitespace(self) -> None:
+        ctx = self.source_contract_context()
+        read_text = verifier.read_text
+        with mock.patch.object(
+            verifier, "read_text", side_effect=lambda path: "\n".join(read_text(path).split())
+        ):
+            verifier.check_vertical_slice_contract(ctx)
+        self.assertEqual(
+            [check.name for check in ctx.checks if check.status != "PASS"], []
+        )
+
+    def test_vertical_slice_contract_rejects_missing_operational_clauses(self) -> None:
+        cases = (
+            ("sdlc-validate-codes", "against the locked plan and its End-To-End Slice"),
+            ("sdlc-evaluate", "When the locked plan defines an end-to-end slice"),
+            ("align", "Compare implementation against tests, CLI help, examples, workflows, and documentation"),
+            ("align", "Make the smallest effective change only when the issue is clear"),
+            ("align", "Run the mandatory changed-scope quality gate"),
+        )
+        read_text = verifier.read_text
+        for skill, clause in cases:
+            with self.subTest(skill=skill, clause=clause):
+                ctx = replace(self.source_contract_context(), checks=[])
+                target = ctx.skills_root / skill / "SKILL.md"
+                pattern = r"\s+".join(re.escape(word) for word in clause.split())
+                changed, count = re.subn(pattern, "REMOVED", read_text(target))
+                self.assertEqual(count, 1)
+                with mock.patch.object(
+                    verifier, "read_text",
+                    side_effect=lambda path: changed if path == target else read_text(path),
+                ):
+                    verifier.check_vertical_slice_contract(ctx)
+                checks = [check for check in ctx.checks if check.name == f"{skill} skill"]
+                self.assertEqual([check.status for check in checks], ["FAIL"])
 
     def test_design_contract_reports_a_missing_normalized_term(self) -> None:
         missing = verifier.DESIGN_REQUIRED_TERMS[-1]
@@ -925,6 +1035,13 @@ class VerifierContractTests(unittest.TestCase):
             )
         self.assertEqual(sorted(required - declared), [])
 
+    def test_golden_path_intake_precedes_coordinator_only_requirements(self) -> None:
+        self.assertEqual(verifier.GOLDEN_PHASE_SEQUENCE[0], "sdlc-start")
+        self.assertLess(
+            verifier.GOLDEN_PHASE_SEQUENCE.index("sdlc-start"),
+            verifier.GOLDEN_PHASE_SEQUENCE.index("sdlc-create-requirements"),
+        )
+
     def test_project_lifecycle_is_not_runtime_support_or_golden_phase(self) -> None:
         self.assertNotIn(
             "project-agent-instructions", verifier.REQUIRED_RUNTIME_SUPPORT_SKILLS
@@ -1304,6 +1421,8 @@ class VerifierContractTests(unittest.TestCase):
         git(self.project, "commit", "-qm", "old flat fixture")
         verifier.setup_disposable_project(self.ctx)
         self.assertEqual(git(self.project, "status", "--porcelain"), "")
+        self.assertFalse([check for check in self.ctx.checks if check.status == "FAIL"])
+        verifier.owned_git_origin.validate(self.project, self.verification_root, "lightweight")
         self.assertTrue((self.selected / "pyproject.toml").is_file())
         self.assertFalse((self.project / "pyproject.toml").exists())
 

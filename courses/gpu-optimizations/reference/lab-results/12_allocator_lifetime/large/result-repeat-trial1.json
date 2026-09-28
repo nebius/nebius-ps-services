@@ -1,0 +1,78 @@
+{
+  "correctness": {
+    "all_lab_allocations_released": true,
+    "allocated_bytes_drop_after_delete": true,
+    "empty_cache_preserved_live_allocation": true,
+    "final_empty_cache_did_not_increase_reservation": true,
+    "first_tensor_live_during_empty_cache": true,
+    "reservation_survived_middle_delete": true
+  },
+  "lab": "12_allocator_lifetime",
+  "measurements": {
+    "after_all_delete": {
+      "allocated_bytes": 0,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 268435456
+    },
+    "after_empty_cache_with_first_live": {
+      "allocated_bytes": 268435456,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 268435456
+    },
+    "after_final_empty_cache": {
+      "allocated_bytes": 0,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 0
+    },
+    "after_middle_delete": {
+      "allocated_bytes": 536870912,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 671088640
+    },
+    "after_reuse_candidate": {
+      "allocated_bytes": 637534208,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 33554432,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 671088640
+    },
+    "after_three_allocations": {
+      "allocated_bytes": 671088640,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 671088640
+    },
+    "allocation_scale": 4,
+    "baseline": {
+      "allocated_bytes": 0,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 0
+    },
+    "before_empty_cache_with_first_live": {
+      "allocated_bytes": 268435456,
+      "allocation_retries": 0,
+      "inactive_split_bytes": 0,
+      "out_of_memory_events": 0,
+      "reserved_bytes": 671088640
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

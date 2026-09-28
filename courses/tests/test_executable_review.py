@@ -1,16 +1,15 @@
 """CPU fault injection for lab numerics, training and offline validation."""
 
 import ast
-from contextlib import contextmanager
 import importlib.util
 import os
-from pathlib import Path
 import subprocess
 import sys
+from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from test_course_review_fixes import ROOT, load_lab
 
 
@@ -78,10 +77,10 @@ def test_library_decision_accepts_independent_bf16_rounding(monkeypatch, fixture
 
     with load_lab("gpu-optimizations/labs/16_library_first_decision.py") as lab:
         monkeypatch.setattr(lab, "load_torch", lambda: proxy)
-        monkeypatch.setattr(lab, "require_h100", lambda _: {})
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(lab, "cuda_times_ms", time_operation)
         monkeypatch.setattr(lab, "write_result", write_result)
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "smoke"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
         lab.main()
     assert len(timings) == 2
     assert len(records) == 1
@@ -143,7 +142,7 @@ def test_library_decision_rejects_corruption_before_timing(monkeypatch, target, 
     proxy.relu = relu
     with load_lab("gpu-optimizations/labs/16_library_first_decision.py") as lab:
         monkeypatch.setattr(lab, "load_torch", lambda: proxy)
-        monkeypatch.setattr(lab, "require_h100", lambda _: {})
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(
             lab, "cuda_times_ms", lambda *a, **kw: pytest.fail("timed invalid output")
         )
@@ -152,7 +151,7 @@ def test_library_decision_rejects_corruption_before_timing(monkeypatch, target, 
             "write_result",
             lambda *a, **kw: pytest.fail("published invalid output"),
         )
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "smoke"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
         with pytest.raises(SystemExit, match="Invalid BF16|error budget exceeded"):
             lab.main()
 
@@ -184,7 +183,7 @@ def test_training_capstone_rejects_omitted_optimizer_step(monkeypatch, omit_upda
     records = []
     with load_lab("llm-training/labs/31_training_capstone.py") as lab:
         monkeypatch.setattr(lab, "load_torch", lambda: proxy)
-        monkeypatch.setattr(lab, "require_h100", lambda _: {})
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(lab, "cuda_times_ms", lambda *a, **kw: [1.0, 1.1])
         monkeypatch.setattr(lab, "write_result", lambda *a, **kw: records.append(kw))
         monkeypatch.setattr(sys, "argv", ["lab", "--variant-order", "baseline-first"])
@@ -289,7 +288,7 @@ def cpu_cache_lab(monkeypatch):
             vars(lab),
         )
         monkeypatch.setattr(lab, "load_torch", lambda: proxy)
-        monkeypatch.setattr(lab, "require_h100", lambda _: {})
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(sys, "argv", ["lab"])
         yield lab, torch
 
@@ -366,10 +365,13 @@ def test_standalone_validation_still_rejects_invalid_python(monkeypatch):
     read_bytes = Path.read_bytes
 
     def invalid_lab(path):
-        if path.name == "00_cluster_preflight.py":
+        if path.name == "10_compatibility_stack.py":
             return b"def invalid("
         return read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", invalid_lab)
+    # The deliberately altered lab also invalidates the embedded download kit;
+    # isolate the syntax lane so this regression still reaches the compiler.
+    monkeypatch.setattr(validator, "validate_observability_assets", lambda *_: None)
     with pytest.raises(SyntaxError):
         validator.main()

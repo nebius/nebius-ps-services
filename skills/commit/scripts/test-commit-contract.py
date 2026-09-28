@@ -44,21 +44,19 @@ class CommitContractTest(unittest.TestCase):
         readme = self.text("commit/README.md")
         hook_manifest = self.text("commit/assets/hooks.json.template")
         for required in (
-            "bounded leading directive",
-            "optional `please`",
-            "Casual mentions",
+            "Classify the actual root-user request semantically",
+            "--intent-sha256",
+            "quoted examples",
             "canonical installed `commit_transaction.py prepare`",
             "canonical installed `commit_transaction.py execute`",
             "private `review` transition",
-            "raw Git mutation",
+            "direct preparation",
         ):
             self.assertIn(required, skill)
-        for directive in ("`run`", "`apply`", "`execute`", "`invoke`", "`use`"):
-            self.assertIn(directive, skill)
         for required in (
             "UserPromptSubmit",
             "commit_intent.py",
-            "Binding explicit commit intent",
+            "Recording commit intent context",
         ):
             self.assertIn(required, hook_manifest)
         for required in (
@@ -116,13 +114,11 @@ class CommitContractTest(unittest.TestCase):
         ):
             self.assertIn(required, worktree_skill)
 
-    def test_both_git_skills_remain_explicit_only(self) -> None:
-        for relative in (
-            "commit/agents/openai.yaml",
-            "worktree/agents/openai.yaml",
-        ):
-            with self.subTest(relative=relative):
-                self.assertIn("allow_implicit_invocation: false", self.text(relative))
+    def test_commit_skills_allow_selection_but_worktree_stays_explicit(self) -> None:
+        for name in ("commit", "commit-push"):
+            self.assertIn("allow_implicit_invocation: true", self.text(f"{name}/agents/openai.yaml"))
+            self.assertNotIn("disable-model-invocation: true", self.text(f"{name}/SKILL.md"))
+        self.assertIn("allow_implicit_invocation: false", self.text("worktree/agents/openai.yaml"))
 
 
 if __name__ == "__main__":

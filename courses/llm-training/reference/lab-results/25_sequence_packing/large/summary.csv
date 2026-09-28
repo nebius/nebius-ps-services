@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,valid_tokens,value,423,none
+baseline-trial1,padded_tokens,value,678,none
+baseline-trial1,packed_capacity_tokens,value,512,none
+baseline-trial1,padding_efficiency,value,0.6239,none
+baseline-trial1,packing_efficiency,value,0.8262,none
+candidate-trial1,valid_tokens,value,423,none
+candidate-trial1,padded_tokens,value,678,none
+candidate-trial1,packed_capacity_tokens,value,512,none
+candidate-trial1,padding_efficiency,value,0.6239,none
+candidate-trial1,packing_efficiency,value,0.8262,none

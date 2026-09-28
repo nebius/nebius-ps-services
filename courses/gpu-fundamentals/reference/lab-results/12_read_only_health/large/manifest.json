@@ -1,0 +1,44 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "b36750e76bae47a44d0d4b4d68403038d30932e4b5e0310218a13c6afa3cb59f",
+      "sha256": "37d1df472849c8bc3d63c3c7789c177f0cf6b44994a433ef17e2a46a9f6ee90d",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "edb0989f115b4fb2f0757e4168a86fb20cf2c430605a4aa3aa05c99357af5e81",
+      "sha256": "37d1df472849c8bc3d63c3c7789c177f0cf6b44994a433ef17e2a46a9f6ee90d",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "4162cafb51ea36367ed33dce28a02c4567fa0c2d81d830c196211dd1ff4e4ccf",
+      "tool": "grafana"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "12_read_only_health",
+  "limitations": [],
+  "profile": "large",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "78f7dd96ae4eaaa4013e95977ca72dc9c3d703d9223a5486176a8e703e54a465"
+}

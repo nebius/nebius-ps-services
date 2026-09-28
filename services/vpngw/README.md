@@ -1050,6 +1050,11 @@ exec $SHELL
 
 ### Developers (editable install)
 
+Runtime dependencies require `cryptography>=50.0.0,<51.0.0` to include the
+CVE-2026-69247 fix. The development lock selects 50.0.1. Updating a checkout
+does not upgrade an installed gateway; use the normal reviewed package upgrade
+workflow for deployed environments.
+
 - Create a virtual environment (Python 3.10–3.12) and activate it:
 
 ```bash

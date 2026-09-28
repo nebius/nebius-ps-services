@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 import importlib.util
+import hashlib
 from io import StringIO
 import json
 import os
@@ -71,52 +72,23 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.require_command.side_effect = ["29.0", "5.0", "git version 2.50"]
         self.detect_browser.return_value = ("chrome", "Google Chrome")
         self.command.return_value = mock.Mock(returncode=0, stdout="", stderr="")
-        self.browser_assert = mock.patch.object(
-            lifecycle.three_tier_browser, "assert_owned_running"
-        )
-        self.browser_close = mock.patch.object(
-            lifecycle.three_tier_browser, "close"
-        )
-        self.browser_assert.start()
+        self.browser_close = mock.patch.object(lifecycle.three_tier_browser, "close")
         self.close_browser = self.browser_close.start()
+        self.close_browser.side_effect = lambda root, identity, value: {**value, "status": "CLOSED", "active": None}
 
-        def close_owned(run_root, verification_id, browser_state):
-            return {
-                **browser_state,
-                "status": "CLOSED",
-                "pid": None,
-                "process_group": None,
-                "launched_at": browser_state.get("launched_at") or lifecycle.utc_now(),
-                "closed_at": lifecycle.utc_now(),
-            }
-
-        self.close_browser.side_effect = close_owned
 
     def tearDown(self) -> None:
         self.browser_close.stop()
-        self.browser_assert.stop()
         self.preflight.stop()
         self.temporary.cleanup()
 
     def prepare(self) -> dict[str, object]:
         state = lifecycle.prepare(self.root)
-        state["browser_instance"].update(
-            {
-                "status": "RUNNING",
-                "pid": 12345,
-                "process_group": 12345,
-                "launched_at": lifecycle.utc_now(),
-            }
-        )
         lifecycle.update_state(self.root, state)
         return state
 
     def reset_prepare_preflight(self) -> None:
         self.require_command.side_effect = ["29.0", "5.0", "git version 2.50"]
-
-    def browser_marker(self) -> str:
-        _, state = lifecycle.load_active(self.root)
-        return state["browser_instance"]["window_marker"]
 
     def browser_url(self) -> str:
         _, state = lifecycle.load_active(self.root)
@@ -134,8 +106,31 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         )
         lifecycle.update_state(self.root, state)
 
+    def write_startup_fixture(self, state):
+        """Synthetic receipt for semantic unit tests; real startup is tested separately."""
+        relative = "evidence/workflow-startup.json"
+        artifact = Path(state["run_root"]) / relative
+        lifecycle.private_json(artifact, {
+            "schema": "agentic-sdlc/workflow-startup-v1",
+            "verification_id": state["verification_id"],
+            "baseline_sha": state["git"]["baseline_sha"],
+            "project_id": "test-project", "run_id": "run-test", "agent": "codex",
+            "current_phase": "sdlc-start", "hook_discovery": "MATCH",
+            "owner_session_hash": "c" * 64, "lock_sha256": "d" * 64,
+            "observed_at": lifecycle.utc_now(),
+        })
+        state["workflow_startup"] = {
+            "path": relative, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()
+        }
+
     def write_valid_results(self, state: dict[str, object]) -> None:
         run_root = Path(state["run_root"])
+        project = Path(state["project_root"])
+        fixture = project / "test-implementation.txt"
+        fixture.write_text((fixture.read_text() if fixture.exists() else "") + "fixture commit\n")
+        lifecycle.owned_git_origin._git(project, "add", "-A")
+        lifecycle.owned_git_origin._git(project, "commit", "-m", "semantic test fixture")
+        promoted = lifecycle.owned_git_origin._git(project, "rev-parse", "HEAD")
         evidence_paths = []
         for test_name in (
             "unit",
@@ -162,8 +157,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "scenario": lifecycle.SCENARIO,
             "verification_id": state["verification_id"],
             "git": {
-                "baseline_sha": "a" * 40,
-                "promoted_sha": "b" * 40,
+                "baseline_sha": state["git"]["baseline_sha"],
+                "promoted_sha": promoted,
                 "clean": True,
             },
             "layers": {"frontend": "PASS", "web": "PASS", "database": "PASS"},
@@ -179,9 +174,10 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             },
             "sdlc_phases": {phase: "PASS" for phase in lifecycle.REQUIRED_SDLC_PHASES},
             "gui_uat": {
-                "harness": "computer-use",
+                "harness": "playwright-test",
+                "headless": True,
                 "browser": "chrome",
-                "steps": list(lifecycle.REQUIRED_GUI_STEPS[:-1]) + ["retain-test-tab"],
+                "steps": list(lifecycle.REQUIRED_GUI_STEPS),
                 "api_db_correlated": True,
                 "restart_persistence": True,
                 "screenshots": screenshots,
@@ -191,6 +187,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "baseline_sha": value["git"]["baseline_sha"],
             "promoted_sha": value["git"]["promoted_sha"],
         }
+        self.write_startup_fixture(state)
         state["endpoints"] = {
             "web": "http://127.0.0.1:49152/",
             "api": "http://127.0.0.1:49152/api/v1/tasks",
@@ -232,30 +229,364 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     "recorded_at": lifecycle.utc_now(),
                 }
             )
-        state["environment"]["computer_use"] = "PASS"
-        state["computer_use_attempts"] = [
-            {
-                "stage": stage,
-                "outcome": "PASS",
-                "action_attempted": False,
-                "response": "success",
-                "lock_state": "no",
-                "window_visible": "yes",
-                "window_frontmost": "yes",
-                "current_space": "yes",
-                "dedicated_instance": "yes",
-                "recorded_at": lifecycle.utc_now(),
-            }
-            for stage in (
-                "capability-discovery",
-                "evaluate-readiness",
-                "uat-readiness",
-            )
-        ]
+        self.write_browser_receipts(state, screenshots)
         lifecycle.update_state(self.root, state)
         (run_root / "evidence" / "three-tier-results.json").write_text(
             json.dumps(value), encoding="utf-8"
         )
+        (run_root / "evidence" / "three-tier-results.json").chmod(0o600)
+
+    def write_browser_receipts(self, state, screenshots):
+        """Synthetic owned receipts for offline tests; never live evidence."""
+        browser = lifecycle.three_tier_browser
+        root = Path(state["run_root"])
+        state["browser_instance"] = {**browser.initial_state(state["verification_id"]), "status": "CLOSED"}
+        state["browser_stages"] = []
+        state["environment"]["headless_browser"] = "PASS"
+        target = {"path": state["project_root"], "head": state["git"]["promoted_sha"]}
+        binding = self.write_build_receipt(state, target)
+        target["deployment"] = {"build": binding, "image_id": "sha256:" + "a" * 64, "web_container": "web-id"}
+        all_screenshots = []
+        for index, stage in enumerate(browser.STAGES):
+            attempt_id = f"{index:032x}"
+            directory = root / "evidence/gui-uat" / attempt_id
+            directory.mkdir(exist_ok=True)
+            artifacts = {}
+            record = {"id": "1", "title": "test", "completed": True}
+            images = []
+            for name in screenshots[:4] if index == 2 else screenshots[4:] if index == 3 else []:
+                item = directory / Path(name).name
+                item.write_bytes((root / name).read_bytes())
+                images.append(item.name)
+                all_screenshots.append(str(item.relative_to(root)))
+                artifacts[str(item.relative_to(root))] = browser.digest(item)
+            payloads = {
+                "trace.zip": "synthetic trace",
+                "test-results.json": json.dumps({"stats": {"expected": 1, "unexpected": 0, "flaky": 0, "skipped": 0}}),
+                "observations.json": json.dumps({"attempt_id": attempt_id, "stage": stage, "verification_id": state["verification_id"],
+                    "headless": True, "browser": "chrome", "browser_version": "synthetic", "record": record,
+                    "actions": [{"action": "close-browser"}], "screenshots": images})}
+            for name, content in payloads.items():
+                item = directory / name
+                item.write_text(content)
+                artifacts[str(item.relative_to(root))] = browser.digest(item)
+            checks = [] if index == 0 else ["post-restart"] if index == 3 else ["blank", "created", "completed"]
+            receipt = {"schema": browser.RECEIPT_SCHEMA, "verification_id": state["verification_id"],
+                "stage": stage, "attempt_id": attempt_id, "headless": True, "browser": "chrome",
+                "outcome": "PASS", "exit_code": 0, "cleanup": "PASS", "artifacts": artifacts,
+                "target": target, "record": record, "checks": [{"name": n} for n in checks]}
+            item = directory / "receipt.json"
+            item.write_text(json.dumps(receipt))
+            state["browser_stages"].append({"stage": stage, "outcome": "PASS", "path": str(item.relative_to(root)), "sha256": browser.digest(item)})
+        screenshots[:] = all_screenshots
+        state["browser_restart"] = {"after_attempt": f"{2:032x}", "target": target, "volumes": state["resources"]["volumes"]}
+
+    def write_build_receipt(self, state, target):
+        relative = "evidence/runtime/build-test.json"
+        artifact = Path(state["run_root"]) / relative
+        artifact.parent.mkdir(exist_ok=True)
+        lifecycle.private_json(artifact, {
+            "schema": "agentic-sdlc/runtime-build-v1", "verification_id": state["verification_id"],
+            "target": dict(target), "image_id": "sha256:" + "a" * 64,
+            "compose_sha256": "b" * 64, "observed_at": lifecycle.utc_now(),
+        })
+        binding = {"path": relative, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}
+        state["runtime_build"] = binding
+        return binding
+
+    def test_fresh_post_restart_capture_may_match_persisted_pixels(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        browser = lifecycle.three_tier_browser
+        root = Path(state["run_root"])
+        bindings = state["browser_stages"]
+        before = json.loads((root / bindings[2]["path"]).read_text())
+        path = root / bindings[3]["path"]
+        after = json.loads(path.read_text())
+        completed = sorted(name for name in before["artifacts"] if name.endswith(".png"))[-1]
+        post = next(name for name in after["artifacts"] if name.endswith(".png"))
+        (root / post).write_bytes((root / completed).read_bytes())
+        after["artifacts"][post] = browser.digest(root / post)
+        path.write_text(json.dumps(after))
+        bindings[3]["sha256"] = browser.digest(path)
+        self.assertEqual(lifecycle.validate_semantic_results(state, keep=True)["gui_uat"]["status"], "PASS")
+
+    def test_browser_receipts_reject_tampering_and_volume_replacement(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        browser = lifecycle.three_tier_browser
+        browser.validate_receipts(state)
+        original = list(state["resources"]["volumes"])
+        state["resources"]["volumes"] = ["replacement-volume"]
+        with self.assertRaisesRegex(browser.BrowserOwnershipError, "restart receipt"):
+            browser.validate_receipts(state)
+        state["resources"]["volumes"] = original
+        entry = state["browser_stages"][-1]
+        path = Path(state["run_root"]) / entry["path"]
+        value = json.loads(path.read_text())
+        value["headless"] = False
+        path.write_text(json.dumps(value))
+        entry["sha256"] = browser.digest(path)
+        with self.assertRaisesRegex(browser.BrowserOwnershipError, "identity"):
+            browser.validate_receipts(state)
+
+    def test_browser_receipts_reject_success_boolean_without_assertions(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        browser = lifecycle.three_tier_browser
+        entry = state["browser_stages"][-1]
+        path = Path(state["run_root"]) / entry["path"]
+        value = json.loads(path.read_text())
+        report = path.parent / "test-results.json"
+        report.write_text(json.dumps({"stats": {"expected": 0, "unexpected": 1, "flaky": 0, "skipped": 0}}))
+        value["artifacts"][str(report.relative_to(Path(state["run_root"])))] = browser.digest(report)
+        path.write_text(json.dumps(value))
+        entry["sha256"] = browser.digest(path)
+        with self.assertRaisesRegex(browser.BrowserOwnershipError, "exactly one test"):
+            browser.validate_receipts(state)
+
+    def test_browser_checkpoint_correlates_api_and_database(self):
+        state = self.prepare()
+        state["resources"]["containers"] = ["web-id", "db-id"]
+        state["endpoints"] = {"api": "http://127.0.0.1:49152/api/v1/tasks"}
+        target = {"head": "b" * 40}
+        record = {"id": "1", "title": "owned test", "completed": True}
+        rows = [{**record, "id": 1}]
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(rows).encode()
+        response.__enter__.return_value.url = state["endpoints"]["api"]
+        self.command.return_value = mock.Mock(returncode=0, stdout=json.dumps(rows), stderr="")
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(lifecycle, "browser_target", return_value=target), mock.patch.object(lifecycle, "assert_resource_owned"), mock.patch("urllib.request.build_opener") as opener:
+            opener.return_value.open.return_value = response
+            lifecycle.browser_checkpoint(state, target, "completed", record)
+        self.assertIn("SELECT id, title, completed FROM tasks_task", self.command.call_args.args[0][-1])
+
+    def test_browser_checkpoint_rejects_changed_target_before_observation(self):
+        state = self.prepare()
+        with mock.patch.object(lifecycle, "execution_target", return_value={"head": "changed"}), mock.patch("urllib.request.build_opener") as opener:
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "target changed"):
+                lifecycle.browser_checkpoint(state, {"head": "expected"}, "blank", None)
+            opener.assert_not_called()
+
+    def test_browser_stages_reject_out_of_order_and_failed_trial(self):
+        state = self.prepare()
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "ordered"):
+            lifecycle.run_browser_stage(self.root, "evaluate")
+        state["browser_stages"] = [{"stage": "capability-discovery", "outcome": "FAIL", "path": "evidence/failure.json", "sha256": "a" * 64}]
+        lifecycle.update_state(self.root, state)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "failed browser trial"):
+            lifecycle.run_browser_stage(self.root, "evaluate")
+
+    def test_browser_stage_rejects_stale_deployment_before_launch(self):
+        state = self.prepare()
+        state["browser_stages"] = [{"stage": "capability-discovery", "outcome": "PASS", "path": "evidence/capability.json", "sha256": "c" * 64}]
+        state["endpoints"] = {
+            "web": "http://127.0.0.1:49152/",
+            "api": "http://127.0.0.1:49152/api/v1/tasks",
+        }
+        self.write_build_receipt(state, {"path": state["project_root"], "head": "a" * 40})
+        lifecycle.update_state(self.root, state)
+        target = {"path": state["project_root"], "head": "b" * 40, "phase": "sdlc-evaluate"}
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(
+            lifecycle.three_tier_browser, "run_stage"
+        ) as launch:
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "deployment"):
+                lifecycle.run_browser_stage(self.root, "evaluate")
+            launch.assert_not_called()
+
+    def test_deployment_rechecks_running_image_mounts_and_endpoint(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        self.write_build_receipt(state, target)
+        image = "sha256:" + "a" * 64
+        state["resources"].update(containers=["web-id", "db-id"], images=[image])
+        state["endpoints"] = {name: "http://127.0.0.1:49152/" for name in ("web", "api", "health")}
+        observed = {"Id": "web-id", "Image": image, "Mounts": [], "State": {"Running": True},
+            "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "49152"}]}}}
+        owner = mock.Mock(return_value={"labels": {"com.docker.compose.service": "web"}})
+        self.command.return_value = mock.Mock(returncode=0, stdout=json.dumps(observed))
+        self.assertEqual(lifecycle.three_tier_runtime.validate_deployment(state, target, self.command, owner)["image_id"], image)
+        for changed in ({"Image": "sha256:" + "c" * 64}, {"Mounts": [{"Destination": "/app"}]}, {"State": {"Running": False}}):
+            with self.subTest(changed=changed):
+                self.command.return_value.stdout = json.dumps({**observed, **changed})
+                with self.assertRaises(lifecycle.three_tier_runtime.RuntimeEvidenceError):
+                    lifecycle.three_tier_runtime.validate_deployment(state, target, self.command, owner)
+        self.command.return_value.stdout = json.dumps(observed)
+        state["endpoints"]["api"] = "http://127.0.0.1:49153/api/v1/tasks"
+        with self.assertRaisesRegex(lifecycle.three_tier_runtime.RuntimeEvidenceError, "endpoint"):
+            lifecycle.three_tier_runtime.validate_deployment(state, target, self.command, owner)
+
+    def test_owned_build_records_image_and_rejects_failed_rebuild(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        image = "sha256:" + "a" * 64
+        self.command.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(
+            lifecycle.three_tier_runtime, "compose_build_model", return_value=("owned-web", "b" * 64)
+        ), mock.patch.object(lifecycle, "assert_resource_owned", return_value={"canonical_id": image}):
+            lifecycle.run_owned_compose(state, ["build", "web"])
+            proof = lifecycle.three_tier_runtime.load_build(state, state["runtime_build"], target)
+            self.assertEqual(proof["image_id"], image)
+            self.command.side_effect = [mock.Mock(returncode=0, stdout=""), mock.Mock(returncode=1, stdout="", stderr="failed")]
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "Compose action failed"):
+                lifecycle.run_owned_compose(state, ["build", "web"])
+            self.assertIsNone(lifecycle.load_active(self.root)[1]["runtime_build"])
+
+    def test_owned_restart_refreshes_dynamic_port_before_deployment_check(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        self.write_build_receipt(state, target)
+        image = "sha256:" + "a" * 64
+        state["resources"].update(containers=["web-id", "db-id"], images=[image], volumes=["owned-data"])
+        state["endpoints"] = {
+            "web": "http://127.0.0.1:49152/",
+            "api": "http://127.0.0.1:49152/api/v1/tasks",
+            "health": "http://127.0.0.1:49152/health",
+            "database": "db:5432",
+        }
+        lifecycle.update_state(self.root, state)
+        ports = {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "49153"}]}
+        observed = {"Id": "web-id", "Image": image, "Mounts": [], "State": {"Running": True},
+                    "NetworkSettings": {"Ports": ports}}
+
+        def command(argv, **kwargs):
+            value = observed if argv[-1] == "{{json .}}" else ports if "web-id" in argv else {}
+            return mock.Mock(returncode=0, stdout=json.dumps(value), stderr="")
+
+        def owned(kind, identifier, current):
+            return {"canonical_id": identifier, "labels": {"com.docker.compose.service": "web" if identifier == "web-id" else "db"}}
+
+        receipts = [{"stage": "uat-before-restart", "attempt_id": "before"}]
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(
+            lifecycle, "assert_resource_owned", side_effect=owned
+        ), mock.patch.object(lifecycle, "command", side_effect=command), mock.patch.object(
+            lifecycle.three_tier_browser, "validate_receipts", return_value=receipts
+        ):
+            lifecycle.run_owned_compose(state, ["restart"])
+        updated = lifecycle.load_active(self.root)[1]
+        self.assertEqual(updated["endpoints"]["api"], "http://127.0.0.1:49153/api/v1/tasks")
+        self.assertEqual(updated["endpoints"]["database"], "db:5432")
+        self.assertEqual(updated["browser_restart"]["after_attempt"], "before")
+        self.assertEqual(updated["browser_restart"]["volumes"], ["owned-data"])
+        observed["Image"] = "sha256:" + "c" * 64
+        with mock.patch.object(lifecycle, "execution_target", return_value=target), mock.patch.object(
+            lifecycle, "assert_resource_owned", side_effect=owned
+        ), mock.patch.object(lifecycle, "command", side_effect=command), mock.patch.object(
+            lifecycle.three_tier_browser, "validate_receipts", return_value=receipts
+        ):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "image changed"):
+                lifecycle.run_owned_compose(state, ["restart"])
+        rejected = lifecycle.load_active(self.root)[1]
+        self.assertEqual(rejected["endpoints"], updated["endpoints"])
+        self.assertNotIn("browser_restart", rejected)
+
+    def test_restart_endpoint_refresh_rejects_unowned_or_public_binding(self):
+        state = self.prepare()
+        state["resources"]["containers"] = ["web-id", "db-id"]
+        state["endpoints"] = {name: "http://127.0.0.1:49152/" for name in ("web", "api", "health")}
+        original = dict(state["endpoints"])
+        with mock.patch.object(lifecycle, "assert_resource_owned", side_effect=lifecycle.LifecycleError("ownership mismatch")):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "ownership"):
+                lifecycle.refreshed_restart_state(state)
+        def owned(kind, identifier, current):
+            return {"labels": {"com.docker.compose.service": "web" if identifier == "web-id" else "db"}}
+
+        with mock.patch.object(lifecycle, "assert_resource_owned", side_effect=owned), mock.patch.object(
+            lifecycle, "container_ports", return_value={"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "49153"}]}
+        ):
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.refreshed_restart_state(state)
+        self.assertEqual(state["endpoints"], original)
+        self.assertNotIn("browser_restart", state)
+
+    def test_build_model_rejects_external_context_and_web_mounts(self):
+        state = self.prepare()
+        target = {"path": state["project_root"], "head": "a" * 40}
+        (Path(target["path"]) / "Dockerfile").write_text("FROM scratch\n")
+        web = {"build": {"context": target["path"]}}
+        self.command.return_value = mock.Mock(returncode=0, stdout=json.dumps({"services": {"web": web}}))
+        self.assertEqual(lifecycle.three_tier_runtime.compose_build_model(state, target, self.command)[0], state["compose_project"] + "-web")
+        for invalid in ({"build": {"context": "/tmp"}}, {**web, "volumes": [".:/app"]}):
+            self.command.return_value.stdout = json.dumps({"services": {"web": invalid}})
+            with self.assertRaises(lifecycle.three_tier_runtime.RuntimeEvidenceError):
+                lifecycle.three_tier_runtime.compose_build_model(state, target, self.command)
+
+    def test_keep_retains_application_with_closed_browser(self):
+        self.prepare()
+        self.mark_browser_closed()
+        result = lifecycle.finish(self.root, "FAIL", keep=True)
+        self.assertEqual(result["status"], "KEPT")
+        self.assertEqual(result["browser_instance"]["status"], "CLOSED")
+
+    def test_phase_record_cannot_overwrite_browser_failure(self):
+        state = self.prepare()
+        state["environment"]["headless_browser"] = "FAIL"
+        lifecycle.update_state(self.root, state)
+        result = lifecycle.record_phase(self.root, "sdlc-uat-tests", "FAIL", "Browser assertion failed", [])
+        self.assertEqual(result["environment"]["headless_browser"], "FAIL")
+
+    def test_aggregate_profile_resolves_its_owned_lifecycle_and_independent_identity(self):
+        import verify_agentic_sdlc as verifier
+
+        state = self.prepare()
+        self.write_valid_results(state)
+        state["cleanup"]["status"] = "KEPT"
+        lifecycle.update_state(self.root, state)
+        canonical = Path(state["evidence_root"]) / "three-tier-results.json"
+        copied = self.root / "collected-source.json"
+        copied.write_bytes(canonical.read_bytes())
+        copied.chmod(0o600)
+        ctx = verifier.setup_context(verifier.parse_args(["--verification-root", str(self.root)]))
+
+        def claims(identity=state["verification_id"]):
+            return verifier.validated_profile_claims(
+                ctx, "three-tier", [copied], verification_id_value="f" * 64,
+                source_identity=identity, baseline="a" * 40, final="b" * 40,
+            )
+
+        self.assertIsNotNone(claims())
+        original_attempts = json.loads(json.dumps(state["browser_stages"]))
+        for stage in ("capability-discovery", "evaluate", "uat-before-restart", "uat-after-restart"):
+            with self.subTest(failed_readiness=stage):
+                state["browser_stages"] = json.loads(json.dumps(original_attempts))
+                next(item for item in state["browser_stages"] if item["stage"] == stage)["outcome"] = "FAIL"
+                lifecycle.update_state(self.root, state)
+                self.assertIsNone(claims())
+        state["browser_stages"] = original_attempts[:-1]
+        lifecycle.update_state(self.root, state)
+        self.assertIsNone(claims())
+        state["browser_stages"] = original_attempts
+        state["environment"]["headless_browser"] = "FAIL"
+        lifecycle.update_state(self.root, state)
+        self.assertIsNone(claims())
+        state["environment"]["headless_browser"] = "PASS"
+        lifecycle.update_state(self.root, state)
+        self.assertIsNotNone(claims())
+        self.assertIsNone(claims("e" * 32))
+        copied.write_bytes(canonical.read_bytes() + b"\n")
+        self.assertIsNone(claims())
+        copied.write_bytes(canonical.read_bytes())
+        canonical.chmod(0o644)
+        self.assertIsNone(claims())
+        canonical.chmod(0o600)
+        alias = canonical.with_name("alias.json")
+        os.link(canonical, alias)
+        self.assertIsNone(claims())
+        alias.unlink()
+        canonical.rename(alias)
+        canonical.symlink_to(alias)
+        self.assertIsNone(claims())
+        canonical.unlink()
+        alias.rename(canonical)
+        active = self.root / "three-tier-live" / "active.json"
+        active.chmod(0o644)
+        self.assertIsNone(claims())
+        active.chmod(0o600)
+        lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "add", "foreign", "/unowned.git")
+        self.assertIsNone(claims())
+        lifecycle.owned_git_origin._git(Path(state["project_root"]), "remote", "remove", "foreign")
+        active.unlink()
+        self.assertIsNone(claims())
 
     def test_prepare_creates_one_owned_private_run_and_report(self) -> None:
         state = self.prepare()
@@ -512,9 +843,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
 
     def test_record_git_can_capture_clean_baseline_before_promotion(self) -> None:
         state = self.prepare()
-        Path(state["project_root"]).joinpath(".git").mkdir()
-        baseline_sha = "a" * 40
-        self.require_command.side_effect = [baseline_sha, "", ""]
+        baseline_sha = state["git"]["baseline_sha"]
+        self.require_command.side_effect = [baseline_sha, ""]
         updated = lifecycle.record_git(self.root, baseline_sha, None)
         self.assertEqual(
             updated["git"],
@@ -615,25 +945,6 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             list(lifecycle.PUBLIC_BASE_IMAGES),
         )
 
-    def test_uat_phase_failure_updates_computer_use_report_status(self) -> None:
-        self.prepare()
-        summary = (
-            "ENVIRONMENT_DEFECT: JIT Computer Use readiness failed at "
-            "pre-navigation-window-capture; no GUI navigation or action was attempted."
-        )
-        updated = lifecycle.record_phase(
-            self.root,
-            "sdlc-uat-tests",
-            "FAIL",
-            summary,
-            [],
-        )
-        self.assertEqual(updated["environment"]["computer_use"], "FAIL")
-        report = Path(updated["report_path"]).read_text(encoding="utf-8")
-        self.assertIn("## Top issues and recommended fixes", report)
-        self.assertIn(summary, report)
-        self.assertIn("Keep the owned runtime unchanged.", report)
-        self.assertIn("make no further Computer Use calls", report)
 
     def test_passing_phase_requires_canonical_semantic_result(self) -> None:
         state = self.prepare()
@@ -641,6 +952,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "baseline_sha": "a" * 40,
             "promoted_sha": "b" * 40,
         }
+        self.write_startup_fixture(state)
         lifecycle.update_state(self.root, state)
         run_root = Path(state["run_root"])
         relative = "evidence/phases/sdlc-create-requirements.json"
@@ -681,167 +993,12 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 [relative],
             )
 
-    def test_computer_use_attempts_preserve_discovery_and_jit_failure(self) -> None:
-        state = self.prepare()
-        lifecycle.record_computer_use(
-            self.root,
-            stage="capability-discovery",
-            outcome="PASS",
-            action_attempted=False,
-            response="success",
-            lock_state="no",
-            window_visible="yes",
-            window_frontmost="yes",
-            current_space="yes",
-            window_marker=self.browser_marker(),
-        )
-        updated = lifecycle.record_computer_use(
-            self.root,
-            stage="evaluate-readiness",
-            outcome="ENVIRONMENT_DEFECT",
-            action_attempted=False,
-            response="error",
-            lock_state="unknown",
-            window_visible="unknown",
-            window_frontmost="unknown",
-            current_space="unknown",
-            window_marker=self.browser_marker(),
-        )
-        self.assertEqual(updated["environment"]["computer_use"], "FAIL")
-        self.assertEqual(len(updated["computer_use_attempts"]), 2)
-        report = Path(state["report_path"]).read_text(encoding="utf-8")
-        self.assertIn("capability-discovery", report)
-        self.assertIn("evaluate-readiness", report)
-        self.assertIn("ENVIRONMENT_DEFECT", report)
 
-    def test_later_pass_does_not_hide_computer_use_environment_defect(self) -> None:
-        self.prepare()
-        lifecycle.record_computer_use(
-            self.root,
-            stage="capability-discovery",
-            outcome="PASS",
-            action_attempted=False,
-            response="success",
-            lock_state="no",
-            window_visible="yes",
-            window_frontmost="yes",
-            current_space="yes",
-            window_marker=self.browser_marker(),
-        )
-        lifecycle.record_computer_use(
-            self.root,
-            stage="evaluate-readiness",
-            outcome="ENVIRONMENT_DEFECT",
-            action_attempted=False,
-            response="error",
-            lock_state="unknown",
-            window_visible="unknown",
-            window_frontmost="unknown",
-            current_space="unknown",
-            window_marker=self.browser_marker(),
-        )
-        updated = lifecycle.record_computer_use(
-            self.root,
-            stage="uat-readiness",
-            outcome="PASS",
-            action_attempted=False,
-            response="success",
-            lock_state="no",
-            window_visible="yes",
-            window_frontmost="yes",
-            current_space="yes",
-            window_marker=self.browser_marker(),
-        )
-        self.assertEqual(updated["environment"]["computer_use"], "FAIL")
 
-    def test_computer_use_timeout_blocks_later_attempts(self) -> None:
-        self.prepare()
-        lifecycle.record_computer_use(
-            self.root,
-            stage="capability-discovery",
-            outcome="ENVIRONMENT_DEFECT",
-            action_attempted=False,
-            response="timeout",
-            lock_state="unknown",
-            window_visible="unknown",
-            window_frontmost="unknown",
-            current_space="unknown",
-            window_marker=self.browser_marker(),
-        )
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "unhealthy"):
-            lifecycle.record_computer_use(
-                self.root,
-                stage="evaluate-readiness",
-                outcome="PASS",
-                action_attempted=False,
-                response="success",
-                lock_state="no",
-                window_visible="yes",
-                window_frontmost="yes",
-                current_space="yes",
-                window_marker=self.browser_marker(),
-            )
 
-    def test_computer_use_pass_requires_successful_visible_capture(self) -> None:
-        self.prepare()
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "PASS requires"):
-            lifecycle.record_computer_use(
-                self.root,
-                stage="capability-discovery",
-                outcome="PASS",
-                action_attempted=False,
-                response="error",
-                lock_state="unknown",
-                window_visible="unknown",
-                window_frontmost="unknown",
-                current_space="unknown",
-                window_marker=self.browser_marker(),
-            )
 
-    def test_computer_use_action_rejects_non_dedicated_window_marker(self) -> None:
-        self.prepare()
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "exact dedicated"):
-            lifecycle.record_computer_use(
-                self.root,
-                stage="capability-discovery",
-                outcome="FAIL",
-                action_attempted=True,
-                response="error",
-                lock_state="no",
-                window_visible="yes",
-                window_frontmost="yes",
-                current_space="yes",
-                window_marker="an existing Chrome window",
-            )
 
-    def test_browser_record_rejects_url_credentials(self) -> None:
-        self.prepare()
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "loopback URL"):
-            lifecycle.record_browser(
-                self.root,
-                "SDLC Task Board",
-                "http://user:password@127.0.0.1:8000/",
-                closed=False,
-            )
 
-    def test_browser_record_does_not_override_failed_computer_use_uat(self) -> None:
-        self.prepare()
-        lifecycle.record_phase(
-            self.root,
-            "sdlc-uat-tests",
-            "FAIL",
-            "ENVIRONMENT_DEFECT: JIT Computer Use readiness failed at "
-            "pre-navigation-window-capture; no GUI navigation or action was attempted.",
-            [],
-        )
-        self.mark_browser_closed()
-        updated = lifecycle.record_browser(
-            self.root,
-            "SDLC Task Board",
-            self.browser_url(),
-            closed=True,
-        )
-        self.assertEqual(updated["environment"]["computer_use"], "FAIL")
 
     def test_pass_rejects_placeholder_semantic_evidence(self) -> None:
         state = self.prepare()
@@ -861,12 +1018,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "PASS",
             "All required application tests passed.",
         )
-        lifecycle.record_browser(
-            self.root,
-            "SDLC Task Board",
-            self.browser_url(),
-            closed=False,
-        )
+        self.mark_browser_closed()
         with (
             mock.patch.object(lifecycle, "assert_resource_owned"),
             mock.patch.object(lifecycle, "assert_port_isolation"),
@@ -880,6 +1032,21 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.assertIn("API/database correlation: PASS", report)
         self.assertIn("Retained owned resources: 5", report)
 
+    def test_semantic_pass_rejects_missing_startup_registration_proof(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        state.pop("workflow_startup", None)
+        with self.assertRaisesRegex(lifecycle.SemanticEvidenceError, "startup"):
+            lifecycle.validate_semantic_results(state, keep=True)
+
+    def test_semantic_pass_rejects_modified_startup_registration_proof(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        artifact = Path(state["run_root"]) / state["workflow_startup"]["path"]
+        artifact.write_bytes(artifact.read_bytes() + b"\n")
+        with self.assertRaisesRegex(lifecycle.SemanticEvidenceError, "startup receipt digest"):
+            lifecycle.validate_semantic_results(state, keep=True)
+
     def test_final_pass_revalidates_canonical_phase_artifact(self) -> None:
         state = self.prepare()
         self.write_valid_results(state)
@@ -892,12 +1059,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "PASS",
             "Tests passed.",
         )
-        lifecycle.record_browser(
-            self.root,
-            "SDLC Task Board",
-            self.browser_url(),
-            closed=False,
-        )
+        self.mark_browser_closed()
         with (
             mock.patch.object(lifecycle, "assert_resource_owned"),
             mock.patch.object(lifecycle, "assert_port_isolation"),
@@ -942,7 +1104,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         }
         results["sdlc_phases"]["sdlc-evaluate"] = "FAIL"
         results["gui_uat"] = {
-            "harness": "computer-use",
+            "harness": "playwright-test",
+                "headless": True,
             "browser": "chrome",
             "steps": [],
             "api_db_correlated": False,
@@ -978,7 +1141,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             phase: "NOT_RUN" for phase in lifecycle.REQUIRED_SDLC_PHASES
         }
         results["gui_uat"] = {
-            "harness": "computer-use",
+            "harness": "playwright-test",
+                "headless": True,
             "browser": "chrome",
             "steps": [],
             "api_db_correlated": False,
@@ -1037,12 +1201,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_pass_requires_recorded_passing_validations(self) -> None:
         state = self.prepare()
         self.write_valid_results(state)
-        lifecycle.record_browser(
-            self.root,
-            "SDLC Task Board",
-            self.browser_url(),
-            closed=False,
-        )
+        self.mark_browser_closed()
         with (
             mock.patch.object(lifecycle, "assert_resource_owned"),
             mock.patch.object(lifecycle, "assert_port_isolation"),
@@ -1107,26 +1266,13 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         Path(state["run_root"]).joinpath(
-            "evidence/gui-uat/checkpoint-0.png"
+            "evidence/gui-uat/00000000000000000000000000000002/checkpoint-0.png"
         ).write_bytes(b"not an image")
         with self.assertRaisesRegex(
-            lifecycle.SemanticEvidenceError, "not a recognized PNG or JPEG"
+            lifecycle.SemanticEvidenceError, "artifact changed or is missing"
         ):
             lifecycle.validate_semantic_results(state, keep=True)
 
-    def test_keep_rejects_browser_tab_recorded_closed(self) -> None:
-        self.prepare()
-        self.mark_browser_closed()
-        lifecycle.record_browser(
-            self.root,
-            "SDLC Task Board",
-            self.browser_url(),
-            closed=True,
-        )
-        with self.assertRaisesRegex(
-            lifecycle.LifecycleError, "must retain its dedicated browser tab"
-        ):
-            lifecycle.finish(self.root, "FAIL", keep=True)
 
     def test_record_validation_populates_report_and_rejects_secrets(self) -> None:
         state = self.prepare()
@@ -1179,11 +1325,6 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "volumes": ["volume-id"],
             "images": ["image-id"],
         }
-        state["browser_tab"] = {
-            "title": "SDLC Task Board",
-            "url": "http://127.0.0.1:49152/",
-            "closed": False,
-        }
         lifecycle.update_state(self.root, state)
         owned_labels = {
             lifecycle.OWNERSHIP_LABEL: state["verification_id"],
@@ -1214,7 +1355,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             result, destroyed = lifecycle.destroy(self.root)
         self.assertEqual(result, "DESTROYED")
         self.assertIsNotNone(destroyed)
-        self.assertFalse(destroyed["browser_tab"]["closed"])
+        self.assertEqual(destroyed["browser_instance"]["status"], "CLOSED")
         self.assertEqual(
             removed,
             [
@@ -1385,38 +1526,17 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             ["containers:container-id", "networks:network-id"],
         )
 
-    def test_destroy_leaves_recorded_browser_tab_open(self) -> None:
-        state = self.prepare()
-        state["browser_tab"] = {
-            "title": "SDLC Task Board",
-            "url": "http://127.0.0.1:49152/",
-            "closed": False,
-        }
-        lifecycle.update_state(self.root, state)
-        result, destroyed = lifecycle.destroy(self.root)
-
-        self.assertEqual(result, "DESTROYED")
-        self.assertIsNotNone(destroyed)
-        self.assertEqual(
-            destroyed["browser_tab"],
-            {
-                "title": "SDLC Task Board",
-                "url": "http://127.0.0.1:49152/",
-                "closed": False,
-            },
-        )
-        self.assertFalse(Path(state["run_root"]).exists())
-        self.assertFalse((self.root / "three-tier-live" / "active.json").exists())
 
     def test_kept_project_with_remote_fails_destroy_before_docker(self) -> None:
         state = self.prepare()
-        Path(state["project_root"]).joinpath(".git").mkdir()
+        lifecycle.owned_git_origin._git(
+            Path(state["project_root"]), "remote", "add", "extra", str(self.root / "foreign.git")
+        )
         state["status"] = "KEPT"
         lifecycle.update_state(self.root, state)
-        self.require_command.side_effect = [str(state["project_root"]), "origin"]
         with (
             mock.patch.object(lifecycle, "inspect_labels") as inspect,
-            self.assertRaisesRegex(lifecycle.LifecycleError, "gained a Git remote"),
+            self.assertRaisesRegex(lifecycle.LifecycleError, "exactly its one approved origin"),
         ):
             lifecycle.destroy(self.root)
         inspect.assert_not_called()
@@ -1492,7 +1612,9 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         compose = mock.Mock(returncode=0, stdout="service output\n", stderr="")
         self.command.return_value = compose
-        with redirect_stdout(StringIO()):
+        with redirect_stdout(StringIO()), mock.patch.object(
+            lifecycle, "execution_target", return_value={"path": state["project_root"]}
+        ):
             result = lifecycle.main(
                 [
                     "--verification-root",

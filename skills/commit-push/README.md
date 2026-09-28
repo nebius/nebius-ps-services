@@ -5,6 +5,19 @@ repository on the active non-default feature branch and pushes that branch to
 `origin`. It is intentionally smaller than `create-pr`: it does not create
 PRs, change branches, merge, rebase, or repair remote divergence.
 
+Natural-language action requests work, including "please commit and push",
+"could you commit everything and push this branch?", and "commit and push
+using $commit-push". A native skill mention can appear anywhere; no leading
+phrase is required. Help, quotations, discussion, negation, and requests to
+repair the skill do not authorize publication. Selection may be implicit, but
+the user must still authorize the actual commit-and-push action.
+
+The shared hook records only a current root-turn receipt. The root agent
+classifies the action and binds the exact receipt during transaction preparation.
+Existing claims survive unrelated user messages. A new action can create a new
+transaction after the old one is consumed; replay cannot. Receipt checks prove
+provenance, while semantic classification remains the root agent's duty.
+
 ## What It Does
 
 - Rejects publication from every state-classified managed child, integration

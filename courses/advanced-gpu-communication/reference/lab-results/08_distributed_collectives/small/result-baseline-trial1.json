@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "all_reduce_sum": true
+  },
+  "lab": "08_distributed_collectives",
+  "measurements": {
+    "effective_payload_gib_per_s": 23.27,
+    "median_ms": 0.1679,
+    "payload_mib": 4
+  },
+  "parameters": {
+    "iterations": 20,
+    "payload_mib": 4,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

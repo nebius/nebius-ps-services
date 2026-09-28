@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from course_builder import config as cb_config, content as cb_content, markdown as cb_markdown, metadata as cb_metadata
 import html
 import importlib.util
 import json
@@ -9,14 +10,12 @@ import re
 from pathlib import Path
 
 import pytest
-
-from test_course_content_contract import COURSES, ROOT, load_builder
+from test_course_content_contract import COURSES, ROOT
 from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_banner_is_only_title_and_short_guided_hours(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
     metadata = json.loads((root / "reference/course.json").read_text())
     hours = metadata["estimated_guided_hours"]
@@ -27,7 +26,7 @@ def test_banner_is_only_title_and_short_guided_hours(course: str) -> None:
     assert f"**{hours} hours**" in (root / "README.md").read_text()
     assert f"**{hours} hours**" in (root / "SYLLABUS.md").read_text()
     for item in metadata["labs"]:
-        target = "lab-" + builder.slug(Path(item["path"]).stem)
+        target = "lab-" + cb_markdown.slug(Path(item["path"]).stem)
         lab = re.search(
             rf'<article class="lab" id="{target}".*?</article>', document, re.S
         ).group()
@@ -36,20 +35,19 @@ def test_banner_is_only_title_and_short_guided_hours(course: str) -> None:
 
 @pytest.mark.parametrize("course", COURSES)
 def test_pages_share_style_and_navigate_readable_supporting_guides(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
     document = (root / "index.html").read_text()
     assert re.findall(r"<style>(.*?)</style>", document, re.S) == [
         (ROOT / "tools/course.css").read_text()
     ]
-    for relative in builder.COMMON_GUIDES:
-        target = builder.guide_id(relative)
+    for relative in cb_config.COMMON_GUIDES:
+        target = cb_content.guide_id(relative)
         assert f'href="#{target}"' in document
         assert f'id="{target}" data-source="{relative}"' in document
     glossary = re.search(
-        r'<article[^>]+id="guide-glossary".*?</article>', document, re.S
+        r'<section[^>]+id="guide-glossary".*?</section>', document, re.S
     ).group()
-    assert "<ul><li><strong>" in glossary
+    assert "<dl><dt>" in glossary
     assert "<pre>" not in glossary
     worksheet = re.search(
         r'<article[^>]+id="guide-reference-benchmark-record".*?</article>',
@@ -61,12 +59,11 @@ def test_pages_share_style_and_navigate_readable_supporting_guides(course: str) 
 
 
 def test_guide_markdown_preserves_order_tables_lists_code_and_safe_links() -> None:
-    builder = load_builder()
-    rendered = builder.block(
+    rendered = cb_markdown.block(
         "## Example\n\nFirst paragraph.\n\n- Item one\n- Item two\n\n"
         "| Factor | Value |\n| --- | --- |\n| Size | 4 |\n\n"
         "```bash\nprintf '<hello>'\n```\n\n"
-        "[Run](labs/example.py) [Unsafe](javascript:bad)",
+        "[Run](labs/example.py)",
         {"labs/example.py": "#lab-example"},
         prefix="guide-",
     )
@@ -76,7 +73,8 @@ def test_guide_markdown_preserves_order_tables_lists_code_and_safe_links() -> No
     assert "<td>Size</td><td>4</td>" in rendered
     assert "printf &#x27;&lt;hello&gt;&#x27;" in rendered
     assert '<a href="#lab-example">Run</a>' in rendered
-    assert "javascript:" not in rendered
+    with pytest.raises(ValueError, match="unresolved destination"):
+        cb_markdown.block("[Unsafe](javascript:bad)")
     assert (
         rendered.index("First paragraph")
         < rendered.index("<ul>")
@@ -84,21 +82,19 @@ def test_guide_markdown_preserves_order_tables_lists_code_and_safe_links() -> No
         < rendered.index("<pre")
     )
     with pytest.raises(ValueError, match="unterminated"):
-        builder.block("```python\nunclosed")
+        cb_markdown.block("```python\nunclosed")
 
 
 @pytest.mark.parametrize("course", COURSES)
 def test_glossary_terms_are_readable_and_current(course: str) -> None:
-    builder = load_builder()
     root = ROOT / course
-    terms = re.findall(r"^- \*\*(.+?):\*\*", (root / "GLOSSARY.md").read_text(), re.M)
+    terms = re.findall(r"^- \*\*(.+?)\*\* —", (root / "GLOSSARY.md").read_text(), re.M)
     assert len(terms) >= 15
     document = (root / "index.html").read_text()
-    assert all(builder.inline(f"**{term}:**") in document for term in terms)
+    assert all(f"<dt>{cb_markdown.inline(term)}</dt>" in document for term in terms)
 
 
 def test_every_detailed_visual_has_one_destination_and_reachable_lessons() -> None:
-    builder = load_builder()
     diagrams: set[str] = set()
     for course in COURSES:
         root = ROOT / course
@@ -106,16 +102,16 @@ def test_every_detailed_visual_has_one_destination_and_reachable_lessons() -> No
         entries = json.loads((root / "reference/visual-manifest.json").read_text())[
             "diagrams"
         ]
-        _, _, lessons = builder.parse_course(root / "COURSE.md")
+        _, _, lessons = cb_metadata.parse_course(root / "COURSE.md")
         for entry in entries:
             identity = str(root / entry["path"])
             assert identity not in diagrams
             diagrams.add(identity)
             svg = (root / entry["path"]).read_text().strip()
             assert svg in document
-            target = "detail-" + builder.slug(Path(entry["path"]).stem)
+            target = "detail-" + cb_markdown.slug(Path(entry["path"]).stem)
             for number in entry["lessons"]:
-                lesson_id = builder.slug(lessons[number - 1]["title"])
+                lesson_id = cb_markdown.slug(lessons[number - 1]["title"])
                 lesson = re.search(
                     rf'<section class="lesson" id="{lesson_id}".*?</section>',
                     document,
@@ -125,20 +121,28 @@ def test_every_detailed_visual_has_one_destination_and_reachable_lessons() -> No
                     assert f'id="{target}"' in lesson
                 else:
                     assert f'href="#{target}"' in lesson
-    assert len(diagrams) == 56
+    assert len(diagrams) == 54
+    advanced = ROOT / "advanced-gpu-communication"
+    moved = json.loads((advanced / "reference/visual-manifest.json").read_text())[
+        "diagrams"
+    ]
+    assert len(moved) == 4
+    for entry in moved:
+        assert (advanced / entry["path"]).read_text().strip() in (
+            advanced / "index.html"
+        ).read_text()
 
 
 def test_generated_launch_recipes_use_owned_runtime_and_actual_build_directory() -> (
     None
 ):
-    builder = load_builder()
     samples = {
-        "gpu-fundamentals/labs/00_cluster_preflight.py": "slurm/two_node.sbatch",
-        "gpu-optimizations/labs/00_cluster_preflight.py": "slurm/two_node.sbatch",
-        "llm-training/labs/00_cluster_preflight.py": "slurm/two_node.sbatch",
-        "llm-inference/labs/00_cluster_preflight.py": "slurm/two_node.sbatch",
-        "gpu-fundamentals/labs/06_distributed_collectives.py": "slurm/two_node.sbatch",
-        "gpu-optimizations/labs/08_distributed_scaling.py": "slurm/two_node.sbatch",
+        "advanced-gpu-communication/labs/02_collective_readiness.py": "slurm/two_node.sbatch",
+        "advanced-gpu-communication/labs/05_transport_readiness.py": "slurm/two_node.sbatch",
+        "advanced-gpu-communication/labs/03_training_readiness.py": "slurm/training_two_rank.sbatch",
+        "advanced-gpu-communication/labs/04_inference_readiness.py": "slurm/two_node.sbatch",
+        "advanced-gpu-communication/labs/08_distributed_collectives.py": "slurm/two_node.sbatch",
+        "advanced-gpu-communication/labs/12_distributed_scaling.py": "slurm/two_node.sbatch",
         "llm-inference/labs/11_serving_client.py": "slurm/vllm_benchmark.sbatch",
         "llm-inference/labs/15_streaming_client.py": "slurm/vllm_streaming_benchmark.sbatch",
         "llm-inference/labs/34_policy_equivalence_client.py": "slurm/vllm_chunked_prefill_ab.sbatch",
@@ -147,21 +151,28 @@ def test_generated_launch_recipes_use_owned_runtime_and_actual_build_directory()
     for source, expected in samples.items():
         path = ROOT / source
         course = path.parents[1]
-        lessons = builder.parse_course(course / "COURSE.md")[2]
-        guides = builder.lab_guides(
-            course, builder.course_metadata(course), len(lessons)
+        lessons = (
+            []
+            if course.name == "advanced-gpu-communication"
+            else cb_metadata.parse_course(course / "COURSE.md")[2]
+        )
+        guides = cb_metadata.lab_guides(
+            course, cb_metadata.course_metadata(course), len(lessons)
         )
         guide = next(item for item in guides if item["source"] == path)
         references = {
-            name: "#" + builder.guide_id(name)
-            for name in builder.COMMON_GUIDES
-            + builder.SUPPORTING_GUIDES.get(course.name, ())
+            name: "#" + cb_content.guide_id(name)
+            for name in cb_config.COMMON_GUIDES
+            + cb_config.SUPPORTING_GUIDES.get(course.name, ())
         }
-        rendered = builder.lab_markup(course, guide, lessons, references)
-        command = html.unescape(
-            re.search(r"<pre[^>]*><code>(.*?)</code></pre>", rendered, re.S).group(1)
-        )
-        assert expected in command
+        rendered = cb_content.lab_markup(course, guide, lessons, references)
+        commands = [
+            html.unescape(block)
+            for block in re.findall(
+                r"<pre[^>]*><code>(.*?)</code></pre>", rendered, re.S
+            )
+        ]
+        assert any(expected in command for command in commands)
 
 
 def test_private_raw_artifacts_are_rejected_outside_ignored_runtime_directories(
@@ -176,6 +187,13 @@ def test_private_raw_artifacts_are_rejected_outside_ignored_runtime_directories(
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs/run.log").write_text("synthetic private output")
     (tmp_path / "COURSE.md").write_text("Public teaching text")
+    # The independent resource validator now also covers pre-results courses.
+    from course_archives import publish_results
+
+    (tmp_path / "reference/grafana").mkdir(parents=True)
+    (tmp_path / "reference/course.json").write_text(json.dumps({"slug": "example", "labs": []}))
+    (tmp_path / "reference/grafana/environment_readiness.json").write_text('{}')
+    publish_results(tmp_path)
     module.validate_publication_artifacts(module.course_paths())
     for suffix in (".out", ".log", ".qdrep", ".nsys-rep", ".pem"):
         path = tmp_path / f"accidental{suffix}"

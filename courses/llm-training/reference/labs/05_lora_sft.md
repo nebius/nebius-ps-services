@@ -4,7 +4,7 @@ LoRA trains low-rank adapter parameters while leaving most pretrained weights fr
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 2–4 for labels, transformer computation and updates, then Lesson 14 for SFT, LoRA factors and trainable-state accounting. Distinguish padding-only masking from response-only supervision.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/05_lora_sft.json).
 
 Qualify the Training extras and the approved model artifact described in the runbook. Model revisions must be immutable commits and remote custom code is disabled. Downloads, model caches, and adapter artifacts remain private.
 
@@ -12,25 +12,40 @@ Adapter compute can be small relative to the base GEMM but may introduce extra k
 
 ## Concepts and code path
 
-For one projection, the adapter adds `s * B(Ax)` to the frozen base result `Wx`. A reduces the input to rank r; B expands it to the output width; s is the configured update scale. Only the selected trainable factors receive optimizer updates. Read Lesson 14's two-value hand calculation before interpreting trainable-parameter counts; the reduction in state follows from these smaller matrix shapes, not from skipping the base projection.
+For one projection, the adapter adds `s * B(Ax)` to the frozen base result `Wx`. A reduces the input to rank r; B expands it to the output width; s is the configured update scale. Only the selected trainable factors receive optimizer updates. The reduction in trainable state follows from these smaller matrix shapes, not from skipping the base projection.
 
-Transformers loads the pinned tokenizer and model; PEFT (Parameter-Efficient Fine-Tuning) attaches LoRA factors to `q_proj` and `v_proj`. Inspect actual trainable parameters before interpreting the requested configuration. The supplied workload masks padding only, so question and answer tokens both contribute to loss; response-only masking is an extension. The script records trainable counts, adapter gradients and updates, frozen-base behavior and a bounded held-out observation. Frozen base weights still occupy memory.
+Transformers loads the pinned tokenizer and model; PEFT (Parameter-Efficient Fine-Tuning) attaches LoRA factors to `q_proj` and `v_proj`. Inspect actual trainable parameters before interpreting the requested configuration. The supplied workload masks padding only, so question and answer tokens both contribute to loss; response-only masking is an extension. The script records trainable counts, adapter gradients and updates, and a bounded held-out observation. PEFT configures the base weights as non-trainable; this lab does not checksum every base tensor before and after training. Frozen base weights still occupy memory.
+
+For an illustrative 4096-by-4096 projection and rank 8, the full matrix has about 16.8 million values while LoRA adds `8*(4096+4096)=65,536` trainable values. This explains the potential optimizer-state reduction, not a measured speedup or a supplied full-fine-tuning comparison. The guided experiment keeps LoRA fixed and changes only gradient-buffer clearing with `--zero-grad-fill`; base weights and activations remain in memory.
 
 ## Practice
 
-Given a 4096-by-4096 projection and rank 8, full weight count is about 16.8 million while LoRA adds `8*(4096+4096)=65,536` trainable values. Change only the optimization method. Expected observation: adapter optimizer bytes fall by roughly two orders of magnitude, but base weights and activation memory remain, so peak-memory and step-time savings are much smaller.
-
-Run Lab 05 and audit trainable parameters, the implemented padding-only loss mask, loss, and memory. Its checkpoint saving is not implemented. Extension: save adapters with their configuration and pinned base revision, then test save/reload equivalence on a fixed evaluation input; use Lab 13 when adding response-only masking.
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Inspect artifact options, then use the pinned defaults after approval. Changing `--model` requires a matching immutable `--revision` and a review of tokenizer, architecture, and target adapter modules.
 
 ```bash
 umask 077
-python labs/05_lora_sft.py --help
-sbatch slurm/single_gpu.sbatch labs/05_lora_sft.py --profile smoke
+"$COURSE_PYTHON" labs/05_lora_sft.py --help
+python3 tools/submit_lab.py --lab 05_lora_sft slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
 ```
 
+For the guided candidate, run:
+
+```bash
+python3 tools/submit_lab.py --lab 05_lora_sft slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small --zero-grad-fill
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 05_lora_sft --job "$LAB_JOB_ID"
+```
 
 Require finite loss, nonzero finite adapter gradients, a nonzero adapter update, and the parameter-efficiency gate. Inspect `trainable_percent`, loss values, `adapter_max_parameter_delta`, elapsed time, and peak allocation. A changed digest is evidence of changed output, not better output.
 
@@ -38,17 +53,60 @@ Retain the supplied trainable/total counts, adapter settings, loss, and memory f
 
 Parameter-efficiency and runtime speed are different claims.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Trainable parameters | `trainable_parameters` | `none` |
+| Trainable percent | `trainable_percent` | `percent` |
+| Elapsed (seconds) | `elapsed_ms` | `s` |
+| Peak allocated mib | `peak_allocated_mib` | `bytes` |
+| Adapter max parameter delta | `adapter_max_parameter_delta` | `none` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 05_lora_sft \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
-Which persistent tensors disappear from the trainable-state ledger and which remain? For a response-only masking extension using Lab 13's concepts, explain why ignoring prompt labels does not stop response tokens from attending to the prompt. Identify what a meaningful held-out quality evaluation would add.
+Which persistent tensors disappear from the trainable-state ledger and which remain? For a response-only masking extension on the supplied labels, explain why ignoring prompt labels does not stop response tokens from attending to the prompt. Identify what a meaningful held-out quality evaluation would add.
 
 Lower rank reduces state and possibly expressiveness. Targeting more modules adds flexibility and memory. Merging adapters can simplify inference but changes artifact management and may remove convenient multi-adapter serving.
+
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 05_lora_sft --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 05_lora_sft --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare the default gradient release with --zero-grad-fill at fixed model, data, seed and update count. Inspect the zero_grad range and complete-step time, require the same finite-loss/update checks, and compare final loss within numerical tolerance. Independently inspect whether clearing traffic or buffer allocation dominates before choosing a policy.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate forward and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 
 Missing target modules indicate an artifact/architecture mismatch. Zero adapter gradients can indicate incorrect freezing or label masking. Preserve failures and do not enable remote code or choose an unreviewed model to bypass setup.
 
 Avoid comparing LoRA and full tuning with different data, effective batch, or evaluation prompts.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 
@@ -57,3 +115,5 @@ Parameter-efficient training needs verified gradient flow and updates. Treat thi
 Keep the objective fixed and report trainable state, optimizer state, memory, and quality separately.
 
 Explain what LoRA saves and what it normally does not save.
+
+Run Lab 05 and audit trainable parameters, the implemented padding-only loss mask, loss, and memory. Its checkpoint saving is not implemented. Extension: save adapters with their configuration and pinned base revision, then test save/reload equivalence on a fixed evaluation input; mask prompt and padding labels when adding response-only supervision.

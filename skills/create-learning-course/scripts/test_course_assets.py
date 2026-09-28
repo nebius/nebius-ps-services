@@ -55,8 +55,7 @@ def fixture() -> str:
         "INLINE_CSS": (ROOT / "assets/styles.css").read_text(),
         "LESSON_TOC": '<li><a href="#lesson-01">1. Process inputs and results</a></li>',
         "LAB_TOC": '<li><a href="#lab-01">Lab 01: Compare two cases</a></li>',
-        "MISSION_HTML": "<p>Describe a process before choosing a change.</p>",
-        "SYLLABUS_HTML": "<p>Observe, explain, then compare.</p>",
+        "ORIENTATION_HTML": "<p>Describe a process before choosing a change.</p>",
         "LESSONS_HTML": lesson_fixture(),
         "LABS_HTML": (
             '<article class="lab" id="lab-01"><h3>Lab 01: Compare two cases</h3>'
@@ -68,9 +67,9 @@ def fixture() -> str:
             )
             + "</article>"
         ),
-        "GLOSSARY_HTML": "<p>Baseline: the declared reference condition.</p>",
-        "NEXT_STEPS_HTML": "<p>Study how additional observations test an explanation.</p>",
-        "RESOURCES_HTML": '<p><a href="https://www.w3.org/TR/WCAG22/">Accessibility standard</a></p>',
+        "GLOSSARY_HTML": "<dl><dt>Baseline</dt><dd>The declared reference condition.</dd><dt>Process</dt><dd>Steps that transform inputs into a result.</dd></dl>",
+        "NEXT_STEPS_HTML": "<ul><li>Study how additional observations test an explanation.</li></ul>",
+        "RESOURCES_HTML": '<ol><li><a href="https://www.w3.org/TR/WCAG22/">Accessibility standard</a></li></ol>',
     }
     for key, value in values.items():
         shell = shell.replace("{{" + key + "}}", value)

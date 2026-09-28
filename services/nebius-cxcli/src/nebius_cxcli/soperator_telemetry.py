@@ -610,6 +610,7 @@ def verify_soperator_observability(
     *,
     verification_id: str,
     token: str,
+    require_token: bool = True,
     timeout_seconds: int = 60,
     poll_interval_seconds: float = 10.0,
     query: Callable[..., Mapping[str, Any]] = _http_json,
@@ -642,7 +643,7 @@ def verify_soperator_observability(
         <= 0
     ):
         raise ValueError("Soperator observability scope requires positive evidence timestamps")
-    if not str(token or "").strip():
+    if require_token and not str(token or "").strip():
         raise SoperatorObservabilityFailure(
             "authentication-unavailable",
             "Soperator observability requires an operator IAM access token",

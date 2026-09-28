@@ -8,12 +8,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+import click
 import typer
 
 from nebius_cxcli import cli
 from nebius_cxcli.cli_contract import CLI_CONTRACT_SCHEMA, cli_contract_snapshot
 
-SOPERATOR_SCHEMA = "nebius-cxcli.soperator-cli-contract.v4"
+SOPERATOR_SCHEMA = "nebius-cxcli.soperator-cli-contract.v6"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -65,11 +66,11 @@ def _soperator_command_metadata(command: Any) -> dict[str, Any]:
             paired[primary] = secondary
         if parameter.default is not None:
             defaults[primary] = parameter.default
-    if len(arguments) != 1:
+    if len(arguments) != (0 if isinstance(command, click.Group) else 1):
         raise RuntimeError("each Soperator command must have one canonical path argument")
     return {
         "short_help": _normalized(command.short_help),
-        "argument": arguments[0],
+        "argument": arguments[0] if arguments else None,
         "option_help": dict(sorted(option_help.items())),
         "options": sorted(options),
         "option_order": options,
@@ -88,6 +89,16 @@ def _soperator_contract(payload: dict[str, Any]) -> dict[str, Any]:
     ):
         raise RuntimeError("existing CLI contract has no canonical Soperator subtree")
     click_group = typer.main.get_command(cli.soperator_app)
+    flattened = {}
+
+    def visit(group, prefix=""):
+        for name, command in group.commands.items():
+            path = prefix + name
+            flattened[path] = command
+            if isinstance(command, click.Group):
+                visit(command, path + " ")
+
+    visit(click_group)
     commands = {
         name: {
             **_soperator_command_metadata(command),
@@ -95,7 +106,7 @@ def _soperator_contract(payload: dict[str, Any]) -> dict[str, Any]:
             "help_clauses": (
                 [
                     "Target Kubernetes endpoint: latest or exact major.minor",
-                    "ownership-selected Terraform or provider-API backend",
+                    "Recover an interrupted deployment with deploy CONFIG_YAML.",
                 ]
                 if name == "upgrade"
                 else [
@@ -104,16 +115,23 @@ def _soperator_contract(payload: dict[str, Any]) -> dict[str, Any]:
                     "it does not read or create config.yaml",
                 ]
                 if name == "discover"
+                else [
+                    "--no-live reads configured state and local receipts",
+                    "Show all recorded checks without running checks or adding queries",
+                    "Explicitly verify current Soperator metrics and logs with the existing operator Nebius CLI identity",
+                    "Requires --live",
+                ]
+                if name == "status"
                 else nested.get("commands", {}).get(name, {}).get("help_clauses", [])
             ),
         }
-        for name, command in click_group.commands.items()
+        for name, command in flattened.items()
     }
     return {
         "schema": SOPERATOR_SCHEMA,
         "command_order": list(click_group.commands),
         "group_help": _normalized(click_group.help),
-        "group_help_clauses": nested.get("group_help_clauses", []),
+        "group_help_clauses": ["soperator create", "then use render and deploy"],
         "commands": commands,
     }
 

@@ -45,12 +45,25 @@ def _runtime_component_key(component_id: str, instance_id: str) -> str:
 
 
 def to_dynamic_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return dynamic payload copy. Static payloads are rejected."""
+    """Project runtime rows into canonical source data without derived aliases.
+
+    This is an internal export boundary, not an alternate source-config reader.
+    Public validation still rejects authored runtime-only fields.
+    """
     if not is_dynamic_payload(payload):
         raise ValueError(
             "config payload must use dynamic model with 'infra.components[]' and 'apps.charts[]'"
         )
-    return _deep_copy(dict(payload))
+    dynamic = _deep_copy(dict(payload))
+    dynamic["infra"] = {"components": dynamic["infra"].get("components", [])}
+    dynamic["apps"] = {"charts": dynamic["apps"].get("charts", [])}
+    for row in dynamic["apps"]["charts"]:
+        if not isinstance(row, dict) or TARGET_REF_FIELD not in row:
+            continue
+        if row[TARGET_REF_FIELD] != component_instance_id(row):
+            raise ValueError("Runtime chart target identity differs from its instance_id")
+        row.pop(TARGET_REF_FIELD)
+    return dynamic
 
 
 def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -68,6 +81,8 @@ def to_runtime_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "infra": {},
         "apps": {},
     }
+    if "compatibility" in dynamic_payload:
+        runtime["compatibility"] = _deep_copy(dynamic_payload["compatibility"])
 
     infra_source = dynamic_payload.get("infra", {})
     if isinstance(infra_source, Mapping):

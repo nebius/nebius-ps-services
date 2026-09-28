@@ -1,6 +1,24 @@
-# LLM Inference and GPU Optimization on NVIDIA H100
+# LLM Inference
 
 This course connects autoregressive generation mechanics to memory, scheduling, latency, throughput, quality, and serving-engine behavior. Every optimization keeps workload and decoding semantics explicit.
+
+Hardware routes:
+
+The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Learn to connect autoregressive model mechanics with KV capacity,
+scheduling, latency, throughput, quality, parallel placement, and serving
+engine behavior through single-GPU experiments and distributed-serving concepts.
+
+The course owns local serving-engine comparisons and request measurement.
+Distributed practice, Dynamo placement/routing and multi-worker goodput belong
+to the advanced communication course on two eight-H100 workers. Engine
+experiments require their exact runtime and model artifacts to pass target
+qualification before any performance claim.
 
 ## 1. Model inference and artifact preparation
 
@@ -50,7 +68,9 @@ A model name is not a complete artifact identity. Different tokenizer, chat temp
 
 Imagine a four-token vocabulary: I, like, GPUs and an end marker. A fixed table of next-token scores can map I to like, like to GPUs, and GPUs to the end marker. Starting with I, three repeated choices yield like, GPUs and stop. The table never changes. A one-token output budget instead stops after like. This is a transparent autoregressive model, not a trained transformer: it has no attention, prefill optimization or KV cache.
 
-**Practice labs**
+**Practice**
+
+Begin with Lab 35’s fixed-parameter inference exercise, then use Lab 16 to audit the model and tokenizer metadata before loading a real model.
 
 - [Lab 35: Trace fixed-parameter autoregressive inference](reference/labs/35_inference_basics.md)
 - [Lab 16: Audit model, tokenizer, configuration, and license identity](reference/labs/16_model_artifact_audit.md)
@@ -93,10 +113,12 @@ PyTorch's scaled dot-product attention (SDPA) application programming interface 
 
 Prefill and decode execute different shapes and stress different resources. Model correctness, service correctness, and streaming transport correctness are also separate: valid logits do not guarantee correct stop handling or chunk/token accounting.
 
-**Practice labs**
+**Practice**
 
-- [Lab 08: Compare cached attention with full recomputation](reference/labs/08_kv_cache.md)
+Run Lab 09 to trace prefill and continuation. Inspect Lab 08’s cache shapes as a preview; its full comparison belongs to Lesson 4.
+
 - [Lab 09: Follow real-model prefill and continuation](reference/labs/09_hf_prefill_decode.md)
+- [Lab 08: Compare cached attention with full recomputation](reference/labs/08_kv_cache.md)
 
 **Mental model**
 
@@ -126,7 +148,9 @@ A deterministic regression profile, often greedy or fixed settings and seed, che
 
 A candidate can look faster only because it emits fewer tokens, stops earlier, uses a different seed, or changes randomness. Deterministic regression and representative stochastic service evaluation answer different questions.
 
-**Practice labs**
+**Practice**
+
+Use Lab 17 to compare greedy and seeded stochastic generation with explicit stopping and output-equivalence rules.
 
 - [Lab 17: Compare greedy and seeded stochastic generation](reference/labs/17_sampling_semantics.md)
 
@@ -160,10 +184,12 @@ KV cache often limits active sequence concurrency, but the ideal formula is only
 
 For a hypothetical model with 32 layers, 8 key/value heads per layer, 128 values per head and 2 bytes per stored value, one cached token needs 2 × 32 × 8 × 128 × 2 = 131,072 bytes, or 128 KiB. The initial factor of two counts keys and values. At 2,048 cached tokens, one request needs 256 MiB; eight such requests need 2 GiB. This excludes block rounding, metadata and all other model memory. It is a capacity calculation, not a measured allocation or a promise that every architecture uses this layout.
 
-**Practice labs**
+**Practice**
 
-- [Lab 08: Compare cached attention with full recomputation](reference/labs/08_kv_cache.md)
+Use Lab 26 to calculate ideal cache capacity, then Lab 08 to compare cached attention with recomputation. Distinguish the storage model from measured execution.
+
 - [Lab 26: Calculate ideal KV storage for MHA, GQA, and MQA](reference/labs/26_kv_capacity.md)
+- [Lab 08: Compare cached attention with full recomputation](reference/labs/08_kv_cache.md)
 
 **Mental model**
 
@@ -193,7 +219,9 @@ Sequential dependence is another axis beyond size. In `state = tanh(state @ weig
 
 Engine settings that win for short chat can fail for long-context summarization or long generation. Production traffic may also change by time or tenant, so one permanent configuration is not always best.
 
-**Practice labs**
+**Practice**
+
+Use Labs 18 and 25 to vary prompt shape and recurrent work, keeping the request and output accounting explicit.
 
 - [Lab 18: Reduce padded prefill work with length buckets](reference/labs/18_padding_bucketing.md)
 - [Lab 25: Explore input length and recurrent operator work](reference/labs/25_workload_metrics.md)
@@ -234,7 +262,9 @@ Multimodal inference accepts more than one kind of input, such as text and image
 
 A process can be alive before weights, engines, graphs, and caches are ready. Benchmarking an unpinned or warming server mixes startup failures with steady-state latency and makes results irreproducible.
 
-**Practice labs**
+**Practice**
+
+Use Lab 10 for offline batching and Lab 11’s server workflow to prepare a live engine. Run the Lab 30 readiness/schema probe before interpreting client performance.
 
 - [Lab 10: Measure batched offline generation with vLLM](reference/labs/10_vllm_offline.md)
 - [Lab 11: Measure concurrent completion requests](reference/labs/11_serving_client.md)
@@ -280,7 +310,9 @@ Open-loop load schedules new arrivals independently of previous completions and 
 
 Tools disagree about ITL/TPOT boundaries, empty chunks, warm-up, and throughput windows. Open-loop and closed-loop generators also produce different queueing behavior, so unlabeled numbers cannot be compared.
 
-**Practice labs**
+**Practice**
+
+Use Labs 11 and 15 for request latency and streaming boundaries, including the introductory AIPerf comparison in the guides. Lab 15's supplied client runs a finite closed-loop workload and reports median/p90 first-content and completion latency, inter-chunk gaps and requests/s. It does not implement open-loop arrivals or measure token throughput or SLO goodput. Revisit Lab 25 only as an operator-level contrast, not a serving benchmark.
 
 - [Lab 11: Measure concurrent completion requests](reference/labs/11_serving_client.md)
 - [Lab 15: Observe first content and streaming gaps](reference/labs/15_streaming_client.md)
@@ -318,7 +350,9 @@ Priority, eviction, host offload, and attention-window reclamation decide which 
 
 Attention-window reclamation discards positions that the model's declared attention rule can no longer read. A sliding-window model can stop needing older positions; ordinary full-context attention cannot discard them merely because memory is tight without changing its outputs.
 
-**Practice labs**
+**Practice**
+
+Run Lab 27 to follow physical cache blocks through growth, release and reuse; check conserved ownership before discussing capacity.
 
 - [Lab 27: Follow paged-cache allocation, growth, and recycling](reference/labs/27_paged_kv.md)
 
@@ -352,11 +386,19 @@ Prefill-first scheduling can block decode behind one long prompt; decode-first s
 
 An overlap scheduler prepares upcoming work on the CPU while already-submitted GPU work runs. Piecewise compilation or graph capture divides model execution into eligible compiled or captured regions and other regions. This partitions the execution graph; chunked prefill partitions prompt-token work. The serving engine must qualify its CUDA Graph capture sizes and its compiled shape ranges or fallback paths separately.
 
-**Practice labs**
+**Practice**
 
-- [Lab 18: Reduce padded prefill work with length buckets](reference/labs/18_padding_bucketing.md)
+Compare the scheduling model in Lab 28 with the real-engine policy check in Lab 34. Revisit Lab 18 to separate padding savings from scheduling effects.
+
+Lab 34 fixes batch-invariant execution, `TRITON_ATTN`, and eager execution for
+both chunking policies, including their load-generator trials. This holds the
+numerical execution mode constant while the prompt scheduling changes. Its
+measurements do not qualify compiled or CUDA Graph serving performance; those
+execution modes need their own output-equivalence and timing checks.
+
 - [Lab 28: Compare full-prefill and chunked scheduling](reference/labs/28_continuous_batching.md)
 - [Lab 34: Preserve outputs while changing a serving policy](reference/labs/34_policy_equivalence_client.md)
+- [Lab 18: Reduce padded prefill work with length buckets](reference/labs/18_padding_bucketing.md)
 
 **Mental model**
 
@@ -377,6 +419,8 @@ Reuse identity is the information proving two cache entries mean the same comput
 Cache tiering retains reusable KV state outside its fastest memory tier. High-bandwidth memory (HBM) is device memory used by attention; host dynamic random-access memory (DRAM) and storage can retain inactive state for later restoration. Eviction discards an entry, offload moves or copies it, and restoration brings compatible state back before reuse. A time-to-live (TTL) limits retention; least recently used (LRU) eviction selects the least recently accessed eligible entry under capacity pressure. A TTL is not a guarantee that capacity will retain an entry that long.
 
 Paged KV blocks can outlive or be shared across request prefixes. Prefix caching avoids repeated prefill only when the model’s exact token-level computation is identical.
+
+Greedy decoding selects the largest logit, but different attention shapes can still change floating-point results and the selected token. Lab 20 therefore holds batch-invariant execution and the `TRITON_ATTN` backend fixed across cache-disabled and cache-enabled runs. It still checks exact response digests before measuring performance; those settings do not replace the equality check or establish model quality.
 
 ### Find an exact, compatible beginning
 
@@ -400,11 +444,13 @@ GPUDirect Storage (GDS) provides supported direct memory access (DMA) paths betw
 
 Text that looks the same can tokenize differently, and one changed token invalidates all following KV state. Incorrect reuse is a correctness bug; aggressive retention also competes with active-request capacity.
 
-**Practice labs**
+**Practice**
 
+Begin with Lab 36’s CPU retention model, then test live prefix reuse with Lab 20. Revisit Lab 34 for the same output-equivalence discipline applied to chunked-prefill scheduling. Keep model predictions separate from observed engine behavior.
+
+- [Lab 36: Model KV retention and restore decisions](reference/labs/36_kv_tiering.md)
 - [Lab 20: Investigate reusable prompt prefixes in a live engine](reference/labs/20_prefix_cache_client.md)
 - [Lab 34: Preserve outputs while changing a serving policy](reference/labs/34_policy_equivalence_client.md)
-- [Lab 36: Model KV retention and restore decisions](reference/labs/36_kv_tiering.md)
 
 **Mental model**
 
@@ -438,7 +484,9 @@ TensorRT-LLM's XQA is a multi-query attention (MQA)/GQA generation optimization 
 
 Tiling must preserve one softmax normalization across all allowed keys. For each query, maintain a running maximum score, a sum of exponentials relative to that maximum, and the correspondingly weighted value sum. If a new tile raises the maximum, rescale the old sums before adding the new tile's contributions. Divide the accumulated weighted values by the accumulated exponential sum at the end. Keeping these running quantities avoids storing the full score matrix. Independently normalizing each tile and averaging its output would generally give the wrong attention result.
 
-**Practice labs**
+**Practice**
+
+Run Lab 24 with fixed attention inputs and shapes, then establish the actual selected backend before explaining any measured difference.
 
 - [Lab 24: Compare materialized attention with SDPA dispatch](reference/labs/24_sdpa_attention.md)
 
@@ -472,7 +520,9 @@ Smaller tensors do not guarantee faster requests. Dequantization, calibration, f
 
 NVIDIA Model Optimizer quantizes models and exports supported representations for deployment frameworks such as TensorRT-LLM. Quantization, export and engine execution are distinct stages. FP8 is a numerical format; activation-aware weight quantization (AWQ) and GPTQ are quantization methods. Supported combinations depend on the selected workflow, and a quantized artifact alone does not prove H100 kernel dispatch or quality.
 
-**Practice labs**
+**Practice**
+
+Use Lab 29 to compare codes, scales, storage and reconstruction error; keep representation savings distinct from a qualified serving speedup.
 
 - [Lab 29: Inspect quantized weight and KV storage mechanics](reference/labs/29_quantization.md)
 
@@ -512,7 +562,9 @@ Draft generation and verification are not free. Low acceptance, large batches, m
 
 For exact stochastic sampling, let p(x) be the target probability of a proposed token x and q(x) its draft probability at the same accepted history, after the declared sampling transformations. Accept x with probability min(1, p(x)/q(x)). A sampled draft token has q(x) > 0. If rejected, sample a replacement from probabilities proportional to max(p(x) − q(x), 0), then discard later proposals. This correction fills probability mass underrepresented by the draft. For two tokens with target probabilities [0.6, 0.4] and draft probabilities [0.8, 0.2], the first is accepted with probability 0.75 and the second with probability 1. Rejection mass is 0.2 and goes to the second token, recovering target probabilities [0.6, 0.4]. This teaches the exact sampling rule; the supplied greedy mechanics lab does not implement or verify it.
 
-**Practice labs**
+**Practice**
+
+Use Lab 23 to inspect acceptance, rejection and recovery, then Lab 33 to test greedy equivalence in the separately prepared serving engine.
 
 - [Lab 23: Trace speculative acceptance, rejection, and recovery](reference/labs/23_speculative_decoding.md)
 - [Lab 33: Check greedy equivalence in a speculative engine campaign](reference/labs/33_speculative_engine_client.md)
@@ -553,11 +605,13 @@ Training parallelism names are reused in serving but the synchronization contrac
 
 Context-parallel serving partitions long prefill or decode context with different KV and communication effects. In context-parallel serving, workers own different portions of a request's stored keys and values. A decode query still needs information from every allowed portion, so workers exchange the query or cache blocks and combine properly normalized attention contributions. Splitting cache ownership can increase the context that fits, but adds communication on that request's path; it does not create independent replicas.
 
-**Practice labs**
+**Practice**
 
-- [Lab 00: Verify the two-node inference mechanics platform](reference/labs/00_cluster_preflight.md)
-- [Lab 12: Route inference tokens to expert owners](reference/labs/12_moe_expert_parallel.md)
-- [Lab 19: Compare inference tensor-partition communication patterns](reference/labs/19_tensor_parallel_linear.md)
+On the fabric cluster, complete Advanced Lab 04 before Labs 23 and 24; trace request and tensor ownership before comparing communication.
+
+- [Lab 04: Verify the two-node inference mechanics platform](../advanced-gpu-communication/reference/labs/04_inference_readiness.md)
+- [Lab 23: Route inference tokens to expert owners](../advanced-gpu-communication/reference/labs/23_inference_expert_parallel.md)
+- [Lab 24: Compare inference tensor-partition communication patterns](../advanced-gpu-communication/reference/labs/24_inference_tensor_parallel.md)
 
 **Mental model**
 
@@ -593,15 +647,20 @@ In an agentic tool loop, the model requests a permitted external operation and t
 
 ### Keep benchmark conventions consistent
 
-GenAI-Perf is another NVIDIA generative-model benchmarking client and appears in performance-engineering material. It does not define a separate model-execution phase. This course uses AIPerf as its canonical workload/reporting path; NVIDIA documents differences in input formats, metric names and CLI behavior between them. Do not mix files, percentile definitions or token/chunk boundaries across tools. MLPerf Inference provides standardized workload and quality scenarios for comparable benchmark submissions; an ad hoc course smoke run is not an MLPerf-compliant result. The goal is to borrow disciplined workload definitions without relabeling unqualified measurements.
+GenAI-Perf is another NVIDIA generative-model benchmarking client and appears in performance-engineering material. It does not define a separate model-execution phase. This course uses AIPerf as its canonical workload/reporting path; NVIDIA documents differences in input formats, metric names and CLI behavior between them. Do not mix files, percentile definitions or token/chunk boundaries across tools. MLPerf Inference provides standardized workload and quality scenarios for comparable benchmark submissions; an ad hoc course small run is not an MLPerf-compliant result. The goal is to borrow disciplined workload definitions without relabeling unqualified measurements.
 
 A single successful request says nothing about capacity. Disaggregation and cache-aware routing can also add KV transfer, coordination, and queueing that exceed any phase specialization benefit.
 
 Suppose a stable workload admits ten requests per second, each with 1,000 prompt tokens and 100 output tokens. Ignoring prefix reuse and retries, the prefill pool must sustain 10,000 prompt tokens per second and the service must deliver 1,000 output tokens per second. If prefill selects each request’s first output token, as in the workflow taught here, the decode pool must sustain ten times the remaining 99 positions, or 990 continuation positions per second. Equal request counts do not imply equal token-processing rates or equal worker counts. If either pool falls behind its required rate, its queue grows; cache transfer and latency targets add constraints beyond this simple average-rate calculation.
 
-**Practice labs**
+**Practice**
+
+Revisit local Lab 30 for the engine contract, then use Advanced Labs 32–34 on the fabric cluster for phase separation, cache-aware routing and latency-constrained goodput.
 
 - [Lab 30: Probe an engine's readiness and request schema](reference/labs/30_engine_profile.md)
+- [Lab 32: Compare aggregated and disaggregated Dynamo serving](../advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md)
+- [Lab 33: Test KV-cache-aware request routing](../advanced-gpu-communication/reference/labs/33_dynamo_routing.md)
+- [Lab 34: Tune serving goodput under latency objectives](../advanced-gpu-communication/reference/labs/34_serving_goodput.md)
 
 **Mental model**
 
@@ -631,10 +690,36 @@ The final keep/reject decision must satisfy correctness, quality and capacity ga
 
 Maximum tokens/s can hide unacceptable TTFT/ITL tails, queue growth, quality drift, or fragile capacity. A causal report must include a rejected hypothesis and the limits of the two-node test.
 
-**Practice labs**
+**Practice**
+
+Complete Lab 32 with one controlled attention change, correct outputs and separate diagnostic and clean runs. Bound the conclusion to this attention workload.
 
 - [Lab 32: Build a causal attention optimization report](reference/labs/32_inference_capstone.md)
 
 **Mental model**
 
 An inference decision connects artifact identity and decoding equivalence to ISL/OSL/concurrency, TTFT, ITL/TPOT, throughput, memory, failures, and quality.
+
+## 17. Parallel generation and serving placement
+
+**Objective**
+
+Distinguish replication from partitioning and explain how placement changes model fit, communication, throughput and request latency.
+
+**How it works**
+
+Replicas improve aggregate capacity by serving independent requests with complete model copies. Tensor parallelism partitions model operations, introducing communication at each dependent layer or decode step. Pipeline parallelism places stages on different devices and introduces pipeline fill, drain and stage imbalance. The tensor-parallel (TP) degree is the number of cooperating ranks, or processes, in each tensor group; the pipeline-parallel (PP) degree is the number of sequential stages. On two eight-H100 nodes, TP8/PP2 means eight cooperating ranks in each of two stages. Placing one stage per node can keep tensor collectives local while passing activations between nodes. TP16/PP1 means one stage spanning sixteen ranks, so its tensor collectives cross InfiniBand. Neither layout wins universally. First isolate the dependency using identical projection decoding, then measure a real model with fixed prompt lengths, output lengths, request count and concurrency. Time to first token (TTFT) measures the interval from the client request to its first output token. Compare successful output-token throughput with TTFT and inter-token latency, not throughput alone. A capacity benefit and a latency benefit are different claims.
+
+The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
+
+Consider 32 requests generating eight outputs each: useful work is 256 generated outputs, regardless of the number of tensor-parallel ranks. Reporting sixteen copies of that token count would invent a throughput gain. With replicas, requests partition across ranks; with tensor parallelism, ranks collaborate on the same requests. On small shapes, collective latency can outweigh the saved matrix work. On a model that cannot fit one GPU, partitioning may be necessary even if latency increases. For the real server, preserve completed request count, prompt distribution and output length, then inspect p50 and p95 latency alongside output-token throughput. Keep model-startup time separate from warmed serving measurements.
+
+**Practice**
+
+Use Advanced Lab 25 on the fabric cluster to compare request replication and tensor partitioning; count each useful output once and inspect latency alongside throughput.
+
+- [Lab 25: Compare request replicas with tensor-parallel decoding](../advanced-gpu-communication/reference/labs/25_fabric_inference.md)
+
+**Mental model**
+
+Replicas serve independent requests; partitions cooperate on each request. Placement trades memory ownership against communication, so capacity and latency must be evaluated separately.

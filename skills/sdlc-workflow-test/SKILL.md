@@ -1,6 +1,6 @@
 ---
 name: sdlc-workflow-test
-description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
+description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create-live-test/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
 disable-model-invocation: true
 ---
 
@@ -62,9 +62,10 @@ the SDLC system itself.
 
 ## Inputs
 
-- Lifecycle flags: no lifecycle action, `--create`, `--create --keep`,
+- Lifecycle flags: no lifecycle action, `--create-live-test`, `--create-live-test --keep`,
   `--resume`, or `--destroy`. Preserve every existing lightweight verifier option when no
-  lifecycle action is present. `--keep` alone is invalid, and `--destroy` is
+  lifecycle action is present. Retired `--create` and `--three-tier-results`
+  are rejected without aliases or abbreviation. `--keep` alone is invalid, and `--destroy` is
   mutually exclusive with create/keep; validate these rules before mutation.
 - `docs/agentic-sdlc-design.md`.
 - Optional user-specified dedicated verification root, report path under that
@@ -77,8 +78,6 @@ the SDLC system itself.
 - Optional prior verification report and disposable state under
   `<agent-home>/sdlc-verification/`.
 - Optional private live-results manifest passed with `--live-evidence PATH`.
-- Canonical retained three-tier semantic result passed with
-  `--three-tier-results PATH` whenever the three-tier profile claims PASS.
   The default is `<agent-home>/sdlc-verification/live-results.json`; its contract
   is `assets/live-results.schema.json`.
 
@@ -151,7 +150,7 @@ remotes.
 1. Parse the invocation mode before any mutation.
    With no lifecycle flag, run steps 2-10 exactly as the existing lightweight
    verifier and do not create or inspect a Docker or browser application. With
-   `--create` or `--create --keep`, first run the unchanged lightweight
+   `--create-live-test` or `--create-live-test --keep`, first run the unchanged lightweight
    preflight, then safely destroy the previous active exactly owned test
    environment before preparing a fresh replacement and following the
    Three-Tier Live Process below. Never run two live test environments for one
@@ -180,7 +179,7 @@ remotes.
    disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. A clean canonical flat fixture with the
    exact expected tracked tree and no remote is migrated once. Unknown,
-   unowned, dirty, remote-backed, or non-canonical directories and repositories
+   unowned, dirty, externally connected, or non-canonical directories and repositories
    fail closed without mutation. The script does not edit installed skills or
    hooks.
 4. Review the preflight report.
@@ -190,7 +189,8 @@ remotes.
 5. Run the disposable golden-path workflow when full verification is requested.
    Use the disposable project only. Explicitly load and follow these phase
    skills in order:
-   `sdlc-create-requirements`, `sdlc-start`, `sdlc-gather-context`,
+   `sdlc-start` (workspace initialization and prompt intake),
+   `sdlc-create-requirements`, `sdlc-gather-context`,
    `sdlc-create-design`, `sdlc-auto-steering`,
    `sdlc-create-plan`,
    `sdlc-prepare-execution`, `sdlc-tdd`,
@@ -231,15 +231,18 @@ remotes.
    Lightweight PASS remains fail-closed until its collector derives exact
    claims from checkpoint, Git, test, steering, document, and repaired-failure
    bytes. Three-tier PASS requires the copied source to byte-match
-   `--three-tier-results` and pass the existing strict layer, artifact, phase,
+   the canonical result resolved through the profile source identity and owned
+   lifecycle under the verification root, and pass the strict layer, artifact, phase,
    Git, ordered-GUI, correlation, and restart-persistence validator.
    Evidence must stay under `evidence/<lane>/` within the verification root,
    use private permissions, match the exact preserved baseline/final Git
    identity, include a real selected-scope golden-path commit, keep every commit
    in the live history inside the selected nested project, exclude private SDLC
    state, and never contain prompt bodies or secrets. Rerun the verifier with
-   `--live-evidence PATH`; include `--three-tier-results PATH` when that
-   profile is present and claims PASS.
+   `--live-evidence PATH`. Aggregate identity and Git history bind the lightweight
+   fixture; the three-tier source identity and history bind its own lifecycle.
+   Validate live evidence before cleanup; removed canonical evidence cannot
+   later be replaced by a sanitized report or copied source alone.
 10. Update the report.
    Keep the report concise and evidence-backed. Include capability-level PASS,
    PARTIAL, or FAIL, validation commands, skipped live checks, and the low-risk
@@ -248,7 +251,7 @@ remotes.
 
 ## Three-Tier Live Process
 
-For explicit `--create`, `--create --keep`, or `--resume`, read and follow
+For explicit `--create-live-test`, `--create-live-test --keep`, or `--resume`, read and follow
 `references/three-tier-process.md` before any live operation. It owns all ten
 steps, including capability proof, immutable generation fencing, normal SDLC
 execution, GUI readiness, evidence collection and exact-resource cleanup.
@@ -265,7 +268,7 @@ The mode, authority, failure and completion rules in this file remain required.
 - If a previous verification run is incomplete, resume from the report and
   disposable state instead of deleting unrelated user files.
 - The three-tier profile permits one active application per verification root.
-  Every `--create`, including `--create --keep`, replaces the previous active
+  Every `--create-live-test`, including `--create-live-test --keep`, replaces the previous active
   environment: exact owned cleanup must finish before a fresh lifecycle can be
   created. Every later helper mutation and every Compose action is fenced by
   the immutable verification ID, so a superseded workflow stops before its
@@ -274,10 +277,9 @@ The mode, authority, failure and completion rules in this file remain required.
   resumable and returns `ALREADY_DESTROYED` when no active lifecycle exists.
   Destroy retains sanitized reports and the lifecycle archive, but removes the
   owned project, raw evidence, private run state, containers, network, database
-  volume, and built image. Recorded tab state remains sanitized audit metadata,
-  while the browser tab itself is user-managed: standalone destroy and
-  replacement cleanup never close it or gate cleanup on whether it remains
-  open.
+  volume, and built image. Every terminal path closes and verifies the absence
+  of its exactly owned browser processes. Ambiguous browser ownership blocks
+  cleanup rather than targeting personal browser sessions.
 - `--resume` accepts only an owned KEPT run whose prior result is FAIL or
   PARTIAL, revalidates its project boundary, and continues from recorded state.
   It never creates a second application or infers prior PASS evidence.
@@ -301,7 +303,8 @@ The mode, authority, failure and completion rules in this file remain required.
 - If an existing custom verification root lacks its ownership marker, or an
   existing disposable directory is non-empty and not an exact marked verifier
   Git fixture or canonical flat migration source, fail closed without chmod,
-  file writes, or commits. Any disposable Git remote is also a failure.
+  file writes, or commits. Reject every remote except the exactly owned local
+  bare `origin` validated by the fixture contract.
 - If hook configuration is malformed or an SDLC hook command does not target
   the canonical payload under `<agent-home>/hooks`, report FAIL rather than
   treating registration as missing or comparing an unrelated canonical file.
@@ -311,16 +314,14 @@ The mode, authority, failure and completion rules in this file remain required.
   sequence.
 - If live evidence is absent, stale, dirty, symlinked, overly permissive,
   outside the verification root, or schema-invalid, never infer success.
-- If a requested profile requires unavailable tooling such as Computer Use,
+- If a requested profile requires unavailable tooling such as Chrome or Playwright Test,
   mark it PARTIAL instead of granting synthetic success. `NOT APPLICABLE` is
   reserved for checks outside the requested profile; an exact 20-skill PASS
   requires both GUI and TUI evidence.
-- If a just-in-time Computer Use capture fails before navigation, classify it
-  as `ENVIRONMENT_DEFECT`, not a product, URL, evaluation, or UAT defect. If the
-  call hangs or the shared service stops responding, make no further Computer
-  Use calls in that attempt. Cleanup does not call Computer Use: it revalidates
-  the exact verifier-owned Chrome PID, process group, executable, and profile.
-  Any mismatch preserves the owned runtime as `CLEANUP_FAILED`.
+- Required web acceptance uses headless Playwright Test, fresh owned processes
+  and contexts, and digest-bound stage receipts. No native desktop capture or
+  unlocked-screen prerequisite applies. Preserve failed stages and clean up
+  exact owned processes; identity ambiguity remains `CLEANUP_FAILED`.
 - If any command would push, publish, merge, edit installed hooks, or touch a
   non-disposable project, stop and report the unsafe action.
 - For three-tier cleanup, inspect every recorded/discovered alias, require both
@@ -343,8 +344,12 @@ merge, publish, alter credentials, or mutate installed hooks or skills.
 The verification root must be a dedicated, verifier-owned directory outside
 the source repository. It uses private `0700` permissions on POSIX; the root
 marker, context, manifest, report, and referenced evidence files require
-private modes. The disposable Git root must have no remote and must carry the
-exact public fixture marker. The root, fixture components, and report path must
+private modes. The disposable Git root must carry the exact public fixture
+marker and have exactly one verifier-owned local bare `origin`. Its private
+receipt binds the project, owner generation, frozen baseline and default branch.
+Creation, evidence recording, resume and cleanup share one validator. Reject
+external or extra remotes, URL overrides, unsafe paths, borrowed objects,
+command-bearing inherited configuration and changed origin refs or push guards. The root, fixture components, and report path must
 be real local directories and files, never symlink redirects.
 
 The three-tier lifecycle helper is additionally limited to private lifecycle
@@ -369,6 +374,34 @@ For read-only/report-only work, or when a learning is not public-safe,
 evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
+
+The live harness resolves the active feature through the isolated host's validated
+prompt workspace and canonical execution status. Before promotion, Compose and
+execution-phase Git evidence use the exact registered integration worktree, with
+matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
+active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
+run validation on uncommitted integration work before coordinator sealing.
+Shipping and UAT always require a clean promoted checkout. After completed promotion,
+Compose uses the exact promoted primary checkout and requires integration
+resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+
+Before dispatching the first phase, record `sdlc-start` PASS while the coordinator
+checkpoint still names `sdlc-start` and Git remains at the fixture baseline.
+The lifecycle independently checks the JSON ownership record and actual hook
+discovery and stores a digest-bound startup receipt. Every later phase PASS and
+final semantic ingestion require that receipt. Empty or mismatched ownership
+also blocks runtime targeting. A late ownership repair requires a fresh trial;
+it cannot restore full-workflow validity to earlier evidence.
+
+Pre-commit runtime testing may select a worker only through the private helper's
+`run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
+Both identifiers are required. The resolver admits only the sole task in the
+active capacity batch during `sdlc-implement-plan`, with a registered worktree,
+unchanged assignment base, and an `ACTIVE` result from the execution owner's
+live scope guard. Uncommitted changes must stay inside its write claims. This
+selection never changes phase evidence or UAT targeting; after integration, rerun
+the original oracle using the normal integration target. The shared runtime must
+not serve concurrent worker tests.
 
 ## Completion Criteria
 
@@ -396,7 +429,7 @@ URLs, customer data, raw logs, or one-off local state.
 - No installed skills, hook configuration, credentials, real repositories, or
   external services were modified.
 - In three-tier create mode, every logical layer, SDLC phase, named test class,
-  local deployment, computer-use GUI journey, API/database correlation, and
+  local deployment, headless Playwright Test GUI journey, API/database correlation, and
   restart-persistence assertion has semantic evidence. The report records all
   ports/endpoints and exact owned resources. The final lifecycle is either
   safely `KEPT` by explicit request, `DESTROYED`, or retained as

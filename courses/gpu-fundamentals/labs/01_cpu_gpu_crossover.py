@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import time
 
@@ -10,12 +11,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation, evidence_phase
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,9 +29,10 @@ def parse_args() -> argparse.Namespace:
 def cpu_time_ms(x: object, y: object, iterations: int) -> float:
     samples = []
     for _ in range(iterations):
-        start = time.perf_counter()
-        _ = x * y + x
-        samples.append((time.perf_counter() - start) * 1_000)
+        with evidence_phase("cpu_expression"):
+            start = time.perf_counter()
+            _ = x * y + x
+            samples.append((time.perf_counter() - start) * 1_000)
     return statistics.median(samples)
 
 
@@ -37,10 +40,10 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     sizes = [1_024, 1_000_000]
-    if args.profile == "h100":
+    if args.profile == "large":
         sizes.append(32_000_000)
     rows = []
     all_correct = True
@@ -51,18 +54,31 @@ def main() -> None:
         y_gpu = y_cpu.to("cuda")
         resident = cuda_times_ms(
             torch,
-            lambda: x_gpu * y_gpu + x_gpu,
+            lambda x_gpu=x_gpu, y_gpu=y_gpu: x_gpu * y_gpu + x_gpu,
             warmup=args.warmup,
             iterations=args.iterations,
         )
         transfer_samples = []
-        for _ in range(args.iterations):
-            start = time.perf_counter()
-            transferred_x = x_cpu.to("cuda")
-            transferred_y = y_cpu.to("cuda")
-            result_gpu = transferred_x * transferred_y + transferred_x
-            result = result_gpu.cpu()
-            transfer_samples.append((time.perf_counter() - start) * 1_000)
+        if os.environ.get("COURSE_CAPTURE") == "1":
+            for _ in range(args.iterations):
+                start = time.perf_counter()
+                with evidence_phase("h2d_inputs"):
+                    transferred_x = x_cpu.to("cuda")
+                    transferred_y = y_cpu.to("cuda")
+                with evidence_phase("gpu_expression"):
+                    result_gpu = transferred_x * transferred_y + transferred_x
+                with evidence_phase("d2h_output"):
+                    result = result_gpu.cpu()
+                transfer_samples.append((time.perf_counter() - start) * 1_000)
+        else:
+            # Keep annotation machinery completely outside acceptance intervals.
+            for _ in range(args.iterations):
+                start = time.perf_counter()
+                transferred_x = x_cpu.to("cuda")
+                transferred_y = y_cpu.to("cuda")
+                result_gpu = transferred_x * transferred_y + transferred_x
+                result = result_gpu.cpu()
+                transfer_samples.append((time.perf_counter() - start) * 1_000)
         reference = x_cpu * y_cpu + x_cpu
         correct = bool(torch.allclose(result, reference, rtol=1e-5, atol=1e-6))
         all_correct = all_correct and correct
@@ -89,4 +105,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

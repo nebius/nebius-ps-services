@@ -461,7 +461,9 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     )
 
     soperator_settings = soperator_wizard_settings()
-    soperator = soperator_install_entry("4.1.7")
+    soperator = soperator_install_entry(
+        "4.1.7", chart_repo="oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd"
+    )
     assert soperator.source == ("oci://cr.eu-north1.nebius.cloud/soperator/helm-soperator-fluxcd")
     assert soperator.chart_repo == soperator.source
     assert soperator.chart_name == "helm-soperator-fluxcd"
@@ -495,11 +497,9 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
         "values.soperator-checks.enabled",
     ):
         assert field not in soperator_wizard_fields
-    assert soperator_wizard_fields["values.soperator-dcgm-exporter.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
+    assert not any(
+        field.startswith("values.soperator-dcgm-exporter") for field in soperator_wizard_fields
+    )
     assert "values.qosConfiguration.enabled" not in soperator_wizard_fields
     assert "values.rebooter.enabled" not in soperator_wizard_fields
     assert soperator_wizard_fields["values.sssd.enabled"] == {
@@ -557,6 +557,12 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     }
     for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1"):
         profile = soperator_settings.nodesets.profiles[profile_name]
+        health_check = profile["chart"]["values"]["soperator-activechecks"]["checks"][
+            "ensure-healthy-nodes"
+        ]
+        # Leave enablement to the upstream default or the selected deployment profile.
+        assert "enabled" not in health_check
+        assert health_check["runAfterCreation"] is True
         assert profile["mk8s"]["inputs"]["node_group_defaults"]["cpu"] == {
             "platform": "cpu-d3",
             "preset": "32vcpu-128gb",
@@ -590,12 +596,6 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     assert profile["placements"]["worker"]["default_node_group_kind"] == "gpu"
     assert (
         profile["chart"]["values"]["soperator-activechecks"]["checks"]["wait-for-topology"][
-            "runAfterCreation"
-        ]
-        is False
-    )
-    assert (
-        profile["chart"]["values"]["soperator-activechecks"]["checks"]["ensure-healthy-nodes"][
             "runAfterCreation"
         ]
         is False
@@ -652,13 +652,13 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
         "worker-cpu": (
             "soperator.worker_cpu_total_nodes",
             "soperator.worker_cpu_nodes_per_group",
-            1,
+            2,
             100,
         ),
         "worker-gpu": (
             "soperator.worker_gpu_total_nodes",
             "soperator.worker_gpu_nodes_per_group",
-            1,
+            2,
             100,
         ),
     }
@@ -716,7 +716,9 @@ def test_bundled_catalog_excludes_soperator_and_exposes_nfs_local_sources() -> N
     assert soperator_defaults["values.soperator-notifier.slack.mysterybox.property"] == "url"
     assert soperator_defaults["values.soperator-backup-config.enabled"] is False
     assert soperator_defaults["values.soperator-backup-config.secret.name"] == "jail-backup"
-    assert soperator_defaults["values.soperator-dcgm-exporter.enabled"] is False
+    assert not any(
+        field.startswith("values.soperator-dcgm-exporter") for field in soperator_defaults
+    )
 
 
 def _kubernetes_agent_validation_enabled() -> bool:
@@ -3007,7 +3009,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "worker_gpu_total_nodes",
     ):
         assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "number",
@@ -3186,11 +3188,11 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     }
     n8n_defaults = {item.target_path: item.value for item in charts["n8n"].defaults}
 
-    assert "values.replicas" not in grafana_defaults
+    assert grafana_defaults["values.replicas"] == 2
     assert grafana_defaults["values.affinity"] == _NEBIUS_CPU_ONLY_AFFINITY
     assert "values.image.registry" not in grafana_defaults
     assert "values.image.repository" not in grafana_defaults
-    assert "values.image.tag" not in grafana_defaults
+    assert grafana_defaults["values.image.tag"] == "13.2.2"
     grafana_settings = charts["grafana"].grafana
     assert grafana_settings.org_id == 1
     assert grafana_settings.logout_timeout == "20m"

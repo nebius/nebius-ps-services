@@ -1,5 +1,7 @@
 # H100 CUDA C++ smoke test
 
+**Hardware scope:** run local checks on the base cluster. Every `two_node`, `nccl_tests`, `fabric` or multi-node serving command below requires the separate two-eight-H100 cluster; never use the TCP base pair as fabric optimization evidence.
+
 This is a target-qualification checklist, not the lesson execution order.
 Follow the [syllabus](../SYLLABUS.md) for the learning route and complete each
 exercise's relevant safety/setup gate before running it. Distributed and optional
@@ -16,7 +18,7 @@ profiler reports, and local paths in the ignored private artifact directories.
 2. Stage the reviewed CUTLASS 4.6.1 source tree, then submit
    `slurm/build_and_test.sbatch`; it binds the recorded digest and source path
    to the CMake build, required CUTLASS Lab 09, SM90 binaries, and CTest.
-3. Submit Lab 00 and confirm one full non-MIG H100 at compute capability 9.0.
+3. Submit Lab 13 and confirm one full non-MIG H100 at compute capability 9.0.
 4. Run Labs 01–09 and 11–12 through the one-node launcher.
 5. Run `slurm/sanitizer.sbatch memcheck EXECUTABLE` for every required binary;
    submit the same launcher with `racecheck`, `initcheck`, or `synccheck` where
@@ -38,24 +40,24 @@ The build launcher uses a unique `build/run-<build-job-id>` directory. Set
 umask 077
 python3 tools/validate_course.py
 bash slurm/build_and_test.sbatch --help
-sbatch slurm/build_and_test.sbatch
+python3 tools/submit_lab.py --lab 13_h100_preflight slurm/build_and_test.sbatch
 ```
 
 After that job completes the CMake build and passes CTest, use its privately recorded build directory:
 
 ```bash
 export COURSE_BUILD_DIR='build/run-REPLACE_WITH_BUILD_JOB_ID'
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/00_h100_preflight"
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/02_fused_elementwise" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/03_tiled_transpose" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/04_reduction" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/05_tiled_stencil" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/06_divergence_tail" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/07_resource_sweep" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/08_async_pipeline" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/09_library_epilogue" --smoke
-sbatch slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --smoke
+python3 tools/submit_lab.py --lab 13_h100_preflight slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/13_h100_preflight"
+python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add" --profile small
+python3 tools/submit_lab.py --lab 02_fused_elementwise slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/02_fused_elementwise" --profile small
+python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+python3 tools/submit_lab.py --lab 04_reduction slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/04_reduction" --profile small
+python3 tools/submit_lab.py --lab 05_tiled_stencil slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
+python3 tools/submit_lab.py --lab 06_divergence_tail slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/06_divergence_tail" --profile small
+python3 tools/submit_lab.py --lab 07_resource_sweep slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/07_resource_sweep" --profile small
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+python3 tools/submit_lab.py --lab 09_library_epilogue slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/09_library_epilogue" --profile small
+python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
 ```
 
 Every kernel must agree with its reference for the declared shapes and
@@ -77,14 +79,14 @@ one example kernel; repeat the applicable sanitizer for every required binary.
 
 ```bash
 mkdir -p results
-sbatch slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --smoke
-sbatch slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --smoke
-sbatch slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --smoke
-sbatch slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/08_async_pipeline" --smoke
-sbatch slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --smoke
-sbatch slurm/nsys_single_gpu.sbatch results/transpose-systems "${COURSE_BUILD_DIR}/03_tiled_transpose" --smoke
-sbatch slurm/ncu_single_gpu.sbatch results/transpose-kernel "${COURSE_BUILD_DIR}/03_tiled_transpose" --smoke
-sbatch slurm/capstone_three_trials.sbatch "${COURSE_BUILD_DIR}/12_capstone" --smoke
+python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/nsys_single_gpu.sbatch results/transpose-systems "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/ncu_single_gpu.sbatch results/transpose-kernel "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+python3 tools/submit_lab.py --lab 12_capstone slurm/capstone_three_trials.sbatch "${COURSE_BUILD_DIR}/12_capstone" --profile small
 ```
 
 Require zero relevant sanitizer errors. A missing profiler or counter
@@ -95,36 +97,4 @@ and architecture statement; they are excluded from the core guided-hour total.
 
 ## Optional cluster configure, build, and test
 
-The standard build launcher does not enable Lab 10. For this advanced profile,
-first obtain a site-approved interactive allocation with one full H100. Run
-from the course root inside that allocation; the following `srun` commands
-use its assigned GPU rather than executing on an unallocated login node.
-Export `CUDA_IMAGE_DIGEST` with the reviewed immutable CUDA 13.3 development
-image and `COURSE_CONTAINER_RUNNER` with the approved runner. Use the same
-reviewed `CUTLASS_ROOT`, and set `COURSE_CLUSTER_BUILD_DIR` to a fresh, private
-build directory distinct from the required SM90 build.
-
-```bash
-umask 077
-: "${SLURM_JOB_ID:?obtain an approved one-H100 allocation first}"
-: "${CUDA_IMAGE_DIGEST:?set the qualified immutable CUDA 13.3 image}"
-: "${COURSE_CONTAINER_RUNNER:?set the reviewed container runner}"
-: "${CUTLASS_ROOT:?set the reviewed CUTLASS 4.6.1 source}"
-: "${COURSE_CLUSTER_BUILD_DIR:?set a fresh optional build directory}"
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" \
-  cmake -S . -B "${COURSE_CLUSTER_BUILD_DIR}" -DCMAKE_CUDA_ARCHITECTURES=90 \
-  -DCOURSE_ENABLE_SM90A=ON -DCOURSE_ENABLE_CUTLASS=ON -DCUTLASS_ROOT="${CUTLASS_ROOT}"
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" \
-  cmake --build "${COURSE_CLUSTER_BUILD_DIR}" --target 10_hopper_cluster --parallel
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" \
-  ctest --test-dir "${COURSE_CLUSTER_BUILD_DIR}" --output-on-failure -R '^10_hopper_cluster_smoke$'
-```
-
-Stop after any failed command. CMake keeps required targets at SM90 and gives
-only Lab 10 the explicit `sm_90a` compile option. The selected CTest checks only
-the cluster probe; it does not replace the standard required-target suite.
-For later `single_gpu.sbatch` or `sanitizer.sbatch` submissions, export this
-same optional image as `CUDA_IMAGE_DIGEST` in the submitting shell and pass the
-executable under `COURSE_CLUSTER_BUILD_DIR`. A build-directory variable alone
-does not choose the runtime image. Record the optional build, image, CTest,
-and sanitizer evidence separately and leave it pending if unavailable.
+[Lab 10: Qualify an optional thread-block-cluster launch](labs/10_hopper_cluster.md) owns the complete optional configure, build and targeted CTest procedure. Keep its build and image qualification separate from the required SM90 suite.

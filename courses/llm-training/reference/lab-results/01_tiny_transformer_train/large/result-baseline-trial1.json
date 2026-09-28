@@ -1,0 +1,48 @@
+{
+  "correctness": {
+    "all_trainable_parameters_had_gradients": true,
+    "finite_gradients": true,
+    "finite_loss": true,
+    "parameter_updated": true
+  },
+  "lab": "01_tiny_transformer_train",
+  "measurements": {
+    "final_loss": 0.00917,
+    "gradient_norm": {
+      "final": 0.033925,
+      "initial": 6.002367,
+      "median": 1.020042
+    },
+    "initial_loss": 3.24703,
+    "median_step_ms": 46.9844,
+    "memory": {
+      "baseline_allocated_bytes": 7542620672,
+      "baseline_reserved_bytes": 14413725696,
+      "incremental_peak_allocated_bytes": 5104294400,
+      "incremental_peak_reserved_bytes": 0,
+      "peak_allocated_bytes": 12646915072,
+      "peak_reserved_bytes": 14413725696
+    },
+    "model_shape": {
+      "batch": 4,
+      "hidden": 2048,
+      "layers": 12,
+      "sequence": 1024,
+      "vocab_size": 4096
+    },
+    "parameter_delta_l2": 3.75130916,
+    "parameters": 622956544,
+    "tokens": 40960,
+    "tokens_per_second": 87239.8
+  },
+  "parameters": {
+    "iterations": 10,
+    "save_checkpoint": false,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1,
+    "zero_grad_fill": false
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

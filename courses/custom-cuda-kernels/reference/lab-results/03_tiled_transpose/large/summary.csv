@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,naive_median_seconds,value,0.000976448,s
+baseline-trial1,tiled_unpadded_median_seconds,value,0.000529744,s
+baseline-trial1,tiled_padded_median_seconds,value,0.000312544,s
+repeat-trial1,naive_median_seconds,value,0.0009768160000000001,s
+repeat-trial1,tiled_unpadded_median_seconds,value,0.000530128,s
+repeat-trial1,tiled_padded_median_seconds,value,0.000312592,s

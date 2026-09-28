@@ -1,0 +1,133 @@
+{
+  "artifacts": [
+    {
+      "file": "result-bf16-trial1.json",
+      "original_sha256": "af8cfaede895f735e2c5297b5396d01c2a63ef93831d07361c48c68b6f63f8b6",
+      "sha256": "0e18534add31f43c57a1eb01e5e0bf85167c1147ee45d2406887c66f0e8c846d",
+      "variant": "bf16-trial1"
+    },
+    {
+      "file": "result-bucket01-trial1.json",
+      "original_sha256": "2ee50082f9b73253f3b7a3a0cc4b91798a670bf0bac1b10d17be7f8c4ccd89bc",
+      "sha256": "f753311e4f3a17c1b718cfa28a01a31b62c525221f319bee5d1ad1a696bb0a52",
+      "variant": "bucket01-trial1"
+    },
+    {
+      "file": "result-bucket1-trial1.json",
+      "original_sha256": "7f879546cfb66116e78dbc1bdb79a9001d350ce77f2cc596ffef2ecedefdd471",
+      "sha256": "7b28d712a1c6531e861f19e03c1a22b60520db9148098606b6a1a4d1b19b6abb",
+      "variant": "bucket1-trial1"
+    },
+    {
+      "file": "result-fp16-trial1.json",
+      "original_sha256": "c91d2ab818e3f8ba84cdf434c69dbd70b51ba382240cd6e8a7d3d4b5938d4817",
+      "sha256": "550d8952869276f0240bf5c6b759350e57cf0be30ddb19bf009b2334b619ae79",
+      "variant": "fp16-trial1"
+    },
+    {
+      "file": "result-power-control-trial1.json",
+      "original_sha256": "2125f07fc7334734b8b8a21783f052530d18c9c7f1194c48c1eb5c05e8eebf58",
+      "sha256": "08b955e204750254223811dac886c8df2fca36e7c6eaa2d2073f93d1cc9cc310",
+      "variant": "power-control-trial1"
+    },
+    {
+      "file": "result-powersgd-trial1.json",
+      "original_sha256": "50ba6849fbb53b0a2e55322730a52f11ed44d732ec64e896a8b07c0e97cb1faf",
+      "sha256": "abfe08e3e4b90125b0fb7dbea0dbc989ba2fcb083714027d559352c1427866f8",
+      "variant": "powersgd-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "f361b60cc6ab9cad55e1a0ed360f6bab65d96cba82b8f1cabc2b9cddb83c085a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "ab5cbd65381d078e1fdefbca3fd0906a993bad423e6e9364f38b24fb6508e7cd",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "b2ad3808f387e4f629b56e368046947bde134335618d4c4cb3152c5e6898f37a",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view2.png",
+      "sha256": "d9c02e40b091a9d93c84358aa4016e72d598cb2b62e051487b1d846c440678dd",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view1.png",
+      "sha256": "0cc8f15df30ab4f504ad9c2cd35737ab9a75da6e1c22ee52ee095e4714aee9e4",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view2.png",
+      "sha256": "3273a6fd3669fe3044b46519b029442ab5c158a7db7cb220b62ce39289ce925c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view1.png",
+      "sha256": "891420e16be65d36eed7b0fabf374e4b7fc4c280b41f7af2eab6cc27b8d17b23",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair4-view2.png",
+      "sha256": "7b56e024bc28f302ff3d643daee0e992cf7ace1dd35af72997e10ae5c38278b0",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-bucket1-rank-0.png",
+      "sha256": "dcf8dd5988eec2a85188dcf87324586a0837d45285267ccfdf76662ddd587e91",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-bucket01-rank-0.png",
+      "sha256": "635d20f5585ffbb5f70c6ef2827dfc2de9f53a0e7afffeb5160949a14bf54d4f",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-fp16-rank-0.png",
+      "sha256": "cf65751f423e1ef28e1a76037928c614ca9f9b066377abd8cf29a62a19f40405",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-bf16-rank-0.png",
+      "sha256": "e67a30da3bc2f0aaf552bbd864258f5cb80a6673cb84c942afe16b448c8809bd",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-powersgd-rank-0.png",
+      "sha256": "d7c58959ee3ad8b375f816414c1477604cad73c236e45510e361d6a7903f18e9",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "21_ddp_buckets",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "5acdbfa9c506c343406830c7c6563a140948e57ef5850990b2736095137d9f76"
+}

@@ -1,4 +1,4 @@
-# GPU Performance Optimization with PyTorch
+# Course mission
 
 Teach engineers to improve GPU workloads with a causal loop: freeze equivalent
 work, measure correctly, classify the limiter, choose focused evidence, change

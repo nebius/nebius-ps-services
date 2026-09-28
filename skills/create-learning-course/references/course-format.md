@@ -9,12 +9,12 @@ Use `assets/course-workspace-template/` as an authoring starter:
 
 | Artifact | Authority |
 | --- | --- |
-| `MISSION.md` | Audience, real-world goal, constraints and exclusions |
-| `SYLLABUS.md` | Ordered competencies, prerequisites, practice and readiness |
+| `MISSION.md` | Authoring input: audience, real-world goal, constraints and exclusions |
+| `SYLLABUS.md` | Authoring input: ordered competencies, prerequisites, practice and readiness |
 | `COURSE.md` | Complete canonical lesson prose, not an outline |
-| `GLOSSARY.md` | Consistent definitions of introduced terms |
+| `GLOSSARY.md` | The course's single A–Z glossary for all lessons and guides |
 | `RESOURCES.md` | Public official/primary references grouped by topic |
-| `NEXT-STEPS.md` | Optional Where to Go Next self-study |
+| `NEXT-STEPS.md` | The course's single Where to Go Next, containing optional self-study |
 | `PUBLICATION-REVIEW.md` | Review gates, evidence and unresolved limitations |
 | `reference/course.json` | Identity and source associations |
 | `reference/labs/` | Authored practical guides |
@@ -30,10 +30,18 @@ Do not ship learner histories, source-coverage tables or comparisons with
 superseded courses. Keep design/audit notes out of the public reading path.
 A user-requested partial artifact need not contain every full-course file.
 
+Do not render Syllabus or Course mission sections, headings or navigation
+entries in a full course. These planning files may remain in the source package;
+an explicitly requested syllabus-only deliverable is still supported. Before
+removing their published sections, move unique audience, scope, prerequisites,
+readiness checks, outcomes and safety qualifications into the orientation or
+owning lesson. Compare against the working source so a presentation change
+never discards distinct teaching or practical context.
+
 ## Lesson Pattern
 
 Apply this pattern to every lesson, including the first, across all subjects.
-Use plain headings without trailing periods and exactly four main sections:
+Use plain headings without trailing periods and these sections in order:
 
 1. **Objective** — first after the lesson title. State an observable capability
    and its success conditions in concise language; detailed teaching follows.
@@ -44,9 +52,37 @@ Use plain headings without trailing periods and exactly four main sections:
 3. **Practice** — link the exact owning lab, case or exercise and say what the
    learner will apply. For a lesson-only request, include the activity and
    feedback here instead of creating an unrequested course package.
-4. **Mental model** — last. Give a concise synthesis of the relationships or
+4. **Mental model** — last teaching section. Give a concise synthesis of the relationships or
    process already taught, with any necessary qualification. Introduce no new
    concept, abbreviation, prerequisite or mechanism here.
+5. **References** — optional per lesson, always last when included. Place
+   public sources after Mental model; retain course-level References as the final
+   supporting section of the full publication.
+   Use numbered lists, including for course-level Official references.
+
+### Course Appendices
+
+Each complete course has exactly one **Where to Go Next** and one **Glossary**,
+shared by all lessons and practical guides. Place them after teaching and
+practical work, in that order, before final **Official references**. Never
+create lesson-local or guide-local copies.
+
+- **Where to Go Next**: give concrete optional onward learning tied to completed
+  course competencies. Use one complete option per bullet, keeping its purpose,
+  question, links and limitations together. Optional study adds no required
+  prerequisites, installations, runtime dependencies or completion gates.
+- **Glossary**: collect all taught key terms and abbreviations, with concise
+  definitions and full expansions where applicable. Merge repeated entries
+  without losing distinct contextual meanings. Sort A–Z, case-insensitively by
+  displayed term or abbreviation, not expansion (FIFO precedes WIP). Include
+  ordinary terms when no abbreviations are used; never invent abbreviations.
+  Keep first-use explanations in each lesson; a glossary cannot replace teaching.
+
+For a lesson-only revision, update the owning course appendices when available.
+For a standalone lesson, explain terms in context and put onward suggestions
+in the handoff, without adding these appendices inside the lesson or creating
+an unrequested full course. Keep the practical guide's Takeaways and next step
+for activity reflection and transfer; it is not another course appendix.
 
 ### Conceptual Titles
 
@@ -95,10 +131,25 @@ example stays in How it works so the learner is prepared before practice.
 ### Rendered Structure
 
 Use `section.lesson` with its title in a direct `h2`, followed by four direct
-`div` containers in order: `.lesson-outcome`, `.how-it-works`, `.practice-links`
-and `.mental-model`. Each starts with one direct `h3` with the matching visible
+`div` containers in order: `.lesson-outcome`, `.how-it-works`, `.practice-links`,
+and `.mental-model`. Each starts with
+one direct `h3` with the matching visible
 label above and contains substantive content. All other lesson content belongs
-inside those sections; nothing follows Mental model within the lesson.
+inside those sections. Only an optional `.lesson-references` div with a direct
+`h3` labeled References may follow Mental model; nothing follows References.
+
+Render the single course Glossary as one direct `dl` after its heading, containing alternating
+nonempty `dt`/`dd` pairs. Put only the term or abbreviation in `dt`; put its
+expansion and definition in `dd`. Normalize whitespace and compare keys
+case-insensitively for A–Z ordering; do not repeat a key within the course.
+Inline emphasis or code in entries is allowed. Give each course appendix its own
+`main > section`, a direct `h2` labeled Where to Go Next or Glossary, and one
+TOC entry. Neither may be nested under lessons, practical work, course guides
+or another appendix. Render next-step options as `ul > li` and references as
+`ol > li`; do not simulate list markers in paragraphs or CSS. Subordinate
+procedures may use numbered steps inside a next-step bullet without changing
+the outer option list. The bundled shell supplies example anchors; existing builders may retain their
+own stable IDs when the TOC targets the actual sections.
 Place every lesson figure inside `.how-it-works`, near its explanatory prose.
 The starter metadata's diagram `section` names the enclosing section, not a
 sibling after which to append the figure. A real inline SVG in a contextual
@@ -106,8 +157,8 @@ figure is required for each lesson; a
 caption-only placeholder or a linked figure elsewhere does not count.
 Use consistent classes without adding a rainbow of boxes. The bundled checker
 verifies this bounded structure for a complete standard HTML course. It does
-not evaluate title quality, concept accuracy, prose completeness, abbreviation
-meaning or diagram usefulness. Review those semantically. Syllabus-only and
+not evaluate title quality, concept accuracy, prose completeness, glossary
+coverage, abbreviation meaning or diagram usefulness. Review those semantically. Syllabus-only and
 review-only requests do not require this complete-HTML checker.
 
 ## Practical Guide Pattern
@@ -134,6 +185,12 @@ white/paper with pale mint and blue, dark readable text and restrained amber
 warnings. Preserve the existing design tokens unless the user requests a new
 identity. Keep essential meaning independent of color.
 
+Use one shared stylesheet across a series. Keep the same system font stack,
+type scale, line height, reading measure, spacing and heading weights for
+equivalent roles: one banner h1, h2 topics, h3 lesson fields and h4 conceptual
+subtopics. Keep prose, lists, tables, code and glossary definitions consistent
+across subjects; do not add per-course fonts or one-off heading overrides.
+
 - Banner: main course title and a short estimated guided-hours line only.
   No status badges, marketing text, author details or timing calculations.
 - Desktop: wide centered layout, up to 1800px, with a 240px persistent side TOC
@@ -148,7 +205,7 @@ identity. Keep essential meaning independent of color.
   keyboard-accessible local table/code scrollers.
 - No repeated Back to contents links or Read the diagram in text expanders.
   Essential diagram meaning still belongs in adjacent visible prose.
-- End with supporting material, Where to Go Next and official references.
+- End with supporting material, Where to Go Next, Glossary and Official references.
   Do not show a research-review dateline. Optional reading adds no silent core
   prerequisites, runtime dependencies or required guided hours.
 
@@ -188,6 +245,9 @@ reuse its existing builder or create a small course-owned generator using the
 project's established Markdown tooling. Do not create a new LMS, remote build
 service or custom Markdown dialect merely for this format.
 
+Use the executable workspace scaffold and project-owned renderer adapter described
+in [Portable publication](portable-publication.md). Reuse existing project tooling.
+
 The generator must:
 
 1. Read the canonical prose, guides, metadata, CSS, diagrams and explicit
@@ -198,7 +258,8 @@ The generator must:
    Preserve external official links and internal destinations.
 4. Embed CSS, original SVGs and complete escaped source files. Include helpers
    needed to understand/run a lab; no ellipses standing in for real source.
-5. Create one page with no remote scripts, fonts, trackers, assets or automatic
+5. Keep bulky downloads outside HTML using exact declared local companion links;
+   keep offline reading complete. Create one page with no remote scripts, fonts, trackers, assets or automatic
    requests. Normal user-followed public reference links are allowed.
 6. Render/validate fully before atomically replacing `index.html`; reject
    symlinked or out-of-package input/output targets.
@@ -210,7 +271,7 @@ Mark embedded source as `<code data-source="labs/example.py">...</code>`.
 Use one such marker per included file; repeat mentions link to the primary
 listing. `scripts/check_course.py` checks exact UTF-8 bytes after HTML entity
 decoding against a separate allowlist, along with selected navigation/safety
-properties and the four-section, per-lesson diagram contract. It does not
+properties and the lesson-section, glossary-order and per-lesson diagram contract. It does not
 render Markdown or verify full prose parity; the
 course-owned generator and tests own that additional gate.
 

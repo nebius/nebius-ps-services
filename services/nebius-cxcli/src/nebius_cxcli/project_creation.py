@@ -12,7 +12,9 @@ from typing import Any, Protocol
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 
+from .component_instances import component_instance_id
 from .components import ComponentEntry, ComponentScope, soperator_install_entry
 from .deploy_targets import app_chart_target_ref
 from .mk8s_gpu import (
@@ -29,10 +31,12 @@ from .observability import (
 from .provider_options import ProviderOptionLookup
 from .quota_checks import QuotaReport
 from .soperator_config_materialization import _SOPERATOR_APP_ID, _default_soperator_profile_name
+from .soperator_deployment_profile import deployment_profile_summary
 from .soperator_install_policy import (
     validate_soperator_install_configuration as _validate_soperator_install_configuration,
 )
-from .soperator_release import SoperatorReleaseSnapshot
+from .soperator_release import SoperatorArtifactRequest, VerifiedSoperatorSource
+from .soperator_upgrade_progress import sanitized_bounded_command_output
 from .terminal_styles import warning_markup
 
 
@@ -163,31 +167,27 @@ class ProjectCreationWorkflow:
         validate_config: bool = True,
         no_interactive: bool = False,
         force: bool = False,
-        soperator_release: SoperatorReleaseSnapshot | None = None,
+        soperator_release: VerifiedSoperatorSource | None = None,
         soperator_profile: str | None = None,
         soperator_values: Mapping[str, Any] | None = None,
     ) -> Path | None:
         """Create one project from typed inputs; command adapters own token parsing."""
         services = self._services()
         from .soperator_login_keys import select_headless_root_keys
-        from .soperator_release_resolver import current_frozen_soperator_release
+        from .soperator_release_resolver import freeze_soperator_release
         from .soperator_values import (
-            apply_frozen_feature_defaults,
+            apply_source_feature_defaults,
+            explicit_values,
             seed_soperator_values,
             soperator_rows,
             validate_feature_values,
-            validate_frozen_input,
+            validate_source_input,
         )
 
-        frozen = (
-            current_frozen_soperator_release(soperator_release.release)
-            if soperator_release is not None
-            else None
-        )
         if soperator_values is not None:
-            if frozen is None:
-                raise ValueError("Soperator values input requires the frozen install release")
-            validate_frozen_input(soperator_values, frozen)
+            if soperator_release is None:
+                raise ValueError("Soperator values input requires the verified install source")
+            validate_source_input(soperator_values, soperator_release)
         app_namespace_overrides = dict(app_namespace_overrides or {})
         app_releasename_overrides = dict(app_releasename_overrides or {})
         app_version_overrides = dict(app_version_overrides or {})
@@ -319,7 +319,12 @@ class ProjectCreationWorkflow:
                 raise RuntimeError(
                     "Soperator lifecycle create requires a frozen official upstream release."
                 )
-            app_entries = (*app_entries, soperator_install_entry(release))
+            app_entries = (
+                *app_entries,
+                soperator_install_entry(
+                    release, chart_repo=soperator_release.chart_oci_url("umbrella")
+                ),
+            )
 
         optional_wizard_mode = interactive_mode
         if soperator_release is not None:
@@ -328,7 +333,7 @@ class ProjectCreationWorkflow:
             services.console.print(
                 "[dim]Soperator is configured to export metrics and logs to Nebius Observability. "
                 "Use Public Nebius Grafana at https://grafana.nebius.dev/. "
-                "Add optional apps after installation with 'component add'.[/dim]"
+                "Add optional apps to this configuration with 'component add'.[/dim]"
             )
         elif interactive_mode:
             selected_infra_raw = set()
@@ -441,7 +446,7 @@ class ProjectCreationWorkflow:
             )
         if interactive_mode and optional_wizard_mode and _SOPERATOR_APP_ID in selected_apps_raw:
             services.console.print(
-                "[dim]Soperator install configures the full production MK8s+SFS "
+                "[dim]Soperator create configures the full production MK8s+SFS "
                 "bundle. Use `nebius-cxcli soperator onboard "
                 "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
                 "clusters.[/dim]"
@@ -587,8 +592,8 @@ class ProjectCreationWorkflow:
             final_payload,
             provider_lookup=provider_lookup,
         )
-        if frozen is not None:
-            apply_frozen_feature_defaults(final_payload, frozen)
+        if soperator_release is not None:
+            apply_source_feature_defaults(final_payload, soperator_release)
         if soperator_values is not None:
             seed_soperator_values(final_payload, soperator_values)
         if soperator_release is not None and not interactive_mode:
@@ -637,6 +642,14 @@ class ProjectCreationWorkflow:
                 provider_lookup=provider_lookup,
                 **field_wizard_kwargs,
             )
+            if soperator_release is not None and not wizard_completed:
+                services.print_incomplete_wizard_no_write_warning(
+                    issues=["Soperator installation wizard was not completed."],
+                    message="No project config or generated output was written.",
+                    preserved_path=existing_config_path.parent if had_existing_config else None,
+                    skipped_path=existing_config_path.parent if not had_existing_config else None,
+                )
+                raise typer.Exit(code=1)
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
                 raise RuntimeError("Updated config payload must be a mapping")
@@ -647,6 +660,12 @@ class ProjectCreationWorkflow:
                 entries=app_entries,
             )
 
+        from .grafana_install import initialize_selected_grafana
+
+        if initialize_selected_grafana(final_payload):
+            selected_apps = services.enabled_ids_from_runtime_payload(
+                payload=final_payload, entries=app_entries
+            )
         services.materialize_soperator_component_defaults(final_payload)
         selected_apps, mysterybox_eso_app_labels = (
             services.materialize_soperator_child_chart_secret_dependencies(
@@ -849,6 +868,24 @@ class ProjectCreationWorkflow:
             for row in soperator_rows(final_payload):
                 validate_feature_values(row.get("values", {}))
             _validate_soperator_install_configuration(final_payload, soperator_release)
+            for row in soperator_rows(final_payload):
+                target = app_chart_target_ref(row)
+                try:
+                    freeze_soperator_release(
+                        soperator_release.release,
+                        source=soperator_release,
+                        request=SoperatorArtifactRequest.deployment(
+                            target,
+                            row["values"],
+                            payload=final_payload,
+                            post_render_patches=tuple(row.get("post_render_patches") or ()),
+                        ),
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Soperator configuration for target '{target}' cannot render "
+                        f"(apps.charts[id=soperator].values): {exc}"
+                    ) from exc
 
         result = services.scaffold_instance(
             base_path=base_path,
@@ -890,12 +927,33 @@ class ProjectCreationWorkflow:
                 )
             else:
                 services.console.print(f"Config up-to-date: {result.config_path}")
+        if soperator_release is not None:
+            for row in soperator_rows(final_payload):
+                for line in deployment_profile_summary(
+                    row["values"],
+                    target=app_chart_target_ref(row) or component_instance_id(row),
+                    stage="saved",
+                    explicit=explicit_values(row),
+                ):
+                    services.console.print(escape(line))
         if validate_config:
-            services.run_runtime_validation(
-                config_path=result.config_path,
-                strict=False,
-                title="Post-create validation",
-            )
+            try:
+                services.run_runtime_validation(
+                    config_path=result.config_path,
+                    strict=False,
+                    title="Post-create validation",
+                )
+            except (typer.Abort, typer.Exit):
+                raise
+            except (RuntimeError, ValueError, OSError) as exc:
+                detail = sanitized_bounded_command_output(str(exc))
+                services.console.print(
+                    f"{warning_markup('Post-create validation incomplete:')} "
+                    "the configuration was saved. Run the validate command shown below "
+                    "before rendering or deploying."
+                )
+                if detail:
+                    services.console.print(escape(detail))
         quota_report = services.warn_on_live_quota_issues(final_payload, phase="create")
         if quota_report.has_confirmed_insufficiency:
             services.console.print(

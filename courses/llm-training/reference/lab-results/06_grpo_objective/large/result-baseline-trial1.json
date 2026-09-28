@@ -1,0 +1,20 @@
+{
+  "correctness": {
+    "finite_gradients": true,
+    "zero_mean_advantages": true
+  },
+  "lab": "06_grpo_objective",
+  "measurements": {
+    "group_size": 8,
+    "loss": 0.004417,
+    "max_group_advantage_mean_error": 6e-08,
+    "mean_approximate_kl": 0.0002563
+  },
+  "parameters": {
+    "group_size": 8,
+    "seed": 17,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

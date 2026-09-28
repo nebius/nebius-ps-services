@@ -60,7 +60,7 @@
       "lessons": [
         6
       ],
-      "after": "Practice",
+      "after": "Concepts and code path",
       "home": "lab:21_mixed_precision_training"
     },
     {

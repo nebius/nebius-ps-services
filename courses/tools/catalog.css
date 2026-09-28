@@ -9,7 +9,7 @@
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
-body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
 a { color: inherit; text-underline-offset: .2em; }
 a:hover { color: var(--teal); }
 :focus-visible { outline: 3px solid var(--teal); outline-offset: 5px; }
@@ -41,7 +41,7 @@ h1 span { color: var(--teal); }
 .learning-map h2 { margin: 20px 0 24px; font-size: 26px; line-height: 1.25; letter-spacing: -.03em; font-weight: 600; }
 .path-foundations { margin: 0; padding: 0; list-style: none; }
 .path-foundations li { display: flex; position: relative; align-items: center; gap: 14px; padding-bottom: 20px; }
-.path-foundations li:first-child::after { content: ""; position: absolute; top: 38px; left: 18px; height: 32px; border-left: 1px solid #9cbcac; }
+.path-foundations li:not(:last-child)::after { content: ""; position: absolute; top: calc(50% + 9px); bottom: -9px; left: 18px; border-left: 1px solid #9cbcac; }
 .path-step { background: white; border: 1px solid #bbd3c5; border-radius: 8px; width: 37px; height: 37px; display: grid; place-items: center; flex: 0 0 auto; color: var(--teal); font: 12px ui-monospace, monospace; }
 .path-foundations a { text-decoration: none; font-size: 13px; font-weight: 650; }
 .path-foundations a:hover, .path-branches a:hover { text-decoration: underline; }

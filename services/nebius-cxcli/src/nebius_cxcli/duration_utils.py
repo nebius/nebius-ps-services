@@ -16,6 +16,17 @@ _GO_DURATION_UNIT_NS = {
 }
 
 
+def parse_optional_duration_seconds(value: str, *, option_name: str) -> int:
+    """Parse lifecycle job durations, including the supported unlimited spellings."""
+    raw = str(value or "").strip() or "0s"
+    if raw in {"0", "0s", "none"}:
+        return 0
+    try:
+        return parse_go_duration_seconds(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid {option_name} duration {raw!r}.") from exc
+
+
 def parse_go_duration_seconds(value: str) -> int:
     """Parse a positive Go-style duration and return whole seconds."""
 

@@ -14,7 +14,7 @@ find_package(CUDAToolkit REQUIRED)
 enable_testing()
 
 set(REQUIRED_LABS
-  00_h100_preflight
+  13_h100_preflight
   01_vector_add
   02_fused_elementwise
   03_tiled_transpose
@@ -29,6 +29,7 @@ set(REQUIRED_LABS
 
 foreach(lab IN LISTS REQUIRED_LABS)
   add_executable(${lab} labs/${lab}.cu)
+  target_link_libraries(${lab} PRIVATE CUDA::nvtx3)
   target_include_directories(${lab} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/labs)
   target_compile_options(
     ${lab}
@@ -37,14 +38,14 @@ foreach(lab IN LISTS REQUIRED_LABS)
       $<$<COMPILE_LANGUAGE:CUDA>:--resource-usage>
   )
   if(lab STREQUAL "12_capstone")
-    add_test(NAME ${lab}_smoke COMMAND ${lab} --smoke --variant-order baseline-first)
+    add_test(NAME ${lab}_smoke COMMAND ${lab} --profile small --variant-order baseline-first)
   else()
-    add_test(NAME ${lab}_smoke COMMAND ${lab} --smoke)
+    add_test(NAME ${lab}_smoke COMMAND ${lab} --profile small)
   endif()
 endforeach()
 
-add_test(NAME 08_async_pipeline_zero_work COMMAND 08_async_pipeline --smoke --work-iterations 0)
-add_test(NAME 08_async_pipeline_max_work COMMAND 08_async_pipeline --smoke --work-iterations 1024)
+add_test(NAME 08_async_pipeline_zero_work COMMAND 08_async_pipeline --profile small --work-iterations 0)
+add_test(NAME 08_async_pipeline_max_work COMMAND 08_async_pipeline --profile small --work-iterations 1024)
 add_test(NAME 08_async_pipeline_invalid_work COMMAND 08_async_pipeline --work-iterations -1)
 set_tests_properties(08_async_pipeline_invalid_work PROPERTIES WILL_FAIL TRUE)
 
@@ -59,6 +60,7 @@ endif()
 
 if(COURSE_ENABLE_SM90A)
   add_executable(10_hopper_cluster labs/10_hopper_cluster.cu)
+  target_link_libraries(10_hopper_cluster PRIVATE CUDA::nvtx3)
   target_include_directories(10_hopper_cluster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/labs)
   set_property(TARGET 10_hopper_cluster PROPERTY CUDA_ARCHITECTURES OFF)
   target_compile_options(
@@ -68,5 +70,5 @@ if(COURSE_ENABLE_SM90A)
       $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
       $<$<COMPILE_LANGUAGE:CUDA>:--resource-usage>
   )
-  add_test(NAME 10_hopper_cluster_smoke COMMAND 10_hopper_cluster --smoke)
+  add_test(NAME 10_hopper_cluster_smoke COMMAND 10_hopper_cluster --profile small)
 endif()

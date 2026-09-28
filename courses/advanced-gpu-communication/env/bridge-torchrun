@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Use the selected Bridge interpreter, including inherited base PyTorch packages.
+set -euo pipefail
+: "${COURSE_BRIDGE_PYTHON:?source env/vendor-environment.sh}"
+exec "$COURSE_BRIDGE_PYTHON" -m torch.distributed.run "$@"

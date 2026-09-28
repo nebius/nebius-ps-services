@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -130,6 +131,24 @@ class SoperatorRecoveryJournal:
         if not isinstance(payload, dict) or not resource_version:
             raise RuntimeError("Soperator recovery journal is incomplete")
         self._validate(payload)
+        from .nsight_jail import decode_payload
+
+        for name, stage in payload["stages"].items():
+            if name.startswith("rootfs-nsight-"):
+                decoded = decode_payload(stage)
+                chain = decoded.get("nsight")
+                if chain is not None:
+                    from .nsight_recovery import attempt_manifest
+
+                    for index, attempt in enumerate(chain["attempts"]):
+                        if "manifest" in attempt:
+                            raise RuntimeError("Nsight wire attempt must use its immutable base")
+                        attempt["manifest"] = attempt_manifest(
+                            chain["baseManifest"], index, attempt["epoch"]
+                        )
+                    if chain["attempts"][-1].get("complete"):
+                        decoded["evidence"]["result"] = chain["attempts"][-1]["result"]
+                payload["stages"][name] = decoded
         return payload, resource_version
 
     def _validate(self, payload: Mapping[str, object]) -> None:
@@ -163,6 +182,35 @@ class SoperatorRecoveryJournal:
         *,
         resource_version: str = "",
     ) -> dict[str, object]:
+        from .nsight_jail import encode_payload
+
+        # Nsight uses compact wire storage; the owner API and local mirror keep
+        # canonical decoded evidence and its unchanged identity digests.
+        wire = dict(payload)
+        stages = payload.get("stages")
+        if not isinstance(stages, Mapping):
+            raise RuntimeError("Soperator recovery journal has no stage map")
+        other = {
+            name: stage for name, stage in stages.items() if not name.startswith("rootfs-nsight-")
+        }
+        if (
+            len(other) != len(stages)
+            and len(json.dumps({**wire, "stages": other}).encode()) + 4 * (64 * 1024 + 1024)
+            > 900 * 1024
+        ):
+            raise RuntimeError("Rootfs journal has insufficient reserved Nsight recovery capacity")
+        packed = {}
+        for name, stage in stages.items():
+            if name.startswith("rootfs-nsight-"):
+                compact = copy.deepcopy(stage)
+                if "nsight" in compact:
+                    for attempt in compact["nsight"]["attempts"]:
+                        attempt.pop("manifest")
+                    compact.get("evidence", {}).pop("result", None)
+                packed[name] = encode_payload(compact)
+            else:
+                packed[name] = stage
+        wire["stages"] = packed
         metadata: dict[str, object] = {
             "name": self.name,
             "namespace": "kube-system",
@@ -178,7 +226,7 @@ class SoperatorRecoveryJournal:
             "apiVersion": "v1",
             "kind": "ConfigMap",
             "metadata": metadata,
-            "data": {"journal.json": json.dumps(payload, sort_keys=True, separators=(",", ":"))},
+            "data": {"journal.json": json.dumps(wire, sort_keys=True, separators=(",", ":"))},
         }
 
     def _mirror(self, payload: Mapping[str, object]) -> None:
@@ -300,9 +348,67 @@ class SoperatorRecoveryJournal:
             for stage in stages.values()
         ):
             raise RuntimeError("Soperator recovery journal has unfinished stages")
+        from .nsight_recovery import validate_chain
+
+        for name, stage in stages.items():
+            if name in {"rootfs-nsight-admit", "rootfs-nsight-install", "rootfs-nsight-verify"}:
+                validate_chain(stage.get("nsight"), completed=True)
         payload["status"] = "complete"
         self._replace(payload, resource_version=resource_version)
         return payload
+
+    def checkpoint_nsight(self, *, name: str, chain: Mapping) -> None:
+        """Persist only Nsight attempt transitions under the existing ConfigMap CAS."""
+        from .nsight_recovery import STAGES, validate_chain, validate_transition
+        from .soperator_protected_data_plane import protected_workload_identity
+
+        names = tuple("rootfs-" + stage for stage in STAGES)
+        if name not in names:
+            raise ValueError("Only Nsight stages support attempt checkpoints")
+        current = self._read()
+        if current is None:
+            raise RuntimeError("Soperator recovery journal is missing")
+        payload, resource_version = current
+        stages = payload["stages"]
+        if not isinstance(stages, dict):
+            raise RuntimeError("Nsight journal has no stage map")
+        previous = stages.get(name)
+        old = previous.get("nsight") if previous else None
+        if old == chain:
+            return
+        if payload.get("status") != "active" or (previous and old is None):
+            raise RuntimeError("Nsight journal is sealed or lacks original attempt history")
+        if any(
+            later in stages
+            for later in (*names[names.index(name) + 1 :], "rootfs-nsight-customization")
+        ):
+            raise RuntimeError("Nsight recovery cannot rewind later rootfs stages")
+        validate_transition(old, chain)
+        attempt = validate_chain(chain)
+        identity = protected_workload_identity(chain["baseManifest"])
+        stage = (
+            dict(previous)
+            if previous
+            else {
+                "intent": {
+                    "fenceEpoch": int(identity.fence_epoch),
+                    "pvcUid": chain["baseManifest"]["metadata"]["labels"]["nebius-cxcli/pvc-uid"],
+                    "workloadSha256": identity.workload_sha256,
+                },
+                "attempts": 1,
+            }
+        )
+        stage.update(status="complete" if attempt.get("complete") else "intent", nsight=dict(chain))
+        if attempt.get("jobUid"):
+            stage["evidence"] = {
+                "jobUid": attempt["jobUid"],
+                "admittedWorkloadSha256": attempt["workloadSha256"],
+                **({"result": attempt["result"]} if attempt.get("complete") else {}),
+            }
+        if attempt.get("complete"):
+            stage["disposition"] = "applied"
+        stages[name] = stage
+        self._replace(payload, resource_version=resource_version)
 
     def begin_safe_replay_supersession(
         self,

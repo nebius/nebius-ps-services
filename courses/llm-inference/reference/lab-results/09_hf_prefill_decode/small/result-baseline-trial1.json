@@ -1,0 +1,35 @@
+{
+  "correctness": {
+    "attention_mask_advanced": true,
+    "cache_length_advanced": true,
+    "cache_position_advanced": true,
+    "generated_requested_token_count": true
+  },
+  "lab": "09_hf_prefill_decode",
+  "measurements": {
+    "decode_steps_per_request": 0,
+    "decode_timing": null,
+    "generated_new_tokens_per_request": 1,
+    "output_shape": [
+      1,
+      1
+    ],
+    "prefill_timing": {
+      "median_ms": 11.589,
+      "min_ms": 11.4014,
+      "p90_ms": 12.0563
+    },
+    "requested_new_tokens_per_request": 1,
+    "requests": 10,
+    "total_generated_tokens": 10
+  },
+  "parameters": {
+    "iterations": 10,
+    "new_tokens": 1,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

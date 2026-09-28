@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "dbb1b39923dcf2f65311f92da34a720c3c847ab548c9e78b2ec59dd42ea0ce98",
+      "sha256": "06a979982edb5d0ae158d3d7fe0c22b04ea8d3643ed51832d2db6586b8fed161",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "b64bbe4f2380a50afbf1316d01d530d4adbf0eb26f3f26abb2ae0406b26a523b",
+      "sha256": "15c78f552faaf8f70c5dc512226768ba5e3b7285ac6e18dfee43e88ac19e9866",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "cd8ef37533874cd3e942ef617b88813d2ff719a7a3c8a420483bf6ce072dd515",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "3858fb616c1cb2f5cc9438b68e5be545f0ff400f918baa809ed438e7e8278ef6",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "4f898ef302fe265e23b3287b7d6ec0c72947ee71077cd2f0d3c240a941b410c8",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "2383f0a1ea6b62a0b41a1a04fe9201ac9b85a220c4532114999142751457dc92",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "cdecad057ff72529c1c3e4658036ec9827ab3f787b7a3c84c0db6210df1adbf8",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-fundamentals",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "11_scheduler_tail",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1223984ec75065e7a02e57f1da7c35f3725178ca72c2f8c585331c98d3e6a308",
+  "summary_sha256": "be381f2384bddaedc8294d72595df29cfe197238eb50420c5a4a44657b2c5e3d"
+}

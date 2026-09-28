@@ -6,12 +6,12 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from . import kubernetes_process
 from .flux_ops import (
     _flux_wait_targets,
     _rendered_soperator_graph_contract,
@@ -34,8 +34,8 @@ def run_soperator_deploy_validations(
     emit: Callable[[str], None] | None = None,
 ) -> list[Path]:
     written = []
-    env = {**os.environ, **(extra_env or {})}
     for spec in validations:
+        env = {**os.environ, **(extra_env or {})}
         if spec.get("kind") != SOPERATOR_CLUSTER_VALIDATION_KIND:
             raise ValueError("upstream deployment validation requires a Soperator target")
         target = str(spec.get("target_ref", ""))
@@ -51,18 +51,15 @@ def run_soperator_deploy_validations(
             raise ValueError("upstream deployment validation requires one exact main workload")
         graph_path = flux_dir / "soperator-release-graph.yaml"
         graph_sha = hashlib.sha256(graph_path.read_bytes()).hexdigest()
-        context = str(spec.get("kube_context", ""))
+        context = str(spec.get("kube_context", "") or "").strip()
+        handoff_context = str(
+            (extra_env or {}).get(kubernetes_process.TARGET_CONTEXT_ENV) or ""
+        ).strip()
+        if context and handoff_context and context != handoff_context:
+            raise RuntimeError("upstream deployment validation Kubernetes context differs")
         if context:
-            current = subprocess.run(
-                ["kubectl", "config", "current-context"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=True,
-            ).stdout.strip()
-            if current != context:
-                raise RuntimeError("upstream deployment validation Kubernetes context differs")
+            env[kubernetes_process.TARGET_CONTEXT_ENV] = context
+        kubernetes_process.target_command(["kubectl", "get", "pods"], env=env)
         if emit:
             emit(f"Validating the complete upstream Soperator release graph ({target})")
         timeout = float(spec.get("readiness_timeout_seconds", 1200))

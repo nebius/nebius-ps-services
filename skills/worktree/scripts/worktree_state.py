@@ -101,7 +101,7 @@ def checked_worktree_parent(primary: Path, *, create: bool = False) -> Path:
             raise StateError(f"managed worktree parent must be canonical: {parent}")
     elif create:
         try:
-            parent.mkdir(parents=False)
+            parent.mkdir(parents=False, exist_ok=True)
             fsync_directory(parent.parent)
         except OSError as error:
             raise StateError(
@@ -130,7 +130,7 @@ def checked_state_directory(primary: Path, *, create: bool = False) -> Path:
             raise StateError(f"state directory must be canonical: {directory}")
     elif create:
         try:
-            directory.mkdir(parents=False, mode=0o700)
+            directory.mkdir(parents=False, mode=0o700, exist_ok=True)
             fsync_directory(parent)
         except OSError as error:
             raise StateError(

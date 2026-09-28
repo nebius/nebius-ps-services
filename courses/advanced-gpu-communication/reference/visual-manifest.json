@@ -1,0 +1,28 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/13_collective_overlap-serialized-versus-overlapped-two-node-work.svg",
+      "title": "Serialized versus overlapped two-node work",
+      "lab": "13_collective_overlap",
+      "after": "Concepts and code path"
+    },
+    {
+      "path": "reference/diagrams/09_nccl_transport_sweep-all-reduce-result-units.svg",
+      "title": "Reading an illustrative all-reduce result",
+      "lab": "09_nccl_transport_sweep",
+      "after": "Check your results"
+    },
+    {
+      "path": "reference/diagrams/fabric-boundaries.svg",
+      "title": "Two communication domains",
+      "lab": "01_fabric_topology",
+      "after": "Concepts and code path"
+    },
+    {
+      "path": "reference/diagrams/dynamo-placement.svg",
+      "title": "Keep sixteen GPUs while changing phase placement",
+      "lab": "32_dynamo_disaggregation",
+      "after": "Concepts and code path"
+    }
+  ]
+}

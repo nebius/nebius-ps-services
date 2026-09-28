@@ -1,0 +1,152 @@
+{
+  "correctness": {
+    "all_declared_operator_work_counted": true,
+    "four_cells_executed": true
+  },
+  "lab": "25_workload_metrics",
+  "measurements": {
+    "workload_cells": [
+      {
+        "batch_rows": 4,
+        "finite": true,
+        "input_length": 128,
+        "input_projection": {
+          "median_ms": 0.0188,
+          "min_ms": 0.0178,
+          "p90_ms": 0.0233
+        },
+        "joined_projection_and_recurrence": {
+          "median_ms": 0.4854,
+          "min_ms": 0.4557,
+          "p90_ms": 0.4992
+        },
+        "joined_row_updates_per_second": 263700.04120313143,
+        "mean_recurrent_iteration_ms": 0.01448125,
+        "one_recurrent_step": {
+          "median_ms": 0.0236,
+          "min_ms": 0.0219,
+          "p90_ms": 0.0318
+        },
+        "projected_input_rows": 512,
+        "projection_incremental_peak_bytes": 262144,
+        "recurrent_incremental_peak_bytes": 6144,
+        "recurrent_iterations": 32,
+        "recurrent_row_updates": 128,
+        "recurrent_row_updates_per_second": 276219.2490289167,
+        "recurrent_sequence": {
+          "median_ms": 0.4634,
+          "min_ms": 0.4425,
+          "p90_ms": 0.4931
+        }
+      },
+      {
+        "batch_rows": 4,
+        "finite": true,
+        "input_length": 2048,
+        "input_projection": {
+          "median_ms": 0.0181,
+          "min_ms": 0.0175,
+          "p90_ms": 0.0232
+        },
+        "joined_projection_and_recurrence": {
+          "median_ms": 0.4918,
+          "min_ms": 0.4735,
+          "p90_ms": 0.5414
+        },
+        "joined_row_updates_per_second": 260268.40178934525,
+        "mean_recurrent_iteration_ms": 0.013953125,
+        "one_recurrent_step": {
+          "median_ms": 0.0216,
+          "min_ms": 0.0205,
+          "p90_ms": 0.0221
+        },
+        "projected_input_rows": 8192,
+        "projection_incremental_peak_bytes": 4194304,
+        "recurrent_incremental_peak_bytes": 6144,
+        "recurrent_iterations": 32,
+        "recurrent_row_updates": 128,
+        "recurrent_row_updates_per_second": 286674.1321388578,
+        "recurrent_sequence": {
+          "median_ms": 0.4465,
+          "min_ms": 0.4309,
+          "p90_ms": 0.4622
+        }
+      },
+      {
+        "batch_rows": 4,
+        "finite": true,
+        "input_length": 128,
+        "input_projection": {
+          "median_ms": 0.0173,
+          "min_ms": 0.0169,
+          "p90_ms": 0.0198
+        },
+        "joined_projection_and_recurrence": {
+          "median_ms": 7.007,
+          "min_ms": 6.8199,
+          "p90_ms": 7.0445
+        },
+        "joined_row_updates_per_second": 292279.14942200657,
+        "mean_recurrent_iteration_ms": 0.013586328125,
+        "one_recurrent_step": {
+          "median_ms": 0.021,
+          "min_ms": 0.02,
+          "p90_ms": 0.0226
+        },
+        "projected_input_rows": 512,
+        "projection_incremental_peak_bytes": 262144,
+        "recurrent_incremental_peak_bytes": 6144,
+        "recurrent_iterations": 512,
+        "recurrent_row_updates": 2048,
+        "recurrent_row_updates_per_second": 294413.61662976915,
+        "recurrent_sequence": {
+          "median_ms": 6.9562,
+          "min_ms": 6.8188,
+          "p90_ms": 6.9922
+        }
+      },
+      {
+        "batch_rows": 4,
+        "finite": true,
+        "input_length": 2048,
+        "input_projection": {
+          "median_ms": 0.0191,
+          "min_ms": 0.0183,
+          "p90_ms": 0.02
+        },
+        "joined_projection_and_recurrence": {
+          "median_ms": 7.0852,
+          "min_ms": 6.8818,
+          "p90_ms": 7.661
+        },
+        "joined_row_updates_per_second": 289053.2377349969,
+        "mean_recurrent_iteration_ms": 0.0137390625,
+        "one_recurrent_step": {
+          "median_ms": 0.0229,
+          "min_ms": 0.0217,
+          "p90_ms": 0.0232
+        },
+        "projected_input_rows": 8192,
+        "projection_incremental_peak_bytes": 4194304,
+        "recurrent_incremental_peak_bytes": 6144,
+        "recurrent_iterations": 512,
+        "recurrent_row_updates": 2048,
+        "recurrent_row_updates_per_second": 291140.6800864324,
+        "recurrent_sequence": {
+          "median_ms": 7.0344,
+          "min_ms": 6.8885,
+          "p90_ms": 7.181
+        }
+      }
+    ]
+  },
+  "parameters": {
+    "concurrency": 4,
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

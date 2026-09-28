@@ -8,12 +8,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,10 +27,10 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    vector_elements = 16_000_000 if args.profile == "smoke" else 128_000_000
-    matrix_size = 2_048 if args.profile == "smoke" else 8_192
+    vector_elements = 16_000_000 if args.profile == "small" else 128_000_000
+    matrix_size = 2_048 if args.profile == "small" else 8_192
     x = torch.randn(vector_elements, device="cuda")
     y = torch.randn(vector_elements, device="cuda")
     a = torch.randn((matrix_size, matrix_size), device="cuda", dtype=torch.bfloat16)
@@ -78,4 +79,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

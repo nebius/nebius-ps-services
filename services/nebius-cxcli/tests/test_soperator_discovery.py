@@ -114,7 +114,7 @@ def test_slurm_health_collection_failure_is_sanitized_and_recorded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        soperator_registration.subprocess,
+        soperator_registration.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             soperator_registration.subprocess.TimeoutExpired("kubectl", 30)

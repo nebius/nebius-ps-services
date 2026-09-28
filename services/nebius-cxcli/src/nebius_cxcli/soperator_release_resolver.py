@@ -12,35 +12,35 @@ import subprocess
 import tempfile
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .archive_safety import open_bounded_tar_gz
 from .oci_image import is_immutable_oci_image_reference, resolve_oci_image
 from .soperator_cache import prepare_private_cache_root
 from .soperator_release import (
     SOPERATOR_ADAPTER_MOUNT_IMAGE,
-    SOPERATOR_MAIN_RELEASE_NAME,
-    SOPERATOR_RELEASE_SNAPSHOT_SCHEMA,
     SOPERATOR_UPSTREAM_CHART_ROLES,
-    SOPERATOR_UPSTREAM_REGISTRY,
-    SoperatorChartSnapshot,
-    SoperatorReleaseGraphNode,
+    SoperatorArtifactRequest,
     SoperatorReleaseMetadata,
     SoperatorReleaseSnapshot,
-    SoperatorThirdPartyChartSnapshot,
+    SoperatorSourceChart,
     SoperatorVersion,
+    VerifiedSoperatorSource,
     classify_soperator_release_capabilities,
     load_soperator_release_snapshot,
     normalize_soperator_release_selector,
     resolve_soperator_release,
     seal_soperator_release_snapshot,
+    soperator_upstream_registry,
     write_soperator_release_snapshot,
 )
 from .soperator_release_identity import SoperatorReleaseIdentityLedger
@@ -49,7 +49,6 @@ from .soperator_release_source import (
     acquire_soperator_release_source,
     default_soperator_source_cache_root,
     ensure_soperator_release_source,
-    normalized_script_manifest,
     normalized_tree_manifest,
 )
 from .soperator_upgrade_progress import sanitized_bounded_command_output
@@ -87,6 +86,11 @@ _CHART_PULL_BASE_BACKOFF_SECONDS = 2.0
 _CHART_PULL_MAX_JITTER_SECONDS = 0.5
 
 
+def _artifact_key(*identity: str) -> str:
+    material = "\0".join(identity).encode()
+    return "chart-" + hashlib.sha256(material).hexdigest()[:24]
+
+
 def _notify(emit: Callable[[str], None] | None, message: str) -> None:
     if emit is None:
         return
@@ -116,33 +120,164 @@ class FrozenSoperatorRelease:
     source: SoperatorSourceReceipt
     snapshot: SoperatorReleaseSnapshot
 
+    @cached_property
+    def source_context(self) -> VerifiedSoperatorSource:
+        return describe_soperator_source(
+            self.metadata,
+            self.source,
+            jail_identity=(self.snapshot.populate_jail_image, self.snapshot.jail_cuda_version),
+        )
 
-_FROZEN_RELEASE: ContextVar[FrozenSoperatorRelease | None] = ContextVar(
+
+def describe_soperator_source(
+    metadata: SoperatorReleaseMetadata,
+    source: SoperatorSourceReceipt,
+    *,
+    jail_identity: tuple[str, str] | None = None,
+) -> VerifiedSoperatorSource:
+    """Describe verified Git files without acquiring optional chart packages."""
+    if (metadata.release, metadata.commit, metadata.tree) != (
+        source.release,
+        source.commit,
+        source.tree,
+    ):
+        raise ValueError("Soperator source receipt differs from verified release identity")
+    root = Path(source.source_dir)
+    contract, capability = classify_soperator_release_capabilities(root)
+    if contract != "upstream-flux-v1":
+        raise ValueError("Soperator source does not implement the supported Flux contract")
+    charts = {}
+    names = set()
+    for path in sorted(root.glob("helm/*/Chart.yaml")):
+        data = yaml.safe_load(path.read_text())
+        if not isinstance(data, Mapping):
+            raise ValueError("Invalid source chart metadata")
+        name, version = str(data.get("name") or ""), str(data.get("version") or "")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", name) or not version or name in names:
+            raise ValueError("Invalid or ambiguous source chart identity")
+        names.add(name)
+        digest, _ = normalized_tree_manifest(path.parent)
+        charts[_CHART_KEY_BY_NAME.get(name) or _artifact_key(name)] = SoperatorSourceChart(
+            name, version, path.parent.relative_to(root).as_posix(), digest
+        )
+    if "umbrella" not in charts:
+        raise ValueError("Soperator source has no umbrella")
+    registry = soperator_upstream_registry(root)
+    image, cuda = jail_identity or _populate_jail_identity(root)
+    return VerifiedSoperatorSource(
+        metadata, source, registry, charts, contract, capability, image, cuda
+    )
+
+
+def resolve_soperator_source(
+    selector: str,
+    *,
+    cache_root: Path | None = None,
+    identity_root: Path | None = None,
+    opener: Any = None,
+    emit: Callable[[str], None] | None = None,
+) -> VerifiedSoperatorSource:
+    """Verify source authority for configuration; this grants no package admission."""
+    _notify(emit, "Verifying official Soperator source and configuration defaults")
+    metadata = resolve_soperator_release(selector, opener=opener)
+    ledger = SoperatorReleaseIdentityLedger(identity_root)
+    with ledger.locked(metadata) as identity:
+        receipt = acquire_soperator_release_source(metadata, cache_root=cache_root, opener=opener)
+        described = describe_soperator_source(metadata, receipt)
+        fresh = resolve_soperator_release(metadata.release, opener=opener)
+        if (fresh.commit, fresh.tree) != (metadata.commit, metadata.tree):
+            raise ValueError("official Soperator release tag moved while verifying source")
+        ledger.record(identity)
+    return described
+
+
+@dataclass(frozen=True)
+class SoperatorObservabilityDefaults:
+    metadata: SoperatorReleaseMetadata
+    source: SoperatorSourceReceipt
+    values: dict[str, Any]
+
+
+def resolve_soperator_observability_defaults(
+    release: str, *, emit: Callable[[str], None] | None = None
+) -> SoperatorObservabilityDefaults:
+    """Verify source-only query defaults without acquiring the deployment chart graph."""
+    from .soperator_values import read_observability_defaults
+
+    _notify(emit, f"Verifying Soperator {release} source for datasource connections...")
+    metadata = resolve_soperator_release(release)
+    ledger = SoperatorReleaseIdentityLedger()
+    _notify(emit, "Checking the verified release identity and acquiring its source defaults...")
+    with ledger.locked(metadata) as identity:
+        source = acquire_soperator_release_source(metadata)
+        if (source.release, source.commit, source.tree) != (
+            metadata.release,
+            metadata.commit,
+            metadata.tree,
+        ):
+            raise ValueError("Soperator source receipt does not match resolved release metadata")
+        root = Path(source.source_dir)
+        contract, _ = classify_soperator_release_capabilities(root)
+        if contract != "upstream-flux-v1":
+            raise ValueError("Soperator datasource defaults require the upstream Flux contract")
+        defaults = read_observability_defaults(root / "helm/soperator-fluxcd/values.yaml")
+        _notify(emit, "Re-verifying the Soperator release tag identity...")
+        fresh = resolve_soperator_release(metadata.release)
+        if (fresh.repository, fresh.tag, fresh.commit, fresh.tree) != (
+            metadata.repository,
+            metadata.tag,
+            metadata.commit,
+            metadata.tree,
+        ):
+            raise RuntimeError(
+                "official Soperator release tag moved while its defaults were verified"
+            )
+        ledger.record(identity)
+    _notify(emit, "Verified Soperator datasource defaults are ready.")
+    return SoperatorObservabilityDefaults(metadata, source, defaults)
+
+
+_FROZEN_RELEASES: ContextVar[dict[str, FrozenSoperatorRelease] | None] = ContextVar(
     "nebius_cxcli_frozen_soperator_release",
     default=None,
 )
 
 
-def current_frozen_soperator_release(release: str) -> FrozenSoperatorRelease | None:
-    frozen = _FROZEN_RELEASE.get()
-    if frozen is not None and frozen.snapshot.release == release:
-        return frozen
-    return None
+def current_frozen_soperator_release(
+    release: str,
+    *,
+    target_ref: str,
+    request_sha256: str | None = None,
+) -> FrozenSoperatorRelease | None:
+    frozen = (_FROZEN_RELEASES.get() or {}).get(target_ref)
+    if frozen is None:
+        return None
+    if frozen.snapshot.release != release:
+        raise ValueError("Bound Soperator target has a different release")
+    if request_sha256 is not None and frozen.snapshot.request_sha256 != request_sha256:
+        raise ValueError("Bound Soperator target has a different admission request")
+    return frozen
 
 
 @contextmanager
 def use_frozen_soperator_release(frozen: FrozenSoperatorRelease):
-    token = _FROZEN_RELEASE.set(frozen)
+    releases = dict(_FROZEN_RELEASES.get() or {})
+    target = frozen.snapshot.target_ref
+    previous = releases.get(target)
+    if previous is not None and previous.snapshot != frozen.snapshot:
+        raise ValueError("Conflicting frozen Soperator snapshots for one target")
+    releases[target] = frozen
+    token = _FROZEN_RELEASES.set(releases)
     try:
         yield frozen
     finally:
-        _FROZEN_RELEASE.reset(token)
+        _FROZEN_RELEASES.reset(token)
 
 
 def _run(command: Sequence[str], *, label: str) -> subprocess.CompletedProcess[str]:
     timeout = 300
     try:
-        result = subprocess.run(
+        result = kubernetes_process.run(
             list(command),
             capture_output=True,
             text=True,
@@ -318,6 +453,7 @@ def _transient_chart_pull_reason(exc: BaseException) -> str | None:
         return None
     reason_markers = (
         ("operation timed out", "network timeout"),
+        ("timed out after", "network timeout"),
         ("i/o timeout", "network timeout"),
         ("timeout awaiting response", "network timeout"),
         ("connection reset", "connection reset"),
@@ -335,7 +471,8 @@ def _transient_chart_pull_reason(exc: BaseException) -> str | None:
     return next((reason for marker, reason in reason_markers if marker in detail), None)
 
 
-def _pull_chart(
+@contextmanager
+def _downloaded_chart(
     *,
     helm: str,
     chart: str,
@@ -343,8 +480,8 @@ def _pull_chart(
     repository: str,
     destination: Path,
     emit: Callable[[str], None] | None = None,
-) -> tuple[str, str, str | None]:
-    """Pull and validate one chart with bounded transient-only retries."""
+) -> Iterator[tuple[Path, tuple[str, str, str | None]]]:
+    """Keep one verified package alive through consumption, then remove it."""
 
     destination.mkdir(parents=True, exist_ok=True)
     last_reason = "transient network failure"
@@ -361,34 +498,60 @@ def _pull_chart(
             )
         )
         try:
-            return _pull_chart_once(
-                helm=helm,
-                chart=chart,
-                version=version,
-                repository=repository,
-                destination=attempt_dir,
-            )
-        except (RuntimeError, subprocess.TimeoutExpired) as exc:
-            reason = _transient_chart_pull_reason(exc)
-            if reason is None:
-                raise
-            last_reason = reason
-            if attempt >= _CHART_PULL_ATTEMPTS:
-                raise RuntimeError(
-                    f"download official chart {chart} {version} failed after "
-                    f"{_CHART_PULL_ATTEMPTS} attempts: {last_reason}"
-                ) from None
-            _notify(
-                emit,
-                f"Retrying chart {chart} after {reason} "
-                f"(attempt {attempt + 1}/{_CHART_PULL_ATTEMPTS})",
-            )
+            try:
+                result = _pull_chart_once(
+                    helm=helm,
+                    chart=chart,
+                    version=version,
+                    repository=repository,
+                    destination=attempt_dir,
+                )
+            except (RuntimeError, subprocess.TimeoutExpired) as exc:
+                reason = _transient_chart_pull_reason(exc)
+                if reason is None:
+                    raise
+                last_reason = reason
+                if attempt >= _CHART_PULL_ATTEMPTS:
+                    raise RuntimeError(
+                        f"download official chart {chart} {version} failed after "
+                        f"{_CHART_PULL_ATTEMPTS} attempts: {last_reason}"
+                    ) from None
+                _notify(
+                    emit,
+                    f"Retrying chart {chart} after {reason} "
+                    f"(attempt {attempt + 1}/{_CHART_PULL_ATTEMPTS})",
+                )
+            else:
+                # Caller failures must propagate, never enter acquisition retries.
+                yield attempt_dir, result
+                return
         finally:
             shutil.rmtree(attempt_dir, ignore_errors=True)
         delay = _CHART_PULL_BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
         delay += random.uniform(0.0, _CHART_PULL_MAX_JITTER_SECONDS)
         time.sleep(delay)
     raise AssertionError("unreachable chart pull retry state")
+
+
+def _pull_chart(
+    *,
+    helm: str,
+    chart: str,
+    version: str,
+    repository: str,
+    destination: Path,
+    emit: Callable[[str], None] | None = None,
+) -> tuple[str, str, str | None]:
+    """Collect verified package metadata without retaining the downloaded bytes."""
+    with _downloaded_chart(
+        helm=helm,
+        chart=chart,
+        version=version,
+        repository=repository,
+        destination=destination,
+        emit=emit,
+    ) as (_, metadata):
+        return metadata
 
 
 def _validated_chart_repository(repository: str) -> str:
@@ -412,8 +575,8 @@ def _validated_chart_repository(repository: str) -> str:
 
 def _render_upstream_umbrella(source_root: Path, *, helm: str) -> list[dict[str, Any]]:
     chart = source_root / "helm" / "soperator-fluxcd"
-    # Freeze the complete adapter-supported graph, not only upstream defaults.
-    # Runtime rendering selects a subset from this immutable superset.
+    # A known optional can hide another default child. Collect both inventories;
+    # runtime rendering still selects the actual graph from effective values.
     supported_optional_releases = (
         "nodesets.enabled=true",
         "storageClasses.enabled=true",
@@ -426,56 +589,143 @@ def _render_upstream_umbrella(source_root: Path, *, helm: str) -> list[dict[str,
     set_arguments = [
         argument for value in supported_optional_releases for argument in ("--set", value)
     ]
-    result = _run(
-        [
-            helm,
-            "template",
-            "soperator-fluxcd",
-            str(chart),
-            "--namespace",
-            "flux-system",
-            *set_arguments,
-        ],
-        label="render verified upstream Soperator umbrella",
-    )
-    return [
-        document for document in yaml.safe_load_all(result.stdout) if isinstance(document, dict)
-    ]
+    inventory: dict[tuple[str, str, str], dict[str, Any]] = {}
+    authorities: dict[tuple[str, str, str], tuple[str, str, str] | str] = {}
+    for arguments in (set_arguments, []):
+        result = _run(
+            [
+                helm,
+                "template",
+                "soperator-fluxcd",
+                str(chart),
+                "--namespace",
+                "flux-system",
+                *arguments,
+            ],
+            label="render verified upstream Soperator umbrella",
+        )
+        documents = [doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict)]
+        repositories = _rendered_repositories(documents)
+        seen: set[tuple[str, str, str]] = set()
+        for document in documents:
+            kind = str(document.get("kind") or "")
+            if kind not in {"HelmRelease", "HelmRepository", "OCIRepository"}:
+                continue
+            metadata = document.get("metadata")
+            if not isinstance(metadata, Mapping) or not metadata.get("name"):
+                raise ValueError("upstream chart inventory has invalid metadata")
+            identity = (
+                kind,
+                str(metadata.get("namespace") or "flux-system"),
+                str(metadata["name"]),
+            )
+            if identity in seen:
+                raise ValueError("upstream chart inventory has duplicate identities")
+            seen.add(identity)
+            authority = (
+                _release_chart_identity(document, repositories)
+                if kind == "HelmRelease"
+                else repositories[identity]
+            )
+            if kind == "HelmRelease":
+                _release_chart_dependencies(document)
+            previous = inventory.get(identity)
+            if previous is not None:
+                if authorities[identity] != authority:
+                    raise ValueError("upstream chart authority differs between supported renders")
+            else:
+                inventory[identity] = document
+                authorities[identity] = authority
+        # Keep the first render's edges for shared inventory nodes. Defaults may
+        # reference disabled optionals; runtime validates the effective graph.
+    return list(inventory.values())
 
 
-def _rendered_repositories(documents: Sequence[Mapping[str, Any]]) -> dict[str, str]:
-    repositories: dict[str, str] = {}
+def _source_chart_dependencies(source_chart: Path) -> tuple[tuple[str, str, str], ...]:
+    metadata = yaml.safe_load((source_chart / "Chart.yaml").read_text(encoding="utf-8"))
+    dependencies = metadata.get("dependencies", [])
+    if not isinstance(dependencies, list):
+        raise ValueError(f"source chart {source_chart.name} has invalid dependencies")
+    identities = []
+    for dependency in dependencies:
+        if not isinstance(dependency, Mapping):
+            raise ValueError(f"source chart {source_chart.name} has invalid dependency metadata")
+        name = str(dependency.get("name") or "")
+        version = str(dependency.get("version") or "")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", name) or not version:
+            raise ValueError(f"source chart {source_chart.name} has an invalid dependency identity")
+        repository = _validated_chart_repository(str(dependency.get("repository") or ""))
+        identities.append((name, version, repository))
+    return tuple(identities)
+
+
+def _rendered_repositories(
+    documents: Sequence[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], str]:
+    repositories: dict[tuple[str, str, str], str] = {}
     for document in documents:
         if document.get("kind") not in {"HelmRepository", "OCIRepository"}:
             continue
-        metadata = document.get("metadata")
-        spec = document.get("spec")
+        metadata, spec = document.get("metadata"), document.get("spec")
         if not isinstance(metadata, Mapping) or not isinstance(spec, Mapping):
-            continue
+            raise ValueError("upstream chart repository has invalid metadata")
         name = str(metadata.get("name") or "")
-        url = str(spec.get("url") or "").rstrip("/")
-        if name and url:
-            repositories[name] = _validated_chart_repository(url)
+        namespace = str(metadata.get("namespace") or "flux-system")
+        identity = (str(document["kind"]), namespace, name)
+        if not name or identity in repositories:
+            raise ValueError("upstream chart repository identities are ambiguous")
+        repositories[identity] = _validated_chart_repository(str(spec.get("url") or ""))
     return repositories
 
 
 def _release_chart_identity(
     document: Mapping[str, Any],
-    repositories: Mapping[str, str],
+    repositories: Mapping[tuple[str, str, str], str],
 ) -> tuple[str, str, str]:
+    if document.get("apiVersion") != "helm.toolkit.fluxcd.io/v2":
+        raise ValueError("upstream HelmRelease uses an unsupported API contract")
+    metadata = document.get("metadata")
+    namespace = (
+        str(metadata.get("namespace") or "flux-system")
+        if isinstance(metadata, Mapping)
+        else "flux-system"
+    )
     spec = document.get("spec")
     chart_wrapper = spec.get("chart") if isinstance(spec, Mapping) else None
     chart_spec = chart_wrapper.get("spec") if isinstance(chart_wrapper, Mapping) else None
     if not isinstance(chart_spec, Mapping):
-        raise ValueError("upstream HelmRelease has no chart specification")
+        raise ValueError("upstream HelmRelease has no supported chart specification")
     source_ref = chart_spec.get("sourceRef")
-    source_name = str(source_ref.get("name") or "") if isinstance(source_ref, Mapping) else ""
-    repository = repositories.get(source_name, "")
+    if not isinstance(source_ref, Mapping) or source_ref.get("kind") != "HelmRepository":
+        raise ValueError("upstream HelmRelease uses an unsupported chart source kind")
+    identity = (
+        "HelmRepository",
+        str(source_ref.get("namespace") or namespace),
+        str(source_ref.get("name") or ""),
+    )
+    repository = repositories.get(identity, "")
     chart = str(chart_spec.get("chart") or "")
     version = str(chart_spec.get("version") or "")
-    if not repository or not chart or not version:
+    if not repository or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", chart) or not version:
         raise ValueError("upstream HelmRelease has an unresolved chart authority")
     return chart, version, repository
+
+
+def _release_chart_dependencies(document: Mapping[str, Any]) -> tuple[str, ...]:
+    metadata, spec = document["metadata"], document["spec"]
+    namespace = str(metadata.get("namespace") or "flux-system")
+    required = spec.get("dependsOn", [])
+    if not isinstance(required, list) or any(
+        not isinstance(item, Mapping)
+        or set(item) - {"name", "namespace"}
+        or not item.get("name")
+        or item.get("namespace", namespace) != namespace
+        for item in required
+    ):
+        raise ValueError(
+            f"upstream HelmRelease {metadata.get('name')} has unsupported dependencies"
+        )
+    return tuple(str(item["name"]) for item in required)
 
 
 def _topological_stages(
@@ -531,310 +781,119 @@ def _populate_jail_identity(source_root: Path) -> tuple[str, str]:
 
 
 def build_soperator_release_snapshot(
-    metadata: SoperatorReleaseMetadata,
-    source: SoperatorSourceReceipt,
+    source: VerifiedSoperatorSource,
+    request: SoperatorArtifactRequest,
     *,
-    runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+    cache_root: Path | None = None,
     emit: Callable[[str], None] | None = None,
 ) -> SoperatorReleaseSnapshot:
-    """Resolve all chart/package identities and seal one operation snapshot."""
+    """Admit the complete required target inventory before sealing evidence."""
+    from .soperator_artifact_selection import build_required_snapshot
 
-    del runner  # Reserved injection boundary; subprocess execution remains centralized in _run.
-    if (
-        source.release != metadata.release
-        or source.commit != metadata.commit
-        or source.tree != metadata.tree
-    ):
-        raise ValueError("Soperator source receipt does not match resolved release metadata")
-    helm = shutil.which("helm")
-    if not helm:
-        raise RuntimeError("helm is required to freeze a Soperator release snapshot")
-    source_root = Path(source.source_dir).resolve(strict=True)
-    capability_contract, capability_sha256 = classify_soperator_release_capabilities(source_root)
-    if capability_contract != "upstream-flux-v1":
-        raise ValueError(
-            "the requested target release does not implement the supported upstream Flux contract"
-        )
-    _notify(emit, "Rendering the verified upstream Soperator chart graph")
-    documents = _render_upstream_umbrella(source_root, helm=helm)
-    repositories = _rendered_repositories(documents)
-    helm_releases = [item for item in documents if item.get("kind") == "HelmRelease"]
-    if not helm_releases:
-        raise ValueError("verified upstream umbrella rendered no HelmRelease graph")
+    return build_required_snapshot(source, request, cache_root=cache_root, emit=emit)
 
-    chart_identities: dict[str, tuple[str, str, str]] = {}
-    release_dependencies: dict[str, tuple[str, ...]] = {}
-    release_namespaces: dict[str, str] = {}
-    for document in helm_releases:
-        metadata_row = document.get("metadata")
-        if not isinstance(metadata_row, Mapping):
-            raise ValueError("upstream HelmRelease has no metadata")
-        name = str(metadata_row.get("name") or "")
-        namespace = str(metadata_row.get("namespace") or "flux-system")
-        if not name or name in chart_identities:
-            raise ValueError("upstream HelmRelease identities are ambiguous")
-        chart_identities[name] = _release_chart_identity(document, repositories)
-        spec = document.get("spec")
-        depends_on = spec.get("dependsOn", []) if isinstance(spec, Mapping) else []
-        if not isinstance(depends_on, list):
-            raise ValueError(f"upstream HelmRelease {name} has invalid dependencies")
-        release_dependencies[name] = tuple(
-            str(item.get("name") or "")
-            for item in depends_on
-            if isinstance(item, Mapping) and str(item.get("name") or "")
-        )
-        release_namespaces[name] = namespace
-    stages = _topological_stages(release_dependencies)
 
-    charts: dict[str, SoperatorChartSnapshot] = {}
-    third_party: dict[str, SoperatorThirdPartyChartSnapshot] = {}
-    graph: list[SoperatorReleaseGraphNode] = []
-    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-freeze-") as value:
-        temp = Path(value)
-        for chart_name, key in _CHART_KEY_BY_NAME.items():
-            source_path = source_root / "helm" / chart_name.removeprefix("helm-")
-            if not (source_path / "Chart.yaml").is_file():
-                # Chart directory names are not always the chart name without its prefix.
-                matches = [
-                    path.parent
-                    for path in source_root.glob("helm/*/Chart.yaml")
-                    if isinstance(
-                        (chart_payload := yaml.safe_load(path.read_text(encoding="utf-8"))),
-                        Mapping,
-                    )
-                    and str(chart_payload.get("name") or "") == chart_name
-                ]
-                if len(matches) != 1:
-                    raise ValueError(
-                        f"unknown target capability: required chart {chart_name} is absent"
-                    )
-                source_path = matches[0]
-            source_chart = yaml.safe_load((source_path / "Chart.yaml").read_text(encoding="utf-8"))
-            if not isinstance(source_chart, Mapping):
-                raise ValueError(f"upstream source chart {chart_name} has invalid metadata")
-            source_chart_name = str(source_chart.get("name") or "")
-            source_chart_version = str(source_chart.get("version") or "")
-            if source_chart_name != chart_name or not source_chart_version:
-                raise ValueError(f"upstream source chart {chart_name} has an invalid identity")
-            source_tree_sha256, _ = normalized_tree_manifest(source_path)
-            destination = temp / f"upstream-{key}"
-            destination.mkdir()
-            version, package_sha256, oci_digest = _pull_chart(
-                helm=helm,
-                chart=chart_name,
-                version=source_chart_version,
-                repository=SOPERATOR_UPSTREAM_REGISTRY,
-                destination=destination,
-                emit=emit,
-            )
-            if version != source_chart_version or oci_digest is None:
-                raise ValueError(f"official upstream chart {chart_name} differs from release")
-            charts[key] = SoperatorChartSnapshot(
-                name=chart_name,
-                version=version,
-                digest=oci_digest,
-                package_sha256=package_sha256,
-                source_path=source_path.relative_to(source_root).as_posix(),
-                source_tree_sha256=source_tree_sha256,
-            )
-
-        resolved_third_party: dict[tuple[str, str, str], str] = {}
-        for release_name, (chart_name, constraint, repository) in chart_identities.items():
-            if repository == SOPERATOR_UPSTREAM_REGISTRY:
-                chart_key = _CHART_KEY_BY_NAME.get(chart_name)
-                owner = "upstream"
-                if chart_key is None:
-                    raise ValueError(f"unknown upstream chart in release graph: {chart_name}")
-            else:
-                owner = "third-party"
-                chart_key = _THIRD_PARTY_KEY_BY_CHART.get(chart_name)
-                if chart_key is None:
-                    raise ValueError(
-                        f"unknown third-party chart in release capability contract: {chart_name}"
-                    )
-                identity = (chart_name, constraint, repository)
-                prior_key = resolved_third_party.get(identity)
-                if prior_key is None:
-                    destination = temp / f"third-party-{chart_key}"
-                    destination.mkdir()
-                    version, package_sha256, oci_digest = _pull_chart(
-                        helm=helm,
-                        chart=chart_name,
-                        version=constraint,
-                        repository=repository,
-                        destination=destination,
-                        emit=emit,
-                    )
-                    third_party[chart_key] = SoperatorThirdPartyChartSnapshot(
-                        chart=chart_name,
-                        version=version,
-                        repository=repository,
-                        package_sha256=package_sha256,
-                        oci_digest=oci_digest,
-                    )
-                    resolved_third_party[identity] = chart_key
-                else:
-                    chart_key = prior_key
-            graph.append(
-                SoperatorReleaseGraphNode(
-                    release_name=release_name,
-                    namespace=release_namespaces[release_name],
-                    owner=owner,
-                    stage=stages[release_name],
-                    chart_key=chart_key,
-                    dependencies=release_dependencies[release_name],
-                    is_main=release_name == SOPERATOR_MAIN_RELEASE_NAME,
-                )
-            )
-
-    _notify(emit, "Resolving the immutable PopulateJail image and Jail CUDA target")
-    scripts_manifest_sha256, _ = normalized_script_manifest(source_root)
-    populate_jail_image, jail_cuda_version = _populate_jail_identity(source_root)
-    snapshot = SoperatorReleaseSnapshot(
-        schema=SOPERATOR_RELEASE_SNAPSHOT_SCHEMA,
-        selector=metadata.selector,
-        release=metadata.release,
-        repository=metadata.repository,
-        tag=metadata.tag,
-        commit=metadata.commit,
-        tree=metadata.tree,
-        archive_url=metadata.archive_url,
-        archive_sha256=source.archive_sha256,
-        archive_root=metadata.archive_root,
-        source_manifest_sha256=source.manifest_sha256,
-        registry=SOPERATOR_UPSTREAM_REGISTRY,
-        capability_contract=capability_contract,
-        capability_sha256=capability_sha256,
-        charts=charts,
-        third_party_charts=third_party,
-        release_graph=tuple(sorted(graph, key=lambda item: (item.stage, item.release_name))),
-        scripts_manifest_sha256=scripts_manifest_sha256,
-        image_references=_source_image_references(source_root),
-        mount_image=SOPERATOR_ADAPTER_MOUNT_IMAGE,
-        adapter_state_schema="nebius-cxcli.soperator-adapter-state.v2",
-        populate_jail_image=populate_jail_image,
-        jail_cuda_version=jail_cuda_version,
-        snapshot_sha256="",
+def _snapshot_cache_root(cache_root: Path | None) -> Path:
+    return prepare_private_cache_root(
+        (cache_root or default_soperator_source_cache_root()).expanduser() / "snapshots-v3"
     )
-    return seal_soperator_release_snapshot(snapshot)
 
 
 def _recent_release_snapshot_path(
-    selector: str,
+    request_sha256: str,
     *,
     cache_root: Path | None,
 ) -> Path:
-    normalized = normalize_soperator_release_selector(selector)
-    root = prepare_private_cache_root(
-        (cache_root or default_soperator_source_cache_root()).expanduser() / "snapshots"
-    )
-    return root / f"{normalized}.json"
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
+        raise ValueError("Invalid Soperator admission request digest")
+    return _snapshot_cache_root(cache_root) / f"{request_sha256.removeprefix('sha256:')}.json"
 
 
 def _load_recent_release_snapshot(
-    selector: str,
+    request_sha256: str,
     *,
     cache_root: Path | None,
     now: float | None = None,
 ) -> SoperatorReleaseSnapshot | None:
-    normalized = normalize_soperator_release_selector(selector)
-    path = _recent_release_snapshot_path(normalized, cache_root=cache_root)
+    path = _recent_release_snapshot_path(request_sha256, cache_root=cache_root)
     try:
         info = path.lstat()
     except FileNotFoundError:
         return None
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise ValueError("cached Soperator release snapshot is unsafe")
-    observed_at = time.time() if now is None else now
-    age = observed_at - info.st_mtime
+    age = (time.time() if now is None else now) - info.st_mtime
     if age < 0:
         raise ValueError("cached Soperator release snapshot has a future timestamp")
     if age > _RECENT_RELEASE_SNAPSHOT_MAX_AGE_SECONDS:
         return None
     snapshot = load_soperator_release_snapshot(path)
-    if snapshot.selector != normalized or (
-        normalized != "latest" and snapshot.release != normalized
-    ):
-        raise ValueError("cached Soperator release snapshot selector differs")
+    if snapshot.request_sha256 != request_sha256:
+        raise ValueError("cached Soperator admission request differs")
     if snapshot.mount_image != SOPERATOR_ADAPTER_MOUNT_IMAGE:
         return None
     return snapshot
 
 
-def _write_recent_release_snapshot(
-    snapshot: SoperatorReleaseSnapshot,
-    *,
-    selector: str,
-    cache_root: Path | None,
-) -> Path:
-    normalized = normalize_soperator_release_selector(selector)
-    if normalized != "latest" and snapshot.release != normalized:
-        raise ValueError("Soperator release snapshot cannot be cached under another release")
-    cached = seal_soperator_release_snapshot(
-        replace(snapshot, selector=normalized, snapshot_sha256="")
-    )
-    path = _recent_release_snapshot_path(normalized, cache_root=cache_root)
-    _retain_release_snapshot(cached, cache_root=cache_root)
-    if path.exists():
-        _retain_release_snapshot(load_soperator_release_snapshot(path), cache_root=cache_root)
-    write_soperator_release_snapshot(path, cached)
-    return path
-
-
 def _retain_release_snapshot(
     snapshot: SoperatorReleaseSnapshot, *, cache_root: Path | None
 ) -> None:
-    """Keep selector and exact-release identities after discovery cache expiry."""
+    snapshot = seal_soperator_release_snapshot(snapshot)
+    root = prepare_private_cache_root(_snapshot_cache_root(cache_root) / "by-digest")
+    path = root / f"{snapshot.snapshot_sha256.removeprefix('sha256:')}.json"
+    if path.exists() or path.is_symlink():
+        if load_soperator_release_snapshot(path) != snapshot:
+            raise ValueError("retained Soperator snapshot differs from its identity")
+    else:
+        write_soperator_release_snapshot(path, snapshot)
 
-    root = prepare_private_cache_root(
-        _recent_release_snapshot_path(snapshot.release, cache_root=cache_root).parent / "by-digest"
-    )
-    for selector in {snapshot.selector, snapshot.release}:
-        sealed = seal_soperator_release_snapshot(
-            replace(snapshot, selector=selector, snapshot_sha256="")
-        )
-        path = root / f"{sealed.snapshot_sha256.removeprefix('sha256:')}.json"
-        if path.exists() or path.is_symlink():
-            if load_soperator_release_snapshot(path) != sealed:
-                raise ValueError("retained Soperator release snapshot differs from its identity")
-        else:
-            write_soperator_release_snapshot(path, sealed)
+
+def _write_recent_release_snapshot(
+    snapshot: SoperatorReleaseSnapshot,
+    *,
+    cache_root: Path | None,
+) -> Path:
+    snapshot = seal_soperator_release_snapshot(snapshot)
+    _retain_release_snapshot(snapshot, cache_root=cache_root)
+    path = _recent_release_snapshot_path(snapshot.request_sha256, cache_root=cache_root)
+    write_soperator_release_snapshot(path, snapshot)
+    return path
 
 
 def _load_frozen_release_snapshot(
-    selector: str, digest: str, *, cache_root: Path | None
+    selector: str,
+    digest: str,
+    *,
+    cache_root: Path | None,
+    target_ref: str,
 ) -> SoperatorReleaseSnapshot:
-    """Locate content by admitted digest; discovery freshness grants no authority."""
-
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ValueError("invalid frozen Soperator release snapshot digest")
-    root = _recent_release_snapshot_path(selector, cache_root=cache_root).parent
-    candidates = (
-        root / "by-digest" / f"{digest.removeprefix('sha256:')}.json",
-        root / f"{selector}.json",
-        root / "latest.json",
-    )
-    for index, path in enumerate(candidates):
-        if not path.exists() and not path.is_symlink():
-            continue
-        snapshot = load_soperator_release_snapshot(path)
-        normalized = seal_soperator_release_snapshot(
-            replace(snapshot, selector=selector, snapshot_sha256="")
-        )
-        if normalized.snapshot_sha256 != digest:
-            if index == 0:
-                raise ValueError("retained Soperator release snapshot digest differs")
-            continue
-        if selector != "latest" and normalized.release != selector:
-            raise ValueError("frozen Soperator release snapshot version differs")
-        _retain_release_snapshot(normalized, cache_root=cache_root)
-        return normalized
-    raise RuntimeError("the approved Soperator release snapshot content is unavailable")
+    bound = (_FROZEN_RELEASES.get() or {}).get(target_ref)
+    if bound is not None:
+        if bound.snapshot.snapshot_sha256 != digest:
+            raise ValueError("Bound Soperator snapshot digest differs from requested authority")
+        sealed = seal_soperator_release_snapshot(bound.snapshot)
+        if selector not in {"latest", sealed.release}:
+            raise ValueError("Bound Soperator snapshot release differs")
+        return sealed
+    path = _snapshot_cache_root(cache_root) / "by-digest" / f"{digest.removeprefix('sha256:')}.json"
+    if not path.exists():
+        raise RuntimeError("the approved Soperator release snapshot content is unavailable")
+    snapshot = load_soperator_release_snapshot(path)
+    if snapshot.snapshot_sha256 != digest or selector not in {"latest", snapshot.release}:
+        raise ValueError("retained Soperator release snapshot identity differs")
+    if snapshot.target_ref != target_ref:
+        raise ValueError("retained Soperator release snapshot target differs")
+    return snapshot
 
 
 def freeze_soperator_release(
     selector: str | None = "latest",
     *,
+    request: SoperatorArtifactRequest | None = None,
+    source: VerifiedSoperatorSource | None = None,
+    target_ref: str | None = None,
     current_release: str | None = None,
     cache_root: Path | None = None,
     identity_root: Path | None = None,
@@ -842,12 +901,19 @@ def freeze_soperator_release(
     opener: Any = None,
     emit: Callable[[str], None] | None = None,
 ) -> FrozenSoperatorRelease:
-    """Resolve, verify, and freeze a stable official release before mutation."""
+    """Admit requested artifacts, or reverify one exact captured operation."""
+    from .soperator_artifact_selection import compile_required_stages
+    from .soperator_release_artifacts import verify_soperator_release_artifacts
 
-    normalized_selector = normalize_soperator_release_selector(selector)
+    normalized = normalize_soperator_release_selector(selector)
     if snapshot_sha256 is not None:
+        if not target_ref:
+            raise ValueError("Frozen Soperator snapshot replay requires its target identity")
         snapshot = _load_frozen_release_snapshot(
-            normalized_selector, snapshot_sha256, cache_root=cache_root
+            normalized,
+            snapshot_sha256,
+            cache_root=cache_root,
+            target_ref=target_ref,
         )
         if current_release and SoperatorVersion.parse(snapshot.release) < SoperatorVersion.parse(
             current_release
@@ -855,79 +921,67 @@ def freeze_soperator_release(
             raise ValueError(
                 f"Soperator downgrade {current_release} -> {snapshot.release} is not supported"
             )
-        _notify(emit, "Re-verifying the approved release snapshot source and identity")
         frozen = frozen_soperator_release_from_snapshot(snapshot, cache_root=cache_root)
         with SoperatorReleaseIdentityLedger(identity_root).locked(frozen.metadata):
             pass
+        verify_soperator_release_artifacts(snapshot, frozen.source, cache_root=cache_root)
+        _retain_release_snapshot(snapshot, cache_root=cache_root)
         return frozen
-    if opener is None:
-        cached_snapshot = _load_recent_release_snapshot(
-            normalized_selector,
-            cache_root=cache_root,
-        )
-        if cached_snapshot is not None:
-            _retain_release_snapshot(cached_snapshot, cache_root=cache_root)
-            _notify(
-                emit,
-                "Cached release snapshot found; re-verifying source and identity",
-            )
-            if current_release and SoperatorVersion.parse(
-                cached_snapshot.release
-            ) < SoperatorVersion.parse(current_release):
-                raise ValueError(
-                    f"Soperator downgrade {current_release} -> "
-                    f"{cached_snapshot.release} is not supported"
-                )
-            frozen = frozen_soperator_release_from_snapshot(
-                cached_snapshot,
-                cache_root=cache_root,
-            )
-            ledger = SoperatorReleaseIdentityLedger(identity_root)
-            with ledger.locked(frozen.metadata):
-                pass
-            _notify(emit, "Cached release source and identity re-verified")
-            return frozen
-
-    _notify(emit, "Resolving the exact official Soperator release identity")
-    metadata = resolve_soperator_release(
-        normalized_selector,
-        current_release=current_release,
+    if request is None:
+        raise ValueError("Soperator package admission requires a target configuration request")
+    source = source or resolve_soperator_source(
+        normalized,
+        cache_root=cache_root,
+        identity_root=identity_root,
         opener=opener,
+        emit=emit,
     )
-    ledger = SoperatorReleaseIdentityLedger(identity_root)
-    with ledger.locked(metadata) as release_identity:
-        _notify(emit, "Acquiring and verifying the official release source archive")
-        source = acquire_soperator_release_source(
-            metadata,
-            cache_root=cache_root,
-            opener=opener,
+    if normalized not in {"latest", source.release}:
+        raise ValueError("Soperator source differs from the requested release")
+    if current_release and SoperatorVersion.parse(source.release) < SoperatorVersion.parse(
+        current_release
+    ):
+        raise ValueError(
+            f"Soperator downgrade {current_release} -> {source.release} is not supported"
         )
-        snapshot = build_soperator_release_snapshot(metadata, source, emit=emit)
-        _notify(emit, "Re-verifying the official release tag and source identity")
-        fresh = resolve_soperator_release(metadata.release, opener=opener)
-        if (
-            fresh.repository,
-            fresh.tag,
-            fresh.commit,
-            fresh.tree,
-        ) != (
-            metadata.repository,
-            metadata.tag,
-            metadata.commit,
-            metadata.tree,
-        ):
-            raise RuntimeError(
-                "official Soperator release tag moved while its artifacts were being verified"
+    digest = request.fingerprint(source.identity_sha256)
+    cached = (
+        _load_recent_release_snapshot(digest, cache_root=cache_root) if opener is None else None
+    )
+    if cached is not None:
+        if cached.target_ref != request.target_ref or cached.commit != source.metadata.commit:
+            raise ValueError("Cached Soperator source or target differs from admission")
+        for stage, (values, _) in compile_required_stages(source, request, cached).items():
+            graph = cached.release_graph if stage == "desired" else cached.stage_graphs[stage]
+            from .soperator_adapter import render_soperator_adapter_documents
+            from .soperator_values import with_source_observability
+
+            adapter_docs, _ = render_soperator_adapter_documents(
+                with_source_observability(request.stages[stage], source),
+                release=cached,
             )
-        ledger.record(release_identity)
-    _notify(emit, "Sealing the verified Soperator release snapshot")
-    for cache_selector in sorted({normalized_selector, metadata.release}):
-        _write_recent_release_snapshot(
-            snapshot,
-            selector=cache_selector,
-            cache_root=cache_root,
+            verify_soperator_release_artifacts(
+                replace(cached, release_graph=graph),
+                source.source,
+                cache_root=cache_root,
+                values=values,
+                post_render_patches=request.post_render_patches,
+                adapter_documents=adapter_docs,
+            )
+        snapshot = cached
+    else:
+        snapshot = build_soperator_release_snapshot(
+            source, request, cache_root=cache_root, emit=emit
         )
-    return FrozenSoperatorRelease(metadata=metadata, source=source, snapshot=snapshot)
+    snapshot = seal_soperator_release_snapshot(snapshot)
+    ledger = SoperatorReleaseIdentityLedger(identity_root)
+    with ledger.locked(source.metadata) as identity:
+        fresh = resolve_soperator_release(source.release, opener=opener)
+        if (fresh.commit, fresh.tree) != (source.metadata.commit, source.metadata.tree):
+            raise ValueError("official Soperator release tag moved during artifact admission")
+        ledger.record(identity)
+        _write_recent_release_snapshot(snapshot, cache_root=cache_root)
+    return FrozenSoperatorRelease(source.metadata, source.source, snapshot)
 
 
 def frozen_soperator_release_from_snapshot(

@@ -1,7 +1,6 @@
 ---
 name: commit-push
-description: "Use only when explicitly asked to commit all repo changes and push an unmanaged non-default branch with repo-root staging and validation. Reject managed worktrees; do not open a PR."
-disable-model-invocation: true
+description: "Use when the user asks to commit all repo changes and push an unmanaged non-default branch with repo-root staging and validation. Reject managed worktrees; do not open a PR."
 ---
 
 # Commit Push
@@ -34,6 +33,25 @@ never permission to bypass a guard or claim unobserved behavior.
 Use this skill to publish the current feature branch by committing all local
 work across the whole Git repository and pushing that branch to GitHub. Keep
 the workflow narrow: commit, push, verify status, and report blockers.
+
+## Invocation And Authority
+
+Select this skill when the user semantically asks to commit and push, including
+"please commit and push", "could you commit everything and push this branch?",
+and "commit and push using $commit-push". Native skill mentions may appear
+anywhere in the action request. No exact phrase or leading token is required.
+Skill selection is not authorization: help, examples, discussion, negation, and
+requests to fix this skill never authorize publication. Do not ask for another
+skill invocation when the user has already clearly requested the action.
+
+The shared commit hook records only a nonauthorizing root-turn receipt. In the
+local commit phase, pass the exact hook-provided `--intent-sha256` plus
+`--requested-action commit-push` to canonical preparation. The helper binds one
+single-use authorization; never rewrite consumed state or run raw Git mutation.
+These private helper arguments are not public skill flags. Missing receipt
+context means the installation needs diagnosis, not that the user must use a
+magic phrase. Continue using an already prepared claim through its supported
+execute/review path instead of preparing it again.
 
 ## Use This Skill For
 
@@ -121,7 +139,7 @@ the workflow narrow: commit, push, verify status, and report blockers.
 6. Commit dirty work.
    - Inspect `git status --short` before preparing the commit.
    - Use the canonical installed `commit_transaction.py prepare` helper with
-     this turn's hook-provided authorization and claim paths, exact repository
+     this turn's hook-provided receipt digest, authorization and claim paths, exact repository
      root, and current session. `$commit-push` authorizes this local transaction
      only as the commit phase of the same publication workflow. Never run raw
      `git add` or `git commit`.
@@ -200,7 +218,7 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
-- Treat `$commit-push` plus an action request as permission for the exact
+- Treat a semantically explicit commit-and-push request as permission for the exact
   claim-bound local transaction and bounded current-branch push only.
 - Never run raw `git add` or `git commit`; the transaction helper is the sole
   local mutation path.

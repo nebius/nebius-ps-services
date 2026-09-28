@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,training_step_slowest_rank_median_seconds,value,0.0006681,s
+baseline-trial1,input_gradient_all_reduce_median_seconds,value,9.810000000000001e-05,s
+baseline-trial1,parameter_shard_bytes_per_rank,value,134217728,bytes
+repeat-trial1,training_step_slowest_rank_median_seconds,value,0.0006796,s
+repeat-trial1,input_gradient_all_reduce_median_seconds,value,0.0001209,s
+repeat-trial1,parameter_shard_bytes_per_rank,value,134217728,bytes

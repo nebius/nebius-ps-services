@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+trials-trial1-1,requests,value,4,none
+trials-trial1-2,requests,value,4,none
+trials-trial1-3,requests,value,4,none
+trials-trial1-4,requests,value,4,none
+trials-trial1-5,requests,value,4,none
+trials-trial1-6,requests,value,4,none

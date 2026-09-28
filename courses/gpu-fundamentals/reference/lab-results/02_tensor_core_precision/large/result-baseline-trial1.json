@@ -1,0 +1,56 @@
+{
+  "correctness": {
+    "finite_outputs_within_teaching_tolerance": true
+  },
+  "lab": "02_tensor_core_precision",
+  "measurements": {
+    "matrix_size": 1024,
+    "modes": [
+      {
+        "achieved_tflops": 32.05,
+        "relative_l2_error": 0.0,
+        "timing": {
+          "median_ms": 0.067,
+          "min_ms": 0.0663,
+          "p90_ms": 0.0706
+        }
+      },
+      {
+        "achieved_tflops": 77.25,
+        "relative_l2_error": 0.0002938,
+        "timing": {
+          "median_ms": 0.0278,
+          "min_ms": 0.0269,
+          "p90_ms": 0.0302
+        }
+      },
+      {
+        "achieved_tflops": 127.07,
+        "relative_l2_error": 0.0028748,
+        "timing": {
+          "median_ms": 0.0169,
+          "min_ms": 0.0156,
+          "p90_ms": 0.0188
+        }
+      },
+      {
+        "achieved_tflops": 130.15,
+        "relative_l2_error": 0.0003596,
+        "timing": {
+          "median_ms": 0.0165,
+          "min_ms": 0.0156,
+          "p90_ms": 0.0183
+        }
+      }
+    ]
+  },
+  "parameters": {
+    "iterations": 20,
+    "matrix_size": 1024,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

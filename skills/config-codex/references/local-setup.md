@@ -7,6 +7,13 @@ files must stay generic; rendered local files belong under that user's
 Read `config-recovery.md` before creating a missing `config.toml` or refreshing
 the public recovery baseline from a reviewed local setup.
 
+Task authorization covers necessary skill scripts after inspecting their effects;
+users do not need to repeat approval or name the command. Explicit read-only
+limits, skill invocation restrictions, actual tool controls and effects outside
+the authorized task remain binding. When explicitly asked to repair global
+instructions, patch the identified obsolete clause even if it is human-owned
+and outside the managed block; preserve unrelated rules and ordering.
+
 ## Inputs
 
 Collect these values first:

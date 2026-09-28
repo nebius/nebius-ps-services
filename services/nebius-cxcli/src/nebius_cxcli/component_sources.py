@@ -367,6 +367,7 @@ class ObservabilityServiceBucket:
 class ObservabilityGrafanaSettings:
     chart_component_id: str = ""
     gateway_chart_component_id: str = ""
+    database_chart_component_id: str = ""
     enabled_by_default: bool = True
 
 
@@ -419,6 +420,7 @@ class GrafanaDatasourceSpec:
     read_endpoint: str
     is_default: bool = False
     description: str = ""
+    auth: str = "nebius_bearer"
 
 
 @dataclass(frozen=True)
@@ -1741,7 +1743,12 @@ def _parse_mk8s_gpu_settings(
         return Mk8sGpuSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"default_stack_source", "image_preferences", "deployment_testing", "benchmarks"}
+    supported_keys = {
+        "default_stack_source",
+        "image_preferences",
+        "deployment_testing",
+        "benchmarks",
+    }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -2080,7 +2087,12 @@ def _parse_observability_grafana_settings(
         return ObservabilityGrafanaSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"chart_component_id", "gateway_chart_component_id", "enabled_by_default"}
+    supported_keys = {
+        "chart_component_id",
+        "gateway_chart_component_id",
+        "database_chart_component_id",
+        "enabled_by_default",
+    }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -2090,6 +2102,7 @@ def _parse_observability_grafana_settings(
     return ObservabilityGrafanaSettings(
         chart_component_id=chart_component_id,
         gateway_chart_component_id=_as_text(raw.get("gateway_chart_component_id")),
+        database_chart_component_id=_as_text(raw.get("database_chart_component_id")),
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
     )
 
@@ -2415,7 +2428,15 @@ def _parse_grafana_datasources(
         item_label = f"{field_label}.{key}"
         if not isinstance(item, dict):
             raise ValueError(f"{item_label} must be a mapping")
-        supported_keys = {"name", "uid", "type", "read_endpoint", "isDefault", "description"}
+        supported_keys = {
+            "name",
+            "uid",
+            "type",
+            "read_endpoint",
+            "isDefault",
+            "description",
+            "auth",
+        }
         unknown = sorted(str(value) for value in item if str(value) not in supported_keys)
         if unknown:
             raise ValueError(f"{item_label} has unsupported field(s): " + ", ".join(unknown))
@@ -2423,6 +2444,11 @@ def _parse_grafana_datasources(
         uid = _as_text(item.get("uid"))
         datasource_type = _as_text(item.get("type"))
         read_endpoint = _as_text(item.get("read_endpoint"))
+        auth = _as_text(item.get("auth", "nebius_bearer"))
+        if auth not in {"nebius_bearer", "none"}:
+            raise ValueError(f"{item_label}.auth must be 'nebius_bearer' or 'none'")
+        if auth == "none" and datasource_type != "prometheus":
+            raise ValueError(f"{item_label}.auth=none requires type=prometheus")
         is_default = _parse_optional_bool(
             item.get("isDefault"),
             field_label=f"{item_label}.isDefault",
@@ -2451,6 +2477,7 @@ def _parse_grafana_datasources(
                 datasource_type=datasource_type,
                 read_endpoint=read_endpoint,
                 is_default=bool(is_default),
+                auth=auth,
                 description=_as_text(item.get("description")),
             )
         )
@@ -2807,7 +2834,7 @@ def _validate_grafana_dashboard_sources(
             if not dashboard_uid:
                 raise ValueError(
                     f"{field_label}.uid is required for gnetId dashboards so "
-                    "validate-dashboards can look up the imported dashboard"
+                    "grafana validate can look up the imported dashboard"
                 )
         elif not dashboard_uid:
             raise ValueError(
@@ -2826,10 +2853,10 @@ def _validate_grafana_dashboard_sources(
             )
 
         datasource = _as_text(dashboard.get("datasource"))
-        if not datasource:
+        if not datasource and source_mode != "json":
             raise ValueError(f"{field_label}.datasource is required")
         datasource_spec = datasources_by_name.get(datasource)
-        if datasource_spec is None:
+        if datasource and datasource_spec is None:
             raise ValueError(
                 f"{field_label}.datasource references '{datasource}', but that datasource "
                 "is not declared in cli.datasources"
@@ -2839,7 +2866,7 @@ def _validate_grafana_dashboard_sources(
             dashboard=dashboard_name,
             gnet_id=gnet_id or 0,
             datasource=datasource,
-            read_endpoint=datasource_spec.read_endpoint,
+            read_endpoint=datasource_spec.read_endpoint if datasource_spec else "",
             dashboard_uid=dashboard_uid,
         )
     return resolved
@@ -2864,6 +2891,11 @@ def _validate_grafana_dashboard_signal_bindings(
             raise ValueError(
                 f"{field_label} references values.dashboards.{binding.folder}."
                 f"{binding.dashboard}, but that dashboard is not declared in defaults"
+            )
+        if not source.datasource:
+            raise ValueError(
+                f"{field_label} requires an explicit single datasource binding; "
+                "mixed-datasource JSON cannot infer a signal read endpoint"
             )
         resolved_bindings.append(
             GrafanaDashboardSignalBinding(
@@ -3651,8 +3683,7 @@ def _parse_helm_chart_usage(raw: Any, *, field_label: str) -> HelmChartUsage:
     unknown_usage_keys = sorted(str(key) for key in raw if str(key) not in supported_usage_keys)
     if unknown_usage_keys:
         raise ValueError(
-            f"{field_label}.usage has unsupported field(s): "
-            + ", ".join(unknown_usage_keys)
+            f"{field_label}.usage has unsupported field(s): " + ", ".join(unknown_usage_keys)
         )
 
     lifecycle = _as_text(raw.get("lifecycle"))
@@ -3675,9 +3706,7 @@ def _parse_helm_chart_usage(raw: Any, *, field_label: str) -> HelmChartUsage:
             )
         config_ref = _as_text(raw_config.get("ref"))
         if not lifecycle:
-            raise ValueError(
-                f"{field_label}.usage.lifecycle is required when usage.config is set"
-            )
+            raise ValueError(f"{field_label}.usage.lifecycle is required when usage.config is set")
 
     return HelmChartUsage(lifecycle=lifecycle, config_ref=config_ref)
 
@@ -3946,6 +3975,14 @@ def _parse_sources_payload(
             source_profile=source_profile,
             source_root=source_root,
         )
+        from .compatibility_matrix import default_chart_version
+
+        if portable_source.repo and not portable_source.version:
+            pinned = default_chart_version(component_id, source=portable_source.repo)
+            if pinned:
+                portable_source = replace(portable_source, version=pinned)
+                if not source.path:
+                    source = replace(source, version=pinned)
 
         release_block = raw.get("release", {})
         if release_block is None:
@@ -4200,6 +4237,13 @@ def load_component_sources(
     explicit: Path | None = None,
     source_profile: SourceProfile | None = None,
 ) -> ComponentSources:
+    from .frozen_catalog import active_catalog
+
+    frozen = active_catalog()
+    if frozen is not None:
+        if explicit is not None:
+            raise ValueError("An explicit catalog cannot replace frozen operation inputs")
+        return frozen
     resolved_profile = resolve_component_sources_profile(explicit=source_profile)
     try:
         path = resolve_component_sources_file(explicit=explicit)
@@ -4211,6 +4255,13 @@ def load_component_sources(
 
 
 def load_cli_settings(*, explicit: Path | None = None) -> CliSettings:
+    from .frozen_catalog import active_catalog
+
+    frozen = active_catalog()
+    if frozen is not None:
+        if explicit is not None:
+            raise ValueError("Explicit CLI settings cannot replace frozen operation inputs")
+        return frozen.cli
     try:
         sources_path = resolve_component_sources_file(explicit=explicit)
     except ValueError:

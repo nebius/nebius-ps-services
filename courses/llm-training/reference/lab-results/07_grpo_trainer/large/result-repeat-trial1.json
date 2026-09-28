@@ -1,0 +1,26 @@
+{
+  "correctness": {
+    "finite_train_loss": true,
+    "nonzero_adapter_parameter_update": true,
+    "nonzero_finite_adapter_gradient": true,
+    "nonzero_within_group_reward_signal": true,
+    "trainer_completed": true
+  },
+  "lab": "07_grpo_trainer",
+  "measurements": {
+    "adapter_max_parameter_delta": 2.0020977444801247e-06,
+    "maximum_observed_adapter_gradient_norm": 2.775507,
+    "minimum_reward_group_stddev": 0.5,
+    "positive_adapter_gradient_samples": 240,
+    "steps": 3,
+    "train_loss": 0.0,
+    "train_runtime_seconds": 5.4856
+  },
+  "parameters": {
+    "seed": 17,
+    "steps": 3,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

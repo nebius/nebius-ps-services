@@ -1,0 +1,27 @@
+{
+  "files": [
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "grafana-pair3-view1.png",
+    "grafana-pair3-view2.png",
+    "grafana-pair4-view1.png",
+    "grafana-pair4-view2.png",
+    "manifest.json",
+    "result-bf16-trial1.json",
+    "result-bucket01-trial1.json",
+    "result-bucket1-trial1.json",
+    "result-fp16-trial1.json",
+    "result-power-control-trial1.json",
+    "result-powersgd-trial1.json",
+    "summary.csv",
+    "systems-bf16-rank-0.png",
+    "systems-bucket01-rank-0.png",
+    "systems-bucket1-rank-0.png",
+    "systems-fp16-rank-0.png",
+    "systems-powersgd-rank-0.png"
+  ],
+  "identity": "ebf111a1d715b125",
+  "schema": "run-labs-owned/v1"
+}

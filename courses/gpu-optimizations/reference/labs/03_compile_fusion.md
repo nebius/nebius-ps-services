@@ -4,7 +4,7 @@ Several pointwise operations can repeatedly read and write intermediate tensors.
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 1–4 for correctness, timing, profiling, eager execution, activation functions and compilation. Revisit the same code in Lesson 7 to count intermediate reads and writes.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/03_compile_fusion.json).
 
 Use the qualified Optimizations environment on one H100 with a working compiler backend. Compilation can take longer than the measured steady-state operations; preserve that cost rather than hiding it in warm-up.
 
@@ -16,31 +16,32 @@ H100 HBM bandwidth is high, but low-intensity chains can still saturate it. Effi
 
 The pointwise function combines multiplication, addition, SiLU and tanh on resident inputs. The program compiles that same function and compares complete eager and compiled outputs. It records first-call wall time separately, then measures both warmed paths with CUDA events. Inspect generated execution before claiming fusion; this experiment does not include a memory-layout sweep.
 
-## Practice
-
-### After Lesson 4
-
 Given ten 4-microsecond kernels, each preceded by 8 microseconds of non-overlapped dispatch work, the modeled region takes 120 microseconds. Change to a validated compiled region with two 12-microsecond kernels and 16 microseconds of dispatch. Expected observation: warmed execution takes approximately 40 microseconds under this model, but the report must also include compile time, graph breaks, and the shape range that reuses the artifact.
-
-Run Lab 03 with eager and compiled paths and count launches before comparing time.
-
-### Run the supplied experiment
-
-Run the smoke case to verify compilation and correctness. Repeat the H100 profile as a distinct element-count workload and retain the first-call measurement for each process.
-
-```bash
-umask 077
-sbatch slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile h100
-```
-
-### After Lesson 7
 
 Given a 1-GiB intermediate, separate bias and activation write 1 GiB then read it again in addition to their required input/output traffic. Change to a supported fused epilogue. Expected observation: it can eliminate 2 GiB of logical intermediate traffic and one launch if it actually combines these operations and no other consumer needs the intermediate. This is a traffic ledger, not a measured HBM saving: cache reuse, generated kernels, and transactions determine actual HBM traffic. Confirm fusion in a trace and measure selected-kernel traffic before claiming a physical bandwidth reduction.
 
-Reuse Lab 03's eager/compiled outputs to draw the intermediate-traffic ledger; Lesson 4 owns its first execution and compilation-cost comparison. Preview Lab 10's library inputs, then run its shape/dtype survey in Lesson 9. Neither lab implements a layout sweep. Extension: build a short producer → library operation → consumer pipeline and profile where views become implicit copies. Compare retaining the producer's layout with one explicit conversion at a shared boundary; validate the final outputs, aliasing/mutation behavior and the complete pipeline time. Use Fundamentals Lab 04's packing-cost result as a control, not as a second standalone stride experiment.
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+
+Run the small case to verify compilation and correctness. Repeat the large profile as a distinct element-count workload and retain the first-call measurement for each process.
+
+```bash
+umask 077
+python3 tools/submit_lab.py --lab 03_compile_fusion slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile small
+python3 tools/submit_lab.py --lab 03_compile_fusion slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile large
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 03_compile_fusion --job "$LAB_JOB_ID"
+```
 
 Require `allclose`. Compare `compiled_first_call_ms`, `eager`, and `compiled` distributions. A faster warmed call may still lose for a short-lived application that pays compilation only to execute a few times.
 
@@ -52,6 +53,25 @@ Record strides, inserted copies, kernel count, bytes moved, bandwidth, and end-t
 
 Layout is an interface contract between operators, not a property to optimize in isolation.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Eager / median (seconds) | `eager.median_ms` | `s` |
+| Compiled / median (seconds) | `compiled.median_ms` | `s` |
+| Compiled first call (seconds) | `compiled_first_call_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 03_compile_fusion \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Count eager intermediates conceptually, then inspect a profiler trace to establish actual launch reduction. Estimate a reuse break-even only when the per-call saving is positive, and state which startup costs your numerator includes.
@@ -60,6 +80,26 @@ Larger batches improve amortization but increase latency and memory. Compilation
 
 Fusion saves traffic and launches but can lengthen live ranges, increase registers, reduce occupancy, duplicate a reusable intermediate, or change numerical order. Packing helps downstream work while costing a full read/write and extra storage.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 03_compile_fusion --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The launcher selects one matching kernel inside `course_measure`, the configured NVTX range for this lab. Its launch-count limit applies after the range and kernel-name filters. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 03_compile_fusion --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare eager versus compiled execution, including compilation startup separately. Independently calculate the reuse break-even and choose compilation only for a workload that passes it.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Compiler failures or numerical disagreement block this candidate. Preserve the failing configuration instead of silently replacing the compiled path with eager execution. Very small arrays may primarily expose launch overhead rather than bandwidth.
@@ -67,6 +107,8 @@ Compiler failures or numerical disagreement block this candidate. Preserve the f
 Keep compilation outside steady-state timing. This lab uses `fullgraph=True`, so an unsupported graph break fails the candidate; in compilation modes that permit eager fallback, inspect that fallback before interpreting performance.
 
 Calling `contiguous()` everywhere moves cost rather than eliminating it.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 
@@ -79,3 +121,5 @@ State when simple batching is preferable to a compiler change.
 Select a pipeline-wide layout and fuse only where correctness and maintainability remain clear.
 
 Identify the producer and consumer of every expensive layout conversion.
+
+Use the eager/compiled outputs to draw an intermediate-traffic ledger. The supplied experiment does not implement a layout sweep. Extension: build a short producer → library operation → consumer pipeline and profile where views become implicit copies. Compare retaining the producer's layout with one explicit conversion at a shared boundary; validate the final outputs, aliasing/mutation behavior and the complete pipeline time. Include the conversion cost and number of subsequent reuses in that comparison.

@@ -11,13 +11,14 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def validate_last_token_logits(
@@ -57,7 +58,7 @@ def main() -> None:
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -85,7 +86,7 @@ def main() -> None:
         .eval()
     )
     base = "Explain why equivalent GPU benchmarks preserve token counts."
-    repeats = (1, 4, 12, 32) if args.profile == "smoke" else (8, 32, 96, 192)
+    repeats = (1, 4, 12, 32) if args.profile == "small" else (8, 32, 96, 192)
     prompts = [" ".join([base] * repeat) for repeat in repeats]
     lengths = [
         len(tokenizer(prompt, add_special_tokens=True).input_ids) for prompt in prompts
@@ -162,4 +163,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

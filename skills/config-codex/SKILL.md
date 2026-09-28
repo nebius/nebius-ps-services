@@ -139,8 +139,14 @@ For existing `$CODEX_HOME/AGENTS.md`:
   markers.
 - Treat empty or stale managed markers as incomplete; update the managed block
   content rather than accepting marker presence alone.
-- Do not delete, rewrite, or deduplicate user-authored sections outside the
-  managed block.
+- Preserve user-authored sections outside the managed block unless the current
+  user explicitly requests repair of an identified rule there. Patch only that
+  clause after checking the preimage; an already-authorized rule repair does
+  not require another confirmation.
+- Global task authorization covers necessary skill scripts after inspecting
+  their effects. Do not restore a separate Run/Execute approval requirement.
+  Keep read-only limits, skill invocation restrictions, actual tool controls
+  and uncovered consequences explicit.
 
 For existing `$CODEX_HOME/config.toml`:
 

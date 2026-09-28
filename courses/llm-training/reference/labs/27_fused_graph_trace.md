@@ -4,7 +4,7 @@ Compilation and CUDA Graphs optimize different parts of execution and should not
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 10 for full-graph expression compilation, fixed-storage CUDA Graph capture and replay, profiler scope and warm-up. Lessons 1, 3 and 4 supply GELU, mean squared error, backward and SGD; Lesson 6 supplies graph-memory lifetime. Verify one complete update before measuring replay.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/27_fused_graph_trace.json).
 
 Use one H100 with a qualified compiler backend and CUDA Graph support. Review static buffer lifetime, gradients, and optimizer updates. The source requires full-graph expression compilation; it does not demonstrate successful graph breaks or fallback routing.
 
@@ -14,21 +14,30 @@ H100 can make short surrounding kernels and launch gaps prominent beside fast GE
 
 The script validates an expression compiled with `fullgraph=True` and records its first call. Separately it builds matched training states, captures zero-grad, forward, backward, and SGD update using fixed storage, and verifies the next update. It times eager and captured training steps. The profiler summary covers graph replay, not a complete comparative eager/compiled training trace.
 
+The supplied expression computes a biased matrix product, GELU and mean-squared loss. Its eager and full-graph compiled outputs must agree, and the first compiled call includes startup cost. Separately, the script captures an eager zero-grad/forward/backward/SGD update and checks it against an eager update from matching state. The captured training step is not the compiled expression. Compare the two training-step distributions only after gradient and update checks pass; a faster replay is an observation to establish, not an assumed result.
+
 ## Practice
 
-Given a forward region with six pointwise kernels, two temporary tensors, and 90 microseconds of launch gaps, compile it and compare outputs plus gradients. Change to graph-capture the stable compiled step after warm-up. Expected observation: fusion reduces launches/traffic and replay reduces submission, but compile time, graph-pool bytes, fallback rate, and optimizer equivalence stay in the report.
-
-Begin with Lab 30 to attribute the tiny transformer's step to operator time and shapes; this adds instrumentation to the update learned in Lesson 4, rather than a second training-step lesson. Preserve that baseline for the capstone. Then run Lab 27's separate compiled-expression and captured-training-update checks. Its expression requires full-graph compilation; its profile covers graph replay, not a comparative compiled/eager training trace. Extension: instrument eager and compiled paths separately to inspect fused groups and launch counts, and add explicit shape validation before a bucket or fallback exercise. A full-graph compilation failure is not an observed successful graph break.
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Run the supplied separated checks before instrumenting additional paths. Keep compile startup and steady-state training results distinct in your worksheet; they have different scopes.
 
 ```bash
 umask 077
-python labs/27_fused_graph_trace.py --help
-sbatch slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile smoke
+"$COURSE_PYTHON" labs/27_fused_graph_trace.py --help
+python3 tools/submit_lab.py --lab 27_fused_graph_trace slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 27_fused_graph_trace --job "$LAB_JOB_ID"
+```
 
 Require `compiled_expression_close` and `captured_next_update_close`. Inspect `compiled_first_call_ms`, `cuda_graph_scope`, eager/graph training-step distributions, and `profile_dispatch_keys`. A replay profile cannot establish the number of fused groups in an unprofiled compiled path.
 
@@ -39,9 +48,28 @@ from the initial parameters and that path's gradients, then requires an exact
 match and at least one changed parameter. Whole-parameter tolerances alone can
 hide an omitted update when the learning rate is small.
 
-Record compile time separately, graph coverage, kernel count, HBM traffic, step time, and numerical equivalence.
+Retain compiled first-call time separately from eager/captured training-step distributions, the declared capture scope, numerical checks and replay profiler dispatch keys. Separate traces and hardware counters are required for comparative kernel counts or HBM traffic; these are not supplied compiled-versus-eager training measurements.
 
 Keep fusion or capture only when the full training step remains correct and faster after warm-up.
+
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Eager training step / median (seconds) | `eager_training_step.median_ms` | `s` |
+| Cuda graph training step / median (seconds) | `cuda_graph_training_step.median_ms` | `s` |
+| Compiled first call (seconds) | `compiled_first_call_ms` | `s` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 27_fused_graph_trace \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
 
 ## Investigate the behavior
 
@@ -49,16 +77,40 @@ Which state changes on each captured update and which storage addresses remain s
 
 Fusion can increase register pressure and reduce reuse. Compilation and graph capture improve warmed steps but increase startup, memory, specialization, and debugging cost. A graph-friendly fixed shape may increase padding.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 27_fused_graph_trace --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small --external-only
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 27_fused_graph_trace --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small --external-only
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Check eager versus compiled expression outputs, then compare eager versus captured complete updates from matching state. Keep these two comparisons distinct. Independently inspect optimizer state and fixed addresses before choosing graph replay.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Full-graph compilation failure is a failed candidate, not an automatic eager fallback. Capture errors or mismatched updates require checking gradient buffers, ordering, and optimizer state before timing.
 
 Avoid timing compilation as steady state or capturing a buffer whose contents are not refreshed.
 
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
+
 ## Takeaways and next step
 
 Keep mechanism, correctness, and measurement scopes aligned. Extension: collect separate eager and compiled traces and compiler diagnostics; add explicit shape validation before attempting buckets or fallback behavior.
 
-Validate gradients and updates, warm separately, and publish fallback frequency.
+Validate gradients and updates, and keep startup and warmed execution separate. This fixed-shape, full-graph experiment has no fallback-frequency measurement.
 
 Name one training operation that can make capture unsafe.
+
+A full-graph compilation failure is a rejected expression path, not evidence of a successful graph break or fallback.

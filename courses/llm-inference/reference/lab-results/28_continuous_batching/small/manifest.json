@@ -1,0 +1,54 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "77bb601fbb51e2f2bbfe8c1b54b41d59d5cb645aca7fbe971353ec8342e3dfdb",
+      "sha256": "63e3640099877ca484efba3684e152d9c570db0199b5b22a941edbd32347c1ea",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "5c11b437fc787fe14049c39801011aabda24cb78c771e7e725db77bafd757e81",
+      "sha256": "63e3640099877ca484efba3684e152d9c570db0199b5b22a941edbd32347c1ea",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "f384f86bcadea0c614ac2a9189ba952adaa0289962c500284e9e8367891fb594",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "44409a262d8ea36e5071a88c6daf256140b2275bf70fc7f173dd88efe8bf7d3f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "fddd701dab18ea08c4590e82cf6c336e3a1a25085a6b72aa69f57b069396dadc",
+      "tool": "grafana"
+    }
+  ],
+  "course": "llm-inference",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "28_continuous_batching",
+  "limitations": [],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "not-applicable"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "1666389acd5388ba713d53460f570e066d9ce7b30928bfb671e07c972d3b2dc9",
+  "summary_sha256": "109506a9c24151da273e4db905704f4efecb82a04f0abeb2a6a0aff629af18fc"
+}

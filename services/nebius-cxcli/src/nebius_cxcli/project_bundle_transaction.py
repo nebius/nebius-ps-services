@@ -10,7 +10,7 @@ import stat
 import tempfile
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,10 @@ _GENERATIONS_DIRECTORY = "project-bundle-generations"
 
 class ProjectBundleSafetyError(RuntimeError):
     """The transaction cannot safely classify or modify project state."""
+
+
+class ProjectBundlePreimageConflict(ProjectBundleSafetyError):
+    """Admitted source bytes changed before the transaction could commit."""
 
 
 @dataclass(frozen=True)
@@ -412,8 +416,8 @@ class ProjectBundleTransaction:
                         "project transaction write postimage digest is invalid"
                     )
                 staged = generation_dir / relative
-                _require_safe_ancestors(generation_dir, staged)
                 if require_staged:
+                    _require_safe_ancestors(generation_dir, staged)
                     try:
                         staged_metadata = staged.lstat()
                     except FileNotFoundError as exc:
@@ -510,6 +514,22 @@ class ProjectBundleTransaction:
                 self._materialize(payload)
             return True
 
+    def recover_expected_generation(self, generation_sha256: str) -> bool:
+        """Recover only the caller's frozen generation, without replaying another writer."""
+        with self._locked():
+            payload = self._read_journal()
+            if payload is None:
+                return False
+            if payload.get("generationSha256") != generation_sha256:
+                if payload["status"] == "committed":
+                    raise ProjectBundleSafetyError(
+                        "Pending project generation differs from destroy approval"
+                    )
+                return False
+            if payload["status"] == "committed":
+                self._materialize(payload)
+            return True
+
     def current_generation_sha256(self) -> str | None:
         """Recover and return the exact last committed logical generation."""
 
@@ -537,11 +557,41 @@ class ProjectBundleTransaction:
                 )
             return digest
 
+    def completed_generation(self) -> dict[str, Any] | None:
+        """Read validated historical authority without replaying or changing it.
+
+        The owner must independently verify its current postimage. This does
+        not relax current_generation_sha256 or authorize another publication.
+        """
+        with self._locked():
+            payload = self._read_journal()
+            if payload is None or payload["status"] != "complete":
+                return None
+            self._validated_entries(payload, require_staged=False)
+            return payload
+
+    def recovery_staged_files(self) -> tuple[Path, ...]:
+        """Read the staged postimages needed by the current pending transaction.
+
+        Completed journals validate against their materialized targets; their
+        historical staged copies are not recovery inputs. This observation does
+        not create locks, recover a transaction, or remove historical files.
+        """
+        _require_safe_ancestors(self.project_dir, self.journal_path)
+        payload = self._read_journal()
+        if payload is None:
+            return ()
+        pending = payload["status"] == "committed"
+        entries = self._validated_entries(payload, require_staged=pending)
+        return tuple(staged for _, _, staged in entries if pending and staged is not None)
+
     def snapshot_preimages(
         self,
         targets: Iterable[Path],
+        *,
+        read_only: bool = False,
     ) -> dict[Path, ProjectBundlePreimage]:
-        """Recover, then snapshot exact canonical target bytes under the lock."""
+        """Snapshot preimages; previews never create locks or recover publication."""
 
         normalized: list[Path] = []
         seen: set[Path] = set()
@@ -557,9 +607,13 @@ class ProjectBundleTransaction:
             raise ValueError("project transaction snapshot requires at least one target")
         normalized.sort(key=lambda path: path.relative_to(self.project_dir).as_posix())
 
-        with self._locked():
+        with nullcontext() if read_only else self._locked():
             prior = self._read_journal()
             if prior is not None and prior["status"] == "committed":
+                if read_only:
+                    raise ProjectBundleSafetyError(
+                        "Project publication requires recovery before a read-only preview"
+                    )
                 self._materialize(prior)
             return {target: _target_preimage(self.project_dir, target)[0] for target in normalized}
 
@@ -626,7 +680,7 @@ class ProjectBundleTransaction:
                     )
                 changed = [path for path, state in preimages.items() if expected[path] != state[0]]
                 if changed:
-                    raise ProjectBundleSafetyError(
+                    raise ProjectBundlePreimageConflict(
                         "project transaction target changed after generation admission: "
                         + ", ".join(str(path) for path in sorted(changed))
                     )

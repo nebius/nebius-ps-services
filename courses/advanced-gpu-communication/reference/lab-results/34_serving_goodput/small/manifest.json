@@ -1,0 +1,68 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "03463e23b5b3574947e2aae4ec46101aa435a5c250f71f722174a7c1592386f2",
+      "sha256": "c1f10a910876557fb80d5a5463fba92c6fc835e3d0314eb5981fe3638d44e0a3",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "a6476dd01054005eb08d3d53555cb0d90efb86c6c64b3b2ca589c7355d5e1bb1",
+      "sha256": "6e6d4718a9cc998fa510e1f331d8a08ba3009e8ae206ed5ccc55172b0d211388",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "131b7110746a153f5e6f10f90302b466447a510011148875eb5e3a15f074f22e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "b8e1f0e6c1cbf7a54a46946d6658fd3e4e230d3d01b93942a7d6340f357851e6",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "6e13ce6fa8aa520f12360a4d5d6b40a3919f8f25e7f2a35c37116a6d602445cb",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view4.png",
+      "sha256": "a06ee26ad2230dc41dcc5d937f92b3402e2b9b6c302a68b4c31f2c4202e61162",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "bbe7543780490a49830ee5e400069d5042ea927f9e356103503ead963a0e9288",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "a0d6ec6b7446f6ad9a8c146150e8d71adee97c76c57c0c818ad9965cd9dd8116",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 16,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "34_serving_goodput",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "incomplete-events",
+    "representative-gui-rank",
+    "separate-clock-domains"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "58436c20b548b71bb48285892faa23fbd5ca5254c2a597352333f6befc9d2d70",
+  "summary_sha256": "b7a9e569e417f427b1db985c85476e39939c5668fc12ff0db30c1786cc469927"
+}

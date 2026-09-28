@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,weight_timing_bf16_median_seconds,value,1.84e-05,s
+baseline-trial1,weight_timing_int8_weight_dequantize_then_matmul_median_seconds,value,3.4200000000000005e-05,s
+baseline-trial1,kv_dequantization_timing_median_seconds,value,2.85e-05,s
+baseline-trial1,bf16_weight_bytes,value,524288,bytes
+baseline-trial1,int8_weight_and_scale_bytes,value,262146,bytes
+repeat-trial1,weight_timing_bf16_median_seconds,value,1.6899999999999997e-05,s
+repeat-trial1,weight_timing_int8_weight_dequantize_then_matmul_median_seconds,value,3.2e-05,s
+repeat-trial1,kv_dequantization_timing_median_seconds,value,2.76e-05,s
+repeat-trial1,bf16_weight_bytes,value,524288,bytes
+repeat-trial1,int8_weight_and_scale_bytes,value,262146,bytes

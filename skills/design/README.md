@@ -11,6 +11,38 @@ non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
 
+Before proposing a solution, it reads the selected project's design documents
+and then traces the affected implemented code and consumers. When documentation
+and code conflict, code wins as the current baseline; the response identifies
+both claims, source references and their impact. Proposed designs must resolve
+unintended conflicts with implementation before they are ready for handoff.
+
+Default execution is non-mutating planning. An explicit request to design and
+implement, or a follow-up to implement the agreed design, can continue through
+the appropriate implementation skills when the active host mode permits writes.
+Actual host Plan Mode remains binding. `maintain-project-specs` alone owns
+canonical requirements/design publication; `design` supplies decisions and
+evidence and never writes project design documents directly.
+
+Greenfield can include existing prototype code, but no users or dependent
+consumers must be confirmed before using the refactor exception. A demonstrated
+anti-pattern may be replaced through a prerequisite refactor with one canonical
+implementation and no compatibility shims unless explicitly requested. Unknown
+usage does not qualify. Code precedence describes the current baseline without
+making it immutable or declaring a defect correct.
+
+## Usage
+
+```text
+$design Design this feature against the project's design documents and code.
+$design Design this feature and implement it.
+$design --help
+$design -h
+```
+
+The request describes the desired work in natural language. No additional
+public flags. Help performs no project reads or changes after loading the skill.
+
 When the approved design needs a complete or multi-component repository
 skeleton, the handoff may include the component/materialization/runtime graph
 for a later explicit `$scaffold-project` invocation. `design` does not create
@@ -27,6 +59,8 @@ that scaffold and the scaffold workflow does not call back into design.
   vertical-slice strategy, and `/plan` handoff template.
 - `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
 - `evals/process-cases.md`: supplemental workflow and runtime-check cases.
+- `evals/evals.json` and `evals/fixtures/`: quality assertions and synthetic
+  projects for code precedence, refactoring, and execution boundaries.
 
 ## Boundaries
 
@@ -70,8 +104,21 @@ that scaffold and the scaffold workflow does not call back into design.
   against a checklist.
 - Use `sdlc-create-design` and `sdlc-create-plan` inside the Agentic SDLC
   workflow for SDLC-owned `docs/design.md`, `FEAT-*` IDs, and locked plans.
-- Use `/plan` or the relevant implementation skill once the design is complete
-  and code should change.
+- Use the relevant implementation skill for an implementation-only request.
+  An active design task may continue after its plan only when implementation
+  was explicitly requested and host mode permits it.
 - Use explicit `$scaffold-project` after design and stack approval when the
   implementation needs repository topology composed from several specialist
   owners. This boundary remains outside Agentic SDLC.
+
+## Validation Evidence
+
+Structure and fixture checks are static evidence. Fresh trigger and comparative
+quality runs require native authenticated runners; do not copy real host
+credentials into disposable evaluation homes. The isolated runner installs only
+this skill, so absent specialist and spec-owner handoffs must remain explicit.
+Host Plan Mode and read-order behavior require an actual host session and trace
+review; a prompt claiming to be Plan Mode or a final summary is not proof.
+
+Implicit invocation remains enabled independently of implementation authority,
+consistent with [official Codex skill metadata](https://learn.chatgpt.com/docs/build-skills#optional-metadata).

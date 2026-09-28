@@ -7,6 +7,7 @@ from typing import Any
 
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+from .soperator_adapter import load_soperator_adapter_documents
 from .soperator_backup_runtime import (
     ensure_soperator_backup_runtime_secrets,
     soperator_backup_enabled_for_target,
@@ -46,7 +47,10 @@ def ensure_soperator_runtime_before_flux(
     )
     source = ensure_soperator_release_source(snapshot)
     consumers = render_soperator_consumers(
-        snapshot, source, _rendered_soperator_upstream_values(paths.flux_dir)
+        snapshot,
+        source,
+        _rendered_soperator_upstream_values(paths.flux_dir),
+        adapter_documents=load_soperator_adapter_documents(paths.flux_dir),
     )
     namespaces = soperator_consumer_namespaces(snapshot, consumers)
     if soperator_backup_enabled_for_target(config, target_ref=target_ref):

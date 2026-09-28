@@ -1,0 +1,64 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "3bf0cfbfcf64ce7cbf7d924e9c4684bbd051ee878c0e402b617cc6bf44bb2534",
+      "sha256": "c1773a179bfe5c6c4f2b2bf655e5b6b59372ed99ea7dfc862bece85c21225c77",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "dced52942859e64be356c6d3360d076838de9ef4b91826787ec7b656d03bd9fa",
+      "sha256": "5d2e84729dd37371725100c78242c3fba8a57c06d7d3b2a05f03a435e6818dc7",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "7931dcd1048420e279ff42419e89f27f95ef162dc49fa68da2085e1510494778",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "c6f0d1a873d1042f279ee588a6ca11857e7db1a09ea27351b49d8909fe9cbc4e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "8f7af67873826bf696c43101a42d7a6403da830e76f21d7553e227bc0aa87e8a",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "da59bc683a26944e03fef9a4f84548dc1ed6dbbddf85fdd9d9e7976e73dc80d7",
+      "tool": "systems"
+    },
+    {
+      "file": "systems-candidate-rank-0.png",
+      "sha256": "843e102623e4fde1d5c7747b7b63f03c401f6898dfd14a28d2db267cf13b280a",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "7944bcb54c2a1f68cf08e40b14579113a3318ad0abb6a75bc521a6a728733fa8",
+      "tool": "compute"
+    }
+  ],
+  "course": "custom-cuda-kernels",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "01_vector_add",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "baf458811d8225e7bc6ee416d29aaadd7a2b82f0dd744ee45b809344998f9f17",
+  "summary_sha256": "67ff66efd84141f14d3ff873216dd797507e8b6376072fb7d77d4d59577675b2"
+}

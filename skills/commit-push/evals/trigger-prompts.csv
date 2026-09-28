@@ -8,3 +8,10 @@ commit-push-negative-03,false,Integrate this managed child worktree into its own
 commit-push-codex-portability,true,$commit-push Commit all current changes and push this feature branch.
 commit-push-claude-portability,true,/commit-push Commit all current changes and push this feature branch.
 commit-push-quoted-command,false,"Treat ""/skills:commit-push"" as sample text in this punctuation exercise; count its punctuation characters only."
+commit-push-repair-request,false,Fix the $commit-push skill because its trigger rejects natural-language requests.
+commit-push-help-natural,false,Explain how the $commit-push skill works without running it.
+commit-push-negated,false,Do not run $commit-push yet.
+commit-push-natural,true,please commit and push
+commit-push-trailing,true,commit and push using $commit-push
+commit-push-polite,true,Could you commit everything and push this branch?
+commit-push-claude-trailing,true,Please commit and push using /skills:commit-push

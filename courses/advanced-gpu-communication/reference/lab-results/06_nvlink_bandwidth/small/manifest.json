@@ -1,0 +1,191 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "4ee9e2cf176186188cbe74e120a9b9028725d3b0cbf4c62f924717d946b75a77",
+      "sha256": "6443d30037f5d40baa49e154c093475950dbc347fbc002c77ea59402d8b4853a",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-baseline-trial2.json",
+      "original_sha256": "151c1d3a263afe237e2ba503524dab8654bcd3a6d6112298e6befc219ca80f81",
+      "sha256": "5697b768f206dd036879a975c6adad887402dd75477515b3f869ba29aa828df0",
+      "variant": "baseline-trial2"
+    },
+    {
+      "file": "result-baseline-trial3.json",
+      "original_sha256": "38028d52dc6c8d47693a76849236d8fb9702499494b33c129412cceb19a0d217",
+      "sha256": "5f5a85481c805a378ac880077739867bdf96027a5a3c3f727f0c528512a6a2ea",
+      "variant": "baseline-trial3"
+    },
+    {
+      "file": "result-candidate-trial1.json",
+      "original_sha256": "5e7036214da87cf2dc003ee271d4e397e884109c0fb7659f7e73f1c50e23043e",
+      "sha256": "ae1885e34c0e5bf0a8d934283cfa7b3388e916eb314c087c1b970af3516ce02c",
+      "variant": "candidate-trial1"
+    },
+    {
+      "file": "result-candidate-trial2.json",
+      "original_sha256": "0bb731783e82a0f34d9bcb107c25d5b0bd56e07471aecb2e46c30194bda85ad5",
+      "sha256": "6a7b2c2a729cefd32795cfe8a1f12a5e7fb712e7c90983c5be827791b0920292",
+      "variant": "candidate-trial2"
+    },
+    {
+      "file": "result-candidate-trial3.json",
+      "original_sha256": "570ccc01cf99d848d1b4d045cf9ca2197d915bc47173797881d61850ad9d933f",
+      "sha256": "1e070e0be03567ed2f1cd7e290235a4756be77929e1bd14807c2c02f6cf1617f",
+      "variant": "candidate-trial3"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-overview.png",
+      "sha256": "56af388bf7eef9ac7808891b7f6cb0836250d332540a8a84829e9f4cf954e31f",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-minimum-gbps-page1.png",
+      "sha256": "977c9fd03fed865d4c7e558065ef96b2d2653ffe55069f82b1cd6a8c434c6512",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-mean-gbps-page1.png",
+      "sha256": "4f5c79ac13a3de5df0e49236aa36e4730594a9642c701dbc61d905dfbef6714d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-pair-count-page1.png",
+      "sha256": "10a7a92f5ae966b3e4327401a3372904cb585dc8076814f4d620cd05be38512b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-directed-pair-gbps-page1.png",
+      "sha256": "f79351590dcac47bb761a0a0d44af1b4c39292ba4628bef2c4bc9c6f26c16ab7",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-directed-pair-gbps-page2.png",
+      "sha256": "5a69f0c1e1e3ce332e4389ff29d2180712f25b9cb3168d954d2a822e4753330c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-directed-pair-gbps-page3.png",
+      "sha256": "a0cf5004d886ed9ee93a9c7efb17ba903713d670a64e8d5351a6d45bc75b0c87",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial1-directed-pair-gbps-page4.png",
+      "sha256": "8cff2912a9ecacdec84f6207a9bc43854ba0a295fba273bafc7f5921e3a85bf6",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-overview.png",
+      "sha256": "3e357914678396756c5d367d908532576b368568e9a785e161e5014caa515617",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-minimum-gbps-page1.png",
+      "sha256": "977c9fd03fed865d4c7e558065ef96b2d2653ffe55069f82b1cd6a8c434c6512",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-mean-gbps-page1.png",
+      "sha256": "4f5c79ac13a3de5df0e49236aa36e4730594a9642c701dbc61d905dfbef6714d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-pair-count-page1.png",
+      "sha256": "10a7a92f5ae966b3e4327401a3372904cb585dc8076814f4d620cd05be38512b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-directed-pair-gbps-page1.png",
+      "sha256": "bee0ed40076e1d10dedb179c8400de08b4c8a782ee14d8b67a2835c9e9affaf5",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-directed-pair-gbps-page2.png",
+      "sha256": "677c64ce6fda9e711c51220e2a3f337ab7321b493551ae6183f6a7c6d75b3153",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-directed-pair-gbps-page3.png",
+      "sha256": "720000be3e5dfc5134aa3c870d061e3c537bfb6bff70c37a99a639ef6b30565c",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial2-directed-pair-gbps-page4.png",
+      "sha256": "c0711d745236d2e01facc910c3dc42f7ecaa2ccc959b10853474ec0ccd63d4f0",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-overview.png",
+      "sha256": "a84923cdd128c44dec3f715be3e933b4858ef0c2af5b991566329b72ad4dd2e0",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-minimum-gbps-page1.png",
+      "sha256": "977c9fd03fed865d4c7e558065ef96b2d2653ffe55069f82b1cd6a8c434c6512",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-mean-gbps-page1.png",
+      "sha256": "4f5c79ac13a3de5df0e49236aa36e4730594a9642c701dbc61d905dfbef6714d",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-pair-count-page1.png",
+      "sha256": "10a7a92f5ae966b3e4327401a3372904cb585dc8076814f4d620cd05be38512b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-directed-pair-gbps-page1.png",
+      "sha256": "3b9d866a369e2eea7e3a012a19d03e9cbb2eae690c7d558b06f8dd5131cfcb36",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-directed-pair-gbps-page2.png",
+      "sha256": "1d0b6865b381af13284a0eeea53e5cb3ac6eb69a673fce31c1aabde433e4be67",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-directed-pair-gbps-page3.png",
+      "sha256": "f78101eda71a9493949d72cabfdb7bc3a525e4f21caa0192aca7e9c0d42243d8",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-ce-sm-trial3-directed-pair-gbps-page4.png",
+      "sha256": "1bd3c680cc0abb6ba245046dc49c0dc77bd56303272a75d8abffe769ca353db5",
+      "tool": "grafana"
+    },
+    {
+      "file": "nsight-systems-baseline-vendor0-timeline.png",
+      "sha256": "ea2335714b3ab012a00d69bea58ee51ccc9acb634023b1921fc9ea98580ea6d4",
+      "tool": "systems"
+    },
+    {
+      "file": "nsight-systems-candidate-vendor0-timeline.png",
+      "sha256": "1e00c9c94dd60d8b7780f373948f153879ba7ce96a76e3a51bcb4828c5aedd98",
+      "tool": "systems"
+    }
+  ],
+  "course": "advanced-gpu-communication",
+  "hardware": {
+    "gpu_count": 8,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "06_nvlink_bandwidth",
+  "limitations": [
+    "cpu-scheduling-unavailable",
+    "diagnostic-companion",
+    "unlocked-gpu-clocks",
+    "vendor-display-unit"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "not-applicable",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {},
+  "source_sha256": "56cf235fb1bb0a5f54ccc7e2d4138a7029e69beecce1b760471d2e57678acea7",
+  "summary_sha256": "5a24e280816c8fdc874f915428a4e575683ce3f1eb4924e80309a11d33570a51"
+}

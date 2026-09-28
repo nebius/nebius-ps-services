@@ -9,12 +9,13 @@ import statistics
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 from tiny_lm import build_tiny_lm, make_language_batch
 
 
@@ -64,6 +65,8 @@ def train_samples(
         )
         loss.backward()
         return loss.detach()
+
+    step = annotated_operation(step, "checkpoint_step")
 
     for _ in range(warmup):
         model.zero_grad(set_to_none=True)
@@ -137,11 +140,11 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    sequence = 256 if args.profile == "smoke" else 1_024
-    hidden = 512 if args.profile == "smoke" else 1_024
-    layers = 4 if args.profile == "smoke" else 8
+    sequence = 256 if args.profile == "small" else 1_024
+    hidden = 512 if args.profile == "small" else 1_024
+    layers = 4 if args.profile == "small" else 8
     vocab_size = 2_048
     base = build_tiny_lm(
         torch,
@@ -236,4 +239,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

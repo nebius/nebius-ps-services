@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from nebius_cxcli.soperator_jail_mounts import (
@@ -7,6 +9,7 @@ from nebius_cxcli.soperator_jail_mounts import (
     jail_persistent_mounts_from_paths,
     jail_rootfs_active_source,
     normalize_jail_persistent_mounts,
+    normalize_jail_storage_intent,
     validate_retained_home_layout,
 )
 
@@ -66,73 +69,24 @@ def test_apply_external_persistent_mount_values_adopts_legacy_paths_in_place() -
         {"mountPath": "/models", "localPath": "/mnt/jail/models"},
         {"mountPath": "/opt/soperator-home", "localPath": "/mnt/jail/opt/soperator-home"},
     ]
-    volume_sources = {item["name"]: item for item in values["volumeSources"]}
-    assert set(volume_sources) == {
-        "controller-spool",
-        "jail",
-    }
-    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
-        "controller-spool-pvc"
-    )
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
+    assert "volumeSources" not in values
     assert "jail_home" not in values
     assert "home" not in values["jailRootfs"]
 
 
-def test_apply_persistent_mount_values_removes_chart_rendered_volume_source_duplicates() -> None:
-    values = apply_jail_persistent_mount_values(
-        {
-            "volumeSources": [
-                {"name": "controller-spool", "persistentVolumeClaim": {"claimName": "spool"}},
-                {
-                    "name": "jail",
-                    "csi": {"driver": "legacy.example.invalid"},
-                    "glusterfs": {"endpoints": "legacy"},
-                },
-                {
-                    "name": "jail-rootfs-slot-a",
-                    "persistentVolumeClaim": {"claimName": "stale-a"},
-                },
-                {
-                    "name": "jail-persistent-data",
-                    "persistentVolumeClaim": {"claimName": "stale-data"},
-                },
-            ]
-        },
-        target_ref="external-cluster",
-        layout="external",
-    )
-
-    volume_sources = {item["name"]: item for item in values["volumeSources"]}
-    assert set(volume_sources) == {"controller-spool", "jail"}
-    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == "spool"
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
-    assert "csi" not in volume_sources["jail"]
-    assert "glusterfs" not in volume_sources["jail"]
-
-
-def test_apply_persistent_mount_values_adds_referenced_controller_spool_source() -> None:
-    values = apply_jail_persistent_mount_values(
-        {
-            "slurmNodes": {
-                "controller": {
-                    "volumes": {
-                        "spool": {
-                            "volumeSourceName": "controller-spool",
-                        }
-                    }
-                }
-            }
-        },
-        target_ref="external-cluster",
-        layout="external",
-    )
-
-    volume_sources = {item["name"]: item for item in values["volumeSources"]}
-    assert volume_sources["controller-spool"]["persistentVolumeClaim"]["claimName"] == (
-        "controller-spool-pvc"
-    )
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == ("jail-pvc")
+@pytest.mark.parametrize(
+    "name",
+    ["custom-data", "jail", "controller-spool", "jail-rootfs-slot-a", "jail-persistent-data"],
+)
+def test_storage_normalization_preserves_supplied_sources_for_adapter_validation(name):
+    source = {"volumeSources": [{"name": name, "emptyDir": {}}]}
+    before = copy.deepcopy(source)
+    values = apply_jail_persistent_mount_values(source, target_ref="cluster", layout="managed")
+    assert source == before
+    assert values["volumeSources"] == source["volumeSources"]
+    assert normalize_jail_storage_intent(values) == values
+    values["volumeSources"][0]["name"] = "changed"
+    assert source == before
 
 
 def test_external_first_adoption_keeps_all_consumers_on_legacy_jail_pvc() -> None:
@@ -166,8 +120,7 @@ def test_external_first_adoption_keeps_all_consumers_on_legacy_jail_pvc() -> Non
         layout="external",
     )
 
-    volume_sources = {item["name"]: item for item in values["volumeSources"]}
-    assert volume_sources["jail"]["persistentVolumeClaim"]["claimName"] == "jail-pvc"
+    assert "volumeSources" not in values
     for role in configurable_jail_roles:
         assert values["slurmNodes"][role]["volumes"]["jail"] == {"volumeSourceName": "jail"}
     assert "volumes" not in values["slurmNodes"]["exporter"]

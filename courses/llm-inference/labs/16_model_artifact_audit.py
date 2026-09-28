@@ -10,7 +10,7 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     validate_common_args,
     write_result,
@@ -26,7 +26,7 @@ def main() -> None:
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     try:
         from huggingface_hub import HfApi
         from transformers import AutoConfig, AutoTokenizer, GenerationConfig
@@ -58,7 +58,8 @@ def main() -> None:
         )
     except Exception as exc:
         raise SystemExit(
-            "The pinned model metadata must be reachable or cached before this lab."
+            "The pinned model metadata must be reachable on the Hub; "
+            "this audit requires online HfApi access even when artifacts are cached."
         ) from exc
 
     files = sorted(sibling.rfilename for sibling in info.siblings)

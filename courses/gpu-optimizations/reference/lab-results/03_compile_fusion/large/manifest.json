@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "a81069cf5189526f0ba974c6339d6b430479412b5b867118b8303ab4c48fa37c",
+      "sha256": "539ece872dd60f4fbe6f24462084171e19278d302fb73f1cbe734e838e8648ec",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "fedbd51753164352d146afcc1d3476745ddf6dad2b11602b0118be8d34550d27",
+      "sha256": "bd92c101621c757a4a670926abc3e0e9b7895e84ed78749ab5042862831f6cb2",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "300a659b6b5d447ad57ba3cf958f2c7562dcd32310cf4b911017c9b855db8ad7",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "64b056c203201c7ef0bb844a831dc77090b677ab1bb4b37307879de0dfa5618b",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "a2c7d2d6cf434fe467b0c51908278b69d679954dedd1ea1500e6cf7f0a937f4d",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "fbbe763b4d7615085271d702153fb3c9fd46fffd9016b241a5dba7ec9153e8a8",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "fe9d364b1d7b0fb26541e0078c63a0fb1254a9e60b6e10b6c357193c676449d1",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "03_compile_fusion",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "large",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a9250a8c5f62518225ab966445945257d3c022014ef8c8d7188a962f8e12f3ad",
+  "summary_sha256": "a9e23fe7b112b4bab9db76ea369b8d686b785e34899e16c76197d21acb114244"
+}

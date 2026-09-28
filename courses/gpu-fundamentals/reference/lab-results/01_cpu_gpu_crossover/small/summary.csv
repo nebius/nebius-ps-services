@@ -1,0 +1,13 @@
+variant,metric,case,value,unit
+baseline-trial1,cpu_duration_seconds,1024,2e-06,s
+baseline-trial1,cpu_duration_seconds,1000000,0.000736,s
+baseline-trial1,resident_duration_seconds,1024,1.67e-05,s
+baseline-trial1,resident_duration_seconds,1000000,1.68e-05,s
+baseline-trial1,transfer_duration_seconds,1024,4.38e-05,s
+baseline-trial1,transfer_duration_seconds,1000000,0.0026537,s
+repeat-trial1,cpu_duration_seconds,1024,2.2e-06,s
+repeat-trial1,cpu_duration_seconds,1000000,0.0007572,s
+repeat-trial1,resident_duration_seconds,1024,1.8e-05,s
+repeat-trial1,resident_duration_seconds,1000000,1.83e-05,s
+repeat-trial1,transfer_duration_seconds,1024,4.62e-05,s
+repeat-trial1,transfer_duration_seconds,1000000,0.0028294,s

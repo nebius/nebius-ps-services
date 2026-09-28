@@ -1,0 +1,66 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "825f9b6b38b1f59063f268837bccbc7b4c693f2e4d38d88c064087912a0a6f15",
+      "sha256": "7c0b600288bdd29d0a371ed52ab36391b609bf068ca8a6d8159e0bc833fe808d",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "967c127116693fce1eb557524e487d4e0f8e3e40aed96842d6cd83f1081ccfb9",
+      "sha256": "e288b7baec749dd5ddebd5f7bf1648b9d347ebbe64613ee7f7d7785daf332337",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "9b1c5ef7e074f3f61b95e9c25294c0e3ecd4c47fed95a2d9057e5fb9ac5848c0",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "7066f8ffa4799e206d65893f33419164ad25bb36e4d61195b3558b80165af69e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view3.png",
+      "sha256": "6d787bab9babb15229e15fe5672a76bc3e1e3d8666c7fe2fe3151f674e01ef5c",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "752656c2c1521e1badc89603fa449748431ed593d2264e17645464ae1721bae5",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "748ada3e937edb30e2cf16aa63f89ecfbba625acf8b3e5e66c899edc79f493cd",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "15_tail_load_balance",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a1ea905a8f5a2df598d2a00d4748102977068eeda17afe84de12e611e954c48d",
+  "summary_sha256": "0671bd768163c10cd4b98ecdd74aac97d2d4514b58a0b260b162612b497a200d"
+}

@@ -1,6 +1,6 @@
 ---
 name: sdlc-gui-test
-description: "Use only as part of the Agentic SDLC workflow; control, observe, screenshot, and evaluate browser GUI behavior through the declared harness, including human-like computer-use UAT or Browser/Playwright when allowed."
+description: "Use only as part of the Agentic SDLC workflow; control, observe, screenshot, and evaluate browser GUI behavior through the declared harness, using headless Playwright Test for web acceptance and optional isolated Playwright MCP exploration."
 user-invocable: false
 ---
 
@@ -83,14 +83,20 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 
 ## Process
 
-- Honor the evaluation plan's required harness. Use `computer-use` when it is
-  explicitly required; otherwise use Browser or Playwright MCP when available.
-- Start or access the app environment.
-- Navigate to the target flow and use accessibility state for interaction when
-  available. After every navigation, click, type, submit, refresh, filter,
-  restart, or other state-changing action, obtain fresh accessibility state
-  before selecting the next target; never reuse stale coordinates or element
-  references.
+- Default required web acceptance to headless Playwright Test. Use a fresh
+  owned process and context for each evaluation/UAT stage; record the actual
+  Chrome version, headless mode, assertions, screenshots, trace, timestamps,
+  target revision and cleanup outcome. Do not require native desktop capture,
+  a visible window, a selected monitor or an unlocked screen for web tests.
+- Keep optional agent exploration in a separate headless isolated Playwright
+  MCP session. It does not replace repeatable acceptance assertions. Refresh
+  DOM/accessibility snapshots before selecting targets in agent exploration;
+  scripted tests use locator resolution, auto-waiting and explicit assertions.
+- Honor an explicitly declared native-desktop acceptance contract separately;
+  classify its availability independently and never substitute web evidence.
+- Start or access the declared app environment. Keep fixture setup/recovery
+  separate from product-owned behavior. Freeze the independent acceptance
+  oracle before implementation; never copy it into product TDD tests.
 - Perform the user journey.
 - Capture screenshots at meaningful checkpoints.
 - For data-backed GUI flows, correlate the GUI observation with an independent
@@ -102,7 +108,12 @@ Control, observe, and evaluate browser UI behavior with durable local evidence.
 - Use disposable test data where possible.
 - Clean up created records when safe.
 - Use unique test names when cleanup is not possible.
-- Avoid relying on previous browser state.
+- Avoid relying on previous browser state. Always close owned browsers, even
+  when retaining the application. Resume with a fresh process/context.
+- Record interrupted stages as failed or unverified; preserve original artifacts.
+- A laptop may lock, but must remain awake with the agent and runtime running.
+  Claim locked-agent continuity only after observing a real agent start a new
+  stage and collect evidence during an independently established lock interval.
 
 ## Failure Handling
 

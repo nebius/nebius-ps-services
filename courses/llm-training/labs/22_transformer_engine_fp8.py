@@ -10,11 +10,12 @@ from typing import Any, Callable
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def relative_l2(torch: Any, candidate: Any, reference: Any) -> float:
@@ -68,7 +69,7 @@ def main() -> None:
             "--warmup must be at least one so BF16 and FP8 use warmed boundaries."
         )
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     try:
         import transformer_engine
@@ -80,7 +81,7 @@ def main() -> None:
             "Engine environment compatible with the pinned PyTorch/CUDA stack."
         ) from exc
 
-    rows, hidden = (1_024, 1_024) if args.profile == "smoke" else (4_096, 4_096)
+    rows, hidden = (1_024, 1_024) if args.profile == "small" else (4_096, 4_096)
     layer = te.Linear(
         hidden,
         hidden,
@@ -108,6 +109,8 @@ def main() -> None:
             loss = output.float().square().mean()
         loss.backward()
         return output.detach(), layer.weight.grad.detach()
+
+    bf16_step = annotated_operation(bf16_step, "bf16_step")
 
     # Measure the BF16 path before an FP8 call can allocate scaling metadata.
     # Each path reports its warmed allocation baseline and only the incremental
@@ -215,4 +218,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

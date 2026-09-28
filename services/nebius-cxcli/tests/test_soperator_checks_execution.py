@@ -12,6 +12,7 @@ import pytest
 
 from nebius_cxcli.soperator_checks import SoperatorChecksExecution
 from nebius_cxcli.soperator_checks_policy import CHECKS_POLICY_ENV, CheckRule, SoperatorChecksPolicy
+from passive_scheduler_fakes import DESIRED_SCHEDULER, LIVE_SCHEDULER
 
 
 class Cluster:
@@ -28,7 +29,9 @@ class Cluster:
         self.reservation_present = True
         self.reservation_fields = {}
         self.nodes = {"cpu-0": (8, 0), "gpu-0": (16, 4), "gpu-1": (32, 8)}
+        self.node_states = {}
         self.running = ""
+        self.scheduler = LIVE_SCHEDULER
         self.next_id = 40
         self.now = 0
         self.fail_create = False
@@ -245,6 +248,8 @@ class Cluster:
         )
 
     def slurm(self, command):
+        if command == "scontrol show config":
+            return self.scheduler
         command = command.removeprefix("env SLURM_TIME_FORMAT=standard TZ=UTC ")
         if command.startswith("head -c 4194305 -- /opt/soperator-outputs/slurm_jobs/"):
             status = self.native_health_status
@@ -292,6 +297,7 @@ class Cluster:
         if command == "scontrol show nodes -o":
             return "\n".join(
                 f"NodeName={name} CoresPerSocket={cores} Sockets=1 CfgTRES=cpu={cores},gres/gpu={gpus}"
+                f" State={self.node_states.get(name, 'IDLE+CLOUD+MAINTENANCE+RESERVED')}"
                 for name, (cores, gpus) in self.nodes.items()
             )
         if command.startswith("scontrol show hostnames "):
@@ -351,6 +357,7 @@ def policy():
         {},
         passive={
             "supported": False,
+            "scheduler": copy.deepcopy(DESIRED_SCHEDULER),
             "opaque": {"checks.json": "[]", "check_runner.py": "# native fixture"},
         },
         partitions={
@@ -404,6 +411,60 @@ def accept(executor):
     return executor.accept(
         reservation="reserve", workers=("cpu-0", "gpu-0", "gpu-1"), gpu_workers=("gpu-0", "gpu-1")
     )
+
+
+@pytest.mark.parametrize(
+    "state", ["IDLE+CLOUD+DRAIN", "DRAINED", "DRAINING", "DOWN", "FAIL", "FAILING"]
+)
+def test_acceptance_reports_unavailable_worker_before_slurm_submission(tmp_path, policy, state):
+    cluster = Cluster(policy)
+    cluster.node_states["gpu-1"] = state
+    runner = execution(tmp_path, policy, cluster)
+    with pytest.raises(RuntimeError, match="acceptance worker gpu-1 is unavailable"):
+        accept(runner)
+    assert not any(
+        job["metadata"].get("annotations", {}).get("slurm-job-id") for job in cluster.jobs.values()
+    )
+    assert runner.state["phase"] != "accepted"
+    assert cluster.node_states["gpu-1"] == state
+
+
+def test_acceptance_reports_worker_drained_after_submission_without_resubmitting(tmp_path, policy):
+    cluster = Cluster(policy)
+    original_kube = cluster.kube
+
+    def kube(args, document):
+        result = original_kube(args, document)
+        if args[0] == "create":
+            for job in cluster.jobs.values():
+                if job["metadata"].get("annotations", {}).get("slurm-job-id"):
+                    job["status"] = {}
+                    cluster.node_states["gpu-1"] = "IDLE+CLOUD+DRAIN+MAINTENANCE+RESERVED"
+        return result
+
+    cluster.kube = kube
+    runner = execution(tmp_path, policy, cluster)
+    with pytest.raises(RuntimeError, match="acceptance worker gpu-1 is unavailable"):
+        accept(runner)
+    saved_jobs = copy.deepcopy(cluster.jobs)
+    resumed = execution(tmp_path, policy, cluster)
+    with pytest.raises(RuntimeError, match="acceptance worker gpu-1 is unavailable"):
+        accept(resumed)
+    assert cluster.jobs == saved_jobs
+    assert cluster.reservation_present
+    assert resumed.state["phase"] != "accepted"
+
+
+def test_acceptance_availability_is_scoped_and_requires_complete_state(tmp_path, policy):
+    cluster = Cluster(policy)
+    cluster.node_states["gpu-1"] = "DRAIN"
+    runner = execution(tmp_path, policy, cluster)
+    runner._verify_acceptance_workers_available(("gpu-0",))
+    cluster.node_states["gpu-0"] = ""
+    with pytest.raises(RuntimeError, match="worker gpu-0 state is unavailable"):
+        runner._verify_acceptance_workers_available(("gpu-0",))
+    with pytest.raises(RuntimeError, match="worker missing state is unavailable"):
+        runner._verify_acceptance_workers_available(("missing",))
 
 
 def test_native_health_error_cannot_pass_with_successful_slurm_accounting(tmp_path, policy):
@@ -1088,3 +1149,77 @@ def test_retained_suspended_diagnostics_require_effective_quiescence(tmp_path, p
     else:
         runner.verify_deferred_diagnostics()
     assert not cluster.writes
+
+
+def test_poll_progress_uses_elapsed_heartbeats_without_changing_polling(tmp_path, policy):
+    cluster = Cluster(policy)
+    runner = execution(tmp_path, policy, cluster)
+    runner.timeout = 90
+    messages, calls = [], []
+    runner.emit = messages.append
+
+    def action():
+        calls.append(cluster.now)
+        return cluster.now == 65
+
+    assert runner._until(action, "native diagnostic")
+    assert calls == list(range(66))
+    assert messages == [
+        "Waiting for native diagnostic (0s)",
+        "Waiting for native diagnostic (30s)",
+        "Waiting for native diagnostic (60s)",
+        "Completed native diagnostic (65s)",
+    ]
+
+
+def test_immediate_poll_failure_keeps_context_and_timeout_still_applies(tmp_path, policy):
+    cluster = Cluster(policy)
+    runner = execution(tmp_path, policy, cluster)
+    messages = []
+    runner.emit = messages.append
+    with pytest.raises(RuntimeError, match="specific failure"):
+        runner._until(lambda: (_ for _ in ()).throw(RuntimeError("specific failure")), "native")
+    assert messages == ["Waiting for native (0s)"]
+    with pytest.raises(RuntimeError, match="recovery remains available"):
+        runner._until(lambda: False, "timeout")
+    assert cluster.now == 2
+
+
+def test_native_replacement_uses_saved_distinct_identity_once(tmp_path, policy):
+    from nebius_cxcli.soperator_checks_image_pull_recovery import CHECK, KEY
+
+    rules = tuple(
+        replace(rule, name=CHECK) if rule.name == "gpu-fryer" else rule for rule in policy.rules
+    )
+    specs = copy.deepcopy(policy.execution_specs)
+    specs[CHECK] = specs.pop("gpu-fryer")
+    specs[CHECK]["name"] = CHECK
+    policy = replace(policy, rules=rules, execution_specs=specs)
+    for spec in specs.values():
+        for item in spec[spec["checkType"] + "Spec"]["jobContainer"]["env"]:
+            if item["name"] == CHECKS_POLICY_ENV:
+                item["value"] = policy.sha256
+    cluster = Cluster(policy)
+    original_slurm = cluster.slurm
+
+    def slurm(command):
+        if command.startswith("head -c "):
+            gpus = 4 if "/gpu-0." in command else 8
+            return (
+                "# Collective test starting: all_reduce_perf\n"
+                f"# nThread 1 nGpus {gpus} minBytes 1 validation: 1 graph: 0\n"
+                "# Out of bounds values : 0 OK\n"
+                "# Avg bus bandwidth : 48.4\n"
+                "# Collective test concluded: all_reduce_perf\n"
+            )
+        return original_slurm(command)
+
+    cluster.slurm = slurm
+    runner = execution(tmp_path, policy, cluster)
+    runner.state[KEY] = {"gpu-0": {"status": "ready", "replacement": "cxcli-check-replacement"}}
+    assert accept(runner)["jobs"] == 4
+    assert "cxcli-check-replacement" in cluster.jobs
+    assert CHECK + "-initial-run" not in cluster.jobs
+    jobs = copy.deepcopy(cluster.jobs)
+    assert accept(runner)["jobs"] == 4
+    assert cluster.jobs == jobs

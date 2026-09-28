@@ -9,12 +9,13 @@ import time
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     resolve_int_override,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,12 +50,12 @@ def main() -> None:
     validate_common_args(args)
     size_mib = resolve_int_override(
         args.size_mib,
-        64 if args.profile == "smoke" else 512,
+        64 if args.profile == "small" else 512,
         option="--size-mib",
     )
     torch = load_torch()
     seed_everything(torch, args.seed)
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     elements = size_mib * 2**20 // 4
     pageable = torch.randn(elements, dtype=torch.float32)
     pinned = torch.empty(elements, dtype=torch.float32, pin_memory=True)
@@ -93,4 +94,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

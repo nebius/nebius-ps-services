@@ -44,10 +44,10 @@ __global__ void scatter_grouped(const float* grouped_output, float* logical_outp
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 06_divergence_tail [--smoke]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 06_divergence_tail [--profile small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 4096, 1U << 25);
-    const auto properties = require_h100();
+    const auto properties = require_course_gpu();
     std::vector<float> input(count), expected(count), divergent_observed(count), grouped_observed(count);
     auto apply_work = [](float value, int iterations) {
       for (int iteration = 0; iteration < iterations; ++iteration) value = std::fma(value, 1.00001F, 0.00001F);
@@ -101,6 +101,7 @@ int main(int argc, char** argv) {
               << "\ntail_blocks_one_block_per_sm=" << tail_blocks
               << "\nprimary_grouped_timing_includes_pack_and_scatter=true"
               << "\nverify_residency_with_profiler=true\n";
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

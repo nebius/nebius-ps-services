@@ -18,7 +18,7 @@ def test_ssh_jumphost_passes_bootstrap_allowed_cidrs_json_to_cloud_init() -> Non
     assert "bootstrap_allowed_cidrs_json = jsonencode(var.allowed_cidrs)" in main_tf
 
 
-def test_ssh_jumphost_template_installs_vm_local_day2_allowed_cidr_helper() -> None:
+def test_ssh_jumphost_template_installs_vm_local_day2_allowed_cidr_helper(tmp_path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     template_path = (
         repo_root / "platform-infra" / "modules" / "ssh-jumphost" / "ssh-jumphost-cloud-init.tftpl"
@@ -32,6 +32,7 @@ def test_ssh_jumphost_template_installs_vm_local_day2_allowed_cidr_helper() -> N
     )
     rendered = subprocess.run(
         ["terraform", "console", "-no-color"],
+        cwd=tmp_path,
         input=expression,
         check=True,
         capture_output=True,
@@ -186,7 +187,7 @@ def test_jump_host_wrappers_use_vm_module_without_legacy_state_moves() -> None:
         assert "name      = var.name" in locals_tf
 
 
-def test_wireguard_gw_template_renders_shell_heredoc_terminators_at_column_zero() -> None:
+def test_wireguard_gw_template_renders_shell_heredoc_terminators_at_column_zero(tmp_path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     template_path = (
         repo_root / "platform-infra" / "modules" / "wireguard-gw" / "wireguard-cloud-init.tftpl"
@@ -215,6 +216,7 @@ def test_wireguard_gw_template_renders_shell_heredoc_terminators_at_column_zero(
     )
     rendered = subprocess.run(
         ["terraform", "console", "-no-color"],
+        cwd=tmp_path,
         input=expression,
         check=True,
         capture_output=True,

@@ -727,8 +727,8 @@ def test_agent_profiles() -> None:
         write_skill(skill, "portable-example", allow_implicit_invocation="invalid")
         if run_validator(skill, agent="core").returncode == 0:
             raise AssertionError("malformed optional metadata accepted")
-        explicit = root / "commit"
-        write_skill(explicit, "commit", allow_implicit_invocation="false")
+        explicit = root / "create-pr"
+        write_skill(explicit, "create-pr", allow_implicit_invocation="false")
         if run_validator(explicit, agent="claude").returncode == 0:
             raise AssertionError("Claude explicit-only policy was not enforced")
         path = explicit / "SKILL.md"
@@ -786,8 +786,8 @@ def test_invocation_policy_contract_fails_for_wrong_value() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         write_skill(
-            root / "commit",
-            "commit",
+            root / "create-pr",
+            "create-pr",
             allow_implicit_invocation="true",
         )
 
@@ -798,7 +798,7 @@ def test_invocation_policy_contract_fails_for_wrong_value() -> None:
 
         assert_contains(
             output,
-            "policy.allow_implicit_invocation must be false for commit",
+            "policy.allow_implicit_invocation must be false for create-pr",
         )
 
 

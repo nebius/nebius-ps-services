@@ -1,0 +1,52 @@
+{
+  "correctness": {
+    "first_rejection_emits_target_recovery_tokens": true,
+    "full_acceptance_emits_target_bonus_tokens": true,
+    "high_acceptance_reduces_target_calls": true,
+    "low_acceptance_does_not_reduce_target_calls": true
+  },
+  "lab": "23_speculative_decoding",
+  "measurements": {
+    "draft_length": 4,
+    "generated_tokens": 32,
+    "hidden_size": 512,
+    "high_acceptance": {
+      "accepted_draft_tokens": 26,
+      "accepted_prefix_histogram": {},
+      "draft_tokens_proposed": 26,
+      "mean_accepted_prefix": 3.714,
+      "median_e2e_ms": 0.4722,
+      "peak_allocated_mib": 40.1,
+      "target_bonus_tokens": 6,
+      "target_forward_calls": 7,
+      "target_recovered_tokens": 0
+    },
+    "low_acceptance": {
+      "accepted_draft_tokens": 0,
+      "accepted_prefix_histogram": {},
+      "draft_tokens_proposed": 122,
+      "mean_accepted_prefix": 0,
+      "median_e2e_ms": 2.0855,
+      "peak_allocated_mib": 40.1,
+      "target_bonus_tokens": 0,
+      "target_forward_calls": 32,
+      "target_recovered_tokens": 32
+    },
+    "target_only": {
+      "median_e2e_ms": 1.956,
+      "peak_allocated_mib": 40.0,
+      "target_forward_calls": 32
+    },
+    "vocab_size": 2048
+  },
+  "parameters": {
+    "draft_length": 4,
+    "iterations": 10,
+    "max_new_tokens": 32,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

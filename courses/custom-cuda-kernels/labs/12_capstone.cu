@@ -16,21 +16,21 @@ __global__ void fused_candidate(const float* input, float* output, std::size_t c
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 12_capstone [--smoke] --variant-order baseline-first|candidate-first\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 12_capstone [--profile small|large] --variant-order baseline-first|candidate-first\n"; return 0; }
   try {
-    bool smoke = false;
+    bool small = false, profile_seen = false;
     std::string variant_order;
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
-      if (argument == "--smoke") smoke = true;
+      if (argument == "--profile") small = parse_small_profile(argc, argv, index, profile_seen);
       else if (argument == "--variant-order" && index + 1 < argc) variant_order = argv[++index];
       else throw std::runtime_error("unsupported or incomplete argument: " + argument);
     }
     if (variant_order != "baseline-first" && variant_order != "candidate-first") {
       throw std::runtime_error("--variant-order is required and must be baseline-first or candidate-first");
     }
-    require_h100();
-    const std::size_t count = smoke ? 4099 : 1U << 25;
+    require_course_gpu();
+    const std::size_t count = small ? 4099 : 1U << 25;
     std::vector<float> input(count), expected(count), baseline_observed(count), candidate_observed(count);
     for (std::size_t index = 0; index < count; ++index) { input[index] = static_cast<float>(static_cast<int>(index % 101) - 50) / 50.0F; expected[index] = std::tanh(input[index] * 1.25F + 0.5F); }
     DeviceBuffer<float> device_input(count), temporary(count), baseline_output(count), candidate_output(count);
@@ -69,6 +69,7 @@ int main(int argc, char** argv) {
               << "sanitizer=run-separately\nprofiler=run-separately\n"
               << "end_to_end_claim=pending-integration\n"
               << "publication_decision=pending-three-independent-run-aggregation\n";
+    std::cout << "course_checks=passed\n";
     return 0;
   } catch (const std::exception& error) { std::cerr << "ERROR: " << error.what() << '\n'; return 2; }
 }

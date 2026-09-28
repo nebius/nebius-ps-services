@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +12,7 @@ import yaml
 
 import nebius_cxcli.flux_ops as flux_ops
 from nebius_cxcli.paths import ProjectPaths
+from nebius_cxcli.soperator_observability_routing import child_patches
 
 _DIGEST = "sha256:" + "1" * 64
 
@@ -240,7 +244,7 @@ def test_digest_pinned_oci_source_is_reread_as_oci_repository(
             )
         raise AssertionError(command)
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     receipts = flux_ops.prepare_soperator_release_sources(
         _oci_paths(tmp_path),
@@ -279,7 +283,7 @@ def test_mutable_source_requires_fresh_evidence_then_is_frozen(
             )
         raise AssertionError(command)
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     receipts = flux_ops.prepare_soperator_release_sources(
         _paths(tmp_path),
@@ -326,7 +330,7 @@ def test_digest_mismatch_fails_closed_and_still_resuspends(
             )
         raise AssertionError(command)
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     with pytest.raises(RuntimeError, match="fresh artifact evidence"):
         flux_ops.prepare_soperator_release_sources(
@@ -402,6 +406,140 @@ def _outer_bundle() -> str:
         },
         sort_keys=False,
     )
+
+
+def _outer_with_routing() -> dict:
+    outer = yaml.safe_load(_outer_bundle())
+    original = [
+        {
+            "kind": "HelmRelease",
+            "metadata": {"name": "soperator-fluxcd-product"},
+            "spec": {"values": {"config": {"service": {"pipelines": {"logs": None}}}}},
+        }
+    ]
+    routed = copy.deepcopy(original)
+    routed[0]["spec"]["values"]["extraEnvs"] = [{"name": "ROUTING_MODE", "value": "local"}]
+    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    patches[:0] = child_patches(original, routed)
+    return outer
+
+
+@pytest.mark.parametrize("suspend_children", [False, True])
+@pytest.mark.parametrize("fullname_override", [None, "custom-umbrella"])
+def test_routing_patch_composes_with_child_identity_and_staging(
+    suspend_children, fullname_override
+) -> None:
+    outer = _outer_with_routing()
+    if fullname_override:
+        outer["spec"]["values"] = {"fullnameOverride": fullname_override}
+    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    routing_patch = patches[0]["patch"]
+    patches[0]["target"]["namespace"] = "flux-system"
+
+    flux_ops._normalize_soperator_outer_post_renderers(
+        outer, _staged_contract()["releases"], suspend_children=suspend_children
+    )
+
+    raw_name = f"{fullname_override or 'soperator-controller'}-product"
+    product_patches = [patch for patch in patches if patch["target"]["name"] == raw_name]
+    assert len(product_patches) == 2
+    assert product_patches[0]["patch"] == routing_patch
+    assert "namespace" not in product_patches[0]["target"]
+    graph_ops = yaml.safe_load(product_patches[1]["patch"])
+    assert {
+        "op": "replace",
+        "path": "/metadata/name",
+        "value": "cxcli-soperator-fluxcd-product",
+    } in graph_ops
+    assert {"op": "add", "path": "/metadata/namespace", "value": "flux-system"} in graph_ops
+    assert ({"op": "add", "path": "/spec/suspend", "value": True} in graph_ops) == suspend_children
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "wrong", "test-only", "unsupported"])
+def test_routing_patch_does_not_bypass_graph_identity_validation(mutation) -> None:
+    outer = _outer_with_routing()
+    patches = outer["spec"]["postRenderers"][0]["kustomize"]["patches"]
+    graph_patch = patches[-1]
+    expected = "invalid final identity"
+    if mutation == "missing":
+        patches.pop()
+        expected = "omits graph patches"
+    elif mutation == "duplicate":
+        patches.append(copy.deepcopy(graph_patch))
+        expected = "duplicate graph patches"
+    elif mutation == "unsupported":
+        patches[0]["patch"] = yaml.safe_dump([{"op": "remove", "path": "/spec/chart"}])
+    else:
+        operations = yaml.safe_load(graph_patch["patch"])
+        if mutation == "wrong":
+            operations[0]["value"] = "different-child"
+        else:
+            operations[0]["op"] = "test"
+        graph_patch["patch"] = yaml.safe_dump(operations)
+
+    with pytest.raises(ValueError, match=expected):
+        flux_ops._normalize_soperator_outer_post_renderers(
+            outer, _staged_contract()["releases"], suspend_children=False
+        )
+
+
+def test_stable_documents_preserve_routing_without_mutating_authored_bundle() -> None:
+    outer = _outer_with_routing()
+    original = copy.deepcopy(outer)
+
+    stable = flux_ops.stable_soperator_documents([outer], _staged_contract()["releases"])
+
+    assert outer == original
+    assert (
+        stable[0]["spec"]["postRenderers"][0]["kustomize"]["patches"][0]["patch"]
+        == (original["spec"]["postRenderers"][0]["kustomize"]["patches"][0]["patch"])
+    )
+
+
+@pytest.mark.parametrize("suspend_children", [False, True])
+def test_routing_normalization_renders_final_children(tmp_path, suspend_children) -> None:
+    if not shutil.which("kubectl"):
+        pytest.skip("kubectl kustomize is required for native postrenderer validation")
+    outer = _outer_with_routing()
+    rows = flux_ops._normalize_soperator_outer_post_renderers(
+        outer, _staged_contract()["releases"], suspend_children=suspend_children
+    )
+    children = [
+        {
+            "apiVersion": "helm.toolkit.fluxcd.io/v2",
+            "kind": "HelmRelease",
+            "metadata": {"name": row["rawName"], "namespace": row["rawNamespace"]},
+            "spec": {"values": {"original": True}},
+        }
+        for row in rows
+    ]
+    (tmp_path / "children.yaml").write_text(yaml.safe_dump_all(children))
+    (tmp_path / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": ["children.yaml"],
+                "patches": outer["spec"]["postRenderers"][0]["kustomize"]["patches"],
+            }
+        )
+    )
+    result = subprocess.run(
+        ["kubectl", "kustomize", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    rendered = list(yaml.safe_load_all(result.stdout))
+    assert {doc["metadata"]["name"] for doc in rendered} == {row["finalName"] for row in rows}
+    assert all(doc["metadata"]["namespace"] == "flux-system" for doc in rendered)
+    product = next(doc for doc in rendered if doc["metadata"]["name"].endswith("-product"))
+    assert product["spec"]["values"] == {
+        "config": {"service": {"pipelines": {"logs": None}}},
+        "extraEnvs": [{"name": "ROUTING_MODE", "value": "local"}],
+    }
+    assert product["spec"].get("suspend", False) is suspend_children
 
 
 def test_staged_outer_identity_comes_from_rendered_graph_members() -> None:
@@ -686,7 +824,7 @@ def test_remove_helmrelease_suspend_uses_json_patch(
         commands.append(command)
         return SimpleNamespace(returncode=0, stdout="patched", stderr="")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops._remove_helmrelease_suspend(
         name="soperator-main",
@@ -700,6 +838,48 @@ def test_remove_helmrelease_suspend_uses_json_patch(
     assert patch == [{"op": "remove", "path": "/spec/suspend"}]
 
 
+def test_staged_release_orders_cert_manager_before_profile_operator(tmp_path, monkeypatch):
+    def row(name, stage, dependencies=(), *, main=False):
+        return {
+            "releaseName": "cxcli-soperator-fluxcd-" + name,
+            "upstreamReleaseName": "soperator-fluxcd-" + name,
+            "namespace": "flux-system",
+            "stage": stage,
+            "dependencies": ["cxcli-soperator-fluxcd-" + dep for dep in dependencies],
+            "isMain": main,
+        }
+
+    contract = {
+        "releases": [
+            row("ns", 0),
+            row("security-profiles-operator", 0),
+            row("cert-manager", 1, ("ns",)),
+            row("product", 1, ("security-profiles-operator",), main=True),
+        ]
+    }
+    original = json.dumps(contract, sort_keys=True)
+    monkeypatch.setattr(flux_ops, "_rendered_soperator_graph_contract", lambda _: contract)
+
+    def read_only_render(command, **kwargs):
+        assert command[1] == "kustomize"
+        return SimpleNamespace(returncode=0, stdout=_outer_bundle(), stderr="")
+
+    def inspect_order(documents, releases):
+        rows = {row["upstreamReleaseName"]: row for row in releases}
+        cert = rows["soperator-fluxcd-cert-manager"]
+        profile = rows["soperator-fluxcd-security-profiles-operator"]
+        main = rows["soperator-fluxcd-product"]
+        assert cert["stage"] < profile["stage"] < main["stage"]
+        assert cert["releaseName"] in profile["dependencies"]
+        raise RuntimeError("ordering checked before mutation")
+
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", read_only_render)
+    monkeypatch.setattr(flux_ops, "_staged_soperator_outer_release", inspect_order)
+    with pytest.raises(RuntimeError, match="ordering checked before mutation"):
+        flux_ops.apply_staged_soperator_release(_paths(tmp_path))
+    assert json.dumps(contract, sort_keys=True) == original
+
+
 def test_staged_release_rejects_missing_main_before_kubectl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -711,7 +891,7 @@ def test_staged_release_rejects_missing_main_before_kubectl(
         lambda _path: contract,
     )
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("kubectl must not run for an invalid graph")
@@ -730,6 +910,15 @@ def test_staged_release_rejects_missing_main_before_kubectl(
 def test_staged_release_opens_exact_sources_and_releases_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retry_installation: bool | None
 ) -> None:
+    from nebius_cxcli import soperator_child_publication
+
+    def unexpected_retirement(*args, **kwargs):
+        raise AssertionError("Ordinary installation must not enter native retirement repair")
+
+    monkeypatch.setattr(soperator_child_publication, "materialize_child", unexpected_retirement)
+    monkeypatch.setattr(
+        soperator_child_publication, "recover_pending_materializations", unexpected_retirement
+    )
     patches: list[tuple[str, bool]] = []
     activations: list[str] = []
     source_stages: list[set[str]] = []
@@ -807,7 +996,7 @@ def test_staged_release_opens_exact_sources_and_releases_in_order(
             tuple(sorted(str(item["releaseName"]) for item in stage_items))
         ),
     )
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops.apply_staged_soperator_release(
         _paths(tmp_path),
@@ -935,7 +1124,7 @@ def test_staged_release_does_not_resume_stage_when_fresh_source_fails(
         "prepare_soperator_release_sources",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("upstream unavailable")),
     )
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     with pytest.raises(RuntimeError, match="upstream unavailable"):
         flux_ops.apply_staged_soperator_release(
@@ -1057,6 +1246,51 @@ def test_stage_freezes_main_before_accepting_ready(
     )
 
     assert events == ["observe", "freeze"]
+
+
+@pytest.mark.parametrize("reason", ["InstallFailed", "token=secret\nhttps://private.invalid"])
+def test_stage_timeout_names_blocking_earlier_child_without_raw_conditions(monkeypatch, reason):
+    child = {
+        "releaseName": "dashboards",
+        "namespace": "flux-system",
+        "stage": 0,
+        "sourceKind": "OCIRepository",
+        "sourceName": "dashboard-source",
+        "isMain": False,
+    }
+    payload = {
+        "metadata": {"generation": 2},
+        "spec": {"chartRef": {"kind": "OCIRepository", "name": "dashboard-source"}},
+        "status": {
+            "observedGeneration": 1,
+            "conditions": [
+                {
+                    "type": "Ready",
+                    "status": "False",
+                    "observedGeneration": 2,
+                    "reason": reason,
+                    "message": "token=secret",
+                },
+                {"type": "Reconciling", "status": "True"},
+            ],
+        },
+    }
+    monkeypatch.setattr(flux_ops, "_run_kubectl_json_process", lambda *a, **kw: payload)
+    with pytest.raises(RuntimeError) as caught:
+        flux_ops._wait_for_soperator_release_stage(
+            {"releases": [child, {**child, "releaseName": "later", "stage": 1}]},
+            1,
+            cache_dir=Path("cache"),
+            env={},
+            timeout_seconds=0,
+            poll_interval_seconds=0.01,
+        )
+    text = str(caught.value)
+    assert "stage 1 did not become Ready; blocking HelmRelease flux-system/dashboards" in text
+    assert (
+        f"Ready=False, reason={'InstallFailed' if reason == 'InstallFailed' else 'Unknown'}" in text
+    )
+    assert "secret" not in text and "private.invalid" not in text
 
 
 def test_stage_freezes_current_main_while_it_is_still_progressing(
@@ -1321,7 +1555,7 @@ def test_kruise_default_recovery_repairs_only_missing_soperator_partition(
         commands.append(command)
         return SimpleNamespace(returncode=0, stdout="patched", stderr="")
 
-    monkeypatch.setattr(flux_ops.subprocess, "run", _fake_run)
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", _fake_run)
 
     flux_ops._restore_soperator_kruise_statefulset_defaults(
         cache_dir=tmp_path / "cache",
@@ -1379,7 +1613,7 @@ def test_kruise_default_recovery_retries_unavailable_admission(
         "_run_kubectl_json_process",
         lambda *args, **kwargs: next(inventories),
     )
-    monkeypatch.setattr(flux_ops.subprocess, "run", lambda *args, **kwargs: next(outcomes))
+    monkeypatch.setattr(flux_ops.kubernetes_process, "run", lambda *args, **kwargs: next(outcomes))
 
     flux_ops._restore_soperator_kruise_statefulset_defaults(
         cache_dir=tmp_path / "cache",
@@ -1416,7 +1650,7 @@ def test_kruise_default_recovery_rejects_non_soperator_owner(
         },
     )
     monkeypatch.setattr(
-        flux_ops.subprocess,
+        flux_ops.kubernetes_process,
         "run",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("foreign StatefulSet must not be patched")

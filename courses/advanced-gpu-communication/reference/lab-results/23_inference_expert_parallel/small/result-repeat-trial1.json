@@ -1,0 +1,39 @@
+{
+  "correctness": {
+    "all_ranks_routed_to_expected_experts": true
+  },
+  "lab": "23_inference_expert_parallel",
+  "measurements": {
+    "expert_load_max_to_mean": 1.5,
+    "global_expert_token_load": [
+      48,
+      16
+    ],
+    "hidden_size": 1024,
+    "inference_evidence": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "round_trip": {
+      "median_ms": 0.1154,
+      "min_ms": 0.109,
+      "p90_ms": 0.1748
+    },
+    "tokens_sent_to_experts_per_rank": [
+      24,
+      8
+    ],
+    "toy_expert_parameter_fraction_per_rank": 0.5,
+    "world_size": 2
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-_SETUP_UV_ACTION = "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d"
+_SETUP_UV_ACTION = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
 _SETUP_UV_INPUTS = {
     "version": "0.12.9",
     "enable-cache": "true",
@@ -49,6 +49,28 @@ def _assert_pinned_uv(steps: list[object], *, condition: str | None = None) -> N
     else:
         assert setup_uv["if"] == condition
     assert steps.index(setup_python) < steps.index(setup_uv)
+
+
+def _assert_grafana_api_qualification(steps: list[object], *, condition: str | None = None) -> None:
+    step = _named_step(steps, "Qualify pinned Grafana charts, API and PostgreSQL persistence")
+    assert "continue-on-error" not in step
+    if condition is None:
+        assert "if" not in step
+    else:
+        assert step["if"] == condition
+    run = step["run"]
+    assert isinstance(run, str)
+    assert "set -euo pipefail" in run.splitlines()
+    for script in ("verify_grafana_postgres.py", "verify_grafana_persistence.py"):
+        assert (
+            f"uv run --locked --no-sync --no-python-downloads python scripts/{script}"
+            in run.splitlines()
+        )
+
+    assert (
+        "uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_api.py"
+        in run.splitlines()
+    )
 
 
 def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
@@ -107,6 +129,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     verify_checkout = _uses_step(steps, "actions/checkout@v7")
     assert verify_checkout["with"] == {"fetch-depth": "0"}
     _assert_pinned_uv(steps)
+    _assert_grafana_api_qualification(steps)
     _uses_step(steps, "azure/setup-helm@v5")
     serialized_steps = "\n".join(str(step) for step in steps)
     assert "Validate active component sources catalog" in serialized_steps
@@ -153,7 +176,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     workflow_text = _workflow_path("nebius-cxcli-ci.yml").read_text(encoding="utf-8")
     assert ".venv/bin/python" not in workflow_text
     assert "python -m pip" not in workflow_text
-    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 4
+    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 7
 
     makefile = _service_file("Makefile")
     assert "$(MAKE) -j2 check verify-wheel-cli" in makefile
@@ -177,6 +200,7 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     assert checkout_step["with"] == {"fetch-depth": "0"}
     release_condition = "steps.state.outputs.release_exists == 'false'"
     _assert_pinned_uv(steps, condition=release_condition)
+    _assert_grafana_api_qualification(steps, condition=release_condition)
     helm_step = _uses_step(steps, "azure/setup-helm@v5")
     assert helm_step["if"] == release_condition
     serialized_steps = "\n".join(str(step) for step in steps)
@@ -201,4 +225,4 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     workflow_text = _workflow_path("nebius-cxcli-release.yml").read_text(encoding="utf-8")
     assert ".venv/bin/python" not in workflow_text
     assert "python -m pip" not in workflow_text
-    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 5
+    assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 8

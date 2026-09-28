@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC UAT Tests"
   short_description: "Run evidence-backed product-level UAT"
-  default_prompt: "Use $sdlc-uat-tests to validate the full product before PR creation, honor any exact GUI harness such as computer-use, and record independent behavioral evidence in a confirmed safe environment."
+  default_prompt: "Use $sdlc-uat-tests to validate the full product before PR creation, use headless Playwright Test for web acceptance with fresh owned processes and contexts, and record independent behavioral evidence in a confirmed safe environment."
 policy:
   allow_implicit_invocation: false

@@ -4,19 +4,189 @@ import hashlib
 import io
 import subprocess
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 import nebius_cxcli.soperator_release_artifacts as release_artifacts
-from nebius_cxcli.soperator_flux_graph import expected_soperator_release_names
 from nebius_cxcli.soperator_release_artifacts import (
     _cache_chart_package,
     _run,
-    _verify_rendered_release_graph,
 )
+from soperator_fixtures import sample_snapshot
+
+
+def test_final_consumers_replay_saved_patches_and_bind_generated_jail_storage(monkeypatch):
+    import copy
+    import shutil
+
+    import yaml
+
+    from nebius_cxcli.soperator_jail_logs_binding import _SOURCE_AFFINITY, JAIL_LOGS_RELEASE
+    from nebius_cxcli.soperator_release import (
+        SOPERATOR_MAIN_RELEASE_NAME,
+        seal_soperator_release_snapshot,
+    )
+    from soperator_fixtures import sample_jail_logs_binding
+
+    if not shutil.which("kustomize") and not shutil.which("kubectl"):
+        pytest.skip("Kustomize is required to validate final consumers")
+    values, storage = sample_jail_logs_binding()
+    values["observability"]["publicEndpointEnabled"] = False
+    storage[1]["spec"]["local"]["path"] = "/mnt/jail-store/rootfs/slot-b"
+    snapshot = sample_snapshot(release_names=(SOPERATOR_MAIN_RELEASE_NAME, JAIL_LOGS_RELEASE))
+    snapshot = seal_soperator_release_snapshot(
+        replace(
+            snapshot,
+            post_render_patches=(
+                {
+                    "target": {"kind": "HelmRelease", "name": "disabled-helper"},
+                    "patch": "apiVersion: helm.toolkit.fluxcd.io/v2\nkind: HelmRelease\nmetadata:\n  name: disabled-helper\n$patch: delete\n",
+                },
+            ),
+            snapshot_sha256="",
+        )
+    )
+    repository = {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "kind": "HelmRepository",
+        "metadata": {"name": "soperator", "namespace": "flux-system"},
+        "spec": {"url": snapshot.registry, "type": "oci"},
+    }
+    consumer = {
+        "apiVersion": "helm.toolkit.fluxcd.io/v2",
+        "kind": "HelmRelease",
+        "metadata": {"name": JAIL_LOGS_RELEASE, "namespace": "flux-system"},
+        "spec": {
+            "chart": {
+                "spec": {
+                    "chart": snapshot.umbrella.name,
+                    "version": snapshot.release,
+                    "sourceRef": {"kind": "HelmRepository", "name": "soperator"},
+                }
+            },
+            "values": {
+                "affinity": copy.deepcopy(_SOURCE_AFFINITY),
+                "extraVolumes": [
+                    {"name": "jail", "hostPath": {"path": "/mnt/jail", "type": "Directory"}}
+                ],
+            },
+        },
+    }
+    main = copy.deepcopy(consumer)
+    main["metadata"]["name"] = SOPERATOR_MAIN_RELEASE_NAME
+    main["spec"]["values"] = {}
+    consumer["spec"]["dependsOn"] = [{"name": SOPERATOR_MAIN_RELEASE_NAME}]
+    helper = copy.deepcopy(consumer)
+    helper["metadata"]["name"] = "disabled-helper"
+    documents = [repository, main, consumer, helper]
+    monkeypatch.setattr(
+        release_artifacts, "render_soperator_source_documents", lambda *a, **k: tuple(documents)
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_release_resolver._render_upstream_umbrella",
+        lambda *a, **k: documents,
+    )
+    final = release_artifacts.render_soperator_consumers(
+        snapshot,
+        SimpleNamespace(source_dir="unused"),
+        values,
+        adapter_documents=storage,
+    )
+    assert {doc["metadata"]["name"] for doc in final} == {
+        SOPERATOR_MAIN_RELEASE_NAME,
+        JAIL_LOGS_RELEASE,
+    }
+    final = [doc for doc in final if doc["metadata"]["name"] == JAIL_LOGS_RELEASE]
+    assert (
+        final[0]["spec"]["values"]["extraVolumes"][0]["hostPath"]["path"]
+        == "/mnt/jail-store/rootfs/slot-b"
+    )
+    assert "chart" not in final[0]["spec"]
+    assert (
+        len(
+            final[0]["spec"]["values"]["affinity"]["nodeAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"
+            ]["nodeSelectorTerms"][0]["matchExpressions"]
+        )
+        == 2
+    )
+    # The saved deletion is part of replay authority, and omissions require a declared phase.
+    without_patch = replace(snapshot, post_render_patches=())
+    with pytest.raises(ValueError):
+        release_artifacts._bind_rendered_consumers(
+            without_patch,
+            documents,
+            values,
+            source_documents=documents,
+            adapter_documents=storage,
+        )
+    with pytest.raises(ValueError, match="admitted operation stages"):
+        release_artifacts._verify_rendered_release_graph(
+            yaml.safe_dump_all([repository, main]).encode(), snapshot
+        )
+
+
+@pytest.mark.parametrize("changed_file", [None, "values.yaml", "templates/tests/connect.yaml"])
+def test_source_equality_rejects_registry_host_changes(tmp_path, monkeypatch, changed_file):
+    """A registry relocation is a changed artifact, even with the same chart version."""
+    snapshot = sample_snapshot()
+    chart = replace(snapshot.umbrella, name="helm-nfs-server")
+    snapshot = replace(snapshot, charts={"umbrella": chart}, third_party_charts={})
+    source = SimpleNamespace(
+        release=snapshot.release,
+        manifest_sha256=snapshot.source_manifest_sha256,
+        source_dir=str(tmp_path),
+    )
+
+    def package(name, changed):
+        path = tmp_path / name
+        files = {
+            "Chart.yaml": b"apiVersion: v2\nname: helm-nfs-server\nversion: 1.2.0\n",
+            "values.yaml": b"image: registry.example.invalid/nfs:1.0\n",
+            "templates/tests/connect.yaml": b"image: registry.example.invalid/test:1.0\n",
+        }
+        if changed:
+            files[changed] = files[changed].replace(
+                b"registry.example.invalid", b"regional.example.invalid"
+            )
+        with tarfile.open(path, "w:gz") as bundle:
+            for filename, content in files.items():
+                member = tarfile.TarInfo("nfs/" + filename)
+                member.size = len(content)
+                bundle.addfile(member, io.BytesIO(content))
+        return path
+
+    original = package("source.tgz", None)
+    official = package("official.tgz", changed_file)
+    monkeypatch.setattr(release_artifacts.shutil, "which", lambda _: "helm")
+    monkeypatch.setattr(release_artifacts, "_cache_chart_package", lambda **kw: official)
+    monkeypatch.setattr(
+        release_artifacts, "_package_verified_source_chart", lambda *a, **kw: original
+    )
+    renders = []
+
+    def render(command, **kw):
+        renders.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="same render", stderr="")
+
+    monkeypatch.setattr(release_artifacts, "_run", render)
+    if changed_file:
+        with pytest.raises(
+            ValueError, match="official OCI chart helm-nfs-server differs from release source"
+        ):
+            release_artifacts.verify_soperator_release_artifacts(
+                snapshot, source, cache_root=tmp_path / "cache"
+            )
+        assert not renders
+    else:
+        receipt = release_artifacts.verify_soperator_release_artifacts(
+            snapshot, source, cache_root=tmp_path / "cache"
+        )
+        assert receipt.chart_package_sha256 == (chart.package_sha256,)
+        assert len(renders) == 2
 
 
 def test_child_validation_checks_third_party_schema_and_hides_diagnostics(tmp_path):
@@ -75,35 +245,6 @@ def test_child_validation_checks_third_party_schema_and_hides_diagnostics(tmp_pa
     )
 
 
-def _render(names: set[str]) -> bytes:
-    return yaml.safe_dump_all(
-        [
-            {
-                "apiVersion": "helm.toolkit.fluxcd.io/v2",
-                "kind": "HelmRelease",
-                "metadata": {"name": name, "namespace": "flux-system"},
-            }
-            for name in sorted(names)
-        ]
-        + [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "ignored"}}],
-        sort_keys=False,
-    ).encode()
-
-
-def test_verified_upstream_render_must_equal_enabled_release_graph() -> None:
-    values: dict[str, object] = {
-        "observability": {"enabled": False},
-        "nodesets": {"enabled": False},
-        "storageClasses": {"enabled": False},
-        "backup": {"enabled": False},
-    }
-
-    _verify_rendered_release_graph(
-        _render(set(expected_soperator_release_names(values))),
-        values,
-    )
-
-
 def test_artifact_chart_reader_counts_pax_headers_in_tar_stream_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -131,7 +272,7 @@ def test_artifact_command_failure_redacts_and_bounds_subprocess_output(
     private_url = f"https://user:{secret}@private.example.invalid/chart"
     raw_detail = f'pull failed for {private_url}\n{{"access_token":"{secret}"}}\n' + ("x" * 4096)
     monkeypatch.setattr(
-        release_artifacts.subprocess,
+        release_artifacts.kubernetes_process,
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(
             args[0],
@@ -165,7 +306,7 @@ def test_artifact_command_timeout_redacts_captured_output(
             stderr=f'{{"password":"{secret}"}}'.encode(),
         )
 
-    monkeypatch.setattr(release_artifacts.subprocess, "run", _time_out)
+    monkeypatch.setattr(release_artifacts.kubernetes_process, "run", _time_out)
 
     with pytest.raises(RuntimeError, match="timed out after 300 seconds") as exc_info:
         _run(["helm", "pull"], label="download chart")
@@ -173,19 +314,6 @@ def test_artifact_command_timeout_redacts_captured_output(
     message = str(exc_info.value)
     assert secret not in message
     assert "<redacted>" in message
-
-
-@pytest.mark.parametrize("drift", ["missing", "unexpected"])
-def test_verified_upstream_render_rejects_graph_drift(drift: str) -> None:
-    values: dict[str, object] = {"observability": {"enabled": False}}
-    names = set(expected_soperator_release_names(values))
-    if drift == "missing":
-        names.remove("soperator-fluxcd-slurm-cluster")
-    else:
-        names.add("soperator-fluxcd-unknown")
-
-    with pytest.raises(ValueError, match=drift):
-        _verify_rendered_release_graph(_render(names), values)
 
 
 def test_corrupt_chart_cache_is_refetched_from_exact_upstream(

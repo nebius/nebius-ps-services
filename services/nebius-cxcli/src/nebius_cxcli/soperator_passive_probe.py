@@ -51,8 +51,21 @@ def running() -> list[str]:
     return result
 
 
+def worker_identity(expected: dict) -> str:
+    """Use the caller's pod-bound Slurm identity outside native hook execution."""
+    worker = expected.get("worker")
+    if (
+        not isinstance(worker, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+", worker)
+        or worker in {".", ".."}
+        or os.environ.get("SLURMD_NODENAME") not in {None, worker}
+    ):
+        raise RuntimeError("passive worker identity is missing or inconsistent")
+    return worker
+
+
 def node_facts(expected: dict) -> dict:
-    worker = os.environ["SLURMD_NODENAME"]
+    worker = worker_identity(expected)
     result = subprocess.run(
         ["scontrol", "show", "node", worker, "--json"],
         check=True,
@@ -230,9 +243,9 @@ def periodic_applicable(scheduler: dict, states: list[str]) -> bool:
 
 
 def probe(expected: dict, mode: str) -> dict:
+    worker = worker_identity(expected)
     base = Path("/opt/slurm_scripts")
     hashes, config = mounted(base, expected)
-    worker = os.environ["SLURMD_NODENAME"]
     result: dict[str, Any] = {
         "worker": worker,
         "hashes": hashes,
@@ -285,6 +298,7 @@ def probe(expected: dict, mode: str) -> dict:
         raise RuntimeError("passive suppression does not own this worker reservation")
     env = dict(
         os.environ,
+        SLURMD_NODENAME=worker,
         CHECKS_CONTEXT=context,
         CHECKS_CONFIG=str(base / "checks.json"),
         CHECKS_OUTPUTS_BASE_DIR="/opt/soperator-outputs",

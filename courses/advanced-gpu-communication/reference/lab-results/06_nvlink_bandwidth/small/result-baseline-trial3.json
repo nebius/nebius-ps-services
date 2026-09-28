@@ -1,0 +1,361 @@
+{
+  "correctness": {
+    "all_directed_pairs_passed": true,
+    "vendor_verification_enabled": true
+  },
+  "lab": "06_nvlink_bandwidth",
+  "measurements": {
+    "buffer_mib": 64,
+    "mean_GBps": 387.5403035714286,
+    "minimum_GBps": 387.283,
+    "pair_count": 56,
+    "pairs": [
+      {
+        "GBps": 387.423,
+        "destination": 1,
+        "source": 0
+      },
+      {
+        "GBps": 387.562,
+        "destination": 2,
+        "source": 0
+      },
+      {
+        "GBps": 387.632,
+        "destination": 3,
+        "source": 0
+      },
+      {
+        "GBps": 387.423,
+        "destination": 4,
+        "source": 0
+      },
+      {
+        "GBps": 387.353,
+        "destination": 5,
+        "source": 0
+      },
+      {
+        "GBps": 387.632,
+        "destination": 6,
+        "source": 0
+      },
+      {
+        "GBps": 387.493,
+        "destination": 7,
+        "source": 0
+      },
+      {
+        "GBps": 389.602,
+        "destination": 0,
+        "source": 1
+      },
+      {
+        "GBps": 387.562,
+        "destination": 2,
+        "source": 1
+      },
+      {
+        "GBps": 387.562,
+        "destination": 3,
+        "source": 1
+      },
+      {
+        "GBps": 387.493,
+        "destination": 4,
+        "source": 1
+      },
+      {
+        "GBps": 387.562,
+        "destination": 5,
+        "source": 1
+      },
+      {
+        "GBps": 387.493,
+        "destination": 6,
+        "source": 1
+      },
+      {
+        "GBps": 387.493,
+        "destination": 7,
+        "source": 1
+      },
+      {
+        "GBps": 387.493,
+        "destination": 0,
+        "source": 2
+      },
+      {
+        "GBps": 387.353,
+        "destination": 1,
+        "source": 2
+      },
+      {
+        "GBps": 387.353,
+        "destination": 3,
+        "source": 2
+      },
+      {
+        "GBps": 387.423,
+        "destination": 4,
+        "source": 2
+      },
+      {
+        "GBps": 387.283,
+        "destination": 5,
+        "source": 2
+      },
+      {
+        "GBps": 387.493,
+        "destination": 6,
+        "source": 2
+      },
+      {
+        "GBps": 387.423,
+        "destination": 7,
+        "source": 2
+      },
+      {
+        "GBps": 387.353,
+        "destination": 0,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 1,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 2,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 4,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 5,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 6,
+        "source": 3
+      },
+      {
+        "GBps": 387.353,
+        "destination": 7,
+        "source": 3
+      },
+      {
+        "GBps": 387.493,
+        "destination": 0,
+        "source": 4
+      },
+      {
+        "GBps": 387.493,
+        "destination": 1,
+        "source": 4
+      },
+      {
+        "GBps": 387.423,
+        "destination": 2,
+        "source": 4
+      },
+      {
+        "GBps": 387.632,
+        "destination": 3,
+        "source": 4
+      },
+      {
+        "GBps": 387.493,
+        "destination": 5,
+        "source": 4
+      },
+      {
+        "GBps": 387.493,
+        "destination": 6,
+        "source": 4
+      },
+      {
+        "GBps": 387.493,
+        "destination": 7,
+        "source": 4
+      },
+      {
+        "GBps": 387.562,
+        "destination": 0,
+        "source": 5
+      },
+      {
+        "GBps": 387.493,
+        "destination": 1,
+        "source": 5
+      },
+      {
+        "GBps": 387.702,
+        "destination": 2,
+        "source": 5
+      },
+      {
+        "GBps": 387.632,
+        "destination": 3,
+        "source": 5
+      },
+      {
+        "GBps": 387.562,
+        "destination": 4,
+        "source": 5
+      },
+      {
+        "GBps": 387.353,
+        "destination": 6,
+        "source": 5
+      },
+      {
+        "GBps": 387.562,
+        "destination": 7,
+        "source": 5
+      },
+      {
+        "GBps": 387.632,
+        "destination": 0,
+        "source": 6
+      },
+      {
+        "GBps": 387.632,
+        "destination": 1,
+        "source": 6
+      },
+      {
+        "GBps": 387.353,
+        "destination": 2,
+        "source": 6
+      },
+      {
+        "GBps": 387.632,
+        "destination": 3,
+        "source": 6
+      },
+      {
+        "GBps": 387.493,
+        "destination": 4,
+        "source": 6
+      },
+      {
+        "GBps": 387.493,
+        "destination": 5,
+        "source": 6
+      },
+      {
+        "GBps": 387.423,
+        "destination": 7,
+        "source": 6
+      },
+      {
+        "GBps": 387.632,
+        "destination": 0,
+        "source": 7
+      },
+      {
+        "GBps": 387.493,
+        "destination": 1,
+        "source": 7
+      },
+      {
+        "GBps": 387.562,
+        "destination": 2,
+        "source": 7
+      },
+      {
+        "GBps": 387.632,
+        "destination": 3,
+        "source": 7
+      },
+      {
+        "GBps": 387.493,
+        "destination": 4,
+        "source": 7
+      },
+      {
+        "GBps": 387.562,
+        "destination": 5,
+        "source": 7
+      },
+      {
+        "GBps": 387.562,
+        "destination": 6,
+        "source": 7
+      }
+    ],
+    "pairs_GBps": {
+      "gpu0_to_gpu1": 387.423,
+      "gpu0_to_gpu2": 387.562,
+      "gpu0_to_gpu3": 387.632,
+      "gpu0_to_gpu4": 387.423,
+      "gpu0_to_gpu5": 387.353,
+      "gpu0_to_gpu6": 387.632,
+      "gpu0_to_gpu7": 387.493,
+      "gpu1_to_gpu0": 389.602,
+      "gpu1_to_gpu2": 387.562,
+      "gpu1_to_gpu3": 387.562,
+      "gpu1_to_gpu4": 387.493,
+      "gpu1_to_gpu5": 387.562,
+      "gpu1_to_gpu6": 387.493,
+      "gpu1_to_gpu7": 387.493,
+      "gpu2_to_gpu0": 387.493,
+      "gpu2_to_gpu1": 387.353,
+      "gpu2_to_gpu3": 387.353,
+      "gpu2_to_gpu4": 387.423,
+      "gpu2_to_gpu5": 387.283,
+      "gpu2_to_gpu6": 387.493,
+      "gpu2_to_gpu7": 387.423,
+      "gpu3_to_gpu0": 387.353,
+      "gpu3_to_gpu1": 387.493,
+      "gpu3_to_gpu2": 387.493,
+      "gpu3_to_gpu4": 387.493,
+      "gpu3_to_gpu5": 387.493,
+      "gpu3_to_gpu6": 387.493,
+      "gpu3_to_gpu7": 387.353,
+      "gpu4_to_gpu0": 387.493,
+      "gpu4_to_gpu1": 387.493,
+      "gpu4_to_gpu2": 387.423,
+      "gpu4_to_gpu3": 387.632,
+      "gpu4_to_gpu5": 387.493,
+      "gpu4_to_gpu6": 387.493,
+      "gpu4_to_gpu7": 387.493,
+      "gpu5_to_gpu0": 387.562,
+      "gpu5_to_gpu1": 387.493,
+      "gpu5_to_gpu2": 387.702,
+      "gpu5_to_gpu3": 387.632,
+      "gpu5_to_gpu4": 387.562,
+      "gpu5_to_gpu6": 387.353,
+      "gpu5_to_gpu7": 387.562,
+      "gpu6_to_gpu0": 387.632,
+      "gpu6_to_gpu1": 387.632,
+      "gpu6_to_gpu2": 387.353,
+      "gpu6_to_gpu3": 387.632,
+      "gpu6_to_gpu4": 387.493,
+      "gpu6_to_gpu5": 387.493,
+      "gpu6_to_gpu7": 387.423,
+      "gpu7_to_gpu0": 387.632,
+      "gpu7_to_gpu1": 387.493,
+      "gpu7_to_gpu2": 387.562,
+      "gpu7_to_gpu3": 387.632,
+      "gpu7_to_gpu4": 387.493,
+      "gpu7_to_gpu5": 387.562,
+      "gpu7_to_gpu6": 387.562
+    }
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 0,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

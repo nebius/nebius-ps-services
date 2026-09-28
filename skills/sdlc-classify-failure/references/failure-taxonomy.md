@@ -13,7 +13,7 @@ can fix the cause.
 | WORKTREE_CONFLICT | A registered project, integration, or worker checkout is dirty, moved, divergent, foreign, or has the wrong Git identity. | owning execution phase; preserve resources |
 | REPLAN_REQUIRED | Write ownership, plan digest, source shape, or product truth changed after preparation. | sdlc-create-plan after preserving active execution evidence |
 | TEST_DEFECT | Test expectation, fixture, harness, or assertion is wrong. | sdlc-tdd |
-| IMPLEMENTATION_DEFECT | Production code violates an accepted invariant inside an existing implementation boundary. | active task: sdlc-implement-plan; completed waves: corrective sdlc-create-plan |
+| IMPLEMENTATION_DEFECT | Production code violates an accepted invariant inside an existing implementation boundary. | active task: sdlc-implement-plan; integrated failed or completed waves: corrective sdlc-create-plan |
 | INTEGRATION_CONFLICT | Ordered worker integration cannot merge or its recorded ancestry/result identity is invalid. | sdlc-implement-plan; do not rewrite worker history |
 | CLEANUP_BLOCKED | A worker or integration resource cannot be proven clean, reachable, and registered for non-force removal. | owning execution phase or human input |
 | PROMOTION_BLOCKED | Project or integration identity/evidence drift prevents exact ff-only promotion. | sdlc-commit or responsible earlier phase |
@@ -32,6 +32,18 @@ can fix the cause.
 Do not collapse all failures into implementation. Preserve the evidence path and
 retry count for the responsible phase.
 
+Lifecycle `integrated_wave` preserves the interval between successful task
+integration and failed combined validation. A proven localized diagnosis and
+counted dispatch authorize execution-owned `wave-fail`; the corrective plan
+preserves failed history, and successful correction records a separate
+resolution. Never label this interval `active_task` or `waves_completed`.
+
+After completed waves, an environment block may resolve through private
+`record-environment-recovery` only after its exact gate passes on the original
+clean integrated commit with unchanged fingerprints. Preserve the immutable
+failure and the failed trial outcome. This records observed recovery; it does
+not prove a vendor root-cause fix or authorize recovery actions.
+
 `troubleshoot` is a conditional diagnostic route, not a happy-path phase. Test,
 implementation, specification, evaluator, environment, policy, human, and
 design causes that are already proven bypass it. Every troubleshooting result
@@ -42,3 +54,11 @@ proven change to architecture topology, component or service responsibility or
 boundary, public interface, data ownership or lifecycle, migration behavior,
 security boundary, or cross-component workflow. Probable or incomplete
 causality cannot authorize redesign.
+
+The alignment gate is owned by `align`. After a source repair changes gate
+owner routes, the private `refresh-revalidation-routes` action requires the
+exact pending cursor and an evidence reference. It verifies the original repair
+authority and unchanged invalidated surfaces, archives the old cursor and
+progress, and resets all gates to pending under the current policy. Immutable
+evidence and repair budgets remain unchanged. A retry preserves any new gate
+progress; this is not a general reset or an alias for retired skill names.

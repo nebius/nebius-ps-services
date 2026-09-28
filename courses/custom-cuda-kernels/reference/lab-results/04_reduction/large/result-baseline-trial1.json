@@ -1,0 +1,36 @@
+{
+  "correctness": {
+    "program_completed_checks": true
+  },
+  "lab": "04_reduction",
+  "measurements": {
+    "block_atomic_operations": 65536,
+    "cub_median_ms": 0.024416,
+    "cub_min_ms": 0.023232,
+    "cub_p90_ms": 0.025152,
+    "cub_samples": 20,
+    "cub_temporary_bytes": 21503,
+    "elements": 16777216,
+    "gpu_compute_capability": 9,
+    "kernel_median_ms": 0.024416,
+    "kernel_min_ms": 0.023232,
+    "kernel_p90_ms": 0.025152,
+    "kernel_samples": 20,
+    "maximum_absolute_error": 0,
+    "per_element_atomic_median_ms": 29.4468,
+    "per_element_atomic_min_ms": 29.4456,
+    "per_element_atomic_operations": 16777216,
+    "per_element_atomic_p90_ms": 29.4484,
+    "per_element_atomic_samples": 20,
+    "warmup_samples": 5,
+    "warp_block_atomic_median_ms": 0.120576,
+    "warp_block_atomic_min_ms": 0.120064,
+    "warp_block_atomic_p90_ms": 0.1208,
+    "warp_block_atomic_samples": 20
+  },
+  "parameters": {
+    "work_iterations": null
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

@@ -1,0 +1,22 @@
+{
+  "correctness": {},
+  "lab": "20_prefix_cache_client",
+  "measurements": {
+    "repeated_prefix": {
+      "completion_tokens": 128,
+      "median_e2e_ms": 67.457
+    },
+    "requests_per_cohort": 8,
+    "unique_prefix": {
+      "completion_tokens": 128,
+      "median_e2e_ms": 67.215
+    }
+  },
+  "parameters": {
+    "requests_per_cohort": 8,
+    "variant": "disabled",
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

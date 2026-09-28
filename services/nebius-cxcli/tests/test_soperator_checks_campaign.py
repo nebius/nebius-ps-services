@@ -583,3 +583,35 @@ def test_auxiliary_effective_deferral_checks_exact_scheduling(tmp_path, policy, 
     runner = execution(tmp_path, policy, cluster)
     assert (scheduling_inventory(runner, deferred=True) is not None) is (drift is None)
     assert not cluster.writes
+
+
+@pytest.mark.parametrize("entrypoint", ["finalize", "verify_handoff"])
+@pytest.mark.parametrize("drift", ["scheduler", "mounted-config", "mounted-script"])
+def test_completed_campaign_rejects_passive_drift_without_replaying_work(
+    campaign, entrypoint, drift
+):
+    checks, cluster, _events = campaign
+    checks.before_segment("soperator-release")
+    checks.before_segment("final-readiness")
+    checks.finalize(already_released=False)
+    if drift == "scheduler":
+        cluster.scheduler = cluster.scheduler.replace("= 120", "= 0")
+    elif drift == "mounted-config":
+        cluster.mounted_passive["gpu-0"]["checks.json"] = '[{"name":"unexpected"}]'
+    else:
+        cluster.mounted_passive["gpu-0"]["check_runner.py"] = "# changed"
+    writes = copy.deepcopy(cluster.writes)
+    jobs = copy.deepcopy(cluster.jobs)
+    cluster.passive_modes.clear()
+    policy, _, _ = checks.load_target()
+    target = checks._execution(policy, "target")
+    receipt = target.path.read_bytes()
+    with pytest.raises(RuntimeError, match="scheduler|restor"):
+        if entrypoint == "finalize":
+            checks.finalize(already_released=True)
+        else:
+            checks.verify_handoff()
+    assert cluster.writes == writes and cluster.jobs == jobs
+    assert not cluster.reservation_present
+    assert target.path.read_bytes() == receipt
+    assert set(cluster.passive_modes) <= {"observe"}

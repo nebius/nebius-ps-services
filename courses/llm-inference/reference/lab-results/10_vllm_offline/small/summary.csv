@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,elapsed_seconds,value,1.0097,s
+baseline-trial1,output_tokens_per_second,value,2535.32,count:tokens/s
+baseline-trial1,prompt_tokens_total,value,630,none
+baseline-trial1,output_tokens_total,value,2560,none
+candidate-trial1,elapsed_seconds,value,5.7149,s
+candidate-trial1,output_tokens_per_second,value,447.95,count:tokens/s
+candidate-trial1,prompt_tokens_total,value,630,none
+candidate-trial1,output_tokens_total,value,2560,none

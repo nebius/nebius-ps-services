@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 from common import require_hf_commit_revision, resolve_run_id, write_json_exclusive
+from course_evidence import begin_experiment
 
 
 def main() -> None:
@@ -23,6 +24,7 @@ def main() -> None:
     parser.add_argument("--variant", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    begin_experiment(args)
     require_hf_commit_revision(args.revision)
     parsed = urllib.parse.urlparse(args.base_url)
     if parsed.scheme != "http" or parsed.hostname not in {

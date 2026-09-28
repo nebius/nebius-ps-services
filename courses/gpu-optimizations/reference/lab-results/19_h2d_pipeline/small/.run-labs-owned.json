@@ -1,0 +1,33 @@
+{
+  "files": [
+    "compute-serial-rank-0.png",
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "grafana-pair3-view1.png",
+    "grafana-pair3-view2.png",
+    "grafana-pair4-view1.png",
+    "grafana-pair4-view2.png",
+    "grafana-pair5-view1.png",
+    "grafana-pair5-view2.png",
+    "grafana-pair6-view1.png",
+    "grafana-pair6-view2.png",
+    "manifest.json",
+    "result-pipeline-trial1.json",
+    "result-pipeline-trial2.json",
+    "result-pipeline-trial3.json",
+    "result-serial-trial1.json",
+    "result-serial-trial2.json",
+    "result-serial-trial3.json",
+    "result-slot-control-trial1.json",
+    "result-slot-control-trial2.json",
+    "result-slot-control-trial3.json",
+    "summary.csv",
+    "systems-pipeline-rank-0.png",
+    "systems-serial-rank-0.png",
+    "systems-slot-control-rank-0.png"
+  ],
+  "identity": "7013bfaba5e35a29",
+  "schema": "run-labs-owned/v1"
+}

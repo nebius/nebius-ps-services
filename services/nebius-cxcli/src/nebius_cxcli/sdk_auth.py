@@ -22,6 +22,9 @@ _RETRYABLE_REFRESH_LOG_MARKERS = (
     "deadline_exceeded",
     "deadline exceeded",
 )
+_REFRESH_TIMEOUT_MESSAGE = (
+    "Nebius token refresh timed out; the SDK will retry while the request is active."
+)
 _RETRYABLE_REQUEST_LOG_MARKERS = (
     "request attempt",
     "but will be retried",
@@ -48,9 +51,14 @@ def deleted_key_refresh_log(record: logging.LogRecord) -> bool:
 
 
 def retryable_refresh_log(record: logging.LogRecord) -> bool:
+    if record.name != "nebius.aio.token.renewable":
+        return False
     message = record.getMessage().lower()
-    return "failed refresh token" in message and any(
-        marker in message for marker in _RETRYABLE_REFRESH_LOG_MARKERS
+    if message == _REFRESH_TIMEOUT_MESSAGE.lower():
+        return True
+    return "failed refresh token" in message and (
+        bool(record.exc_info and isinstance(record.exc_info[1], TimeoutError))
+        or any(marker in message for marker in _RETRYABLE_REFRESH_LOG_MARKERS)
     )
 
 
@@ -72,6 +80,42 @@ class _SuppressExpectedRefreshLog(logging.Filter):
 class _SuppressExpectedRequestRetryLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not retryable_request_log(record)
+
+
+class _ConciseRefreshLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
+        if not retryable_refresh_log(record):
+            return True
+        # Replace the record rather than modifying the SDK's original. Python
+        # 3.12+ supports replacement records from logger filters. Keep only a
+        # fixed diagnostic: provider messages and cached tracebacks may contain
+        # credential material. The request itself still owns retry and failure.
+        return logging.makeLogRecord(
+            {
+                **record.__dict__,
+                "msg": _REFRESH_TIMEOUT_MESSAGE,
+                "message": _REFRESH_TIMEOUT_MESSAGE,
+                "args": (),
+                "levelno": logging.WARNING,
+                "levelname": "WARNING",
+                "exc_info": None,
+                "exc_text": None,
+                "stack_info": None,
+            }
+        )
+
+
+@contextmanager
+def concise_refresh_logs():
+    """Render retryable SDK refresh timeouts without changing request behavior."""
+
+    refresh_logger = logging.getLogger("nebius.aio.token.renewable")
+    refresh_filter = _ConciseRefreshLog()
+    refresh_logger.addFilter(refresh_filter)
+    try:
+        yield
+    finally:
+        refresh_logger.removeFilter(refresh_filter)
 
 
 @contextmanager

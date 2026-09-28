@@ -7,7 +7,7 @@ from typing import Any
 
 from .deploy_targets import enabled_cluster_target_refs
 from .soperator_login_keys import explicit_root_keys
-from .soperator_release import SoperatorReleaseSnapshot
+from .soperator_release import SoperatorReleaseSnapshot, VerifiedSoperatorSource
 
 
 def app_ids_on_soperator_targets(payload: Mapping[str, Any]) -> set[str]:
@@ -37,7 +37,7 @@ def app_ids_on_soperator_targets(payload: Mapping[str, Any]) -> set[str]:
 
 
 def validate_soperator_install_configuration(
-    payload: Mapping[str, Any], release: SoperatorReleaseSnapshot
+    payload: Mapping[str, Any], release: SoperatorReleaseSnapshot | VerifiedSoperatorSource
 ) -> None:
     rows = [row for row in payload.get("apps", {}).get("charts", []) if row.get("enabled")]
     soperator = [row for row in rows if row.get("id") == "soperator"]

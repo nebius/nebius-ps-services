@@ -1816,7 +1816,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=unassessed priority=P0 version=4 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -1831,25 +1831,35 @@ lifecycle enforcement denied that documented path before its transaction owner
 could run; the project-spec hook is now advisory. Worktree already uses durable
 preparation claims and direct-child/tree verification; Task Implementer
 and Agentic SDLC retain separate lane and feature-promotion owners. The initial
-prompt matcher accepts only a first `$commit` token, so equally explicit user
-directives such as `run $commit` fail to mint the transaction authorization.
+prompt matcher accepted only a bounded leading token sequence; action prose
+with a trailing skill mention and natural-language requests produced no fresh
+authorization, exposing the previous consumed transaction.
 
 #### Design Details
 
-Add a commit-owned prompt hook that recognizes a bounded leading invocation
-grammar: optional `please`, then either `$commit` directly or one directive
-verb from `run`, `apply`, `execute`, `invoke`, or `use` immediately followed by
-`$commit`. Parse the invocation once so default-branch authorization uses
-the body after the actual `$commit` token. Reject help, questions, quotations,
-later prose mentions, excluded origins, contradictory explicit origin markers,
-and explicitly non-root turns. The current runtime makes `agent_type` optional
-for primary UserPromptSubmit events, so an absent value is not treated as
-delegation. Record the bounded current-turn authorization outside the
-repository. Direct helper execution
-requires that authorization. Worktree and Task Implementer delegated modes
-instead require their existing exact owner claims. The active Agentic SDLC
-policy classifies the helper as commit-sensitive and denies ordinary mode while
-preserving its private `sdlc-commit` path.
+The commit hook records a separate nonauthorizing receipt for an eligible root
+turn in a Git worktree. It stores only repository identity and session, turn,
+and prompt digests. It never overwrites an active authorization or claim.
+Excluded origins remain excluded. Eligible root capture failures emit no
+successful receipt context and return fixed nonblocking diagnostics instead of silently leaving
+older receipt state unexplained. Non-Git and detached contexts report that
+repository identity is unavailable; they never authorize Git effects.
+The root agent classifies intent from the actual conversation, including
+natural-language requests, polite action questions, and native skill mentions
+at any position. Both commit skills permit semantic selection, which alone
+never grants authority. Discussion, help, examples, negation, and skill repair
+remain non-actions. No model service or new agent runtime is introduced.
+
+Direct `prepare` requires a typed requested action and exact receipt digest.
+Under the existing repository lock it verifies the canonical receipt, session,
+repository and base identity, rejects replay, and binds one authorization.
+Semantic classification is the root agent's responsibility; a digest proves
+provenance, not meaning. The transaction independently enforces Git state,
+candidate review, claim consumption, and workflow ownership. Default-branch
+consent remains separately asserted and is forbidden for commit-push.
+Worktree and Task Implementer retain their existing delegated owner evidence.
+Active Agentic SDLC retains its ordinary-commit denial. Do not add a lexical
+authorization fallback or reset consumed claims.
 
 Add an installed commit transaction helper with `prepare`, `execute`, and
 private `review` transitions. `prepare` copies the current index into a private
@@ -1917,6 +1927,21 @@ ordering-only rejection is recoverable only when the failed task plane remains
 bound to the same immutable result digest and direct-child commit and no other
 task in the wave is failed.
 
+For unmanaged PR preparation, the same helper additionally owns an immutable
+`create-pr` grant in private transaction state. It binds the original receipt,
+selected feature ref, native session, canonical repository, effective origin
+fetch/push URL digests, default ref and selected base lineage. A fresh semantic
+PR action creates the grant; continuation derives a new single-use commit
+claim only from that grant's exact predecessor. Completed direct children and
+unchanged-base failed attempts may advance; interrupted direct children use
+existing recovery and uncertain commits require explicit review. Intervening
+history must consist solely of two-parent base merges with correct first-parent
+orientation and a forward-moving recorded base lineage. Every execute/review
+revalidates grant identity. Private completion closes the grant permanently for
+that receipt. Grant metadata never contains prompt bodies, remote URLs or tokens.
+The PR skill owns validation, explicit-ref pushes and terminal GitHub checks;
+ordinary commit/commit-push and active SDLC authority are unchanged.
+
 #### Selected Option
 
 Use one hidden claim-bound transaction behind a bounded explicit `$commit`
@@ -1947,12 +1972,18 @@ their existing owners.
 
 #### Test-First Success Criteria
 
-- TDD-001: A direct `$commit` or a bounded leading directive such as
-  `run $commit`, `apply $commit`, or `execute $commit` prepares and creates one
+- TDD-007: Seed an earlier receipt, then fail native identity, prompt, Git
+  inspection or receipt publication. Verify a fixed advisory without a digest,
+  raw input or exception detail. Validation preserves the prior receipt; even
+  a post-replacement sync failure emits no successful context. Claims and Git
+  state stay unchanged. Verify generated events remain inert and each host fixture supplies
+  only its own native prompt identifier.
+
+- TDD-001: A semantically explicit request with a matching root receipt prepares and creates one
   exact commit from root files plus changes in multiple sibling project folders
   without project-spec lifecycle state.
-- TDD-002: Raw Git, conversational mentions, questions, quotations, help,
-  later prose references, malformed helpers, non-PATH interpreter or helper
+- TDD-002: Receipts alone, missing or stale action assertions, replay, raw Git,
+  malformed helpers, non-PATH interpreter or helper
   digest, stale sessions, alternate worktrees/refs, and token replay fail
   before repository mutation. Contradictory explicit origin markers and
   repository-shaping Git environment fail before authorization or index
@@ -1973,6 +2004,13 @@ their existing owners.
 - TDD-006: Active Agentic SDLC denies ordinary helper execution while its
   existing authorized sealing and released outer Worktree handoff continue.
 
+- TDD-008: One PR receipt supports two independently reviewed commits, repeated
+  execution stays idempotent, a failed no-commit hook permits a corrected retry,
+  and completion rejects replay. Origin/session/ref/base drift, unrelated
+  commits, reversed merges, different owner claims and unreviewed hook commits
+  cannot acquire continuation. Correct base merges and crash recovery preserve
+  the existing exact-tree boundary. Ordinary consumed receipts still fail.
+
 #### Validation Plan
 
 Run commit contract and disposable-repository transaction tests first, then
@@ -1985,9 +2023,9 @@ changed-scope review, and project-wide alignment.
 Cover pre-staged, unstaged, untracked, renamed, deleted, linked-worktree,
 submodule, default-branch, conflict, secret-like, generated-file, shell quoting,
 symlink/hard-link, concurrent owner, failed hook, crash-window, stale claim,
-fresh-session recovery, delegated workflow cases, accepted leading directive
-forms, rejected conversational or quoted mentions, contradictory explicit
-origins, and alternate-index environment injection.
+fresh-session recovery, delegated workflow cases, receipt-bound semantic action
+assertions, replay rejection, nonauthorizing conversational or quoted turns,
+contradictory explicit origins, and alternate-index environment injection.
 
 #### Evaluation Plan
 
@@ -2005,7 +2043,7 @@ incomplete claims remain inert private metadata and never trigger Git cleanup.
 
 #### Done Definition
 
-An explicit `$commit`, including a bounded common leading directive, safely
+A semantically explicit commit request safely
 commits the complete reviewed repository tree across project folders with one
 user action, while casual mentions and raw Git remain denied, workflow owners
 remain isolated, recovery is idempotent, and installation plus fresh-session
@@ -2013,11 +2051,35 @@ behavior are reported as separate proof gates.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+The existing nonauthorizing receipt and single-use transaction remain intact.
+Root capture validates nonblank native identity strings and returns fixed
+nonblocking reasons for unavailable prompt, native identity, repository or
+receipt publication. Excluded generated events remain inert. Capture failures
+never return a usable digest or raw input/error details and never alter
+active authorization or claim state. Validation preserves the old receipt;
+a write may already have replaced it before directory synchronization fails.
+
+The reviewed hook was installed through the canonical scoped installer, which
+backed up its prior bytes and left registration unchanged. Native trust and
+fresh-session receipt capture remain separate completion gates. No real
+commit or publication was performed during this repair.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+On 2026-09-14, the new invalid-root-input regression failed before the source
+change and passed afterward. All 29 disposable-repository transaction tests
+and five static contract tests passed. Two targeted runtime/installation tests
+passed with separate authentic Codex turn_id and Claude prompt_id fixtures,
+including missing-identity advisories and unchanged prior receipt bytes.
+Post-replacement synchronization failure coverage confirms no success context
+or authorization is emitted even when the new receipt bytes already exist.
+Ruff, Python syntax, scoped Markdown, paired spec validation and changed-scope
+code/security review passed. Runtime hook byte parity was verified separately.
+
+These checks fix the silent diagnostic failure; they do not prove the cause of
+an active native session omitting capture or prove restored native dispatch.
+Fresh native prompt capture and real publication remain unverified. Do not
+replay synthetic root events against actual transaction state to fill that gap.
 
 <!-- /FEATURE: FEAT-010 -->
 
@@ -3848,7 +3910,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-020 -->
 
-<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready delivery=unassessed priority=P0 version=1 -->
+<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready delivery=implemented priority=P0 version=2 -->
 ### FEAT-021: Semantic Git-effect classification for commit-push
 
 #### Requirements Covered
@@ -3894,8 +3956,8 @@ ambiguity keeps the command denied because it can introduce unmodeled project
 effects. Upstream setup is a known local Git-config effect, not a project-file
 effect, and remains bounded to the already validated branch and remote.
 
-Teach the existing commit prompt-intent owner that a bounded leading
-`$commit-push` invocation also authorizes its local commit phase. Update the
+The root agent binds a semantically explicit commit-and-push request to its
+current nonauthorizing root-turn receipt for the local commit phase. Update the
 workflow to call the claim-bound commit helper whenever the checkout is dirty;
 raw staging and commit remain transaction-denied. Keep repository-owned
 publication policies and remote authentication authoritative after workflow
@@ -3937,8 +3999,8 @@ push are outside this source repair.
 - TDD-003: Absent relevant hooks permit the exact remote shapes; an effective
   repository or configured pre-push or reference-transaction hook and
   hook-resolution failure deny them.
-- TDD-004: A leading explicit `$commit-push` authorizes the existing commit
-  transaction, while conversational mentions and raw staging/commit do not.
+- TDD-004: A receipt-bound semantic commit-and-push action authorizes the local
+  transaction; receipt metadata, conversational mentions and raw Git do not.
 - TDD-005: Source regressions use disposable repositories and no remote, leave
   the developer checkout unchanged, and do not claim installed or live proof.
 
@@ -3955,8 +4017,8 @@ alignment, and `git diff --check`.
 Use a table-driven publication-workflow matrix for exact and adversarial Git
 shapes, including `-C`, long/short option variants, config and worktree hook paths,
 detached heads, unsafe or multiple URLs, unsafe refspecs, and composed shell
-commands. Extend commit intent cases for direct and leading-imperative
-`commit-push` invocations.
+commands. Extend commit intent cases for semantic requests, nonleading native skill
+mentions, nonauthorizing discussion and same-receipt replay.
 
 #### Evaluation Plan
 
@@ -3983,9 +4045,15 @@ from installed and live behavior.
 
 #### Implementation Evidence
 
+The local commit phase now uses the semantic root-turn receipt protocol from
+FEAT-010. Publication command and remote safety rules remain unchanged.
+
 No implementation evidence was recorded before schema v2 migration.
 
 #### Verification Evidence
+
+The shared receipt-bound local phase passed the FEAT-010 source and disposable
+host checks. No real push or native model classification was exercised.
 
 No independent verification evidence was recorded before schema v2 migration.
 
@@ -4711,7 +4779,7 @@ only the existing public syntax and public-safe placeholders.
   inferred from source verification; the installed skill remains unchanged.
 
 <!-- /FEATURE: FEAT-025 -->
-<!-- FEATURE: FEAT-026 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=5 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-027 status=ready delivery=implemented priority=P1 version=12 -->
 ### FEAT-026: Portable digital-textbook authoring kit
 
 #### Requirements Covered
@@ -4727,6 +4795,22 @@ and learning-record defaults do not express that contract.
 
 #### Design Details
 
+Current approved results/build-template revision: Supply generic build-courses.sh, tools/build_course_html.py, tools/publication.py and tools/course_adapter.py templates. The adapter defines plan_outputs(project_root) returning relative output paths and bytes, plus explicit publication configuration; fail clearly until configured. Keep the existing renderer-neutral Markdown/shell/CSS contract. Provide reading-only, technical-download and shared-guide collection fixtures. Shared helpers handle safe output paths, deterministic explicit-inventory archives, planned-output budget checks, read-only freshness and atomic per-file writes. Add checker --links-manifest and --publication-root for exact declared existing local anchor targets with fragment and containment checks. Keep reading content embedded and bulky downloads external; runtime files use the actual delivery workflow. GitHub limits are conditional host policy, exact 100 MiB/file and conservative 1000000000-byte site default. Preserve explicit invocation and real installed copies; test disposable copies and report static/runtime/quality separately.
+
+
+The presentation consistency extension uses the existing shared stylesheet and
+semantic title/section hierarchy. Templates and bounded checks require numbered
+Official references, bulleted next-step options, and an independent course
+Glossary. Mission/syllabus remain authoring inputs; their headings and navigation
+are removed from full publications while unique learner context moves into the
+orientation or owning lesson. Update canonical templates, instructions, evals
+and deterministic checks together. Existing catalog courses are reconciled by
+the courses project, without changing their practical capabilities. The checker
+binds glossary navigation to its actual distinct top-level section, preserves
+course-owned anchor identities, and
+checks the outer option/reference list while preserving subordinate numbered
+procedures within an option.
+
 Keep explicit-only invocation and a lean instruction core. Put instructional
 design, exact course format, practical-work verification and publication safety
 in focused references. Provide a subject-neutral starter, the existing light
@@ -4738,7 +4822,7 @@ separately. Technical execution requirements are selected in a course profile.
 
 Use concise conceptual lesson titles, synchronized across syllabus and page.
 Replace the many standalone teaching labels with Objective, How it works,
-Practice and a final Mental model. Retain definitions, prerequisite links,
+Practice and Mental model as the final teaching section. Retain definitions, prerequisite links,
 purpose, mechanisms, worked reasoning and limitations in connected explanatory
 prose; practical steps, evidence, feedback and retrieval belong to the owning
 practice activity. The final mental model summarizes already-taught concepts.
@@ -4746,11 +4830,46 @@ Every How it works contains its own meaningful accessible SVG diagram.
 Introduce unfamiliar abbreviations by their full wording and meaning in context;
 avoid global substitutions that confuse mathematical terms with product names.
 
-Templates expose the four sections explicitly. The read-only checker verifies
-lesson-local section order, visible labels, explanatory text and inline SVG
-ownership without treating these as proof of teaching quality. Semantic evals
-cover topic titles, causal depth, terminology and diagram meaning in technical,
-non-code and revision cases. No old section-order compatibility path is added.
+Lessons have four required sections, ending with Mental model, followed only
+by optional References. Provide exactly one independent course Where to Go Next
+section with a TOC entry after teaching and practical guides, before the single
+Glossary and final Official references. NEXT-STEPS.md owns concrete optional
+onward learning tied to completed course competencies; use one option per bullet.
+Reject missing, repeated, local or nested next-step headings/containers.
+A lesson-only revision updates existing owning course appendices when available;
+a standalone lesson retains first-use definitions and puts onward suggestions
+in the handoff without adding course appendices inside the lesson or inventing
+an unrequested package. Preserve the seven practical-guide sections, including
+Takeaways and next step for activity reflection and transfer.
+
+Every complete course has exactly one independent Glossary section and TOC
+entry, immediately before course References. GLOSSARY.md owns all key terms
+and abbreviations taught in lessons and supporting guides. Merge repeated
+terms, deduplicate identical definitions and retain distinct contextual meanings.
+Render one direct definition list with nonempty alternating dt/dd pairs sorted
+A–Z after whitespace normalization and case folding. Reject missing or repeated
+course glossaries, local/nested glossary headings or containers, malformed
+pairs, blank/duplicate keys and unsorted keys. Preserve course-owned anchors.
+The same rule applies to templates, instructions, examples, evals and checker;
+there is no legacy local-glossary path. Semantic coverage remains a review
+responsibility and the course builder owns complete prose/source parity.
+
+For permitted full-course browser verification, use an owned headless Playwright
+Test Chrome process and isolated context, then close owned browser resources on
+success or failure. Preserve desktop, 390px and 320px coverage, keyboard use,
+zoom/reflow, mobile TOC, local scrollers and diagram inspection. Record the
+inspected artifact identity, actual browser/version, headless mode, viewports,
+assertion results, screenshots/traces and cleanup. Keep agent visual judgment
+alongside deterministic browser assertions. Optional isolated headless
+Playwright MCP exploration remains separate from repeatable acceptance.
+
+Do not require a visible desktop, screen unlock or monitor selection. Missing
+or denied browser access leaves its evidence pending while permitted authoring
+continues; it does not permit bypass, implicit installation, personal-profile
+reuse or a publication-ready claim. Preserve review-only and lesson-only scope.
+The browser default does not change course-specific lab/target requirements or
+provide sleep, closed-lid or multi-day execution guarantees. No new runner,
+package, public flag or SDLC harness dependency is introduced.
 
 #### Selected Option
 
@@ -4762,13 +4881,17 @@ all subjects to share a programming language, cloud or assessment type.
 Copying all GPU-course tooling would hard-code one domain. Prose-only guidance
 would leave the desired presentation and practical-work structure underspecified.
 A new LMS or remote renderer adds unnecessary runtime and publication scope.
+Leaving browser choice unspecified invites desktop dependencies; copying the
+SDLC lifecycle harness into course authoring would add unnecessary coupling.
+Reuse its headless ownership and evidence pattern through concise guidance.
 
 #### Implementation Boundaries
 
-Change only `create-learning-course`, its source catalog entry, changelog and
-this canonical spec pair. Preserve unrelated work and leave current courses
-and the installed skill untouched. Use original explanations, public sources
-and generic paths; no external publishing, dependency installation or live labs.
+For the course-appendix consolidation, change only source `create-learning-course`, its
+skills-catalog README entry, changelog and this canonical spec pair. Preserve
+unrelated work and installed copies. The courses project owns course consolidation. Leave other skills, hooks
+and Codex/browser configuration unchanged. Use public sources and generic paths; no external publication,
+dependency installation or live labs.
 
 #### Test-First Success Criteria
 
@@ -4780,6 +4903,15 @@ and generic paths; no external publishing, dependency installation or live labs.
   lesson content and absent, caption-only or misplaced core diagrams fail;
   diagrams in another lesson never satisfy local coverage. Nested explanatory
   containers remain valid and diagram captions cannot stand in for prose.
+- TDD-004: Every full course has exactly one top-level Glossary; local or nested
+  glossary sections fail. Optional lesson References remain last. Mixed-case
+  abbreviation keys sort by displayed spelling, not expansion. Reject blank,
+  duplicate, malformed or unsorted entries; nontechnical terms remain valid.
+
+- TDD-005: Missing, repeated, empty, mislabeled or misplaced Where to Go Next
+  fails the course contract. Reject lesson/guide-local headings and containers;
+  preserve nested numbered procedures inside course-level option bullets.
+  Multiple lessons share the same single pair of course appendices.
 
 #### Validation Plan
 
@@ -4799,11 +4931,19 @@ cases. Capture working bytes before edits; compare fresh output only when a
 clean authorized runner exists. Report missing routing, quality, token and
 browser evidence explicitly.
 
+The browser-default clarification extends existing full-course cases 1-3 and
+preserves restricted-scope cases 4-5. Review permitted headless checks, unavailable
+or denied evidence remaining pending, and absence of implicit browser work in
+restricted requests. Static validation does not prove browser execution or lock
+behavior; no fresh browser trial or complete SDLC rerun is required for this
+bounded documentation change.
+
 #### Rollout And Rollback
 
-Review repository source first. Installation and fresh-session activation are
-separate future actions. Revert only this task's patch if needed; preserve all
-other working-tree changes.
+Review and validate source first. The glossary extension does not refresh an
+installed skill or existing courses. Rollback restores only this task's source
+edits; preserve all unrelated working-tree changes. No commit or external publication is part
+of this change.
 
 #### Done Definition
 
@@ -4811,6 +4951,64 @@ Core instructions, references, templates, checks and evaluations describe one
 course standard; required local checks pass and unexecuted gates remain visible.
 
 #### Implementation Evidence
+
+Implemented reusable build/check wrapper, project-owned adapter scaffold, stdlib publication/archive helpers, copied presentation assets and portable packaging tests. Exact companion-link manifests and an explicit publication root extend the checker without permitting active resources. Updated source instructions, references, README/changelog, eval definitions and fixture paths; retained explicit-only invocation, Help, Learning Loop and native metadata. Real installed skill unchanged. Earlier evidence below applies to preceding revisions.
+
+Course-appendix consolidation is implemented across instructions, format and
+preservation/safety references, Markdown/HTML templates, checker, tests, evals
+and catalog docs. Every complete course has one shared Glossary and Where to
+Go Next; lessons have four fields plus optional final References. Consolidation
+preserves first-use definitions, distinct meanings and useful optional onward
+study. The checker rejects missing/repeated course appendices, local copies,
+and lesson or practical-guide ownership masquerading as an appendix. No
+installed catalog or existing course was changed. Earlier lesson-local appendix
+behavior and its verification evidence below are historical and superseded.
+
+Presentation consistency is implemented in the core, format/preservation/safety
+references, course and lesson starters, shell, README and canonical evals.
+Official references use numbers; next-step options use bullets; course Glossary
+is independent and precedes final references. The shell omits published
+mission/syllabus sections and uses orientation content carrying their unique
+learner context. The shared stylesheet remains the typography authority.
+The bounded checker validates semantic lists and glossary destination ownership.
+Metadata, public request/help interface, explicit-only invocation, source
+allowlist, escaped-source and no-tracking protections remain intact. Existing
+course authoring and verification belong to the courses project.
+
+The lesson-next-steps extension adds required Where to Go Next immediately
+after Mental model and before Glossary in the instruction core, format and
+teaching/safety references, HTML/Markdown starters, publication review, catalog
+docs and existing quality/trigger definitions. The read-only checker requires
+the matching direct container, visible heading and nonempty content. Final and
+standalone lessons still receive an onward learning step; optional study does
+not add required dependencies or completion gates. Course-wide NEXT-STEPS
+remains supplemental. Existing glossary A-Z and References-last behavior stays
+intact. No installed skill or current course was revised.
+
+Earlier glossary implementation evidence follows unchanged.
+
+The glossary extension updates source instructions, teaching/format/safety
+references, HTML and Markdown starters, publication review, catalog docs and
+canonical evals. Every lesson requires a local Glossary after Mental model;
+optional References remain last. The checker requires one direct definition
+list with nonempty alternating entries, unique case-insensitive A-Z keys and
+lesson-local ordering. First-use explanations and semantic coverage review
+remain required. Metadata, invocation policy, public flags and safety controls
+are preserved; existing courses and installed copies are unchanged.
+
+Earlier browser-default implementation evidence follows unchanged.
+
+The browser-default clarification is implemented in the instruction core,
+README, publication-safety reference, publication-review template and existing
+evaluation definitions/procedure. Permitted full-course checks default to owned
+headless Playwright Test with Chrome and isolated state; optional MCP exploration
+remains separate. Existing viewport, accessibility, semantic visual review,
+restricted-request and unavailable-evidence boundaries remain explicit. Both
+root README GUI descriptions and the changelog align with this contract. Six
+changed course-skill files were synchronized into the owned installed copy.
+No checker code, browser configuration, dependencies or public interfaces changed.
+
+Earlier course-format implementation evidence follows unchanged.
 
 The source skill uses a 207-line core with focused teaching, format, practice,
 research and safety references. Every lesson now has a conceptual title and
@@ -4829,6 +5027,103 @@ responsibility of each course's builder. Existing safe-path, active-content,
 malformed-input and exact escaped-source byte checks are preserved.
 
 #### Verification Evidence
+
+Alignment follow-up: six copied-template tests plus 69 skill tests pass after correcting empty linked-root validation and virtual ZIP member names. Source/template helpers match; source containment and traversal rejection remain strict. Copied-template README now states Bash/Python and optional Git/renderer dependencies and separates renderer responsibility from publication orchestration. Final code/security review found no blocker. Invocation, real installed copies and previous runtime/quality limitations are unchanged.
+
+STATIC_PASS: 69 skill tests plus four copied-template tests; core and Codex/Claude repository validators with required evals; scoped Python, shell and Markdown checks. Disposable npx discovery, complete resource/executable parity, repeat installation and isolation pass for both hosts. Final independent code/security review found no remaining blocker after the output-tree collision fix. Twenty-four trigger definitions and seven quality cases exist. Fresh routing NOT_RUN because invocation is unchanged; comparative clean-context quality UNAVAILABLE on both native hosts because isolated authentication is absent. Do not infer model-driven output quality or live deployment from static/installation proof. Current working-byte baseline preserves presentation and teaching contracts; see create-learning-course/references/build-validation.md. Earlier evidence below is historical.
+
+Course-appendix STATIC_PASS: 58 focused unittest tests pass, including singleton
+cardinality, multiple lessons sharing appendices, local/nested copy rejection,
+nonempty sorted glossary definitions and independent ownership. Three focused
+regressions fail against captured pre-edit working-byte checker and pass now.
+A read-only reviewer reproduced a lesson-title substitution gap; the source
+repair and two regression cases passed independent recheck. Code-review and
+security lanes found no remaining blocker. The follow-up alignment reproduced
+four malformed-layout cases in two tests before repairing appendix placement
+and heading-order-dependent ownership: all teaching/practical work must precede
+course appendices, and teaching nested before an appendix heading cannot hide
+its ownership. The same regressions pass after the focused repair. Scoped
+Ruff checks/format, Markdown
+lint, whitespace, and core/Codex/Claude structure/eval checks pass. Standard
+fields pass; the preserved native disable-model-invocation field remains a
+strict-format extension. Disposable skills CLI 1.5.26 discovery, copy parity,
+repeat-install and isolation checks pass for both hosts. Canonical evals have
+22 trigger definitions (13 positive, 9 negative) and five quality definitions.
+Fresh runtime and comparative quality are UNAVAILABLE because isolated native
+runners lack API credentials. Browser and live-target checks were not run for
+this source-only change; delivery remains implemented rather than claiming
+verified generated-course quality. Earlier evidence below is historical.
+
+Presentation STATIC_PASS: 53 focused tests pass, including new malformed-list,
+planning-heading and misplaced-glossary controls. Four new test methods fail
+against the captured working-byte checker; three review findings were reproduced
+and repaired with focused negative/positive controls. Core, Codex and Claude
+structure checks pass while retaining the declared native frontmatter extension.
+Disposable skills CLI 1.5.26 discovery, copy parity, repeat installation and
+isolation pass for both hosts. Python lint/format and Markdown checks pass.
+Independent code-review and security review found no remaining blocker.
+Canonical evals contain 22 trigger definitions (13 positive, 9 negative) and
+five quality definitions. Fresh routing and comparative quality are UNAVAILABLE
+because isolated runners have no API authentication. No installed user catalog,
+external publication, browser run or live lab is claimed by source validation.
+
+Where to Go Next STATIC_PASS: 43 focused unittest tests pass, including a
+negative control that rejected the new valid section before implementation.
+Controls now cover missing, duplicated, empty, mislabeled and misplaced local
+sections, nested content and course-wide content failing to substitute for a
+local section. Scoped Python lint/format, Markdown lint, whitespace and
+core/Codex/Claude skill structure validation pass. Independent code-review and
+security lanes found no blocking issue. Disposable skills CLI 1.5.26 discovery,
+copy parity, repeat installation and isolation pass for both hosts. The same
+21 trigger and five quality definitions now include the new sequence and
+onward-learning expectations. Native metadata and the standard-only extension
+limitation are preserved. Fresh runtime and comparative quality are UNAVAILABLE
+because isolated runners lack API credentials; static checks do not establish
+semantic teaching quality or installed activation. Browser/live-target checks
+were not run for this source-only change.
+
+Earlier glossary verification evidence follows unchanged.
+
+Glossary extension STATIC_PASS: 42 focused unittest tests, Python lint/format,
+scoped Markdown lint and whitespace validation pass. Before the repair, new
+regressions demonstrated both acceptance of missing Glossary and rejection of
+valid Glossary/References. Passing controls now cover per-lesson placement,
+optional final References, mixed-case ordering by abbreviation rather than
+expansion, blank/unpaired/duplicate entries, nested/stray markup, multiple
+lessons and ordinary terms without invented abbreviations. Independent
+read-only code and security review found no blocking findings.
+
+Core Agent Skills fields and repository Codex/Claude policies pass with required
+evals; the preserved disable-model-invocation extension remains a strict
+standard-only limitation. Disposable skills CLI installation passes discovery,
+copy parity, repeat installation and isolation for both hosts. There are 21
+trigger definitions (12 positive, 9 negative) and five quality definitions,
+including glossary assertions for technical, nontechnical and lesson-only
+cases. Fresh runtime and comparative quality evidence are UNAVAILABLE because
+the isolated runner lacks API credentials. No browser, live target, real-home
+installation or existing-course revision ran. Delivery remains implemented;
+static evidence does not prove generated teaching quality or fresh activation.
+
+Earlier browser-default verification evidence follows unchanged.
+
+STATIC_PASS for the browser-default clarification: strict Codex and Claude
+skill/evaluation validation reported zero failures or warnings; all 35 existing
+course tests passed. Scoped Markdown lint, canonical spec validation and
+whitespace checks passed. Changed-scope alignment and independent read-only
+correctness/security review found no blockers. Scenario review covered permitted
+headless verification, unavailable or denied execution remaining pending, and
+restricted requests retaining no implicit browser work; these were contract
+reviews, not executed browser scenarios.
+
+INSTALL_PARITY_PASS: all 32 course-skill files match source, with exactly six
+installed files changed. The installation ownership marker, other installed
+skills and hooks remained unchanged. RUNTIME_NOT_RUN: no fresh skill-routing,
+browser, screen-lock or comparative-output trial ran for this documentation
+change. Existing tests validate course assets/checker behavior, not agent browser
+selection. Delivery remains implemented because broader course qualification
+lanes below remain unverified; no new browser or learner-outcome claim is made.
+
+Earlier course-format verification evidence follows for its original revision.
 
 STATIC_PASS: strict skill structure validation, 34 deterministic tests, Python
 lint/format, configured Markdown lint, CLI success/error/help checks and
@@ -5742,5 +6037,743 @@ scoped lint and an independent final code/security review passed. Native model
 evidence remains unavailable; remote CI was not run.
 
 <!-- /FEATURE: FEAT-031 -->
+
+<!-- FEATURE: FEAT-032 reqs=REQ-033 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-032: Shared ownership contract for disposable local Git origins
+
+#### Requirements Covered
+
+- REQ-033: Exercise normal SDLC Git admission with one owned local origin.
+
+#### Context Evidence
+
+The verifier rejects every remote while normal Git-backed prompt intake calls
+Worktree's remote-default resolver for `origin`. Three-tier record-git and
+cleanup repeat that blanket rejection. Its existing prompt-rendering test
+uses a non-Git directory and therefore does not exercise that boundary.
+
+#### Design Details
+
+A private `owned_git_origin.py` module owns local origin initialization and
+validation for both test modes. Its caller first proves the fixture's existing
+root and project markers. The origin has one predetermined `origin.git` path
+outside the project but inside the owned verification scope. A private exact-
+schema receipt binds owner scope, project, generation, baseline and default ref.
+The lightweight scope uses a stable fixture identity; a three-tier scope uses
+its immutable lifecycle verification ID. Public result schemas retain their
+existing baseline/promoted fields.
+
+Under one private initialization lock, require a clean canonical remote-free
+fixture, reject inherited Git directory/config/object overrides and borrowed,
+shallow or promisor storage, then seed a self-contained bare origin locally
+with independent object files. No push is used. Configure exactly one project
+origin URL and a canonical fetch refspec. Install and verify an executable
+reject-all pre-receive hook with an exact effective hooks path. Publish the
+private receipt only for a complete validated result. A crash before receipt
+publication leaves preserved partial state that cannot be adopted on retry.
+
+Validation checks regular owner-controlled paths and receipt files, effective
+remote URLs and hook configuration, absence of extra remotes or URL overrides,
+self-contained bare storage, and the exact frozen default and ref inventory.
+It never follows a foreign transport. Later project commits may descend from
+the baseline; neither an evidence call nor resume may redefine that baseline.
+Three-tier prepare creates the initial marker-only Git commit and origin;
+record-git, resume and destroy share the same validator before their effects.
+Existing generation and lifecycle locking remain authoritative.
+
+This is deterministic Python/Git infrastructure. The application stack and
+agent behavior are fixed; app-stack, ai-agent-design and ai-stack selection
+are not needed. The system-design-rules review focuses on one ownership
+boundary, idempotency, crash preservation, configuration redirection and exact
+cleanup. No new service, compatibility path or production Git behavior is added.
+
+Git's official clone, remote and config documentation establishes bare clone,
+independent object copying and effective URL rewrite behavior:
+[clone](https://git-scm.com/docs/git-clone),
+[remote](https://git-scm.com/docs/git-remote),
+[config](https://git-scm.com/docs/git-config).
+
+#### Selected Option
+
+Use one shared owner for a single local bare origin in each disposable scope.
+This exercises normal SDLC admission while keeping transport and cleanup local.
+
+#### Alternatives Considered
+
+The current remote-free fixture cannot reach ordinary Git-backed admission.
+A special SDLC no-origin mode would alter production behavior to accommodate
+its test. Accepting arbitrary local remotes would lose ownership and safe
+cleanup guarantees. All are rejected for this test-harness repair.
+
+#### Implementation Boundaries
+
+Change the verifier, three-tier lifecycle, shared private origin owner, focused
+tests, skill/checklist/scenario guidance, README and changelog. Preserve normal
+prompt/worktree promotion, installed hooks and unrelated user changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: A real owned baseline reaches ordinary prompt intake and worktree
+  admission; the prior remote-free composition fails before repair.
+- TDD-002: Every foreign, redirected, borrowed or tampered ownership case fails
+  before Git transport or browser/Docker cleanup; origin push is rejected.
+- TDD-003: Replay, descendant implementation, retained resume and owned cleanup
+  preserve baseline identity and leave unrelated paths unchanged.
+
+#### Validation Plan
+
+Run shared origin tests, composed prompt tests and verifier/lifecycle suites;
+then run the full deterministic verifier and changed-scope alignment gates.
+
+#### Test Plan
+
+Cover ownership receipts, exact URL cardinality, URL and hooks-path rewrites,
+extra refs/remotes, symlinks/hardlinks, alternates and environment overrides,
+crash boundaries, duplicate initialization, baseline replacement and cleanup.
+
+#### Evaluation Plan
+
+Compare actual normal intake and worktree results with the preserved failing
+composition. Verify final source and installed copies independently before
+starting Docker/browser UAT; do not synthesize semantic live evidence.
+
+#### Rollout And Rollback
+
+Review and validate source first, then synchronize only the user-approved
+skills. Existing proven canonical remote-free lightweight fixtures may receive
+their first owned origin during normal preparation. Foreign or partial origin
+state is never adopted. Preserve failed live trials and recover through exact
+owned cleanup; do not roll back by deleting ambiguous state.
+
+#### Done Definition
+
+Both fixture modes use the same owned-origin contract; real Git admission and
+negative cleanup/transport tests pass, documentation agrees, and evidence
+clearly distinguishes source, installed and full live behavior.
+
+#### Implementation Evidence
+
+Implemented the shared owned_git_origin module, verifier and lifecycle wiring,
+real baseline preparation, strict ownership validation and fail-closed cleanup.
+Normal local fetch establishes the tracking default used by Worktree.
+
+#### Verification Evidence
+
+Focused real-Git tests pass for replay, frozen refs, unsafe configuration,
+foreign ownership and rejected pushes. Composed normal prompt intake creates
+the promotion branch and managed worktree create/remove succeeds. Full
+deterministic and live verification remain pending for this source candidate.
+
+<!-- /FEATURE: FEAT-032 -->
+
+<!-- FEATURE: FEAT-033 reqs=REQ-034 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-033: Single public input for owned live evidence
+
+#### Requirements Covered
+
+- REQ-034: Expose one explicit live-test action and one evidence input.
+
+#### Context Evidence
+
+The skill-level create action is interpreted by the agent; the deterministic
+verifier parses evidence options. Its separate canonical-results option also
+compares the lifecycle UUID and Git history with the independent aggregate
+verification digest and lightweight history, preventing genuine composition.
+
+#### Design Details
+
+Rename the skill-level action to `--create-live-test`; keep private lifecycle
+`prepare` unchanged. Reject the retired public action without abbreviation.
+Keep the existing aggregate manifest schema and its sole `--live-evidence`
+input. Pass the already validated profile source identity to the three-tier
+validator, resolve active lifecycle state under the trusted verification root
+through its read-only owner, and derive the exact canonical result path from
+that owned generation. Validate private regular paths, origin ownership,
+canonical result digest and all existing phase/layer/Git/GUI semantics.
+Aggregate identity and lightweight ancestry remain with the aggregate owner;
+lifecycle baseline, promoted SHA and generation remain with its owner.
+Validate while canonical raw evidence exists, before default cleanup. Later
+revalidation without that evidence cannot reuse report booleans as authority.
+No new stack, agent topology or schema is needed. Lightweight semantic claims
+remain fail-closed until their own exact evidence validator is implemented.
+
+#### Selected Option
+
+One aggregate evidence flag with canonical lifecycle discovery from existing
+profile identity, retaining separate internal evidence owners.
+
+#### Alternatives Considered
+
+Accepting either raw three-tier or aggregate JSON under one flag would make
+input semantics ambiguous. Keeping two public flags adds redundant location
+input and permits disagreement. Both alternatives are rejected.
+
+#### Implementation Boundaries
+
+Change sdlc-workflow-test parser, profile validation, focused tests, skill,
+metadata, examples, documentation and changelog. Preserve other skills' create
+flags, private helper actions, collector ownership and live semantic criteria.
+
+#### Test-First Success Criteria
+
+- TDD-001: Different valid aggregate and lifecycle identities can compose.
+- TDD-002: Retired flags and foreign or unsafe canonical evidence fail closed.
+- TDD-003: Copied evidence cannot bypass the lifecycle semantic validator.
+
+#### Validation Plan
+
+Run focused interface/profile tests and full deterministic verification after
+source alignment and authorized installed-skill synchronization.
+
+#### Test Plan
+
+Exercise canonical discovery, lifecycle replacement, hardlinks and symlinks,
+private modes, source mismatch and missing canonical results after cleanup.
+
+#### Evaluation Plan
+
+Use the renamed action for the user-approved core workflow and real local
+Docker/browser trial. Report hosted Git paths separately as unverified.
+
+#### Rollout And Rollback
+
+Make a hard interface replacement in source and the approved installed skill.
+No legacy aliases or migration layer. Existing lifecycle ownership is unchanged.
+
+#### Done Definition
+
+The public surface has one creation action and one evidence flag, all strict
+profile checks remain active, regressions pass and documentation agrees.
+
+#### Implementation Evidence
+
+Renamed the public action across skill, metadata and examples. Removed the
+second parser option; profile validation resolves owned lifecycle status and
+canonical results from source identity, with independent Git validation.
+
+#### Verification Evidence
+
+Focused parser and real owned-lifecycle regression passes with distinct
+aggregate/lifecycle identities and histories. Unsafe permissions, symlinks,
+hardlinks, source mismatch, foreign origin and missing lifecycle are rejected.
+Full deterministic and live verification remain pending for this candidate.
+
+<!-- /FEATURE: FEAT-033 -->
+
+<!-- FEATURE: FEAT-034 reqs=REQ-035 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-034: Owned headless browser stages and exploratory MCP
+
+#### Requirements Covered
+
+- REQ-035: Verify local web workflows without a visible desktop.
+
+#### Context Evidence
+
+The GUI skill permits Playwright but the three-tier prompt, lifecycle and
+semantic validators require native Computer Use and foreground window state.
+The existing global MCP starts headed and can share a persistent profile.
+
+#### Design Details
+
+Use Playwright Test 1.63.0 with a locked dependency bundle and Chrome channel
+for verifier-owned acceptance. Each capability, evaluation and UAT execution
+gets a fresh bounded process/context and immutable hashed artifact receipt.
+Use one worker, no automatic retries, 60-second tests and a five-minute stage
+limit. Browser cleanup always runs and cannot target personal processes.
+Split final UAT at restart: the outer generation-locked owner restarts both
+services, checks unchanged volume identity and rediscovers the loopback port;
+a fresh browser verifies the recorded task. Product-authored TDD tests remain
+independent deliverables; verifier assertions are frozen before implementation.
+Headless MCP 0.0.81 with explicit Chrome and isolated storage supports optional
+exploration outside the acceptance data boundary. It is not an acceptance
+fallback. Keep retains application resources and evidence, not browser state.
+New lifecycle and semantic schemas reject old native evidence without aliases.
+Keep all public live-test flags, local-origin, Git, Docker and phase gates.
+Record actual Chrome version; compatibility is a measured preflight. Five
+screenshots are independent captures: four visually distinct pre-restart states
+and one new post-restart capture, which may match the persisted-state pixels.
+Fresh owner-generated receipts, assertions and independent correlations prove
+the latter; do not manufacture a visual difference or copy an earlier image.
+
+#### Selected Option
+
+Short-lived owned Playwright Test stages plus optional headless MCP.
+
+#### Alternatives Considered
+
+Native locked Computer Use keeps the desktop dependency. Codex's built-in
+browser has no established locked-screen guarantee. A shared long-lived MCP
+browser adds ownership and attachment complexity. Remote execution is outside
+the approved local-laptop scope.
+
+#### Implementation Boundaries
+
+Change browser execution, lifecycle, schemas, semantics, aggregate validation,
+GUI/evaluation/UAT guidance, fixture prompts, reports, source MCP templates and
+focused CI tests. Patch only the selected local Codex Playwright table. Preserve
+unrelated edits, installed hooks, personal browsers and historical failed trials.
+Agent topology/models remain fixed: tests and ownership are deterministic;
+existing evaluator agents retain bounded exploratory judgment. No stack or
+agent-runtime selection is required. Design review emphasizes isolation,
+recovery, independent evidence and honest runtime certification.
+
+#### Test-First Success Criteria
+
+- TDD-001: Native evidence, headed runs, stale/wrong-stage receipts and incomplete
+  browser cleanup cannot pass the new acceptance contract.
+- TDD-002: Kept runs close browsers and resume with fresh owned executions.
+- TDD-003: Restart port changes preserve verification of the original task.
+
+#### Validation Plan
+
+Run browser, target, lifecycle, collector, prompt and aggregate suites;
+configuration-template tests; changed-scope alignment; deterministic verifier.
+
+#### Test Plan
+
+Cover exact ownership, timeout/cancellation, artifact hashes and screenshots,
+failed attempt retention, shared-fixture serialization, keep/resume and cleanup.
+
+#### Evaluation Plan
+
+Fresh unlocked Docker-backed baseline followed by lock-during and fresh-launch
+while-locked trials with independently observed lock intervals. Separately
+verify agent-to-MCP continuity. Missing observation cannot become PASS.
+
+#### Rollout And Rollback
+
+Validate source, sync approved skills, patch the existing Codex MCP table and
+reload its client. Start a fresh trial. Do not migrate old native evidence or
+restore earlier files over unrelated edits; retained old resources require
+their original exact owner for cleanup before upgrading.
+
+#### Done Definition
+
+Source and installed contracts agree; real browser tests prove application
+behavior; locked-screen certification is claimed only for observed platforms.
+
+#### Implementation Evidence
+
+Implemented owned headless stages and frozen Playwright Test 1.63.0 bundle,
+lifecycle v4, semantic results v3, independent API/PostgreSQL checkpoints,
+restart binding and exact-process cleanup. Updated GUI/evaluation/UAT skills,
+source MCP templates, reports, prompts, focused CI checks and documentation.
+The selected local Codex Playwright args are pinned, headless and isolated.
+Owned Compose builds now bind the clean checkout path and revision to an
+immutable web image ID. Browser launch and independent checkpoints verify
+that running image, reject web mounts and require the recorded loopback
+endpoints to resolve to its port. Failed rebuilds invalidate prior build proof.
+
+#### Verification Evidence
+
+The fresh installed core workflow passed all 18 required phases, 27 unchanged
+product tests and all four owned headless Chrome stages. Independent API and
+PostgreSQL observations, five authentic UAT screenshots and a clean promoted
+revision proved the same completed task survived owned service restarts.
+The disposable runtime and raw run were removed with cleanup PASS; its report,
+semantic summary and cleanup ledger remain retained.
+
+A real agent launched the fresh post-restart UAT stage and captured its
+screenshot between independently observed macOS locked-screen boundaries.
+A separate fresh-browser interaction smoke also passed while locked. These
+observations do not certify sleep, closed-lid operation, uninterrupted
+90-second operation or multiday endurance.
+
+The stale-deployment regression reproduced the original false-acceptance gap.
+A later live restart exposed stale endpoint validation before receipt creation;
+its regression reproduced the same failure, and the repaired installed owner
+passed the declared restart replay and subsequent fresh browser stage.
+All 81 lifecycle/browser/prompt and 96 verifier tests pass after the repair;
+scoped review, lint and installation parity pass. Earlier failures remain
+identified separately from the successful corrections.
+
+The full deterministic preflight recorded zero failures and seven warnings.
+The aggregate remains partial because the other live workflow lanes have not
+been supplied. Hosted Git authentication, network failures, push, PR and merge
+flows remain outside the verified local core scope.
+
+<!-- /FEATURE: FEAT-034 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-035: Classified integrated-wave correction
+
+#### Requirements Covered
+
+- REQ-036: Recover failed combined validation without converting failure to pass.
+
+#### Context Evidence
+
+A live disposable run integrated its task before combined Docker and Django
+checks failed. The execution owner cannot start another wave while the
+integrated predecessor remains active, and the classifier has no truthful
+integrated-wave lifecycle. Calling wave-complete would falsely claim success.
+
+#### Design Details
+
+Add integrated_wave to the classifier lifecycle and a private wave-fail
+transition to execution. Bind the exact failed integration commit to canonical
+event, proven localized diagnosis and classification. Retire worker resources
+through existing clean, reachable, non-force cleanup, retain permanent failed
+wave status and clear only its active ownership. Preserve the original failure.
+
+A locked replacement plan preserves historical task definitions and appends a
+bounded corrective task. Admission loads the repair owner's counted active
+dispatch and requires the same diagnosis and original oracle. Ordinary future
+work cannot cross an unresolved failure. Successful combined revalidation at
+the corrective integration tip writes a digest-bound resolution referencing
+the failed wave, corrective result and counted dispatch. Keep failure and
+resolution separate; require validated resolution before normal continuation,
+feature sealing and promotion. Replays cannot rewind integration or overwrite
+failure evidence. Cleanup ambiguity retains resources and blocks dispatch.
+
+The existing Python, Git, private JSON, repair budgets and native worker model
+remain fixed. All new decisions are deterministic owner transitions. No new
+agent subsystem, technology choice or public command is introduced.
+
+#### Selected Option
+
+An explicit failed-wave retirement and classifier-authorized corrective wave
+using the existing execution and repair owners.
+
+#### Alternatives Considered
+
+Marking the failed wave done loses outcome meaning. Reopening its committed
+task rewrites completed history. Restarting every feature discards useful
+product-supported checkpoints and does not repair the missing transition.
+
+#### Implementation Boundaries
+
+Limit changes to execution/classification helpers, tests and owning skill
+instructions, status projection, workflow design documentation and changelog.
+Keep fixture application configuration repairs inside its normal worker lane.
+
+#### Test-First Success Criteria
+
+- TDD-001: The observed integrated failure reaches a fresh authorized correction.
+- TDD-002: Missing authority, stale commits and ordinary bypass tasks are rejected.
+- TDD-003: Failed records survive cleanup/replay and unresolved failure blocks seal.
+
+#### Validation Plan
+
+Run focused real-Git execution and repair-control tests, lint changed code,
+review ownership and replay boundaries, then align affected source skills.
+
+#### Test Plan
+
+Exercise cleanup refusal, interrupted transition replay, exact task history,
+diagnosis and dispatch mismatch, original oracle binding and resolution drift.
+
+#### Evaluation Plan
+
+Synchronize validated source through the authorized installer and replay the
+live workflow from the preserved integrated commit with prior workers stopped.
+Keep the original failed evidence and report runtime proof separately.
+
+#### Rollout And Rollback
+
+Install the source repair before using its new private transition. No aliases,
+migration shims or direct state rewrites. Preserve unresolved live state if the
+repair cannot satisfy ownership or evidence checks.
+
+#### Done Definition
+
+Focused checks and source review pass, the original live correction executes
+through its owners, and downstream tests determine the final workflow outcome.
+
+#### Implementation Evidence
+
+Implemented classified failed-wave retirement, immutable dispatch authority,
+guarded correction admission, separate resolution receipts and promotion
+checks. Original task and failed-wave history remain unchanged.
+
+#### Verification Evidence
+
+The missing transition failed first. All 86 execution, 33 repair-control,
+96 verifier and six corrective-plan tests pass. Scoped code review found no
+blocker; lint, skill structure and documentation checks pass.
+
+The installed live workflow retired its failed integrated wave without
+rewriting that failure, admitted a native corrective task through a new locked
+plan, reran the original oracle at the integrated revision and wrote a separate
+resolution. Ordered validation, tests, evaluation, documentation, alignment
+and commit revalidation completed before local promotion. Final browser UAT
+and exact owned cleanup passed; external publication was not exercised.
+
+<!-- /FEATURE: FEAT-035 -->
+<!-- FEATURE: FEAT-036 reqs=REQ-037 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-036: Task-scoped credential authority and explicit rule repair
+
+#### Requirements Covered
+
+- REQ-037: Reuse accepted task authority and repair explicitly selected rules.
+
+#### Context Evidence
+
+The native global templates and troubleshooting guidance classify every
+credential creation as requiring separate approval. Project instruction
+guidance also treats human-owned conflicts as requiring another user decision,
+even when the current request already authorizes that exact rule change.
+
+#### Design Details
+
+Keep the existing Python helpers and ownership protocol. Update the policy
+text at its source and mirrored instruction templates. An authorized task
+covers necessary new secrets for its identified target and intended access;
+store values only in the intended secret store or protected runtime file.
+Reuse approval already supplied. Additional authority is needed for uncovered
+access expansion, destructive replacement, disclosure or material impact.
+
+An explicit request to repair restrictive instructions selects a focused
+human-rule editing lane. Read the active instruction chain, identify affected
+clauses and preserve unrelated bytes and managed regions. Recheck the original
+file before applying a targeted patch, inspect the diff and reread the result.
+A managed-region change continues through inspect/render/apply/verify with
+its existing receipts, ownership and recovery controls. A broad request to fix
+instructions covers identified projects in the requested workspace, not an
+unbounded scan or unrelated machines. Existing overrides are active sources,
+never a reason to create a dormant alternate file. System/developer policy
+and unresolved authority remain binding.
+
+Spec maintenance records durable policy and routes the explicit repair; its
+hooks remain advisory and never create credentials or rewrite instructions.
+Do not require a spec receipt solely to patch human-owned prose. Require the
+canonical receipt whenever entering managed generation or refresh.
+
+Global script execution follows the same task authority. Before executing a
+helper, inspect its effects and confirm they are necessary for the authorized
+outcome. Do not require a repeated Run/Execute phrase. Preserve explicit
+read-only limits, skill invocation restrictions, real tool/sandbox controls and
+approval for consequences outside the task. Remove the obsolete blanket gate
+from its human-owned global clause and source template; ordinary managed-block
+refresh cannot remove a conflicting human prefix. Validate the entire active
+instruction document so the old rule cannot survive outside the managed block.
+
+#### Selected Option
+
+Reuse task authority and native focused editing for human-owned prose while
+retaining the existing generated-region transaction and spec owner.
+
+#### Alternatives Considered
+
+Keeping blanket approval preserves the reproduced interruption. Removing all
+credential safeguards grants unrelated authority and is rejected. A new
+instruction-editing helper would duplicate native patching and ownership.
+
+#### Implementation Boundaries
+
+Change the two instruction-owner skills, native global templates and mirrored
+troubleshooting guidance, template validators, process cases and documentation.
+Do not change credential providers, IAM, hook admission, secret scanners or
+managed-region helper schemas. Update installed copies only for this task.
+
+#### Test-First Success Criteria
+
+- TDD-001: Old blanket approval policy fails the revised template contract.
+- TDD-002: Authorized creation is allowed; unrelated access expansion and
+  disclosure remain outside that authorization.
+- TDD-003: Explicit human-rule repair preserves unrelated and generated bytes;
+  routine work and unknown managed ownership confer no rewrite authority.
+
+#### Validation Plan
+
+Run scoped template checks, focused unit suites, lint, diff review and source
+to installed parity. Keep native-session replay separate.
+
+#### Test Plan
+
+Exercise config template enforcement, project-instruction ownership and paired
+spec publication; review process cases for authorization semantics.
+
+#### Evaluation Plan
+
+Evaluate generated Grafana admin-secret creation under an authorized setup,
+existing credential replacement, human AGENTS repair and a managed conflict.
+Do not create real credentials merely to verify this instruction-only change.
+
+#### Rollout And Rollback
+
+Patch source first, then only matching installed files and the existing global
+instruction block. Preserve unrelated local changes. Fresh sessions rebuild
+the instruction chain; do not claim older sessions reload automatically.
+Rollback only this task's reviewed text changes if validation fails.
+
+#### Done Definition
+
+All affected guidance agrees, focused checks pass and activation limits are
+reported. No real secret or unrelated project change is introduced.
+
+#### Implementation Evidence
+
+Updated native global instruction templates and mirrored troubleshooting
+guidance to reuse task authorization for necessary new credential creation,
+secure operational storage and uncovered consequence checks. Added explicit
+human-rule repair to project-agent-instructions, including existing native
+instruction sources, while retaining generated-region ownership workflows.
+Maintained advisory spec-owner routing and aligned metadata and process cases.
+Applied only matching changed installed files and focused global rule patches.
+
+The global-script policy now permits necessary task-authorized helpers after
+effect inspection, retains read-only and tool-control limits, and removes the
+obsolete gate from the active global instruction file and source template.
+The setup owner supports explicitly requested human-clause repairs. The global
+validator checks both human-owned text and managed context, and stale temporary
+cleanup wording was aligned with the existing canonical rule.
+
+#### Verification Evidence
+
+Codex template tests (73), Claude template tests (25), troubleshooting contract
+tests (16), paired-spec transaction tests (11), human-instruction tests (6) and
+ownership tests (12) passed. Global-context template validation, six skill
+structure checks, Markdown lint, Ruff and scoped diff checks passed. The
+obsolete blanket credential policy is rejected by the new regression. Changed
+installed files match source and the active global credential section matches
+the template. Read-only risk review findings were corrected. Fresh-session
+behavior and actual credential creation remain unverified; no live secrets
+were created for this policy change.
+
+Canonical paired publication and owner validation report a current contract
+with no pending findings. Exact candidate comparison and predecessor-digest
+checks confirm all pre-existing document bytes were preserved. Scoped Markdown
+lint and diff checks passed after publication.
+
+The global-script regression first demonstrated that the old validator accepted
+the obsolete gate in both the human prefix and suffix. After repair, all 74
+Codex configuration tests and global-context template validation pass. The
+active Global AGENTS.md passes its complete scoped validator. Changed installed
+files equal source, Markdown lint and Ruff pass, and read-only risk review found
+no blocking issue. Fresh-session behavior remains unverified.
+
+A final changed-scope alignment corrected residual README claims that every
+instruction edit required a helper receipt and targeted AGENTS.md. Its flow,
+result list and boundaries now distinguish explicit native human-rule repair
+from managed generation. The source README and installed copy match. Focused
+configuration, troubleshooting and spec-publication checks remain green;
+fresh native behavior is still outside the verified scope.
+
+<!-- /FEATURE: FEAT-036 -->
+
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-037: Code-first design grounding and optional implementation continuation
+
+#### Requirements Covered
+
+- REQ-038: Ground design in code and preserve planning and document ownership.
+
+#### Context Evidence
+
+The design skill already inspects brownfield context and produces a seven-phase
+plan, but defines greenfield as no code, prohibits all implementation and permits
+requested design-document writes. Its process cases do not cover code precedence.
+The canonical publisher belongs to maintain-project-specs.
+
+#### Design Details
+
+Keep design implicitly discoverable and default to read-only design/plan output.
+Resolve the selected project, read its applicable design documents first, then
+trace affected executable code and tests. Code always wins over contradictory
+design prose as the current-state baseline. Report discrepancies with source
+references and route canonical corrections to maintain-project-specs.
+Check the proposed design against callers, interfaces, data ownership and flows;
+redesign unintended conflicts before handoff. Distinguish intentional changes
+from accidental drift. Confirm unused greenfield status even when prototype
+code exists; replace a demonstrated anti-pattern through an explicit prerequisite
+refactor without shims unless requested. Unknown usage does not qualify.
+After all seven phases, an explicit implementation request may continue through
+matching implementation skills, subject to host mode, permissions and existing
+safety boundaries. Design supplies canonical decisions and delivery evidence to
+the spec owner but never publishes project documents itself.
+
+#### Selected Option
+
+Add focused core directives and conditional detail in the existing workflow
+reference, preserving current specialist routes, help and source-owned metadata.
+
+#### Alternatives Considered
+
+Docs-first authority would reproduce stale designs. An immutable-code rule would
+prevent intended changes. Automatic implementation would violate the planning
+default. A new writer or mode flag would duplicate existing ownership or authority.
+
+#### Implementation Boundaries
+
+Change only the design skill and its evaluations, catalog, changelog and this
+canonical pair. Keep installers, shared validators, other skills and real host
+configuration unchanged; preserve unrelated working changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: The current instruction baseline lacks explicit code precedence and
+  rejects requested implementation; new quality cases capture these gaps.
+- TDD-002: Source fixtures exercise document drift, caller contracts, prototype
+  refactoring and execution boundaries with observable output assertions.
+- TDD-003: Existing implementation-only and specialist-routing negatives remain.
+
+#### Validation Plan
+
+Run portable/core, repository/Codex and repository/Claude skill validators with
+canonical eval checks; scoped lint; canonical spec validation and diff checks.
+Apply nested read-only code-review and advisory apply-security through align.
+
+#### Test Plan
+
+Validate JSON and contained fixtures; run safe local fixture tests and disposable
+npx discovery, copy parity and repeat-install checks for both supported hosts.
+
+#### Evaluation Plan
+
+Compare fresh trigger and quality runs with captured working bytes when isolated
+native authentication is available. Keep unavailable evidence explicit. Actual
+host Plan Mode and read-order assertions require native context and trace review,
+not user-prompt simulations or static wording checks.
+
+#### Rollout And Rollback
+
+Publish source changes through the normal catalog workflow. Do not alter the
+real installed catalog or hooks in this change. Preserve a private pre-edit
+baseline for comparison and remove task-owned temporary files after validation.
+
+#### Done Definition
+
+Source, metadata, docs and evals express one code-first contract; scoped static
+checks pass and executed failures are resolved. Runtime and quality limitations
+remain distinct from source or installation evidence.
+
+#### Implementation Evidence
+
+The source design skill, workflow reference, metadata, local README, catalog and
+changelog now express selected-project grounding, code precedence with conflict
+notification, proposal redesign, confirmed unused-greenfield refactoring and
+explicit implementation continuation. Canonical publication remains with
+maintain-project-specs. The trigger CSV has 19 positive and 13 negative cases;
+nine quality cases use contained synthetic code and documentation fixtures.
+No shared validators, installers, real host configuration or installed skill
+copies were modified by this task.
+
+#### Verification Evidence
+
+STATIC_PASS: Portable/core and repository/Codex/Claude structure checks passed
+with strict frontmatter and canonical trigger coverage. Evaluation JSON and all
+fixture paths validated; fixture Python compiled; two catalog baseline tests
+passed; the deliberately lossy prototype reproduced its expected negative control.
+Repository-configured Markdown lint, no-cache Ruff and scoped diff checks passed.
+The initial linter wrapper lacked the parent Markdown configuration; equivalent
+scoped native checks with that existing configuration passed without config edits.
+
+Disposable pinned npx installation passed discovery, payload parity, repeat
+installation and isolation for Codex and Claude. This proves copied payloads,
+not runtime behavior. Official Codex metadata documentation was checked.
+
+Independent nested code-review and advisory apply-security found no remaining
+blocking findings. The review exposed and resolved an unconditional planning-mode
+transition that could block requested implementation; Phase 7, its reference and
+the continuation quality case now preserve execution-capable mode while honoring
+an already-active host Plan Mode.
+
+RUNTIME and QUALITY are UNAVAILABLE: isolated native runners have no API
+credentials; account credentials were not copied or changed. Actual host-mode
+and read-order trace checks were NOT_RUN. Delivery remains implemented rather
+than verified until behavioral evidence is available.
+
+<!-- /FEATURE: FEAT-037 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

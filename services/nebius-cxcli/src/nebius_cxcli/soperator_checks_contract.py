@@ -181,3 +181,67 @@ def job_execution_digest(job: Mapping[str, Any]) -> str:
     if script is not None:
         return checks_digest({"podSpec": spec, "projectedScript": script})
     return checks_digest(spec)
+
+
+def verify_native_pod(
+    expected: Mapping[str, Any], check: Mapping[str, Any], pod: Mapping[str, Any]
+) -> None:
+    """Verify executable identity, allowing only standard Pod admission additions."""
+    spec = copy.deepcopy(dict(pod.get("spec", {})))
+    if spec.get("ephemeralContainers"):
+        raise RuntimeError("native check Pod has additional executable containers")
+    # ServiceAccount admission adds this exact API token projection. Unknown
+    # projections/mounts remain visible to the native template verifier.
+    token_projection = {
+        "defaultMode": 420,
+        "sources": [
+            {"serviceAccountToken": {"expirationSeconds": 3607, "path": "token"}},
+            {
+                "configMap": {
+                    "name": "kube-root-ca.crt",
+                    "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                }
+            },
+            {
+                "downwardAPI": {
+                    "items": [
+                        {
+                            "fieldRef": {"apiVersion": "v1", "fieldPath": "metadata.namespace"},
+                            "path": "namespace",
+                        }
+                    ]
+                }
+            },
+        ],
+    }
+    admitted = [
+        volume
+        for volume in spec.get("volumes", [])
+        if set(volume) == {"name", "projected"}
+        and str(volume["name"]).startswith("kube-api-access-")
+        and normalized(volume["projected"]) == normalized(token_projection)
+    ]
+    if len(admitted) == 1:
+        mount = {
+            "name": admitted[0]["name"],
+            "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "readOnly": True,
+        }
+        spec["volumes"].remove(admitted[0])
+        for container in (*spec.get("containers", []), *spec.get("initContainers", [])):
+            mounts = container.get("volumeMounts", [])
+            if mount in mounts:
+                mounts.remove(mount)
+    expected_tolerations = expected.get("tolerations") or []
+    for key in ("node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"):
+        default = {
+            "key": key,
+            "operator": "Exists",
+            "effect": "NoExecute",
+            "tolerationSeconds": 300,
+        }
+        if default not in expected_tolerations and default in spec.get("tolerations", []):
+            spec["tolerations"].remove(default)
+    if not spec.get("tolerations") and not expected_tolerations:
+        spec["tolerations"] = expected.get("tolerations")
+    verify_native_template(expected, check, {"spec": spec})

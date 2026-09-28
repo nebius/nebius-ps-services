@@ -36,7 +36,7 @@ requests with a safe default-branch workflow. It can prepare a single PR or one
 PR per branch, resolve straightforward merge conflicts against the default
 branch, and report the order the user should merge the PRs manually.
 
-## Use This Skill For
+## When To Use
 
 - Opening a PR from local changes or local commits.
 - Opening or reusing PRs for one or more named branches.
@@ -60,15 +60,18 @@ branch, and report the order the user should merge the PRs manually.
 - Waiting for GitHub PR checks to reach a terminal state when those checks are
   available before reporting the PR as ready.
 - Planning an ordered multi-branch merge path when several branches may overlap.
-- Treating the current non-default branch as the target when the user invokes
-  the skill without naming a branch.
 - Honoring an explicit user-provided PR title or body instead of inventing one.
 - Returning PR numbers, URLs, readiness state, and merge order so the user can
   review or merge manually.
 - In an Agentic SDLC run, publishing or reusing the PR only after
   `sdlc-uat-tests` passes for the clean exact SHA promoted by `sdlc-commit`.
 
-## Requirements
+## When Not To Use
+
+Use commit-push for publication without a PR and review-pr for PR review.
+Managed children must finish their owning integration workflow first.
+
+## Inputs
 
 - A Git repository with an `origin` remote.
 - GitHub CLI (`gh`) authenticated for the target repository.
@@ -139,6 +142,45 @@ omit either explicit branch. Reuse an existing remote branch or PR only when
 its head is the exact promoted SHA and its base is the recorded remote default;
 any mismatch is a blocker, not permission to update or overwrite it. Remove or
 expire the authorization when publication completes or stops.
+
+## Commit Authority
+
+An explicit PR task authorizes the necessary validated staging, commits and
+pushes throughout its branch-owned repair loop. Do not request a new user turn
+for each repair. Before committing, read `references/commit-continuation.md`
+and call the canonical installed shared `commit` helper in `create-pr` mode.
+Each commit gets a fresh exact-tree claim; only the helper runs repo-root
+`git add -A` and normal-hook `git commit`. Staging commands below describe those
+helper-owned effects, not permission for raw Git fallback. Ordinary `commit`
+and `commit-push` stay single-use. Active SDLC remains publication-only.
+
+## Required Reads
+
+Read current repository instructions, the affected checks, and
+`references/commit-continuation.md` before any PR commit.
+
+## Writes
+
+May repair authorized branch-owned files, create exact local commit claims,
+push the selected branch and update its PR. Keep private grants outside Git.
+
+## Idempotency
+
+Reuse the same branch, PR and active continuation grant. Review each fresh tree;
+repeated execution of one claim returns its existing commit. Close the grant
+when the PR task completes or is abandoned; a closed receipt cannot reopen it.
+
+## Failure Handling
+
+Retry safe no-commit failures within the same grant after correcting their
+cause. Preserve uncertain commits for explicit review. Scope or ownership drift
+blocks continuation; never reset claims, fabricate receipts or bypass hooks.
+
+## Completion Criteria
+
+The current pushed head has terminal passing available checks, the PR body
+reflects that head, and the continuation grant is closed. Otherwise report the
+specific blocker and keep the PR draft; ordinary review approval stays separate.
 
 ## Local Check Order
 
@@ -212,7 +254,7 @@ without rewriting branch history.
 - Use the repository default branch as the PR base unless the user explicitly
   provides another base.
 
-## Workflow
+## Process
 
 1. Inspect repository state first.
    Determine:
@@ -386,7 +428,7 @@ evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
 
-## Guardrails
+## Must Not
 
 - In active Agentic SDLC mode, never mutate the clean promoted SHA or publish a
   different local or remote head.

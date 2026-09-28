@@ -7,7 +7,7 @@ import argparse
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
@@ -30,7 +30,7 @@ def main() -> None:
     if args.sequence < 1 or args.concurrency < 1:
         raise SystemExit("--sequence and --concurrency must be positive")
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     cases = {}
     for name, kv_heads in (("mha", 32), ("gqa", 8), ("mqa", 1)):
         per_token = kv_bytes_per_token(32, kv_heads, 128, 2)

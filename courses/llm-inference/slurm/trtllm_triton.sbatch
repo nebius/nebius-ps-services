@@ -10,7 +10,7 @@ set -o noclobber
 umask 077
 
 if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
-  printf 'Usage: TRTLLM_IMAGE_DIGEST=... MODEL_REPOSITORY=... TRITON_REPOSITORY_PROFILE=... TRITON_MODEL_NAME=... TRITON_MAX_TOKEN_FIELD=... sbatch %s\n' "$0"
+  printf 'Usage: TRTLLM_IMAGE_DIGEST=... MODEL_REPOSITORY=... TRITON_REPOSITORY_PROFILE=... TRITON_MODEL_NAME=... TRITON_MAX_TOKEN_FIELD=... python3 tools/submit_lab.py --lab 30_engine_profile %s\n' "$0"
   printf 'Profiles: llmapi+tensorrt_llm+sampling_param_max_tokens, or inflight_batcher+(ensemble|tensorrt_llm_bls)+max_tokens.\n'
   exit 0
 fi
@@ -50,7 +50,7 @@ if [[ ! -f ${MODEL_REPOSITORY}/${model}/config.pbtxt ]]; then
   printf 'ERROR: the selected model has no config.pbtxt in MODEL_REPOSITORY.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit from the llm-inference course root.}
+course_dir=$PWD
 if [[ ! -f ${course_dir}/labs/30_engine_profile.py ]]; then
   printf 'ERROR: submit from the course root containing labs/30_engine_profile.py.\n' >&2
   exit 2
@@ -68,15 +68,17 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
   exit 2
 fi
 export COURSE_RUN_ID
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/30_engine_profile/logs" "${course_dir}/results"
 port_offset=$((job_id % 9000))
 http_port=$((20000 + port_offset))
 grpc_port=$((30000 + port_offset))
 metrics_port=$((40000 + port_offset))
-server_log="${course_dir}/logs/trtllm-triton-run-${COURSE_RUN_ID}.log"
+server_log="${course_dir}/results/30_engine_profile/logs/trtllm-triton-run-${COURSE_RUN_ID}.log"
 
 srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${TRTLLM_IMAGE_DIGEST}" \
+  mpirun --allow-run-as-root --oversubscribe -n 1 \
   tritonserver --model-repository="${MODEL_REPOSITORY}" --exit-on-error=true \
+  --disable-auto-complete-config \
   --http-address=127.0.0.1 --http-port="${http_port}" \
   --grpc-address=127.0.0.1 --grpc-port="${grpc_port}" \
   --metrics-address=127.0.0.1 --metrics-port="${metrics_port}" \

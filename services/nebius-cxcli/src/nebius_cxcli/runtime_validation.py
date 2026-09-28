@@ -31,6 +31,7 @@ from .deploy_targets import (
     EXTERNAL_TARGET_OWNERSHIP,
     deploy_target_is_external_mk8s,
 )
+from .filesystem_mount_tags import validate_filesystem_mount_tags
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
@@ -50,8 +51,9 @@ from .soperator_values import (
     validate_feature_values,
     validate_input_values,
 )
+from .soperator_worker_defaults import WORKER_DEFAULTS_FIELD, validate_worker_defaults
 
-_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
+_ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps", "compatibility"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _SECTION_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _ENV_VAR_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
@@ -533,6 +535,8 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
             base_target_keys = {
                 INSTANCE_ID_FIELD,
                 "deployment_testing",
+                "soperator_rollout",
+                "profiling",
                 "observability",
                 "project_id",
                 "region_id",
@@ -547,6 +551,7 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 "kube_context",
                 "ownership",
                 "soperator_registration",
+                "soperator_desired_platform",
             }
             supported_target_keys = (
                 base_target_keys | external_target_keys
@@ -582,6 +587,25 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 raise ValueError(
                     f"deploy.targets[{index}].ownership must be '{EXTERNAL_TARGET_OWNERSHIP}' when set"
                 )
+            rollout = raw_target.get("soperator_rollout")
+            if rollout is not None:
+                if not isinstance(rollout, Mapping) or set(rollout) != {
+                    "strategy",
+                    "max_surge_count",
+                    "drain_timeout",
+                }:
+                    raise ValueError(
+                        "soperator_rollout requires strategy, max_surge_count and drain_timeout"
+                    )
+                if rollout["strategy"] not in {"zero-surge", "safe-surge", "force-delete"}:
+                    raise ValueError("soperator_rollout has an unsupported strategy")
+                count = rollout["max_surge_count"]
+                if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                    raise ValueError(
+                        "soperator_rollout max_surge_count must be a nonnegative integer"
+                    )
+                if not isinstance(rollout["drain_timeout"], str) or not rollout["drain_timeout"]:
+                    raise ValueError("soperator_rollout drain_timeout must be explicit")
             if deploy_target_is_external_mk8s(raw_target):
                 kube_context = _as_text(raw_target.get("kube_context"))
                 cluster_id = _as_text(raw_target.get("cluster_id"))
@@ -598,6 +622,33 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 inventory = raw_target.get("inventory")
                 if inventory is not None and not isinstance(inventory, Mapping):
                     raise ValueError(f"deploy.targets[{index}].inventory must be a mapping")
+                desired_platform = raw_target.get("soperator_desired_platform")
+                if desired_platform is not None:
+                    if not isinstance(desired_platform, Mapping) or set(desired_platform) != {
+                        "kubernetes_version",
+                        "node_groups",
+                    }:
+                        raise ValueError(
+                            "soperator_desired_platform requires kubernetes_version and node_groups"
+                        )
+                    if not re.fullmatch(
+                        r"[0-9]+\.[0-9]+", str(desired_platform["kubernetes_version"])
+                    ):
+                        raise ValueError(
+                            "soperator_desired_platform requires an exact Kubernetes minor version"
+                        )
+                    groups = desired_platform["node_groups"]
+                    if not isinstance(groups, Mapping) or any(
+                        not isinstance(row, Mapping)
+                        or set(row) != {"os", "gpu_stack_preset"}
+                        or not isinstance(row["os"], str)
+                        or not row["os"]
+                        or not isinstance(row["gpu_stack_preset"], str)
+                        for row in groups.values()
+                    ):
+                        raise ValueError(
+                            "soperator_desired_platform requires exact per-group templates"
+                        )
                 registration = raw_target.get("soperator_registration")
                 if registration is not None and not isinstance(registration, Mapping):
                     raise ValueError(
@@ -612,7 +663,15 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 raw_target.get("observability"),
                 field_label=f"deploy.targets[{index}].observability",
                 allow_vm=False,
+                allow_routing=True,
             )
+            if "routing" in (raw_target.get("observability") or {}):
+                from .observability_routing import resolve_settings
+
+                resolve_settings(payload, str(raw_target.get(INSTANCE_ID_FIELD, "")))
+            from .nsight_profiling import validate_settings
+
+            validate_settings(raw_target.get("profiling"))
             _validate_deploy_target_secrets(
                 raw_target.get("secrets"),
                 field_label=f"deploy.targets[{index}].secrets",
@@ -799,12 +858,17 @@ def _validate_observability(
     field_label: str,
     allow_vm: bool = True,
     allow_kubernetes: bool = True,
+    allow_routing: bool = False,
 ) -> None:
     if observability is None:
         return
     if not isinstance(observability, Mapping):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {"enabled"}
+    if allow_routing:
+        supported_keys.add("routing")
+        if "routing" in observability and not isinstance(observability["routing"], Mapping):
+            raise ValueError(f"{field_label}.routing must be a mapping")
     if allow_kubernetes:
         supported_keys.add("kubernetes")
     if allow_vm:
@@ -1135,6 +1199,8 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
                 "use deploy.targets[].deployment_testing.mk8s_gpu.*"
             )
+        if component_id == "sfs" and bool(raw_component.get("enabled", False)):
+            validate_filesystem_mount_tags(inputs, label=f"infra.components[{index}].inputs")
         if component_id == "vpc" and bool(raw_component.get("enabled", False)):
             cidr_entries = _validate_planned_vpc_private_cidr_contract(
                 component_index=index,
@@ -1288,7 +1354,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "namespace",
                 "release-name",
                 "values",
+                "dashboard_imports",
                 EXPLICIT_VALUES_FIELD,
+                WORKER_DEFAULTS_FIELD,
             }
         )
         if unknown_keys:
@@ -1297,6 +1365,15 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             )
 
         chart_id = component_type_id(raw_chart)
+        if "dashboard_imports" in raw_chart:
+            from .grafana_dashboards import validate_import_declarations
+            from .observability import _grafana_app_id
+
+            validate_import_declarations(raw_chart, grafana_id=_grafana_app_id())
+        if WORKER_DEFAULTS_FIELD in raw_chart:
+            if chart_id != "soperator":
+                raise ValueError("worker-defaults is reserved for Soperator")
+            validate_worker_defaults(raw_chart)
         if EXPLICIT_VALUES_FIELD in raw_chart:
             if chart_id != "soperator":
                 raise ValueError("values-explicit-paths is reserved for Soperator")
@@ -1427,6 +1504,9 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
 
     _validate_client_info(payload)
     _validate_deploy(payload)
+    from .compatibility_matrix import validate_selection
+
+    validate_selection(payload)
 
     infra = payload.get("infra")
     if isinstance(infra, Mapping):

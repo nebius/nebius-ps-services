@@ -4,7 +4,7 @@ Quantization can reduce stored payload size while adding scale metadata, convers
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 12 for scales, integer encoding and reconstruction. Fundamentals Lesson 9 introduces precision and relative L2. The nonzero-reference policy and separate weight/KV checks are defined below.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/29_quantization.json).
 
 Use one H100 in the mechanics environment. Read the scale and error walkthrough below before interpreting the numerical gates. Both BF16 and INT8 copies remain resident for the A/B checks, so the process is intentionally not memory-minimized.
 
@@ -18,21 +18,32 @@ The L2 norm is the square root of summed squared elements, treating a tensor as 
 
 The program derives scales, quantizes values to INT8, reconstructs them, and compares the resulting weight operation and KV tensors with references. The weight path dequantizes before BF16 computation; it is not a native quantized GEMM kernel. Timing separates weight paths and KV dequantization, while byte reports describe logical payloads and scales.
 
-## Practice
-
 Given a 64-GiB budget for weights, KV cache and workspaces, BF16 weights occupying 14 GiB leave 50 GiB for cache and workspaces. If quantized weights and their metadata occupy 8 GiB under the same memory budget, they leave 6 GiB more for those uses. Change only the weight representation and hold ISL/OSL plus quality set fixed. Expected observation: available cache capacity rises if workspace and other runtime requirements remain unchanged, but latency improves only if the selected H100 kernel consumes the format efficiently; fallback/dequantization evidence explains any regression.
 
 Run Lab 29 to measure logical weight/KV storage, dequantization cost, and relative error. Treat supported engine kernels as a separate advanced profile until an exact image and artifact are qualified.
 
-Run the supplied smoke comparison before changing quantization granularity or scales. A larger shape is a separate numerical and conversion-cost experiment, not automatic evidence of engine memory savings.
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+
+Run the supplied small comparison before changing quantization granularity or scales. A larger shape is a separate numerical and conversion-cost experiment, not automatic evidence of engine memory savings.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/29_quantization.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/29_quantization.py --profile h100
+python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile small
+python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile large
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 29_quantization --job "$LAB_JOB_ID"
+```
 
 Require finite output and both weight/KV relative L2 errors below 0.02. Inspect logical byte accounting, `weight_timing`, `kv_dequantization_timing`, and `memory_scope`. These tensor-error gates are not a language-model quality evaluation.
 
@@ -40,17 +51,60 @@ For a separately qualified quantized-engine experiment, retain method, calibrati
 
 A quantized profile is accepted only for models and shapes supported by the actual engine.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Weight timing / bf16 / median (seconds) | `weight_timing.bf16.median_ms` | `s` |
+| Weight timing / int8 weight dequantize then matmul / median (seconds) | `weight_timing.int8_weight_dequantize_then_matmul.median_ms` | `s` |
+| Kv dequantization timing / median (seconds) | `kv_dequantization_timing.median_ms` | `s` |
+| Bf16 weight bytes | `bf16_weight_bytes` | `bytes` |
+| Int8 weight and scale bytes | `int8_weight_and_scale_bytes` | `bytes` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 29_quantization \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Calculate the ideal payload reduction, then add scales and reconstructed buffers. Why can dequantize-then-compute be slower than the BF16 baseline? Which supported engine kernel would be necessary to test a true low-precision execution benefit?
 
 Coarser scales save metadata and can increase error; finer scales do the reverse. Weight-only quantization can improve model fit while leaving KV limits unchanged. KV quantization helps long-lived concurrency but can add per-token overhead.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/29_quantization.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+
+```bash
+python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/29_quantization.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare BF16 with dequantize-then-compute at fixed shape. Independently include scale and reconstruction bytes before deciding whether this path saves usable memory; it does not benchmark a native low-bit GEMM.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Large reconstruction error can indicate outliers, scale granularity, or saturation. Do not relax the 0.02 threshold after seeing a failure. An OOM with both copies resident does not disprove the logical compression ratio.
 
 Avoid declaring success from checkpoint size without proving runtime memory or quality.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

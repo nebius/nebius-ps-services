@@ -1,0 +1,105 @@
+{
+  "artifacts": [
+    {
+      "file": "result-baseline-trial1.json",
+      "original_sha256": "d3b20eb40fe5527430b5bd6be97eab7b4a512d9fdc7727ffbd7f12598df63eaf",
+      "sha256": "1a426b41306f74c1f5df1f4056b39b8cbdb05908c11d0a44438b530ce563c6a0",
+      "variant": "baseline-trial1"
+    },
+    {
+      "file": "result-baseline-trial2.json",
+      "original_sha256": "c9b56f6b93a0251f52e968233e7ed4d4d1b3609019ef00a156eac723bdb0e1b2",
+      "sha256": "704fa99a256c744696f1ec49a71b6522d730527dc454e94cbaf2f8c5033a2da0",
+      "variant": "baseline-trial2"
+    },
+    {
+      "file": "result-baseline-trial3.json",
+      "original_sha256": "1322a38ec743c17f12421383c7fb5337f493d4332bf6be18f3b22be7698b869f",
+      "sha256": "8c4afcfa0bd2059f916c93794f1276b39fb915f83e95b28b54d26c2866b503f3",
+      "variant": "baseline-trial3"
+    },
+    {
+      "file": "result-repeat-trial1.json",
+      "original_sha256": "d0e4a8fe7fe209a5f0968cba5e5db3c8d74fe99d4310941670208699eb819b9d",
+      "sha256": "955605805d0af2eacb6e79cf2ae3d1e97af719793bed536110a5cb0db1a57b97",
+      "variant": "repeat-trial1"
+    },
+    {
+      "file": "result-repeat-trial2.json",
+      "original_sha256": "13457daf8084d849a1f206a42778b3be1be62ae2bf98850360cb1d53e9e28fe4",
+      "sha256": "b04cef41b823873bf1ee1e93718d357eba23a99960fae30cff76414f45d5d670",
+      "variant": "repeat-trial2"
+    },
+    {
+      "file": "result-repeat-trial3.json",
+      "original_sha256": "67edb7b7cfd3287dd4342ae1520fc1860ed51c16aecbd07a1773cba87c06c563",
+      "sha256": "61d6446f79c74c06c42df22935b1220fccd969c94b02ed2d6d6a86dbf71f41ab",
+      "variant": "repeat-trial3"
+    },
+    {
+      "file": "grafana-pair1-view1.png",
+      "sha256": "2732734ec97058b3a98e6bdbebcf8c4bca39054a4ae6d6c0fc25ad25ee5fed26",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair1-view2.png",
+      "sha256": "78944849b222ee6b4340d8b33e8d0d7ed2f8867af2ad423149efa31c6bab2dcd",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view1.png",
+      "sha256": "d0fcb1666c6a82a35f3d06b125a550032e1afe303bbee73ca19ab8a392393c6e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair2-view2.png",
+      "sha256": "18e602b8356c3bb3db9596e59b0c32082b82d5b7fd2c0d7b894b6ea2f0098700",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view1.png",
+      "sha256": "3c94ef255580263365b073ec7ed19c8034435f7b901db71b56b6979535025f8e",
+      "tool": "grafana"
+    },
+    {
+      "file": "grafana-pair3-view2.png",
+      "sha256": "4ca16337e8dac40995b08f8cdcc6f3ac708b94ebe0984461d5d88a64777bc237",
+      "tool": "grafana"
+    },
+    {
+      "file": "systems-baseline-rank-0.png",
+      "sha256": "137d52a0110778bf9ec430c74f8a44d531c6b0080fc135c07d1c2bd1b0003578",
+      "tool": "systems"
+    },
+    {
+      "file": "compute-baseline-rank-0.png",
+      "sha256": "9f7debcefdaa8e012d6a46f453a386d1c2713fdaa5461d91c5b189a1d161e7a5",
+      "tool": "compute"
+    }
+  ],
+  "course": "gpu-optimizations",
+  "hardware": {
+    "gpu_count": 1,
+    "gpu_model": "NVIDIA H200"
+  },
+  "lab": "16_library_first_decision",
+  "limitations": [
+    "diagnostic-companion"
+  ],
+  "profile": "small",
+  "profilers": {
+    "compute": "verified",
+    "systems": "verified"
+  },
+  "schema": "course-lab-results/v1",
+  "software": {
+    "cuda_version": [
+      "13.0"
+    ],
+    "torch_version": [
+      "2.14.0+cu130"
+    ]
+  },
+  "source_sha256": "a1ea905a8f5a2df598d2a00d4748102977068eeda17afe84de12e611e954c48d",
+  "summary_sha256": "a042995c8badf5ba3cbaa7345585302c07125a5343cb8d6a3bd552765fe122a0"
+}

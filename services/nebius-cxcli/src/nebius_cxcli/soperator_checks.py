@@ -118,6 +118,23 @@ def native_acceptance_job(
     return {"apiVersion": "batch/v1", "kind": "Job", **template}
 
 
+class SoperatorAcceptanceJobError(RuntimeError):
+    """A terminal native result safe to retain in deployment summaries."""
+
+    def __init__(self, *, job_id: str, name: str, state: str, exit_code: str) -> None:
+        self.evidence = {
+            "job_id": _identifier(job_id),
+            "job_name": _identifier(name),
+            "state": state if re.fullmatch(r"[A-Z_]{1,32}", state) else "UNKNOWN",
+            "exit_code": exit_code if re.fullmatch(r"\d{1,3}:\d{1,3}", exit_code) else "unknown",
+        }
+        super().__init__(
+            f"Soperator acceptance job {job_id} ({name}) did not complete successfully: "
+            f"state={self.evidence['state']}, exit={self.evidence['exit_code']}. "
+            "Failed evidence and scheduling isolation are preserved."
+        )
+
+
 def slurm_acceptance_result(
     text: str,
     *,
@@ -145,7 +162,9 @@ def slurm_acceptance_result(
     if state in {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "SUSPENDED"}:
         return None
     if state != "COMPLETED" or exit_code != "0:0":
-        raise RuntimeError("Soperator acceptance job did not complete successfully")
+        raise SoperatorAcceptanceJobError(
+            job_id=job_id, name=name, state=state, exit_code=exit_code
+        )
     actual_nodes = tuple(sorted(expand_nodes(nodes)))
     if not actual_nodes or (expected_nodes and actual_nodes != tuple(sorted(expected_nodes))):
         raise RuntimeError("Soperator acceptance worker coverage differs from the plan")
@@ -193,6 +212,10 @@ class SoperatorChecksExecution:
         self.clock = clock
         self.sleep = sleep
         self.lifecycle: ChecksLifecycle | None = None
+        from .soperator_acceptance import current_control, validation_contract
+
+        self.acceptance_control = current_control()
+        self._extended_running = False
         identity = {"schema": _SCHEMA, "operation": operation_id, "policy": policy.sha256}
         if receipt_path.exists():
             payload = read_owner_only_json(receipt_path, label="Soperator checks execution")
@@ -203,6 +226,24 @@ class SoperatorChecksExecution:
             self.state = payload
         else:
             self.state = {**identity, "jobs": {}, "phase": "planned"}
+            self.state["validation"] = {
+                "contract": validation_contract(policy),
+                "readiness": "pending",
+                "requested": self.acceptance_control.requested,
+                "profile": None,
+                "extended": "pending",
+            }
+        validation = self.state.get("validation", {})
+        if validation.get("contract") != validation_contract(policy):
+            raise RuntimeError("recovery-required: acceptance validation contract differs")
+        chosen = validation.get("profile")
+        if (
+            self.acceptance_control.explicit
+            and (chosen or validation.get("requested")) != self.acceptance_control.requested
+        ):
+            raise RuntimeError("recovery-required: acceptance choice cannot change during resume")
+        if validation.get("finish"):
+            self.acceptance_control.finish_requested = True
 
     def require_lifecycle(self) -> ChecksLifecycle:
         if self.lifecycle is None:
@@ -249,18 +290,94 @@ class SoperatorChecksExecution:
         return self.kube(args, None)
 
     def _until(self, action: Callable[[], Any], description: str) -> Any:
-        deadline = self.clock() + self.timeout
+        started = self.clock()
+        deadline = started + self.timeout
+        last_emit = started
+        self.emit(f"Waiting for {description} (0s)")
         while True:
             self.authority()
+            self._poll_graceful_finish()
             result = action()
             if result:
+                self.emit(f"Completed {description} ({int(self.clock() - started)}s)")
                 return result
             if self.clock() >= deadline:
                 raise RuntimeError(
                     f"Soperator checks waiting for {description}; recovery remains available"
                 )
-            self.emit(description)
+            now = self.clock()
+            if now - last_emit >= 30:
+                self.emit(f"Waiting for {description} ({int(now - started)}s)")
+                last_emit = now
             self.sleep(self.poll)
+
+    def _poll_graceful_finish(self) -> bool:
+        if not self._extended_running or not self.acceptance_control.poll():
+            return False
+        validation = self.state["validation"]
+        if "finish" not in validation:
+            validation["finish"] = {"status": "requested", "trigger": "ctrl-g"}
+            self._save()
+            self.emit(
+                "Safe finish requested. Waiting for owned work to settle before restoring checks."
+            )
+        return True
+
+    def _acceptance_rules(self):
+        from .soperator_acceptance import graceful_keyboard
+
+        yield from self.policy.readiness
+        validation = self.state["validation"]
+        validation["readiness"] = "passed"
+        self._save()
+        if validation["profile"] is None:
+            self.authority()
+            if validation["requested"] == "ask":
+                validation["profile"] = self.acceptance_control.choose()
+            else:
+                validation["profile"] = validation["requested"]
+            self.authority()
+            self._verify_isolation()
+            self._verify_acceptance_workers_available(tuple(self.state["acceptance"]["workers"]))
+            self._save()
+        if validation["profile"] == "readiness":
+            validation["extended"] = "skipped"
+            self._save()
+            return
+        required = {rule.name for rule in self.policy.readiness}
+        self._extended_running = True
+        try:
+            with graceful_keyboard(self.acceptance_control):
+                self.emit(
+                    "Extended acceptance running. Press Ctrl+G to finish safely; Ctrl+C interrupts."
+                )
+                for rule in self.policy.required:
+                    if rule.name in required:
+                        continue
+                    if self._poll_graceful_finish():
+                        # Submitted work must still pass or have an exact cancellation
+                        # receipt. A request never erases failures from an earlier attempt.
+                        entries = [
+                            entry
+                            for entry in self.state["jobs"].values()
+                            if entry["check"] == rule.name
+                        ]
+                        if not entries:
+                            continue
+                    yield rule
+                if validation.get("finish"):
+                    if any(
+                        entry.get("status") != "complete" for entry in self.state["jobs"].values()
+                    ):
+                        raise RuntimeError("Graceful finish still has unsettled acceptance work")
+                    validation["finish"]["status"] = "quiescent"
+                    validation["finish"]["jobs_sha256"] = checks_digest(self.state["jobs"])
+                    validation["extended"] = "cancelled"
+                else:
+                    validation["extended"] = "passed"
+                self._save()
+        finally:
+            self._extended_running = False
 
     def quiesce_source(self) -> dict[str, Any]:
         """Pause exact check writers before CR changes and retain write-ahead preimages."""
@@ -645,6 +762,27 @@ class SoperatorChecksExecution:
             raise RuntimeError("Slurm worker inventory is empty")
         return result
 
+    def _verify_acceptance_workers_available(self, workers: tuple[str, ...]) -> None:
+        # State is live admission evidence, not part of the frozen resource
+        # inventory. MAINTENANCE and RESERVED are intentional during acceptance.
+        states: dict[str, str] = {}
+        for line in self.slurm("scontrol show nodes -o").splitlines():
+            fields = dict(re.findall(r"(\w+)=(\S+)", line))
+            name = fields.get("NodeName", "")
+            if not name or name in states:
+                raise RuntimeError("ambiguous Slurm worker state inventory")
+            states[name] = fields.get("State", "")
+        for name in workers:
+            state = states.get(name, "")
+            if not state:
+                raise RuntimeError(f"acceptance worker {name} state is unavailable")
+            if set(state.split("+")) & {"DRAIN", "DRAINED", "DRAINING", "DOWN", "FAIL", "FAILING"}:
+                raise RuntimeError(
+                    f"acceptance worker {name} is unavailable ({state}); inspect its native "
+                    "health checks and host prerequisites before recovery. "
+                    "Existing jobs and scheduling isolation are preserved."
+                )
+
     def prepare_reservation(self, existing: str, *, installing: bool) -> str:
         if self.state.get("scheduleRelease"):
             raise RuntimeError("released check maintenance cannot be entered again")
@@ -868,6 +1006,9 @@ class SoperatorChecksExecution:
 
         if self.state.get("phase") not in {"accepted", "restored"}:
             raise RuntimeError("fresh check acceptance is incomplete")
+        from .soperator_acceptance import terminal_proof
+
+        validation = terminal_proof(self.state, self.policy)
         sealed = released_diagnostic_evidence(self, parent=released_parent)
         if self.lifecycle is not None:
             self.lifecycle.passive.verify_acceptance(sealed=sealed)
@@ -877,6 +1018,8 @@ class SoperatorChecksExecution:
             if live.get("metadata", {}).get("uid") != guard["uid"]:
                 raise RuntimeError("upstream creation trigger guard disappeared")
         expected: set[tuple[str, str]] = set()
+        allowed: set[tuple[str, str]] = set()
+        required_names = {rule.name for rule in self.policy.readiness}
         for rule in self.policy.required:
             eligible = allocation["gpuWorkers"] if rule.requires_gpu else allocation["workers"]
             selected = (
@@ -886,8 +1029,17 @@ class SoperatorChecksExecution:
                 if rule.check_type == "slurmJob"
                 else [""]
             )
-            expected.update((rule.name, worker) for worker in selected)
-        if {(entry["check"], entry["worker"]) for entry in self.state["jobs"].values()} != expected:
+            pairs = {(rule.name, worker) for worker in selected}
+            allowed.update(pairs)
+            if validation["extended"] == "passed" or rule.name in required_names:
+                expected.update(pairs)
+        actual = {(entry["check"], entry["worker"]) for entry in self.state["jobs"].values()}
+        if (
+            not expected <= actual
+            or not actual <= allowed
+            or len(actual) != len(self.state["jobs"])
+            or (validation["extended"] != "cancelled" and actual != expected)
+        ):
             raise RuntimeError("acceptance evidence does not cover every required check and worker")
         live_jobs = self._jobs()
         accounting = self._accounting(
@@ -951,7 +1103,16 @@ class SoperatorChecksExecution:
                         )
         if not self.state["jobs"]:
             raise RuntimeError("acceptance evidence is empty")
-        return {"status": "accepted", "policy": self.policy.sha256, "jobs": len(self.state["jobs"])}
+        proof = {
+            "status": "accepted",
+            "policy": self.policy.sha256,
+            "jobs": len(self.state["jobs"]),
+            "validation": copy.deepcopy(validation),
+        }
+        from .soperator_acceptance import current_control
+
+        current_control().outcomes[self.operation_id] = proof
+        return proof
 
     def _script_identity(self, name: str) -> dict[str, str] | None:
         expected = self.policy.execution_specs.get(name)
@@ -1002,6 +1163,11 @@ class SoperatorChecksExecution:
         self._script_identity(name)
         return cron
 
+    def wait_for_deferred_scheduling(self) -> None:
+        from .soperator_checks_scheduling import wait_for_deferred_scheduling
+
+        wait_for_deferred_scheduling(self)
+
     def verify_deferred_diagnostics(self, *, allow_acceptance: bool = False) -> None:
         from .soperator_checks_scheduling import verify_deferred_diagnostics
 
@@ -1042,6 +1208,16 @@ class SoperatorChecksExecution:
         if "acceptance" in self.state and self.state["acceptance"] != expected:
             raise RuntimeError("recovery-required: acceptance allocation changed")
         self.state["acceptance"] = expected
+        if "checkPreimages" not in self.state["validation"]:
+            observations = {
+                rule.name: self._get("activecheck", rule.name) for rule in self.policy.required
+            }
+            self.state["validation"]["checkPreimages"] = {
+                name: copy.deepcopy(check.get("status", {})) for name, check in observations.items()
+            }
+            self.state["validation"]["checkIdentities"] = {
+                name: check.get("metadata", {}).get("uid") for name, check in observations.items()
+            }
         self.state["phase"] = "acceptance"
         self._save()
         principal = self.slurm("id -u soperatorchecks").strip()
@@ -1058,7 +1234,19 @@ class SoperatorChecksExecution:
             raise RuntimeError("acceptance principal authorization did not converge")
         if before_jobs is not None:
             before_jobs()
-        for rule in self.policy.required:
+        from contextlib import closing
+
+        # The generator owns the terminal context; close it deterministically on
+        # failure or Ctrl+C as well as on success.
+        with closing(self._acceptance_rules()) as rules:
+            return self._execute_acceptance_rules(
+                rules, workers, gpu_workers, inventory, reservation, expected
+            )
+
+    def _execute_acceptance_rules(
+        self, rules, workers, gpu_workers, inventory, reservation, expected
+    ):
+        for rule in rules:
 
             def target_cron(rule: CheckRule = rule) -> Mapping[str, Any] | None:
                 return self._target_cronjob(rule.name)
@@ -1079,6 +1267,15 @@ class SoperatorChecksExecution:
             eligible = gpu_workers if rule.requires_gpu else workers
             if not eligible:
                 raise RuntimeError("required check has no eligible workers")
+            selected = (
+                eligible
+                if rule.each_worker
+                else (eligible[0],)
+                if rule.check_type == "slurmJob"
+                else ("",)
+            )
+            if rule.check_type == "slurmJob":
+                self._verify_acceptance_workers_available(tuple(selected))
             retire_unpinned_jobs(
                 self,
                 rule=rule,
@@ -1086,13 +1283,6 @@ class SoperatorChecksExecution:
                 epoch=epoch,
                 reservation=reservation,
                 workers=tuple(eligible),
-            )
-            selected = (
-                eligible
-                if rule.each_worker
-                else (eligible[0],)
-                if rule.check_type == "slurmJob"
-                else ("",)
             )
             for offset in range(0, len(selected), rule.concurrency):
                 pending: list[tuple[dict[str, Any], str]] = []
@@ -1108,9 +1298,20 @@ class SoperatorChecksExecution:
                         for name, entry in self.state["jobs"].items()
                         if entry["check"] == rule.name and entry["worker"] == worker
                     ]
+                    if self._poll_graceful_finish() and not prior:
+                        continue
                     if prior:
                         job_name = prior[0][0]
-                    elif rule.check_type == "slurmJob" and worker == selected[0]:
+                    elif rule.name == "all-reduce-perf-nccl-in-docker":
+                        from .soperator_checks_image_pull_recovery import replacement_name
+
+                        job_name = replacement_name(self, worker)
+                    if (
+                        not prior
+                        and not job_name
+                        and rule.check_type == "slurmJob"
+                        and worker == selected[0]
+                    ):
                         initial_name = rule.name + "-initial-run"
                         initial = live_jobs.get(initial_name)
                         if not initial:
@@ -1191,6 +1392,10 @@ class SoperatorChecksExecution:
                 def completed(pending=pending, rule=rule, epoch=epoch) -> bool:
                     self._verify_execution_authority(rule.name, epoch, generation=True)
                     self._verify_isolation()
+                    if rule.check_type == "slurmJob":
+                        self._verify_acceptance_workers_available(
+                            tuple(entry["worker"] for entry, _ in pending)
+                        )
                     barrier = self._reservation(reservation)
                     if (
                         barrier["nodes"] != expected["reservationNodes"]
@@ -1318,6 +1523,10 @@ class SoperatorChecksExecution:
                     and status.get("lastJobStatus") == "Complete"
                 )
 
+            if self._poll_graceful_finish() and not any(
+                entry["check"] == rule.name for entry in self.state["jobs"].values()
+            ):
+                continue
             self._until(
                 controller_consumed, f"upstream controller to observe {rule.name} acceptance"
             )
@@ -1328,9 +1537,31 @@ class SoperatorChecksExecution:
             "policy": self.policy.sha256,
             "workers": list(workers),
             "jobs": len(self.state["jobs"]),
+            "validation": copy.deepcopy(self.state["validation"]),
+        }
+
+    def readiness_exemptions(self) -> dict[str, Any]:
+        """Release-scoped optional checks; never hide a new native failure."""
+        from .soperator_acceptance import terminal_proof
+
+        proof = terminal_proof(self.state, self.policy)
+        if proof["extended"] == "passed":
+            return {}
+        self.verify_acceptance()
+        return {
+            rule.name: {
+                "uid": proof["checkIdentities"][rule.name],
+                "execution": copy.deepcopy(self.policy.execution_specs[rule.name]),
+                "priorStatus": copy.deepcopy(proof["checkPreimages"][rule.name]),
+            }
+            for rule in self.policy.required
+            if rule not in self.policy.readiness
         }
 
     def close_authorization(self) -> dict[str, Any]:
+        from .soperator_acceptance import terminal_proof
+
+        terminal_proof(self.state, self.policy)
         if self.state.get("phase") not in {"accepted", "restored"}:
             raise RuntimeError("cannot close check authorization before acceptance")
         acceptance = self.state["acceptance"]

@@ -4,9 +4,9 @@ Activation checkpointing saves memory by recomputing selected forward work durin
 
 ## Before you start
 
-**Theory preparation:** Read Lessons 3–4 for parameter/activation gradients, Lesson 6 for incremental peak allocation and Lesson 8 for selected-module versus whole-block recomputation and non-reentrant checkpointing. Use Lesson 7’s matched-state numerical reasoning. This experiment stops after backward, without an optimizer.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/14_activation_checkpointing.json).
 
-Use one H100 and understand the model's forward/backward flow. The inputs are integer token IDs, so an input-token gradient is not defined. Review the [autograd mechanism guide](../lab-mechanisms.md) for parameter and activation distinctions.
+Use one H100 with the course's Training environment. The experiment computes a forward pass and parameter gradients. Inputs are integer token IDs, so an input-token gradient is not defined.
 
 Extra H100 compute can make recomputation worthwhile when capacity enables a more efficient microbatch, but added kernels and launch overhead remain visible. Sequence length strongly changes the activation benefit.
 
@@ -14,27 +14,59 @@ Extra H100 compute can make recomputation worthwhile when capacity enables a mor
 
 The program prepares matched model state and batches for no checkpointing, alternate-block checkpointing and all-block checkpointing. The output key `selective` checkpoints complete transformer blocks at odd indices; `full` checkpoints every listed transformer block. These are this script's result labels. NVIDIA Megatron's selective activation recomputation instead targets selected modules within layers, which this lab does not implement. It verifies loss and gradients, then measures forward, loss, and backward time plus incremental peak allocation. The reported `step_time` excludes optimizer work and optimizer state: no optimizer is constructed or updated in this lab.
 
-## Practice
-
 Given a block saving 6 GiB of activations and costing 12 milliseconds to recompute, full checkpointing enables microbatch two instead of one but adds 12 milliseconds. Change to checkpoint only a 5-GiB attention intermediate costing 4 milliseconds to replay. Expected observation: if microbatch two still fits, selective recomputation retains most capacity benefit with less step-time penalty at fixed global tokens.
 
-Run Labs 02 and 14 with matched work within each lab, not between their different models. Lab 02 compares an MLP/MSE effective batch against accumulated microbatches. Lab 14 compares no checkpointing, alternate-block checkpointing and all-block checkpointing of a tiny transformer's forward/loss/backward path. Lab 14 does not execute an optimizer update; complete-update equivalence is a separately implemented extension.
+The supplied variants use no checkpointing, alternate-block checkpointing and all-block checkpointing on the same tiny-transformer forward/loss/backward path. Compare checkpoint policies within this workload; durations from a different model are not comparable. There is no optimizer update; complete-update equivalence is a separately implemented extension.
 
-Run all three variants together with the smoke profile. Use the H100 profile only after equivalence passes; its larger model/context is a new memory-pressure experiment.
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+
+Run all three variants together with the small profile. Use the large profile only after equivalence passes; its larger model/context is a new memory-pressure experiment.
 
 ```bash
 umask 077
-sbatch slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile smoke
-sbatch slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile h100
+python3 tools/submit_lab.py --lab 14_activation_checkpointing slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+python3 tools/submit_lab.py --lab 14_activation_checkpointing slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile large
 ```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 14_activation_checkpointing --job "$LAB_JOB_ID"
+```
+
 Require separate loss and gradient agreement for the alternate-block and all-block paths at BF16 `rtol=0.01, atol=0.01`. Inspect checkpointed block indices, forward/backward-only `step_time`, and `median_incremental_peak_bytes`. Token and position embedding parameters are included in the gradient checks; optimizer-update equivalence is not tested here.
 
-For Lab 02 retain effective-batch size, its sampled-gradient check and peak memory. For Lab 14 retain fixed batch/sequence settings, loss and every parameter-gradient comparison, forward/loss/backward timing, peak memory, and recomputed regions. Do not relabel those timings as complete optimizer-step measurements.
+Retain fixed batch/sequence settings, loss and every parameter-gradient comparison, forward/loss/backward timing, peak memory, and recomputed regions. Do not relabel those timings as complete optimizer-step measurements.
 
 Compare loss and gradients at the implemented boundary first, and report the compute cost of the memory saving. An end-to-end training decision additionally requires equivalent optimizer updates and the same useful data per update.
+
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Eager / step time / median (seconds) | `eager.step_time.median_ms` | `s` |
+| Selective / step time / median (seconds) | `selective.step_time.median_ms` | `s` |
+| Full / step time / median (seconds) | `full.step_time.median_ms` | `s` |
+| Eager / median incremental peak bytes | `eager.median_incremental_peak_bytes` | `bytes` |
+| Full / median incremental peak bytes | `full.median_incremental_peak_bytes` | `bytes` |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 14_activation_checkpointing \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
 
 ## Investigate the behavior
 
@@ -42,11 +74,33 @@ Which forward intermediates must be recreated for each checkpointed block? Compa
 
 Smaller microbatches can reduce GEMM efficiency. More accumulation delays updates and may add synchronization complexity. Recomputation saves memory at a variable compute cost; offload is a different trade that spends transfer bandwidth and is advanced material here.
 
+Capture a separate diagnostic run:
+
+```bash
+python3 tools/submit_lab.py --lab 14_activation_checkpointing --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+```
+
+Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
+
+The Compute command selects the first matrix kernel inside `checkpoint_step`, excluding model and batch construction. It diagnoses the first baseline pass; compare checkpoint modes with the complete Systems traces, memory measurements and gradient checks. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
+
+```bash
+python3 tools/submit_lab.py --lab 14_activation_checkpointing '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=checkpoint_step,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+```
+
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+
+Guided comparison: Compare checkpointing disabled/enabled at the same shape. Independently calculate bytes saved per added millisecond and select the policy for a stated memory budget.
+
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+
 ## If something goes wrong
 
 Gradient disagreement after introducing randomness may reflect unmatched RNG handling or state. Missing gradients suggest a disconnected recomputation path. Stop at the failed equivalence check rather than treating memory savings as success.
 
 Avoid changing microbatch count without holding effective batch or optimizer schedule fixed.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

@@ -8,7 +8,6 @@ import json
 import os
 import re
 import subprocess
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -45,6 +44,8 @@ def _verify_removed_package_entries(package_root: Path) -> None:
     package_dir = package_root / "nebius_cxcli"
     prefix = "soperator_"
     removed_entries = (
+        prefix + "install_lease.py",
+        prefix + "install_recovery.py",
         prefix + "migration.py",
         prefix + "migration_profiles.yaml",
         prefix + "onboarding.py",
@@ -140,7 +141,7 @@ def _assert_soperator_callback(
     command: str,
     argv: list[str],
     expected_error: str,
-) -> None:
+) -> str:
     result = runner.invoke(cli.app, ["soperator", command, *argv])
     rendered = _normalized_help(result.output)
     if result.exit_code != 1 or expected_error not in rendered:
@@ -151,6 +152,7 @@ def _assert_soperator_callback(
                 sort_keys=True,
             )
         )
+    return rendered
 
 
 def _verify_soperator_semantics(package_root: Path) -> None:
@@ -160,8 +162,8 @@ def _verify_soperator_semantics(package_root: Path) -> None:
         raise RuntimeError(f"installed-wheel smoke target unexpectedly exists: {missing_config}")
     _assert_soperator_callback(
         runner,
-        command="install",
-        argv=[str(missing_config), "--profile", "cpu", "--no-interactive", "--dry-run"],
+        command="create",
+        argv=[str(missing_config), "--profile", "cpu", "--no-interactive"],
         expected_error="requires --release latest or exact X.Y.Z",
     )
     with patch.object(
@@ -175,26 +177,47 @@ def _verify_soperator_semantics(package_root: Path) -> None:
             argv=[str(missing_config), "--no-interactive"],
             expected_error="installed-wheel-onboard-callback",
         )
-    _assert_soperator_callback(
-        runner,
-        command="upgrade",
-        argv=[str(missing_config), "--no-interactive"],
-        expected_error="requires an explicit execution mode",
-    )
-    with (
-        patch.object(cli, "SoperatorOperationLocalLock", side_effect=lambda _path: nullcontext()),
-        patch.object(
-            cli,
-            "_load_source_payload",
-            side_effect=RuntimeError("installed-wheel-destroy-callback"),
-        ),
+    with patch.object(
+        cli,
+        "_run_soperator_upgrade_campaign",
+        side_effect=RuntimeError("installed-wheel-upgrade-callback"),
     ):
         _assert_soperator_callback(
             runner,
-            command="destroy",
-            argv=[str(missing_config), "--target", "cluster-a", "--dry-run"],
-            expected_error="installed-wheel-destroy-callback",
+            command="upgrade",
+            argv=[str(missing_config), "--no-interactive"],
+            expected_error="installed-wheel-upgrade-callback",
         )
+    from nebius_cxcli import destroy_cli
+
+    with patch.object(
+        destroy_cli,
+        "execute_destroy",
+        side_effect=RuntimeError("installed-wheel-destroy-callback"),
+    ) as destroy:
+        result = runner.invoke(
+            cli.app,
+            [
+                "destroy",
+                str(missing_config),
+                "--target",
+                "mk8scluster-a",
+                "--dry-run",
+                "--delete-sfs",
+                "--preserve-pvc-disks",
+                "--yes",
+            ],
+        )
+        if result.exit_code != 1 or "installed-wheel-destroy-callback" not in result.output:
+            raise RuntimeError("Installed global SDK destroy callback smoke failed")
+        assert runner.invoke(cli.app, ["soperator", "destroy", "--help"]).exit_code == 2
+        assert destroy.call_count == 1
+        assert destroy.call_args.args == (missing_config,)
+        assert destroy.call_args.kwargs["delete_sfs"] is True
+        assert destroy.call_args.kwargs["preserve_pvc_disks"] is True
+        assert destroy.call_args.kwargs["dry_run"] is True
+        assert destroy.call_args.kwargs["cluster_id"] == "mk8scluster-a"
+        assert destroy.call_args.kwargs["yes"] is True
     with patch.object(
         cli,
         "_run_soperator_public_discovery_command",
@@ -214,16 +237,27 @@ def _verify_soperator_semantics(package_root: Path) -> None:
             ],
             expected_error="installed-wheel-discover-callback",
         )
+    status_error = "installed-wheel-status-callback"
     with patch.object(
         cli,
-        "_load_source_payload",
-        side_effect=RuntimeError("installed-wheel-status-callback"),
-    ):
-        _assert_soperator_callback(
+        "_read_config_payload",
+        side_effect=RuntimeError(status_error),
+    ) as read_config:
+        rendered = _assert_soperator_callback(
             runner,
             command="status",
             argv=[str(missing_config), "--no-live", "--no-interactive"],
-            expected_error="installed-wheel-status-callback",
+            expected_error=(
+                "Status collection failed; verify configuration, cluster identity and access."
+            ),
+        )
+        read_config.assert_called_once_with(missing_config)
+    if (
+        "Overall health: Error — Status could not safely complete" not in rendered
+        or status_error in rendered
+    ):
+        raise RuntimeError(
+            "installed Soperator status callback smoke violated sanitized failure contract"
         )
 
 

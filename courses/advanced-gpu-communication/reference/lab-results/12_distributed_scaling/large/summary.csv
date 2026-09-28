@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,median_step_seconds,value,0.00346,s
+baseline-trial1,samples_per_second,value,18497.3,count:samples/s
+baseline-trial1,global_batch,value,64,none
+repeat-trial1,median_step_seconds,value,0.016252600000000002,s
+repeat-trial1,samples_per_second,value,3937.83,count:samples/s
+repeat-trial1,global_batch,value,64,none

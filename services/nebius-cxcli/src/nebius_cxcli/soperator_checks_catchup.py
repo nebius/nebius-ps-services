@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import copy
-import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .soperator_checks import SoperatorChecksExecution, _identifier
 from .soperator_checks_contract import job_execution_digest, verify_native_template
 from .soperator_checks_policy import checks_digest
@@ -17,7 +17,7 @@ from .soperator_install_checks_repair import validate_wait_hook
 
 
 def expected_wait_hook(source_dir: Path) -> Mapping[str, Any]:
-    rendered = subprocess.run(
+    rendered = kubernetes_process.run(
         [
             "helm",
             "template",
@@ -63,7 +63,11 @@ class ChecksCatchupRecovery:
             "operation": state["operation"],
             "policy": self.parent.policy.sha256,
             "acceptanceSha256": checks_digest(
-                {"acceptance": state["acceptance"], "jobs": state["jobs"]}
+                {
+                    "acceptance": state["acceptance"],
+                    "jobs": state["jobs"],
+                    "validation": state["validation"],
+                }
             ),
             "reservation": state["reservation"],
             "fingerprint": state["reservationFingerprint"],
@@ -240,6 +244,14 @@ class ChecksCatchupRecovery:
     def recover(self) -> Mapping[str, Any] | None:
         parent = self.parent
         record = parent.state.get("catchupRecovery")
+        # A current diagnostic failure is never optional. In a shortened run
+        # preserve it for explicit recovery; do not launch a hidden full suite.
+        if parent.state.get("validation", {}).get("extended") in {"skipped", "cancelled"}:
+            if record is not None or self._failures():
+                raise RuntimeError(
+                    "recovery-required: current native catch-up failure prevents safe finish"
+                )
+            return None
         if record is None:
             if parent.state.get("phase") != "accepted" or parent.state.get("scheduleRelease"):
                 return None
@@ -278,6 +290,8 @@ class ChecksCatchupRecovery:
         )
         child.close_authorization()
         child.verify_acceptance()
+        if child.state["validation"]["extended"] != "passed":
+            raise RuntimeError("recovery-required: failed catch-up diagnostics were not rerun")
         record["resultSha256"] = checks_digest(child.state)
         record["status"] = "accepted"
         parent._save()

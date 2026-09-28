@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import re
-import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, lru_cache
@@ -15,6 +14,7 @@ from typing import Any
 
 import yaml
 
+from . import kubernetes_process
 from .soperator_checks_binding import suspend_auxiliary_checks
 from .soperator_checks_login import native_login_commands
 from .soperator_checks_phase import (
@@ -110,6 +110,7 @@ class SoperatorChecksPolicy:
     auxiliary_spec: Mapping[str, Any] = field(default_factory=dict)
     passive: Mapping[str, Any] = field(default_factory=dict)
     partitions: Mapping[str, Any] = field(default_factory=dict)
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
     @cached_property
     def sha256(self) -> str:
@@ -124,6 +125,7 @@ class SoperatorChecksPolicy:
                 "check_values": self.check_values,
                 "passive": self.passive,
                 "partitions": self.partitions,
+                **({"diagnostics": self.diagnostics} if self.diagnostics else {}),
             }
         )
 
@@ -143,6 +145,36 @@ class SoperatorChecksPolicy:
             ordered.extend(remaining.pop(name) for name in ready)
         return tuple(ordered)
 
+    @property
+    def readiness(self) -> tuple[CheckRule, ...]:
+        """Native bootstrap and GPU smoke, closed over creation-time dependencies."""
+        rules = {rule.name: rule for rule in self.required}
+        selected = {
+            name
+            for name, rule in rules.items()
+            if rule.bootstrap
+            or rule.check_type == "k8sJob"
+            or name in {"cuda-samples", "ensure-healthy-nodes"}
+        }
+        while True:
+            dependencies = {
+                dep for name in selected for dep in rules[name].dependencies if dep in rules
+            }
+            if dependencies <= selected:
+                break
+            selected |= dependencies
+        return tuple(rule for rule in self.required if rule.name in selected)
+
+    def readiness_contract(self) -> dict[str, Any]:
+        required = {rule.name for rule in self.readiness}
+        return {
+            rule.name: {
+                "required": rule.name in required,
+                "execution": copy.deepcopy(self.execution_specs[rule.name]),
+            }
+            for rule in self.rules
+        }
+
     def effective_values(
         self,
         values: Mapping[str, Any],
@@ -153,6 +185,14 @@ class SoperatorChecksPolicy:
         if checks_digest(values) != self.values_sha256:
             raise ValueError("Soperator check policy does not match desired values")
         result = copy.deepcopy(dict(values))
+        if self.diagnostics and installing and context is None:
+            # Fresh fast setup needs closed admission, not a diagnostic campaign.
+            # Keep native bootstrap specs identical to the steady configuration.
+            cluster = result["slurmCluster"]["overrideValues"]
+            cluster["partitionConfiguration"] = paused_partition_configuration(
+                cluster.get("partitionConfiguration")
+            )
+            return result
         if context is not None and context.phase in {
             ChecksPhase.SCHEDULES,
             ChecksPhase.ADMISSION,
@@ -234,6 +274,16 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
     if not isinstance(defaults, Mapping) or not isinstance(defaults.get("checks"), Mapping):
         raise ValueError("unsupported upstream ActiveChecks values contract")
     effective = _merge(defaults, overrides)
+    from .soperator_deployment_profile import validate_diagnostics_profile
+
+    source_sha256 = checks_digest(
+        {
+            str(p.relative_to(chart)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(chart.rglob("*"))
+            if p.is_file()
+        }
+    )
+    diagnostics = validate_diagnostics_profile(values, defaults["checks"])
     login_commands = native_login_commands(
         source_dir,
         str(values.get("slurmCluster", {}).get("overrideValues", {}).get("clusterName", "")),
@@ -304,7 +354,10 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
                 required=check.get("runAfterCreation", False),
                 suspend=check.get("suspend", False),
                 dependencies=tuple(check.get("dependsOn") or ()),
-                each_worker=spec.get("eachWorkerJobs", False) is True,
+                # Run the unchanged bounded native health script on each worker
+                # to exercise Slurm and its real prolog/epilog, including CPUs.
+                each_worker=spec.get("eachWorkerJobs", False) is True
+                or name == "ensure-healthy-nodes",
                 concurrency=min(limit or 200, 200),
                 script_sha256=checks_digest(script),
                 requires_gpu=any(
@@ -314,13 +367,7 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
             )
         )
     policy = SoperatorChecksPolicy(
-        source_sha256=checks_digest(
-            {
-                str(p.relative_to(chart)): hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in sorted(chart.rglob("*"))
-                if p.is_file()
-            }
-        ),
+        source_sha256=source_sha256,
         values_sha256=checks_digest(values),
         rules=tuple(sorted(rules, key=lambda r: r.name)),
         check_values=copy.deepcopy(effective["checks"]),
@@ -329,10 +376,57 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
             values.get("slurmCluster", {}).get("overrideValues", {}).get("partitionConfiguration")
             or {}
         ),
+        diagnostics=diagnostics,
     )
     if not policy.required:
         raise ValueError("Soperator target has no required acceptance checks")
+    # Target compilation knows the desired workers. Source-only quiescence
+    # deliberately compiles without NodeSets and never executes acceptance.
+    nodesets = values.get("nodesets", {}).get("overrideValues", {}).get("nodesets")
+    if nodesets is not None and (
+        not isinstance(nodesets, list) or any(not isinstance(row, Mapping) for row in nodesets)
+    ):
+        raise ValueError("Soperator readiness requires a valid worker NodeSet inventory")
+    if (
+        nodesets
+        and not diagnostics
+        and not any(
+            rule.name == "ensure-healthy-nodes"
+            and rule.check_type == "slurmJob"
+            and rule.each_worker
+            and not rule.requires_gpu
+            for rule in policy.readiness
+        )
+    ):
+        raise ValueError("Soperator readiness requires native Slurm smoke on every worker")
+    gpu_workers = any(row.get("gpu", {}).get("enabled") is True for row in nodesets or ())
+    if (
+        not diagnostics
+        and (gpu_workers or any(rule.requires_gpu for rule in policy.required))
+        and not any(
+            rule.name == "cuda-samples" and rule.requires_gpu and rule.each_worker
+            for rule in policy.readiness
+        )
+    ):
+        raise ValueError("GPU Soperator readiness requires native CUDA samples on every GPU worker")
+    if diagnostics:
+        if not policy.passive.get("supported"):
+            raise ValueError(
+                "Fast deployment requires a compatible native passive contract: "
+                + str(policy.passive.get("reason", "unknown"))
+            )
+        if policy.passive.get("diagnostics"):
+            raise ValueError("Fast deployment must disable reviewed passive diagnostics")
+    elif any(
+        row.get("gpu", {}).get("enabled") is True
+        and row.get("slurmd", {}).get("resources", {}).get("gpu") == 1
+        for row in nodesets or ()
+    ):
+        raise ValueError("One-GPU workers require deploymentProfile: fast-dev-test (Dev/Test only)")
     temporary = policy.effective_values(values, installing=False)
+    from .soperator_acceptance_hooks import verify_policy_hooks
+
+    verify_policy_hooks(chart, [overrides, temporary["soperatorActiveChecks"]["overrideValues"]])
     specs = _render_execution_specs(chart, temporary["soperatorActiveChecks"]["overrideValues"])
     from .soperator_checks_binding import (
         active_checks_pvc,
@@ -375,12 +469,14 @@ def compile_checks_policy(source_dir: Path, values: Mapping[str, Any]) -> Sopera
         if len(auxiliary) != 1 or not auxiliary[0].get("schedule"):
             raise ValueError("upstream auxiliary scheduling contract is unavailable")
         from .soperator_checks_binding import bind_auxiliary_spec
+        from .soperator_deployment_profile import auxiliary_checks_suspended
 
         auxiliary_spec = bind_auxiliary_spec(
             auxiliary[0],
             auxiliary_pvc,
             retained_check_mounts(values),
             cluster=values["slurmCluster"]["overrideValues"]["clusterName"],
+            suspended=auxiliary_checks_suspended(values),
         )
     return replace(
         policy, execution_specs=specs, auxiliary_pvc=auxiliary_pvc, auxiliary_spec=auxiliary_spec
@@ -431,7 +527,7 @@ def _render_execution_specs(chart: Path, overrides: Mapping[str, Any]) -> dict[s
 
 @lru_cache(maxsize=8)
 def _cached_execution_specs(chart: str, override_yaml: str) -> tuple[dict[str, Any], ...]:
-    result = subprocess.run(
+    result = kubernetes_process.run(
         [
             "helm",
             "template",

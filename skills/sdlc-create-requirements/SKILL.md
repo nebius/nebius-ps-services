@@ -69,7 +69,7 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Required Reads
 
-- `references/prompt-refinement.md` for prompt-v2 extraction, source
+- `references/prompt-refinement.md` for prompt-v3 extraction, source
   precedence, selective clarification, and stable question handling.
 - Existing requirements file.
 - Existing design file if present.
@@ -77,7 +77,7 @@ Convert user intent into durable, testable product requirements in `docs/require
 - Active SDLC run state if the change happens during a run.
 - The bound run's `prompt.json` and accepted snapshot when prompt intake
   initiated the change.
-- The bound run's private `requirements-refinement.json` when prompt-v2 intake
+- The bound run's private `requirements-refinement.json` when prompt-v3 intake
   initiated or revised the objective.
 
 ## Writes
@@ -90,6 +90,10 @@ Convert user intent into durable, testable product requirements in `docs/require
 ## Process
 
 - Use `assets/templates/requirements.md.template` when creating the file.
+- If either canonical document is absent, return to the coordinator for the
+  shared owner's draft-pair bootstrap before this adapter publishes. Do not
+  create the missing design yourself. Resume with its exact draft bytes as the
+  unchanged counterpart; substantive design remains with `sdlc-create-design`.
 - Extract the entire Ask and all optional/custom headings into product goal,
   users, actors, inputs/outputs, context, functional behavior, constraints,
   acceptance and negative criteria, verification/test/evaluation, non-goals,
@@ -120,12 +124,13 @@ Convert user intent into durable, testable product requirements in `docs/require
   one-file transaction. After paired validation/publication, bind the exact v2
   receipt in the private refinement ledger and set `ready` only when no
   material question is open or reopened.
-- Invoke the private `refinement-verify` action owned by `sdlc-start` with the
-  exact workspace and run after saving `ready` and a complete private impact
-  claim. Route to design only when the shared owner proves that the latest
-  accepted prompt identity and intent, every extracted statement occurrence,
-  and the exact current requirements/design bytes have one accepted impact
-  receipt. Do not use matching bytes or a bare `no_effect` label as proof.
+- Invoke the private `refinement-ready` action owned by `sdlc-start` with the
+  exact workspace and run after saving `ready`. Route to context/design only
+  when it binds the latest accepted prompt identity and intent to the exact
+  compiled requirements. This read-only check publishes no impact receipt.
+  After design is ready, the coordinator must run `refinement-verify` with a
+  complete statement-impact claim before planning or execution. Do not use
+  requirements readiness or a bare `no_effect` label as execution proof.
 
 ## Idempotency
 
@@ -164,8 +169,8 @@ Convert user intent into durable, testable product requirements in `docs/require
   records safe access references, allowed operations, reset instructions, and
   evidence limits.
 - Open questions and change log are explicit.
-- The private refinement verifier passes for the latest accepted revision,
-  complete statement-impact claim, and exact current canonical specs.
+- The private `refinement-ready` check passes for the latest accepted revision
+  and exact compiled requirements; full impact settlement awaits ready design.
 
 ## SDLC Invariants
 

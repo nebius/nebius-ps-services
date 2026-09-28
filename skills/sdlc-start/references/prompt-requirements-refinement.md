@@ -90,10 +90,22 @@ that adapter. The shared owner validates and transactionally publishes the
 complete canonical pair; its receipt is required project-truth evidence but
 not a workflow authority boundary.
 
+When either canonical document is absent, the coordinator invokes the shared
+owner to bootstrap the missing draft pair before adapter publication. Existing
+document bytes remain exact. New records use evidence-backed stable IDs; new
+design records stay draft and not-started with context, architecture, options,
+boundaries and validation decisions explicitly pending. This is an inert
+publication scaffold, not substantive design or an impact receipt.
+
 Design may begin only after the latest intent has a `ready` refinement ledger,
 `docs/requirements.md` reflects its compiled truth, and no material question or
-contradiction remains. Run private `prompt_workspace.py refinement-verify` for
-the exact workspace and run before leaving requirements. Before that call,
+contradiction remains. Run private `prompt_workspace.py refinement-ready` for
+the exact workspace and run before leaving requirements. This read-only check
+requires no ready design and writes no impact attempt, ledger or authority.
+
+After the design adapter publishes ready design and before planning, run private
+`prompt_workspace.py refinement-verify` for the same workspace and run. It
+rechecks requirements readiness and requires current canonical specs. Before that call,
 write one private `prompt-impact-claim.json` that classifies every extracted
 statement occurrence exactly once as `changed_contract`, `existing_contract`,
 `execution_only`, or `non_contract`. Contract classifications map active

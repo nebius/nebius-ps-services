@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mint one private authorization for a bounded root-user `$commit` turn."""
+"""Record nonauthorizing root-turn metadata for semantic commit requests."""
 
 from __future__ import annotations
 
@@ -121,9 +121,7 @@ _load_skill_support('runtime', __file__, 'commit/assets/hooks/commit_intent.py')
 from agent_runtime import agent_home  # noqa: E402
 
 
-AUTH_SCHEMA = "commit-transaction.authorization.v1"
-COMMIT_DIRECTIVES = frozenset({"apply", "execute", "invoke", "run", "use"})
-COMMIT_INVOCATIONS = frozenset({"$commit", "$commit-push"})
+RECEIPT_SCHEMA = "commit-transaction.intent.v1"
 REPOSITORY_SHAPING_GIT_ENV = frozenset(
     {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -175,44 +173,6 @@ def _excluded(payload: dict[str, Any]) -> bool:
         return True
     agent_type = str(payload.get("agent_type") or "").casefold()
     return bool(agent_type and agent_type not in {"root", "primary"})
-
-
-def _commit_invocation(prompt: str) -> tuple[str, tuple[str, ...]] | None:
-    words = prompt.lstrip().split()
-    if not words:
-        return None
-    index = 0
-    if words[index].casefold() == "please":
-        index += 1
-    if index < len(words) and words[index].casefold() in COMMIT_DIRECTIVES:
-        index += 1
-    if index >= len(words) or words[index] not in COMMIT_INVOCATIONS:
-        return None
-    invocation = words[index]
-    body = tuple(words[index + 1 :])
-    if body and body[0] in {"-h", "--help"}:
-        return None
-    return invocation, body
-
-
-def _commit_invocation_body(prompt: str) -> tuple[str, ...] | None:
-    invocation = _commit_invocation(prompt)
-    return invocation[1] if invocation is not None else None
-
-
-def _explicit_commit(prompt: str) -> bool:
-    return _commit_invocation(prompt) is not None
-
-
-def _default_branch_authorized(prompt: str, reference: str) -> bool:
-    invocation = _commit_invocation(prompt)
-    if invocation is None or invocation[0] != "$commit":
-        return False
-    invocation_body = invocation[1]
-    body = " ".join(invocation_body).lower()
-    branch = reference.removeprefix("refs/heads/").lower()
-    phrases = ("on the default branch", f"on {branch}")
-    return any(body == phrase or body.startswith(f"{phrase} ") for phrase in phrases)
 
 
 def _git_environment() -> dict[str, str]:
@@ -346,42 +306,65 @@ def _write(path: Path, value: dict[str, object]) -> None:
         raise IntentError("commit authorization could not be persisted") from error
 
 
-def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("hook_event_name") != "UserPromptSubmit" or _excluded(payload):
-        return {}
-    prompt = payload.get("prompt")
-    if not isinstance(prompt, str) or not _explicit_commit(prompt):
-        return {}
-    session_id = payload.get("session_id")
-    turn_id = payload.get("turn_id")
-    if session_id in {None, ""} or turn_id in {None, ""}:
-        raise IntentError(
-            "explicit commit transaction requires current session and turn identity"
-        )
-    identity = _identity(payload.get("cwd"))
-    path = _authorization_path(identity, session_id)
-    claim_path = _claim_path(identity)
-    authorization: dict[str, object] = {
-        "schema": AUTH_SCHEMA,
-        "state": "AUTHORIZED",
-        **identity,
-        "session_sha256": _digest(session_id),
-        "turn_sha256": _digest(turn_id),
-        "prompt_sha256": _digest(prompt),
-        "owner": "direct",
-        "owner_evidence_path": None,
-        "owner_evidence_sha256": None,
-        "allow_default_branch": _default_branch_authorized(prompt, identity["ref"]),
-    }
-    _write(path, authorization)
+def _unavailable(reason: str) -> dict[str, Any]:
+    """Report capture failure without granting authority or exposing input."""
     return {
         "continue": True,
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "Explicit commit transaction authorization is bound to this root turn and exact "
-                f"repository state. Canonical authorization path: {path}. "
-                f"Canonical claim path: {claim_path}"
+                f"Commit intent receipt unavailable ({reason}). "
+                "No current receipt context was produced. Do not prepare a commit "
+                "from an earlier receipt or modify authorization/claim state. "
+                "Ordinary work may continue; diagnose native hook capture before publication."
+            ),
+        },
+    }
+
+
+def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("hook_event_name") != "UserPromptSubmit" or _excluded(payload):
+        return {}
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _unavailable("PROMPT_UNAVAILABLE")
+    session_id = payload.get("session_id")
+    turn_id = payload.get("turn_id")
+    if any(not isinstance(value, str) or not value.strip() for value in (session_id, turn_id)):
+        return _unavailable("NATIVE_IDENTITY_UNAVAILABLE")
+    try:
+        identity = _identity(payload.get("cwd"))
+    except (IntentError, OSError):
+        return _unavailable("REPOSITORY_UNAVAILABLE")
+    path = _authorization_path(identity, session_id)
+    claim_path = _claim_path(identity)
+    receipt: dict[str, object] = {
+        "schema": RECEIPT_SCHEMA,
+        **identity,
+        "session_sha256": _digest(session_id),
+        "turn_sha256": _digest(turn_id),
+        "prompt_sha256": _digest(prompt),
+    }
+    try:
+        _write(path.with_name("intent.json"), receipt)
+    except (IntentError, OSError):
+        return _unavailable("RECEIPT_WRITE_FAILED")
+    receipt_digest = hashlib.sha256(
+        (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    ).hexdigest()
+    return {
+        "continue": True,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "Commit intent receipt only; no Git action is authorized by this hook. "
+                "Interpret the root user's request semantically: commit, commit-push or create-pr may "
+                "be requested in natural language or with a skill name anywhere. Discussion, "
+                "help, quotations, negation and skill repair are not action requests. "
+                "Only for an authorized action, use the canonical commit transaction prepare "
+                f"with --requested-action commit|commit-push|create-pr and --intent-sha256 {receipt_digest}. "
+                f"Canonical authorization path: {path}. Canonical claim path: {claim_path}. "
+                "Never ask for a repeated magic phrase or create authorization files manually."
             ),
         },
     }
@@ -393,11 +376,8 @@ def main() -> int:
         if not isinstance(payload, dict):
             raise IntentError("hook payload must be an object")
         output = evaluate(payload)
-    except Exception as error:
-        output = {
-            "continue": False,
-            "stopReason": f"Explicit commit intent could not be bound safely: {error}",
-        }
+    except Exception:
+        output = _unavailable("CAPTURE_FAILED")
     if output:
         print(json.dumps(output, sort_keys=True))
     return 0

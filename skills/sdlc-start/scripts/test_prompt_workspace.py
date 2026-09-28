@@ -574,9 +574,7 @@ class PromptWorkspaceTests(unittest.TestCase):
         saved = workspace.save_requirements_refinement(run_dir, state)
         self.assertEqual(saved["status"], "ready")
 
-    def test_requirements_refinement_contract_binds_latest_compiled_file(
-        self,
-    ) -> None:
+    def refined_requirements_fixture(self):
         first = self.intake(self.prompt_path())
         run_dir = Path(str(first["snapshot"])).parents[2]
         manifest = run_dir.parent / "workspace.json"
@@ -710,7 +708,6 @@ Independent verification predates schema v2 evidence tracking.
             ["git", "-C", str(self.project), "commit", "-qm", "specs"],
             check=True,
         )
-        bound_requirements = requirements.read_bytes()
         state = workspace.load_requirements_refinement(run_dir, required=True)
         assert state is not None
         state["status"] = "ready"
@@ -743,6 +740,95 @@ Independent verification predates schema v2 evidence tracking.
             },
         )
 
+        return first, run_dir, manifest, requirements, design, state
+
+    def test_requirements_ready_admits_design_without_settling_impact(self) -> None:
+        first, run_dir, manifest, requirements, design, _state = (
+            self.refined_requirements_fixture()
+        )
+        run_id = str(first["run_id"])
+        ready_design = design.read_bytes()
+        for candidate, reason in (
+            (None, "missing"),
+            (ready_design.replace(b"status=ready", b"status=draft"), "current"),
+        ):
+            with self.subTest(design=reason):
+                if candidate is None:
+                    design.unlink()
+                else:
+                    design.write_bytes(candidate)
+                before = {
+                    path: path.read_bytes()
+                    for path in run_dir.rglob("*")
+                    if path.is_file()
+                }
+                ready = workspace.verify_requirements_refinement_ready(manifest, run_id)
+                self.assertEqual(ready["action"], "requirements_refinement_ready")
+                self.assertEqual(
+                    ready["compiled_requirements_sha256"], file_sha256(requirements)
+                )
+                self.assertNotIn("impact", ready)
+                completed = subprocess.run(
+                    [sys.executable, str(MODULE_PATH), "refinement-ready",
+                     "--workspace", str(manifest), "--run-id", run_id, "--json"],
+                    check=False, text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(json.loads(completed.stdout), ready)
+                self.assertEqual(before, {
+                    path: path.read_bytes()
+                    for path in run_dir.rglob("*")
+                    if path.is_file()
+                })
+                with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+                    workspace.verify_requirements_refinement_contract(manifest, run_id)
+                self.assertEqual(caught.exception.code, "PROMPT_IMPACT_REQUIRED")
+                self.assertIn(reason, caught.exception.message)
+                self.assertFalse((run_dir / "prompt-impact" / "ledger.json").exists())
+                self.assertEqual(list((run_dir / "prompt-impact").glob("attempt-*.json")), [])
+        design.write_bytes(ready_design)
+        verified = workspace.verify_requirements_refinement_contract(manifest, run_id)
+        self.assertEqual(verified["impact"]["classification"], "no_effect")
+        self.assertTrue((run_dir / "prompt-impact" / "ledger.json").is_file())
+
+    def test_requirements_ready_rejects_stale_or_unresolved_refinement(self) -> None:
+        first, run_dir, manifest, requirements, _design, state = (
+            self.refined_requirements_fixture()
+        )
+        run_id = str(first["run_id"])
+        original = json.dumps(state)
+        for field, value in (
+            ("revision", "r0002"),
+            ("intent_sha256", "0" * 64),
+            ("status", "extracting"),
+            ("compiled_requirements_sha256", "0" * 64),
+            ("questions", [{
+                "id": "Q-001", "question": "Which behavior is required?",
+                "material": True, "status": "reopened", "answer": None,
+                "source": None, "source_revision": None, "conflict": "Intent changed.",
+            }]),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(original)
+                changed[field] = value
+                write_private(run_dir / "requirements-refinement.json", changed)
+                with self.assertRaises(workspace.PromptWorkspaceError):
+                    workspace.verify_requirements_refinement_ready(manifest, run_id)
+        write_private(run_dir / "requirements-refinement.json", json.loads(original))
+        requirements.write_text("# Unmanaged requirements\n", encoding="utf-8")
+        state["compiled_requirements_sha256"] = file_sha256(requirements)
+        write_private(run_dir / "requirements-refinement.json", state)
+        with self.assertRaises(workspace.PromptWorkspaceError) as caught:
+            workspace.verify_requirements_refinement_ready(manifest, run_id)
+        self.assertEqual(caught.exception.code, "REQUIREMENTS_REFINEMENT_REQUIRED")
+        self.assertFalse((run_dir / "prompt-impact").exists())
+
+    def test_requirements_refinement_contract_binds_latest_compiled_file(self) -> None:
+        first, run_dir, manifest, requirements, design, _state = (
+            self.refined_requirements_fixture()
+        )
+        bound_requirements = requirements.read_bytes()
         verified = workspace.verify_requirements_refinement_contract(
             manifest, str(first["run_id"])
         )

@@ -22,7 +22,10 @@ git worktree add --no-track -b <generated-child> <path> <captured-source-sha>
 The helper completes a nonmutating preflight before it creates or locks private
 state, then repeats the same checks under the lifecycle lock. The sibling
 worktree parent and `.worktree-skill` directory must be canonical directories,
-never symlinks.
+never symlinks. Concurrent first-use directory creation accepts another
+creator's canonical directory, then revalidates it before acquiring the
+lifecycle lock. Files and symlinks remain errors; selection and activation
+still run under the same lifecycle lock.
 
 Commit preparation and Worktree ownership transitions share the selected
 agent's repository lock under its private configuration home. Claude uses

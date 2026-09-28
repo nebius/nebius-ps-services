@@ -1,0 +1,31 @@
+{
+  "correctness": {
+    "allclose": true,
+    "fixed_shape": true
+  },
+  "lab": "04_cuda_graphs",
+  "measurements": {
+    "cuda_graph": {
+      "median_ms": 0.0447,
+      "min_ms": 0.0436,
+      "p90_ms": 0.0453
+    },
+    "eager": {
+      "median_ms": 0.0531,
+      "min_ms": 0.0509,
+      "p90_ms": 0.0559
+    },
+    "shape": [
+      128,
+      8192
+    ]
+  },
+  "parameters": {
+    "iterations": 20,
+    "seed": 17,
+    "warmup": 5,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

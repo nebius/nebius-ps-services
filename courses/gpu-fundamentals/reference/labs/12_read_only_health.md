@@ -4,7 +4,7 @@ A slow result may coincide with thermal, power, error, or sharing conditions tha
 
 ## Before you start
 
-**Theory preparation:** Read Lesson 11 for MIG partitioning, MPS process sharing, power/clock/health observations and isolation. Use Lab 10’s preflight distinction between observed device state and measured application behavior; this lab only observes configuration.
+Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/12_read_only_health.json).
 
 Run on an allocated H100 with permission to read its management information. Use the [evidence and privacy guide](../evidence-security.md); raw management output can contain identifiers that do not belong in public course reports.
 
@@ -14,21 +14,32 @@ Query only fields allowed by the site and record whether the allocation is a ful
 
 The program issues allow-listed management queries for available health and sharing fields, parses bounded results, and records explicit limitations. MIG concerns hardware partitioning; MPS concerns cooperative process execution; scheduler time-slicing is a separate policy. A compute-mode or MIG field cannot establish whether MPS or time-slicing is active.
 
-## Practice
-
 Given three benchmark trials with stable clocks and one slow trial whose clock and thermal-event timestamps overlap, temperature is a supported hypothesis. Change the evidence to an Xid from the previous day. Expected observation: it remains operational history, not a cause of today’s slowdown, unless a fresh fault or persistent state connects it to the trial.
 
 Run Lab 12 in read-only mode, classify only what its MIG and compute-mode fields prove, and attach health observations to—not inside—the causal performance claim. Obtain MPS, time-slicing, Xid-history, and DCGM evidence only through the cluster's authorized read-only procedure.
+
+## Practice
+
+Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
 
 Collect the snapshot before or after a benchmark as contextual evidence. This command does not request clock changes, error clearing, partition creation, or administrative recovery.
 
 ```bash
 umask 077
-python labs/12_read_only_health.py --help
-sbatch slurm/single_gpu.sbatch labs/12_read_only_health.py --profile smoke
+"$COURSE_PYTHON" labs/12_read_only_health.py --help
+python3 tools/submit_lab.py --lab 12_read_only_health slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
 ```
 
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 ## Check your results
+
+After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+
+```bash
+sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 12_read_only_health --job "$LAB_JOB_ID"
+```
 
 Inspect `snapshot`, `sharing_evidence`, and `configuration_changed`. Require the read-only gate. Unavailable ECC, page-retirement, thermal, or other fields remain missing evidence; they are not zeros and do not certify a healthy device.
 
@@ -41,17 +52,38 @@ Capture current allocation mode, relevant counters, clocks, power, temperature, 
 
 Operational state is context. Correlate it with the trial before concluding that it caused a regression.
 
+The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
+
+| Dashboard panel | Field under `measurements` | Display unit |
+| --- | --- | --- |
+| Correctness of selected results | `correctness` | Boolean pass |
+
+Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 12_read_only_health \
+  --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
+
 ## Investigate the behavior
 
 Define ECC as error detection/correction, Xid as a driver-reported event class, and retired pages as memory removed from service. Ask whether a concerning observation persists across authorized readings and whether it aligns with the benchmark's time interval.
 
 Sharing can improve fleet utilization but changes isolation, capacity, and scheduling. Health telemetry is low overhead but sampled and retrospective; absence of an alarm does not prove application correctness, and an old alarm does not prove causation.
 
+**Nsight Systems: not applicable.** This health probe reads device status without launching a timed workload; use its health fields and sampled device telemetry. Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope.
+
 ## If something goes wrong
 
 A permissions or unsupported-field response is a reporting limit. Ask the operator for the approved DCGM or event-history procedure. Do not elevate privileges, clear errors, or alter clocks to make the lab pass.
 
 Reconfiguring MIG, MPS, clocks, or persistence mode during a benchmark contaminates the trial.
+
+Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 
 ## Takeaways and next step
 

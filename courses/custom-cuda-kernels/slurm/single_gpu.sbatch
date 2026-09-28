@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  printf 'Usage: sbatch [site options] %s EXECUTABLE [arguments]\n' "$0"
+  printf 'Usage: python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s EXECUTABLE [arguments]\n' "$0"
   exit 0
 fi
 if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 1 ]]; then
@@ -28,4 +28,4 @@ if [[ ! -x "${executable}" ]]; then
   printf 'ERROR: executable not found or not executable: %s\n' "${executable}" >&2
   exit 2
 fi
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" "${executable}" "$@"
+srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" python3 tools/cuda_result.py "${executable}" "$@"

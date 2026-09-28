@@ -1,0 +1,14 @@
+{
+  "slug": "soperator",
+  "title": "Soperator: A Nebius Slurm cluster running on Kubernetes",
+  "profile": "text-only",
+  "estimated_guided_hours": 2,
+  "lessons": [
+    {"id": 1, "title": "Slurm turns resource requests into running work"},
+    {"id": 2, "title": "Soperator maintains Slurm inside Kubernetes"},
+    {"id": 3, "title": "Describe the work before requesting resources"},
+    {"id": 4, "title": "Choose batch or interactive execution"},
+    {"id": 5, "title": "Count Slurm tasks and PyTorch workers separately"},
+    {"id": 6, "title": "Follow a job from queue to completion"}
+  ]
+}

@@ -15,6 +15,9 @@ Maintain the existing Python package, CLI, test, build, and release contracts wh
 - SCM tag matching uses the supported nested configuration model, and source-checkout runtime version discovery emits no dependency deprecation warnings while preserving the established tag format and resolved versions.
 - Unit tests remain isolated from real networks and cloud APIs; integration tests remain explicitly marked and separated from the fast unit lane.
 - Standard local coverage, tox, and nox artifacts are ignored without hiding project source or public examples.
+- Runtime package metadata and the development lock must exclude cryptography
+  versions affected by CVE-2026-69247: require cryptography 50.0.0 or newer,
+  below the next major release, while retaining Python 3.10 through 3.12 support.
 
 #### Negative Criteria
 

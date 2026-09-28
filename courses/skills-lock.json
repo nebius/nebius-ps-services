@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "run-labs": {
+      "source": "./skills/run-labs",
+      "sourceType": "local",
+      "computedHash": "d89e521dc3221cc03184b848820d9be6973a8d9a1f0b4e278330bd844ccdb581"
+    }
+  }
+}

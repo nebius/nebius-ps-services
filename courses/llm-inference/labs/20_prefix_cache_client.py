@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import time
@@ -11,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 from common import require_hf_commit_revision, resolve_run_id, write_json_exclusive
+from course_evidence import begin_experiment
 
 DEFAULT_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 
@@ -22,7 +24,9 @@ def main() -> None:
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--requests-per-cohort", type=int, default=8)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--variant", choices=("disabled", "enabled"), required=True)
     args = parser.parse_args()
+    begin_experiment(args)
     require_hf_commit_revision(args.revision)
     parsed = urllib.parse.urlparse(args.base_url)
     if parsed.scheme != "http" or parsed.hostname not in {
@@ -31,13 +35,13 @@ def main() -> None:
         "::1",
     }:
         raise SystemExit("This teaching client only connects to loopback HTTP.")
-    if args.requests_per_cohort < 2:
-        raise SystemExit("--requests-per-cohort must be at least two")
+    if not 2 <= args.requests_per_cohort <= 64:
+        raise SystemExit("--requests-per-cohort must be between two and 64")
     run_id = resolve_run_id()
     endpoint = args.base_url.rstrip("/") + "/v1/completions"
     shared_prefix = "GPU evidence requires a fixed workload. " * 96
 
-    def send(prompt: str) -> tuple[float, int, int]:
+    def send(prompt: str) -> tuple[float, int, int, str]:
         body = json.dumps(
             {
                 "model": args.model,
@@ -57,10 +61,20 @@ def main() -> None:
             payload = json.loads(response.read())
         elapsed = time.perf_counter() - started
         usage = payload.get("usage", {})
+        choices = payload.get("choices", [])
+        if (
+            not isinstance(choices, list)
+            or len(choices) != 1
+            or not isinstance(choices[0], dict)
+            or not isinstance(choices[0].get("text"), str)
+            or not choices[0]["text"]
+        ):
+            raise SystemExit("A request did not return one comparable text completion.")
         return (
             elapsed,
             int(usage.get("prompt_tokens", 0)),
             int(usage.get("completion_tokens", 0)),
+            hashlib.sha256(choices[0]["text"].encode()).hexdigest(),
         )
 
     send(shared_prefix + " Warm the shared prefix.")
@@ -86,7 +100,7 @@ def main() -> None:
             "Repeated and unique prompt cohorts differ by more than 20% in tokens."
         )
 
-    def cohort(values: list[tuple[float, int, int]]) -> dict[str, float]:
+    def cohort(values: list[tuple[float, int, int, str]]) -> dict[str, float]:
         return {
             "median_e2e_ms": round(
                 statistics.median(item[0] for item in values) * 1_000, 3
@@ -103,6 +117,7 @@ def main() -> None:
             "model": args.model,
             "revision": args.revision,
             "requests_per_cohort": args.requests_per_cohort,
+            "response_digests": [item[3] for item in repeated + unique],
             "repeated_prefix": cohort(repeated),
             "unique_prefix": cohort(unique),
             "prompt_token_ratio": round(prompt_ratio, 4),

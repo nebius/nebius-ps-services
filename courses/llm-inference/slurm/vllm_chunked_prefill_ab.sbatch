@@ -12,9 +12,10 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
+export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  sbatch [site options] %s [MODEL] [REVISION]\n' "$0"
+  printf 'Usage:\n  python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
   printf '\nRuns three independent, counterbalanced vLLM/AIPerf trials per policy.\n'
 }
 
@@ -36,7 +37,7 @@ if [[ ! ${revision} =~ ^[0-9a-f]{40}$ ]]; then
   printf 'ERROR: REVISION must be an immutable 40-character Hugging Face commit ID.\n' >&2
   exit 2
 fi
-course_dir=${SLURM_SUBMIT_DIR:?Submit this script from the course root directory.}
+course_dir=$PWD
 course_python=${COURSE_PYTHON:-python3}
 command -v "${course_python}" >/dev/null 2>&1 || { printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2; exit 2; }
 if [[ -z ${COURSE_RUN_ID:-} ]]; then
@@ -46,8 +47,9 @@ if [[ ! ${COURSE_RUN_ID} =~ ^[0-9a-f]{12}$ ]]; then
   printf 'ERROR: COURSE_RUN_ID must be exactly 12 lowercase hex characters.\n' >&2
   exit 2
 fi
+export COURSE_RUN_ID
 base_dir="${course_dir}/results/chunked-prefill-ab-run-${COURSE_RUN_ID}"
-mkdir -p "${course_dir}/logs" "${course_dir}/results"
+mkdir -p "${course_dir}/results/34_policy_equivalence_client/logs" "${course_dir}/results"
 mkdir -m 700 "${base_dir}"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_pid=""
@@ -58,7 +60,9 @@ stop_server() {
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
   kill "${pid}" 2>/dev/null || true
-  for _ in {1..50}; do
+  local stop_attempts=50
+  if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
+  for ((attempt=0; attempt<stop_attempts; attempt++)); do
     if ! kill -0 "${pid}" 2>/dev/null; then wait "${pid}" 2>/dev/null || true; return; fi
     sleep 0.1
   done
@@ -76,11 +80,12 @@ run_trial() {
   local phase=$3
   local chunk_flag=--no-enable-chunked-prefill
   if [[ ${variant} == enabled ]]; then chunk_flag=--enable-chunked-prefill; fi
-  local server_log="${course_dir}/logs/vllm-chunk-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
+  local server_log="${course_dir}/results/34_policy_equivalence_client/logs/vllm-chunk-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   local command=(
-    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}"
+    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" env VLLM_BATCH_INVARIANT=1 python3 tools/profile_lab.py --lab 34_policy_equivalence_client --server --
     vllm serve "${model}" --revision "${revision}" --tokenizer-revision "${revision}"
     --host 127.0.0.1 --port "${port}" --dtype bfloat16 --max-model-len 2048
+    --attention-config '{"backend":"TRITON_ATTN"}' --enforce-eager
     "${chunk_flag}"
   )
   if [[ ${variant} == enabled ]]; then
@@ -104,6 +109,7 @@ run_trial() {
   done
   if [[ ${ready} -ne 1 ]]; then printf 'ERROR: vLLM %s did not become ready.\n' "${variant}" >&2; exit 2; fi
 
+  "${course_python}" tools/server_capture.py start "${port}"
   if [[ ${phase} == probe ]]; then
     "${course_python}" labs/34_policy_equivalence_client.py \
       --base-url "http://127.0.0.1:${port}" --model "${model}" \
@@ -121,6 +127,7 @@ run_trial() {
       --random-seed 100 --output-artifact-dir "${artifact_dir}" \
       --profile-export-prefix profile
   fi
+  "${course_python}" tools/server_capture.py stop "${port}"
   stop_server
 }
 

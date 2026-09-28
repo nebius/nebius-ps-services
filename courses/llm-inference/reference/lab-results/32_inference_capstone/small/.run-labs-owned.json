@@ -1,0 +1,31 @@
+{
+  "files": [
+    "compute-trials-rank-0.png",
+    "grafana-pair1-view1.png",
+    "grafana-pair1-view2.png",
+    "grafana-pair1-view3.png",
+    "grafana-pair1-view4.png",
+    "grafana-pair1-view5.png",
+    "grafana-pair2-view1.png",
+    "grafana-pair2-view2.png",
+    "grafana-pair2-view3.png",
+    "grafana-pair2-view4.png",
+    "grafana-pair2-view5.png",
+    "grafana-pair3-view1.png",
+    "grafana-pair3-view2.png",
+    "grafana-pair3-view3.png",
+    "grafana-pair3-view4.png",
+    "grafana-pair3-view5.png",
+    "manifest.json",
+    "result-trials-repeat-trial1-1.json",
+    "result-trials-repeat-trial1-2.json",
+    "result-trials-repeat-trial1-3.json",
+    "result-trials-trial1-1.json",
+    "result-trials-trial1-2.json",
+    "result-trials-trial1-3.json",
+    "summary.csv",
+    "systems-trials-rank-0.png"
+  ],
+  "identity": "fcfd0517d5fdd02b",
+  "schema": "run-labs-owned/v1"
+}

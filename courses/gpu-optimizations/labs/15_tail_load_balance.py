@@ -9,12 +9,13 @@ import statistics
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 try:
     import triton
@@ -79,11 +80,11 @@ def main() -> None:
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     if triton is None or uniform_tail_probe is None:
         raise SystemExit("This lab requires the environment's PyTorch Triton compiler.")
     seed_everything(torch, args.seed)
-    base = 256 if args.profile == "smoke" else 1_024
+    base = 256 if args.profile == "small" else 1_024
     balanced_widths = [base] * 8
     skewed_widths = [3 * base // 2] + [7 * base // 8] * 7
 
@@ -165,7 +166,7 @@ def main() -> None:
     properties = torch.cuda.get_device_properties(0)
     num_warps = 16
     threads = num_warps * 32
-    tail_work = 256 if args.profile == "smoke" else 2_048
+    tail_work = 256 if args.profile == "small" else 2_048
     compiled = uniform_tail_probe[(1,)](
         torch.empty(1, device="cuda"), work=tail_work, num_warps=num_warps
     )
@@ -206,11 +207,12 @@ def main() -> None:
             launch()
         torch.cuda.synchronize()
         samples: list[float] = []
+        measured_launch = annotated_operation(launch, "tail_measure")
         for _ in range(args.iterations):
             started = torch.cuda.Event(enable_timing=True)
             finished = torch.cuda.Event(enable_timing=True)
             started.record()
-            launch()
+            measured_launch()
             finished.record()
             finished.synchronize()
             samples.append(float(started.elapsed_time(finished)))
@@ -270,4 +272,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

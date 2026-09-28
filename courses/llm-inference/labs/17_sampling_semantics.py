@@ -11,12 +11,13 @@ from common import (
     DEFAULT_REVISION,
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     require_hf_commit_revision,
     seed_everything,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def main() -> None:
@@ -31,7 +32,7 @@ def main() -> None:
     if args.max_new_tokens < 1:
         raise SystemExit("--max-new-tokens must be positive")
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -63,11 +64,13 @@ def main() -> None:
     ).to("cuda")
     prompt_tokens = int(encoded.input_ids.shape[1])
 
+    generate_model = annotated_operation(model.generate, "generation")
+
     def generate(**settings: Any) -> tuple[list[int], float]:
         torch.cuda.synchronize()
         started = time.perf_counter()
         with torch.inference_mode():
-            output = model.generate(
+            output = generate_model(
                 **encoded,
                 max_new_tokens=args.max_new_tokens,
                 pad_token_id=tokenizer.eos_token_id,
@@ -125,4 +128,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

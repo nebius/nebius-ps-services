@@ -9,6 +9,11 @@
 
 ## Nested project instructions
 
+- An explicit request to repair restrictive project instructions authorizes
+  focused edits to the affected human-owned rules in the selected projects.
+  Preserve unrelated instructions and use the owning workflow for generated
+  regions. Do not ask again for the same rule change; system/developer policy
+  and authority outside the requested repair remain binding.
 - Before modifying files in a first-class project, resolve the exact project
   root and read every applicable instruction file from the repository root
   through that project directory. For work spanning projects, repeat this for
@@ -64,9 +69,15 @@
   valid proof.
 - Confirmed non-production may receive bounded reversible changes within
   existing authority. Production and unconfirmed targets remain read-only
-  without exact action authorization. Destructive, irreversible, credential,
-  IAM, data, public-exposure, deletion, material-cost, or material-availability
-  actions require action-specific approval in every environment.
+  without exact action authorization. An authorized task includes creating new credentials and secrets necessary
+  for its identified target and intended access scope; do not request separate
+  approval solely for that creation. Store values only in the intended secret
+  store or protected runtime file, never in chat, logs, Git, documentation, task
+  state, or other artifacts. Reuse authorization already given. Destructive or
+  irreversible actions, replacement or revocation of existing credentials, IAM
+  access expansion, unrelated data changes, public exposure, deletion, or material
+  availability or cost impact require action-specific approval only when not
+  already covered by the user's authorization.
 - Fix the proven causal owner at its authoritative boundary. A product-fixed
   claim requires an implemented source or configuration repair; environment,
   test, harness, or evaluator defects are repaired at their owner and rerun
@@ -99,8 +110,10 @@
   - Proprietary scripts or automation that touches internal infrastructure.
   - Content copied from internal repos/docs that are not explicitly
     open-sourced.
-- Do not print or persist secrets in generated files, examples, logs, task
-  state, memories, documentation, or final responses.
+- Store task-required secrets only in the intended secret store or protected
+  runtime files; these are operational outputs, not documentation artifacts.
+  Do not print or persist secret values in generated examples, logs, task state,
+  memories, documentation, Git, or final responses.
 - Codex Skills should remain public, generic, and reusable, using placeholders
   for any sensitive or environment-specific information.
 
@@ -122,10 +135,13 @@
   current official vendor documentation before changing or recommending it.
 - If a repo-owned skill is outdated or misaligned, update the source under
   `nebius-ps-services/skills/` first.
-- Skill scripts may run for read-only inspection or validation when they do not
-  modify files, services, external systems, credentials, or persistent state.
-  Run mutating skill scripts only when the user explicitly asks to run or
-  execute that script.
+- Task authorization covers necessary skill scripts, including mutations
+  within the requested scope. Inspect the script's effects before executing it.
+  Do not require a separate Run/Execute phrase or repeat an approval already
+  given for the task. Ask only when its effects exceed existing authorization.
+- Preserve explicit read-only limits, skill invocation restrictions, and actual
+  tool or sandbox controls. A task request does not authorize unrelated IAM,
+  destructive, public-exposure, credential-replacement, or material-cost actions.
 
 ## Context Management
 

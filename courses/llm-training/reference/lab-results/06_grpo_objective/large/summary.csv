@@ -1,0 +1,9 @@
+variant,metric,case,value,unit
+baseline-trial1,group_size,value,8,none
+baseline-trial1,loss,value,0.004417,none
+baseline-trial1,mean_approximate_kl,value,0.0002563,none
+baseline-trial1,max_group_advantage_mean_error,value,6e-08,none
+candidate-trial1,group_size,value,4,none
+candidate-trial1,loss,value,-0.000431,none
+candidate-trial1,mean_approximate_kl,value,0.0002022,none
+candidate-trial1,max_group_advantage_mean_error,value,3e-08,none

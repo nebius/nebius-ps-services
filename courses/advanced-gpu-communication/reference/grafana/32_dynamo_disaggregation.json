@@ -1,0 +1,991 @@
+{
+  "uid": "course-5d694a131898c12a239895a3",
+  "title": "Lab 32: Compare aggregated and disaggregated Dynamo serving",
+  "tags": [
+    "gpu-course",
+    "advanced-gpu-communication",
+    "32_dynamo_disaggregation"
+  ],
+  "schemaVersion": 39,
+  "version": 3,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "description": "Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point. The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill. Nsight Systems: Capture the owned GPU server and its worker descendants while the client supplies requests.",
+  "templating": {
+    "list": [
+      {
+        "name": "workspace",
+        "type": "textbox",
+        "label": "Fixed learner workspace",
+        "current": {
+          "text": "learner-01",
+          "value": "learner-01"
+        }
+      },
+      {
+        "name": "profile",
+        "type": "custom",
+        "query": "small,large",
+        "current": {
+          "text": "small",
+          "value": "small"
+        }
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "label": "Node exporter instance",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(node_memory_MemAvailable_bytes, instance)",
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      },
+      {
+        "name": "gpu_node",
+        "type": "query",
+        "label": "GPU worker",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_UTIL, Hostname)",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "gpu",
+        "type": "query",
+        "label": "GPU index on selected workers",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "course-soperator-metrics"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_UTIL{Hostname=~\"${gpu_node:regex}\"}, gpu)",
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Selected comparison generation",
+      "type": "table",
+      "description": "These are explicitly selected completed runs. Submission of another job does not replace them. Summary panels always show the current selected pair, even with a historical time range. Check generation and experiment timestamps.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_publication_generation{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "P99 time to first content",
+      "type": "barchart",
+      "description": "Measured ttft_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_ttft_p99_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_ttft_p99_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Generated tokens per second",
+      "type": "barchart",
+      "description": "Measured tokens_per_second; matched completed unprofiled runs only. Missing evidence stays unknown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_tokens_per_second{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_tokens_per_second{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "count:tokens/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "count:tokens/s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "P99 streamed chunk gap",
+      "type": "barchart",
+      "description": "Measured chunk_gap_p99_ms; matched completed unprofiled runs only. Input milliseconds converted to seconds.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_chunk_gap_p99_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"baseline\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "expr": "(course_lab_chunk_gap_p99_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\",slot=\"candidate\"} @ now())",
+          "instant": true,
+          "format": "table",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Baseline"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Candidate"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "case"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "xField": "case",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "case",
+            "mode": "outerTabular"
+          }
+        },
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "case",
+                "Value #A",
+                "Value #B"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Correctness of selected results",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_correctness{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Experiment start",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_started_unix_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Experiment end",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_ended_unix_seconds{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\"} @ now()) * 1000",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Slurm allocation",
+      "type": "table",
+      "description": "Choose the experiment's UTC interval for the telemetry panels; scrape time is not execution time.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(course_lab_slurm_job_id{course=\"advanced-gpu-communication\",lab=\"32_dynamo_disaggregation\",workspace=\"$workspace\",profile=\"$profile\"} @ now())",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No measured data"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^Value(?: #A)?$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "filterFieldsByName",
+          "options": {
+            "include": {
+              "names": [
+                "slot",
+                "case",
+                "Value",
+                "Value #A"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "GPU activity during the selected window",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Framebuffer memory used",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_FB_USED{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"} * 1048576",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "GPU power",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "GPU temperature",
+      "type": "timeseries",
+      "description": "Sampled device context, not per-kernel timing or proof of exclusive job attribution. Empty data is unknown, never zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 77,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"${gpu_node:regex}\",gpu=~\"${gpu:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{Hostname}} GPU {{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Node CPU busy",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 84,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\",instance=~\"${node:regex}\"}[5m])))",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Node available memory",
+      "type": "timeseries",
+      "description": "Node context; correlate the instance and experiment interval. Other jobs can contribute. Missing series means unavailable telemetry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "course-soperator-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 91,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes{instance=~\"${node:regex}\"}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No measured data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

@@ -11,12 +11,13 @@ from common import (
     add_common_args,
     cuda_times_ms,
     load_torch,
-    require_h100,
+    require_course_gpu,
     seed_everything,
     summarize_ms,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,8 +51,8 @@ def compile_and_warm(
 def build_sync_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 2_000_000 if args.profile == "smoke" else 16_000_000
-    steps = 8 if args.profile == "smoke" else 40
+    elements = 2_000_000 if args.profile == "small" else 16_000_000
+    steps = 8 if args.profile == "small" else 40
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
 
     def synchronized() -> float:
@@ -71,8 +72,8 @@ def build_sync_case(
 def build_launch_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 262_144 if args.profile == "smoke" else 1_048_576
-    steps = 12 if args.profile == "smoke" else 30
+    elements = 262_144 if args.profile == "small" else 1_048_576
+    steps = 12 if args.profile == "small" else 30
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
 
     def pointwise_chain() -> Any:
@@ -99,7 +100,7 @@ def build_launch_case(
 def build_memory_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 8_000_000 if args.profile == "smoke" else 64_000_000
+    elements = 8_000_000 if args.profile == "small" else 64_000_000
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
     bias = torch.randn(elements, device="cuda", dtype=torch.float32)
 
@@ -131,7 +132,7 @@ def build_memory_case(
 def build_compute_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    width = 1_024 if args.profile == "smoke" else 4_096
+    width = 1_024 if args.profile == "small" else 4_096
     input_scale = math.sqrt(width)
     left_fp32 = (
         torch.randn((width, width), device="cuda", dtype=torch.float32) / input_scale
@@ -181,7 +182,7 @@ def main() -> None:
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
-    environment = require_h100(torch)
+    environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     builders = {
         "sync": build_sync_case,
@@ -257,7 +258,7 @@ def main() -> None:
 
     target = write_result(
         args,
-        lab_id=f"14_profiler_bottlenecks_{args.case}_{args.mode}",
+        lab_id="14_profiler_bottlenecks",
         environment=environment,
         measurements=measurements,
         correctness={
@@ -270,4 +271,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

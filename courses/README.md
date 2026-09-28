@@ -1,431 +1,505 @@
-# NVIDIA H100 Performance Engineering Courses
+# Performance Engineering Courses
 
-This directory contains five standalone, practical courses for engineers using
-NVIDIA H100 GPUs on Linux and Slurm.
+Start with [Soperator](soperator/index.html), then [GPU Fundamentals](gpu-fundamentals/index.html)
+and [GPU Performance Optimization](gpu-optimizations/index.html). Continue with
+[LLM Training](llm-training/index.html), [LLM Inference](llm-inference/index.html),
+or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
+are independent. [Advanced GPU Communication](advanced-gpu-communication/index.html)
+owns the multi-GPU, multi-node experiments.
 
-[Browse the course catalog](https://nebius.github.io/nebius-ps-services/courses/)
-for introductions, prerequisites and direct links to all five courses.
+Every course ends with one Where to Go Next, one A–Z Glossary, and then
+Official references. Lessons and performance-tool guides share these course-wide
+sections; optional lesson References follow Mental model and come last.
 
-```text
-gpu-fundamentals
-       ↓
-gpu-optimizations
-       ├── llm-training
-       ├── llm-inference
-       └── custom-cuda-kernels
-```
+[Browse the catalog](index.html) · [Read this guide online](https://nebius.github.io/nebius-ps-services/courses/lab-guide.html) ·
+[Course maintainer guide](docs/maintaining-courses.md)
 
-The catalog order is:
+Each practical course offers one combined Grafana dashboards, Small and Large
+results ZIP for comparison, plus a link to this lab setup guide. Use
+`sync-labs.sh` to copy the original lab scripts and runtime files to the cluster;
+no lab-kit ZIP is needed. `./build-courses.sh` rebuilds and checks course HTML
+and the combined results archives.
 
-1. [GPU Fundamentals](gpu-fundamentals/README.md)
-2. [GPU Performance Optimization](gpu-optimizations/README.md)
-3. [LLM Training](llm-training/README.md)
-4. [LLM Inference](llm-inference/README.md)
-5. [Custom CUDA Kernels](custom-cuda-kernels/README.md)
+The seven courses share one reading format: numbered references, bulleted next
+steps and a separate glossary. Use each lesson’s Objective and Practice to
+follow its learning route.
 
-Fundamentals and Optimizations are prerequisites for all three specialized
-courses. LLM Training and LLM Inference are not prerequisites for Custom CUDA
-Kernels.
+## How to set up the lab
 
-## Sync labs to a Slurm login node
+Prepare the shared cluster and monitoring once, then each course runtime you need.
+**Workstation** means your local computer; **Login node** means after SSH.
+Workloads run on GPU workers through Slurm.
 
-Run [sync-labs.sh](sync-labs.sh) **on your local computer**, from the `courses`
-directory of your Git clone. Open a second local terminal if your current
-terminal is already connected to the login node. Supply the node's DNS name,
-IP address or an existing SSH alias:
+### Prerequisites and hardware
 
-```bash
-./sync-labs.sh login.example.com
-./sync-labs.sh 192.0.2.10
-./sync-labs.sh slurm-login
-```
+The five ordinary GPU courses use one full H100 per allocation. Prepare two workers
+with one H100 each, or reuse the advanced cluster with one-GPU allocations.
+Advanced communication requires two eight-H100 SXM workers, local NVLink/NVSwitch
+and active InfiniBand. TCP/IP connectivity alone does not qualify that route.
 
-Use the actual address of your login node. SSH resolves DNS names and uses your
-normal SSH settings for keys, ports, proxies and host verification. A bare target
-always selects **root**, even if SSH configuration specifies a different `User`.
-An explicit **user@target** selects that account for both preflight and transfer:
+**Workstation:** install [nebius-cxcli](https://github.com/nebius/nebius-ps-services/tree/main/services/nebius-cxcli),
+authenticate the Nebius CLI, and have kubectl, Python 3, Git, Bash, SSH and rsync.
+The login account needs SSH-key access, rsync and storage shared at the same path
+with workers. Check quota and regional hardware availability before provisioning.
 
 ```bash
-./sync-labs.sh 192.0.2.10             # root@192.0.2.10
-./sync-labs.sh nebius@192.0.2.10      # nebius@192.0.2.10
-./sync-labs.sh student@login.example.com
+git clone https://github.com/nebius/nebius-ps-services.git
+cd nebius-ps-services/courses
+export COURSES_ROOT="$PWD"
 ```
 
-IPv6 addresses are also accepted, for example
-`./sync-labs.sh student@2001:db8::10`. Command-line account selection takes
-precedence over SSH configuration; see the
-[OpenSSH configuration documentation](https://man.openbsd.org/ssh_config.5).
+### Create and deploy Soperator
 
-If SSH reports `Permission denied (publickey)`, verify that the selected account
-permits SSH login with your key. For a cluster using a non-root account, supply
-that `user@target` and, when needed, `--identity FILE`. Syncing uses the selected
-account's home; it does not create accounts or authorize keys.
-
-The script requires Bash 3.2 or later, Git, SSH and rsync locally, plus rsync and
-a POSIX shell on the login node. It works from another directory when invoked
-using its path inside the clone.
+Soperator runs Slurm on Kubernetes. Select the required workers in the wizard,
+retain local monitoring, and configure persistent `/data` storage for reports.
+Use the configuration path and exact target printed by the wizard:
 
 ```bash
-./sync-labs.sh --dry-run user@login.example.com
-./sync-labs.sh --port 2222 --identity ~/.ssh/id_ed25519 user@login.example.com
-./sync-labs.sh --dest training-courses user@login.example.com
-./sync-labs.sh --help
+nebius-cxcli soperator create ./deployments
+export CLUSTER_CONFIG='<absolute path to the created config.yaml>'
+export CLUSTER_TARGET='<exact Soperator target name>'
+nebius-cxcli render "$CLUSTER_CONFIG"
+nebius-cxcli deploy "$CLUSTER_CONFIG"
+export KUBECONFIG='<absolute path to this cluster kubeconfig>'
+nebius mk8s cluster get-credentials --id '<cluster_ID>' --external --kubeconfig "$KUBECONFIG"
+export CLUSTER_CONTEXT='<context for this cluster in that kubeconfig>'
 ```
 
-| Option | Behavior |
-| --- | --- |
-| `--dry-run` | Preview without changing the remote destination. |
-| `--dest NAME` | Direct subfolder of remote home; default `courses`. |
-| `--port PORT` | Override the SSH port with a value from 1 through 65535. |
-| `--identity FILE` | Supply an SSH private-key file. |
-| `-h`, `--help` | Show usage and examples. |
-| `--` | End option parsing before the target. |
+Use this deployment's cluster ID, following the [Nebius Kubernetes connection guide](https://docs.nebius.com/kubernetes/connect).
+For an already prepared cluster, reuse its accepted configuration and target.
 
-`NAME` starts with a letter or digit; remaining characters can also be dots,
-underscores or hyphens.
+### Install profiling tools and viewers
 
-The default destination preserves the source course names:
-
-```text
-~/courses/
-├── index.html
-├── gpu-fundamentals/
-│   ├── labs/
-│   ├── slurm/
-│   ├── tools/
-│   ├── reference/
-│   ├── README.md
-│   └── requirements.txt
-├── gpu-optimizations/
-├── llm-training/
-├── llm-inference/
-└── custom-cuda-kernels/
-```
-
-All courses retain their supporting source files, including applicable build
-metadata and instructions. New course folders containing `reference/course.json`
-and `labs/` are discovered automatically. The transfer includes current tracked
-files, uncommitted edits and new non-ignored files. Git ignore rules exclude
-untracked environments, builds, caches, results and profiler outputs; tracked
-files remain included even if an ignore pattern matches them. Git internals are
-not copied. Safe relative symlinks are preserved; links outside the transferred
-tree are skipped, and course source directories must not be symlinks.
-
-Repeat the same command after local edits. One rsync transfer handles the entire
-catalog, comparing file size and modification time to skip unchanged contents.
-Edits that deliberately preserve both attributes are not detected by this quick
-check. Matching remote files are overwritten from the local source, including
-newer remote edits. Remote-only experiments and results remain, as do remote
-copies of files deleted locally. The destination itself must not be a symlink.
-
-Sync is idempotent: once a run completes, repeating it with unchanged source and
-destination state transfers no file contents and leaves destination contents,
-permissions and modification times unchanged. A permission-only local edit is
-applied without retransferring file contents. After an interrupted transfer,
-rerun the same command to finish syncing; completed files and remote-only
-results are retained.
-
-After a successful sync, use your SSH terminal to enter a course:
+**Workstation:** after deployment, install shared Nsight Systems, Nsight Compute
+and their private browser viewers. First-time setup uses masked credential prompts:
 
 ```bash
-cd ~/courses/gpu-fundamentals
-ls labs/
+nebius-cxcli soperator profiling install "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --interactive
 ```
 
-Run that course's documented `sbatch` commands from its course root. The remote
-home directory must be accessible to the compute nodes. Set up dependencies on
-the cluster using the course instructions; syncing does not install packages or
-submit jobs. Ctrl+C stops the local sync; files already transferred remain.
-Finish syncing before starting jobs, and rerun after an interrupted transfer
-before using the updated files.
+With valid existing viewer credentials, use
+`nebius-cxcli soperator profiling install <config.yaml> --target <target>`.
+Keep the two forwarding commands printed by the installer. Install profiling
+before monitoring changes and dashboard imports: installation requires an accepted
+deployment with matching configuration and rendered state.
 
-## Open a course
+cxcli owns the paired tool/viewer versions. Already-open login shells load them
+with `source /etc/profile.d/99-nsight.sh`. Check `nsys --version` and `ncu --version`;
+actual worker/container captures are verified in environment readiness below.
 
-| Course | Self-contained course | Estimated guided hours |
+### How measurements reach Grafana
+
+Each lab saves its benchmark measurements in an immutable JSON result file.
+The course publication client sends selected baseline and candidate measurements,
+such as execution time and throughput, to Pushgateway. Separately, DCGM and native
+exporters expose GPU and cluster telemetry.
+
+VMAgent scrapes both sources and writes the samples to local VictoriaMetrics.
+Grafana queries VictoriaMetrics to display the measurements and comparisons in
+course dashboards. Precise benchmark timings come from the lab results; GPU
+telemetry is sampled over time. The original JSON files remain the authoritative
+results.
+
+![Course measurements and GPU telemetry flowing to Grafana](docs/grafana.png)
+
+Arrows show data flow. VMAgent initiates scrapes; Grafana initiates queries.
+
+### Install Grafana on the cluster
+
+**Workstation:** cxcli installs Grafana and Pushgateway and configures the native
+VMAgent results scrape. Substitute the deployment configuration and exact target:
+
+```bash
+nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway
+```
+
+Keep metrics storage **local** in the installer; **both** also supports course
+readback. Remote-only metrics do not support this course setup. Reuse the accepted
+private installation when already configured. The installer owns these services;
+the course helper only discovers connections and verifies their identities.
+
+After installation, prepare a persistent learner identifier and a fresh private
+output directory. Use the same explicit kubeconfig and context selected above:
+
+```bash
+cd "$COURSES_ROOT/gpu-fundamentals"
+export COURSE_WORKSPACE='<persistent lowercase learner identifier>'
+export COURSE_SETUP_DIR="$(dirname "$CLUSTER_CONFIG")/course-monitoring/$CLUSTER_TARGET"
+python3 -m venv "$HOME/.gpu-course-tools"
+"$HOME/.gpu-course-tools/bin/pip" install -r tools/profiling-requirements.txt
+"$HOME/.gpu-course-tools/bin/python" tools/course_setup.py \
+  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
+  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  --workspace "$COURSE_WORKSPACE" --output-dir "$COURSE_SETUP_DIR"
+source "$COURSE_SETUP_DIR/laptop-environment.sh"
+```
+
+Keep deployment and connection files private. If the installation changes, rerun
+discovery into a fresh directory and replace the copied course environment file.
+
+### Import course dashboards
+
+Start the Grafana connection in [Browsing Grafana and Nsight Profilers](#browsing-grafana-and-nsight-profilers).
+In Grafana select or create `course-gpu-fundamentals` using
+**Dashboards → New → New folder**. Copy its UID from `/dashboards/f/<uid>/...`
+in the address bar; its name is not its UID.
+
+**Workstation:** import every dashboard for the selected course, including
+Environment readiness. Repeat for each course you will use with its own
+`course-<course-name>` folder and observed UID:
+
+```bash
+export COURSE='gpu-fundamentals'
+export COURSE_GRAFANA_FOLDER_UID='<observed course folder UID>'
+cd "$COURSES_ROOT/$COURSE"
+nebius-cxcli grafana import ./reference/grafana --recursive \
+  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
+  --folder-uid "$COURSE_GRAFANA_FOLDER_UID" \
+  --datasource-map "course-soperator-metrics=$COURSE_DATASOURCE_UID"
+nebius-cxcli grafana validate ./reference/grafana --recursive \
+  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
+  --datasource-map "course-soperator-metrics=$COURSE_DATASOURCE_UID"
+```
+
+Imports take effect immediately. Add `--overwrite` only when intentionally updating
+those dashboards. Validation checks JSON and bindings; inspect the rendered
+contents separately. Individual labs reuse their prepared dashboards.
+
+### Prepare course runtimes
+
+**Workstation, from `courses/` in your Git clone:**
+
+```bash
+./sync-labs.sh '<slurm-login-ip-address>'
+```
+
+This copies the courses and opens SSH in `~/courses`. A bare address uses `root`;
+use `user@<slurm-login-ip-address>` for another account. Rerun after local changes
+before submitting jobs; remote-only results remain in place. See `--help` for
+SSH identity, port and sync-only options.
+
+The script transfers source; prepare dependencies below once on the login node.
+From a separate workstation terminal, copy the private monitoring environment to
+that same account (match any custom SSH port/key):
+
+```bash
+scp "$COURSE_SETUP_DIR/environment.sh" '<user>@<slurm-login-ip-address>:courses/.course-environment.sh'
+```
+
+**Login node:** select the course and prepare shared publishing dependencies once:
+
+```bash
+umask 077
+export COURSE='gpu-fundamentals'
+cd "$HOME/courses/$COURSE"
+source "$HOME/courses/.course-environment.sh"
+source /etc/profile.d/99-nsight.sh
+export COURSE_TOOLS="$HOME/courses/.profiling-tools"
+python3 -m venv "$COURSE_TOOLS/venv"
+"$COURSE_TOOLS/venv/bin/pip" install -r tools/profiling-requirements.txt
+export COURSE_PUBLISH_PYTHON="$COURSE_TOOLS/venv/bin/python"
+mkdir -p "$HOME/courses/.runtime"
+```
+
+**Python courses:** create an isolated environment per course. Fundamentals,
+Optimizations, Training and Advanced Communication use `requirements.txt`;
+Inference uses `requirements-mechanics.txt` for its local mechanics labs.
+For Custom CUDA Kernels, skip this Python block and use Lab 13 below.
+
+```bash
+requirements='requirements.txt'
+if [ "$COURSE" = llm-inference ]; then requirements='requirements-mechanics.txt'; fi
+python3 -m venv "$HOME/courses/.venvs/$COURSE"
+export COURSE_PYTHON="$HOME/courses/.venvs/$COURSE/bin/python"
+"$COURSE_PYTHON" -m pip install -r "$requirements"
+export COURSE_TORCHRUN="$HOME/courses/.venvs/$COURSE/bin/torchrun"
+export COURSE_CUDNN_LIB="$("$COURSE_PYTHON" -c 'import importlib.util; print(next(iter(importlib.util.find_spec("nvidia.cudnn").submodule_search_locations)) + "/lib")')"
+test -f "$COURSE_CUDNN_LIB/libcudnn.so.9"
+export LD_LIBRARY_PATH="$COURSE_CUDNN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+declare -p COURSE_TOOLS COURSE_PUBLISH_PYTHON COURSE_PYTHON COURSE_TORCHRUN COURSE_CUDNN_LIB \
+  > "$HOME/courses/.runtime/$COURSE.sh"
+```
+
+For specialized runtimes, continue in the owning guide:
+
+- [Inference serving](llm-inference/README.md#serving-runtime-preparation): container images and the separate serving client.
+- [CUDA Lab 13](custom-cuda-kernels/reference/labs/13_h100_preflight.md): CUDA image, CUTLASS and the course build.
+- [Training Lab 22](llm-training/reference/labs/22_transformer_engine_fp8.md): compatible Transformer Engine, CUDA headers and runtime compiler.
+- [Advanced runtime preparation](advanced-gpu-communication/README.md#runtime-preparation): fabric tools and vendor environments.
+
+### Verify environment readiness
+
+**Workstation, selected course directory:** require exactly one healthy results
+scrape and fresh telemetry for all GPUs on both workers:
+
+```bash
+"$HOME/.gpu-course-tools/bin/python" tools/verify_monitoring.py \
+  --receipt "$COURSE_SETUP_DIR/monitoring.json" \
+  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT"
+```
+
+**Login node, selected course directory:** verify both workers in the actual runtime:
+
+```bash
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=1 \
+  "$COURSE_PYTHON" tools/readiness.py
+```
+
+For CUDA, replace the Python invocation with
+`"$COURSE_CONTAINER_RUNNER" "$CUDA_IMAGE_DIGEST" python3 tools/readiness.py --workload cuda`.
+For inference containers, use the runner with `"$VLLM_IMAGE_DIGEST" python3 tools/readiness.py --workload torch`
+and export `COURSE_RUNTIME_ID` as that digest. For CUDA export
+`COURSE_RUNTIME_ID="$CUDA_IMAGE_DIGEST"` before the check. Repeat for each execution runtime.
+Publish the two printed JSON paths from the same runtime:
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab environment_readiness \
+  --baseline "${WORKER_ONE_RESULT:?first worker JSON path}" \
+  --candidate "${WORKER_TWO_RESULT:?second worker JSON path}" --expected-generation 0
+```
+
+For later selections use the reviewed current generation. Open **Environment
+readiness** in the course Grafana folder, then inspect both workers' reports using
+the viewing steps below. Require matching canary kernels, NVTX, Compute counters
+and publication generation.
+
+## How to run the labs
+
+Reconnect with `./sync-labs.sh '<slurm-login-ip-address>'` from your workstation.
+For a downloaded lab kit, extract it on a prepared login node and enter its
+course directory; synchronization requires a Git clone.
+
+### Select a course and run a lab
+
+**Login node:** restore the prepared runtime. Follow the syllabus; lab numbers
+identify files rather than a universal execution order.
+
+```bash
+umask 077
+export COURSE='gpu-fundamentals'
+cd "$HOME/courses/$COURSE"
+source "$HOME/courses/.course-environment.sh"
+source "$HOME/courses/.runtime/$COURSE.sh"
+source /etc/profile.d/99-nsight.sh
+if [ -n "${COURSE_CUDNN_LIB:-}" ]; then
+  export LD_LIBRARY_PATH="$COURSE_CUDNN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
+  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Use each lab's own command and runtime prerequisites for other courses.
+`small` and `large` select workload presets, independently of GPU model or the baseline/candidate choice. Some qualification, modeling and fixed server experiments use identical parameters in both profiles. Compare the effective configuration recorded by each lab, and keep the same profile within a comparison.
+
+The submitter prints its job ID and private log directory. Slurm writes
+`results/<lab>/logs/<job>.out` and `.err` in the remote course directory.
+After completion inspect the job and authoritative JSON results:
+
+```bash
+sacct -j '<job-id>' --format=JobID,State,ExitCode
+"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 01_cpu_gpu_crossover --job '<job-id>'
+```
+
+### Capture a profile
+
+Submit separate diagnostic runs; instrumentation changes timing. Systems shows
+CUDA activity and dependencies; Compute examines one selected kernel's counters.
+
+```bash
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
+  --export=ALL,COURSE_PROFILE_TOOL=nsys \
+  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Identify the measured kernel in Systems, then capture it with Compute:
+
+```bash
+export COURSE_PROFILE_KERNEL='<regular expression matching the measured kernel>'
+python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
+  --export=ALL,COURSE_PROFILE_TOOL=ncu \
+  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Use each lab's declared capture recipe; distributed, server and CPU-only labs
+have specific applicability limits. A nonempty report alone does not establish
+that it captured the experiment.
+
+Kernel expressions match full demangled names, with name simplification
+disabled. This includes template arguments: a GEMM may appear as `Kernel2` in
+the short-name view while its full name identifies the matrix operation.
+
+### Compare results in Grafana
+
+Choose two successful, equivalent, unprofiled runs and follow the lab's allowed
+comparison. From the login node publish their printed JSON paths:
+
+```bash
+"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_cpu_gpu_crossover \
+  --baseline "${BASELINE_RESULT:?baseline JSON path}" \
+  --candidate "${CANDIDATE_RESULT:?candidate JSON path}" \
+  --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
+```
+
+Inspect the selected comparison using the [Grafana browsing steps](#browsing-grafana-and-nsight-profilers).
+
+### Optional agent-assisted runs
+
+From the workstation's `courses/` directory install the project-scoped skill:
+
+```bash
+npx --yes skills add ./skills/run-labs -a codex --yes
+```
+
+The first `--yes` skips npm confirmation; the last skips the skill wizard and
+optional extra-skill offer. Do not add `--global`. Use `-a claude-code` for Claude.
+On a prepared environment, `$run-labs run --course gpu-fundamentals` runs both
+workload profiles and collects verified results. See the [run-labs skill](skills/run-labs/SKILL.md)
+for selection, resume and evidence details.
+For qualification labs without numeric metrics, the evidence crop must show
+the selected generation and both correctness values after the panels render.
+The skill independently rechecks the prepared monitoring runtime before jobs.
+Resuming alone does not repeat setup or issue new connection files; missing
+runtime prerequisites still block execution. Existing local-only metrics routing
+must remain local-only.
+The campaign may fully recover its identified Grafana service, Nsight
+Systems/Compute viewers and streamers, `nsys`/`ncu` runtimes, browser sessions and
+owned forwards as often as needed, without a fixed recovery count or repeated
+approval within existing target authority. It restores exact-target loopback
+connections for all three services, retaining Nsight HTTP/TURN mappings, and
+checks visible browser responses. If reconnection is insufficient, it may restart
+the affected authorized deployment/service while preserving configuration,
+persistent storage, originals and unrelated work. Exited prior-session forwards
+reuse existing access authorization; local reconnection does not need remote
+service-restart approval.
+A terminal profiler-tool failure is recovered through a fresh campaign for only
+the affected lab/profile after diagnosis, repair and normal claim release. That
+unit runs its complete unchanged recipe; unaffected completed units and failed
+evidence are preserved. Viewer-only recovery resumes capture without GPU replay.
+See [recovery details](skills/run-labs/references/tool-recovery.md).
+For transfer-only labs such as Fundamentals Lab 03, run-labs verifies the
+declared memory copies and their actual Systems views. A CUDA kernel is not
+required to demonstrate a host-to-device transfer.
+
+Inference Lab 10 retains the guide's in-process diagnostic mode and requests
+256 GiB of host memory only for Compute replay. The runner freezes this request
+on that stage; clean timing retains its normal engine mode and allocation.
+Compute selects a matrix kernel in measured generation; verify its role in
+Systems before interpreting counters for that individual launch.
+
+Inference Lab 30 runs two fresh qualification jobs per protocol in each profile.
+It publishes OpenAI and Triton pairs separately; the bounded requests qualify
+their APIs without establishing an engine speedup or latency distribution.
+Before submitting container jobs, verify that the prepared runner admits the
+newly synchronized campaign workspace and can import its required packages; see the
+[prepared environment checks](skills/run-labs/references/environment.md).
+
+Inference Lab 35 repeats each CUDA, CPU and one-token CPU configuration for
+separate equivalent publications. Only its CUDA configuration has a Systems
+capture; both profile labels retain the same fixed bigram exercise.
+
+Inference Lab 32 and Training Lab 31 each run two independent three-trial
+capstone groups. Retain all six originals and both aggregates; publish
+corresponding children with matching seeds and variant orders. Training Lab 32
+repeats each device configuration separately and profiles only CUDA. Inference
+Lab 36 publishes five one-control policy comparisons; its computed costs are
+model outputs, not measured storage or serving latency.
+
+## Browsing Grafana and Nsight Profilers
+
+### Connect from your workstation
+
+Run **one forwarding command per terminal** and keep all three running.
+In each terminal restore this cluster's `KUBECONFIG`, `CLUSTER_CONTEXT` and
+`COURSE_SETUP_DIR`, then run `source "$COURSE_SETUP_DIR/laptop-environment.sh"`.
+For Nsight, replace the namespace and service placeholders with the values in
+the profiling installer's output. The examples use its default HTTP/TURN ports;
+retain the installed mappings if customized. See the
+[kubectl port-forward reference](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/).
+
+**Terminal 1 — Grafana:**
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  -n "$COURSE_GRAFANA_NAMESPACE" port-forward --address 127.0.0.1 \
+  "service/$COURSE_GRAFANA_SERVICE" "3000:$COURSE_GRAFANA_PORT"
+```
+
+**Terminal 2 — Nsight Compute:**
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  -n '<Compute viewer namespace>' port-forward --address 127.0.0.1 \
+  'service/<Compute viewer service>' 30081:30081 30479:30479
+```
+
+**Terminal 3 — Nsight Systems:**
+
+```bash
+kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  -n '<Systems viewer namespace>' port-forward --address 127.0.0.1 \
+  'service/<Systems viewer service>' 30080:30080 30478:30478
+```
+
+Both port mappings are required for each Nsight viewer. If a forward exits,
+restart that command before reconnecting.
+
+| Dashboard | Browser URL | What to inspect |
 | --- | --- | --- |
-| GPU Fundamentals | [Read the course](gpu-fundamentals/index.html) | 21 |
-| GPU Performance Optimization | [Read the course](gpu-optimizations/index.html) | 36 |
-| LLM Training | [Read the course](llm-training/index.html) | 48 |
-| LLM Inference | [Read the course](llm-inference/index.html) | 47 |
-| Custom CUDA Kernels for GPU Optimization | [Read the course](custom-cuda-kernels/index.html) | 36 |
+| Grafana | `http://127.0.0.1:3000` | Lab measurements and sampled GPU telemetry |
+| Nsight Compute | `http://127.0.0.1:30081` | A selected kernel's counters and bottlenecks |
+| Nsight Systems | `http://127.0.0.1:30080` | CUDA activity, NVTX ranges and CPU/GPU dependencies |
 
-Lesson 1 of Fundamentals starts with an H100 SXM overview before enlarging one SM. Across the catalog, lessons explain concepts; the linked labs define their setup, supplied code and result checks where students use them.
+### Browse Grafana
 
-Each self-contained page uses a light digital-textbook layout: a persistent
-side-panel TOC, a wide responsive content frame, soft blue and mint callouts,
-and complete source listings. Diagrams sit directly beside their lesson or lab
-explanations and fit the available width without horizontal panning. The sidebar
-provides course navigation; each figure retains its caption and accessible SVG
-title and description without duplicate transcript controls. The banner
-contains only the main topic and a brief estimated guided-hours label.
+Sign in with the Grafana credentials from your private Kubernetes secret viewer.
+During first-time setup, create the course folder and [import its dashboards](#import-course-dashboards).
+For completed runs, open **Dashboards**, choose `course-<course-name>`, and open
+the lab's dashboard or **Environment readiness**.
 
-An **All courses** link and **Switch course** disclosure sit at the top of each
-sidebar. The switcher identifies the current course and links directly to the
-other four. These relative links work on GitHub Pages and in a local checkout.
-When downloading individual HTML files, keep the catalog and sibling directory
-layout to use cross-course links; each course's lessons, styles, diagrams and
-license remain readable on their own.
+Select workspace and profile, verify both
+correctness slots and the publication generation, then set the telemetry window
+to the experiment interval. Select GPU worker and local GPU index together.
+Sampled telemetry provides context; unprofiled measurements determine performance.
 
-## Website publication
+### Browse Nsight Compute and Systems
 
-**For course maintainers.**
-
-The repository welcome page links to this catalog. For initial publication,
-merge the reviewed website files into `main`, then open the repository's
-**Settings → Pages**. Select **Deploy from a branch**, branch **main**, folder
-**/(root)**, and save. Use HTTPS for the published site. The root `.nojekyll`
-file lets GitHub serve committed static files without Jekyll processing.
-This makes other eligible repository files available under the same site.
-The site has no custom deployment workflow, framework or external font
-dependency. GitHub still
-runs its managed Pages deployment when the publishing branch changes.
-
-`tools/build_course_html.py` generates the catalog and individual pages. Titles,
-guided hours and lab counts come from each course's `reference/course.json`;
-its stable `slug` identifies the course even if a downloaded folder is renamed.
-Catalog introductions and learning outcomes live in the renderer, while
-`tools/catalog.css` owns the catalog's embedded styles. Edit these sources
-instead of generated HTML. A selected-course build also refreshes the catalog;
-rebuild all five pages when shared metadata, navigation, styles or licensing
-changes. `--check` always checks the catalog as well as the selected courses.
-
-Run the offline validation commands below before committing generated HTML.
-Once Pages is enabled, reviewed changes to `main` publish those committed files.
-Confirm the deployment succeeded and the root, catalog and five course URLs
-serve the intended revision before declaring a publication complete. See
-[GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
-for the branch deployment settings.
-
-To preview from a local checkout, serve the repository root with
-`python3 -m http.server --bind 127.0.0.1` and open `/courses/` on that server.
-
-## Ownership and license
-
-© 2026 Nebius B.V. These courses are provided free of charge for learning and
-education under the repository's [Apache License 2.0](../LICENSE). This notice
-describes their educational purpose; it does not restrict the uses permitted
-by that license, including commercial reuse. Third-party materials retain
-their respective licenses.
-
-The catalog and every course contain a compact attribution footer and the full,
-unchanged repository license inside **License and notices**, so the license
-travels with each saved HTML file.
-
-## Educational approach
-
-Every lesson has a concise title naming its central subject and uses four
-sections: **Objective**, **How it works**, **Practice labs**, then **Mental model**.
-The objective states the capability to learn. How it works starts with a
-plain-English definition, integrates useful prerequisite connections and
-purpose, and follows the causal steps through to their consequences. It contains
-at least one accessible diagram explaining the core concept. Unfamiliar terms
-such as Parallel Thread Execution (PTX) are expanded in context; common CPU/GPU
-names do not need repeated expansions. The closing mental model summarizes
-concepts already explained.
-
-Each course preserves its substantial introductory explanation of the subject,
-workflow and vocabulary, plus a small worked example, inside How it works.
-Training Lab 32 and Inference Lab 35 teach learning versus fixed-parameter
-prediction on CPU or an explicitly selected H100 without model downloads.
-The linked guides own H100 scope, integrated **Practice** examples and commands,
-trade-offs, evidence interpretation, failure analysis and review. Read the
-explanation, use its summary to check the relationships, then follow the lab.
-
-Longer explanations use meaningful subheadings. Examples retain assumptions,
-intermediate reasoning and limits. The renderer embeds diagrams within the
-explanation and validators check every lesson's order, diagram coverage and
-complete source-to-HTML narrative parity.
-
-**For course maintainers:** Technical vocabulary follows NVIDIA documentation for CUDA, GPU architecture,
-profiling, communication and NVIDIA libraries. Framework-specific concepts use
-the owning framework's official names. Define each term in context and verify
-its meaning against the relevant source before revising lessons or labs. Plain
-explanations and teaching models remain useful, but must not be presented as
-formal GPU mechanisms. For timing, name the CPU timer or CUDA events, the
-operations included and how completion is established. Distinguish data in GPU
-memory from thread blocks resident on an SM, and document tool-specific metric
-formulas and aggregation. Review connected glossary entries and diagram labels
-together; a keyword replacement or passing validator cannot prove terminology
-accuracy.
-
-**For course maintainers:** The same sequence applies when a new topic starts inside a lesson, practical
-guide or optional study entry. First explain what kind of thing it is and how
-its essential parts work together; then introduce its purpose, mechanics,
-trade-offs and application. Expand acronyms in context and distinguish nearby
-ideas. A name, benefit or glossary link alone is insufficient. For a concept
-already taught along the prerequisite route, use a brief reminder where needed
-instead of repeating the full explanation.
-
-Every lab's **Theory preparation** identifies the lessons to read before its
-first full execution. Those lessons explain what each computation, measurement,
-validation or coordination technique is, why it is used and how to apply it.
-The guide connects that theory to the supplied code; it is not the only home
-for a technique's explanation. Prerequisite-course concepts may be reused,
-while later or optional topics cannot be hidden requirements for an earlier
-experiment. A code preview does not authorize running a script whose remaining
-techniques have not yet been taught.
-
-Numerical acceptance checks reject non-finite reference and candidate values
-before applying tolerances or aggregating errors. Distributed experiments
-keep every rank participating through the shared verdict. The theory and
-lab guide explain both the comparison and its limits; successful samples
-do not establish whole-model equivalence or target-runtime qualification.
-
-Before running a lab, explain its operation, dependencies, timer, included work and
-numerical acceptance check in your own words. Reused profiler skills transfer
-to a new workload, but its measured
-bottleneck does not: collect evidence from the actual baseline and candidate.
-
-Each of the 94 labs has an authored introduction followed by seven practical
-sections: **Before you start**, **Concepts and code path**, **Practice**,
-**Check your results**, **Investigate the behavior**, **If something goes wrong**,
-and **Takeaways and next step**. These explain the actual code structure,
-supported commands, result fields, numerical gates, and meaningful extensions.
-Exact lab titles link both ways between their lessons and the practical section.
-
-Throughout the catalog, explanations distinguish supplied experiments from
-optional extensions, state units, included operations and completion checks, and use code formatting
-for exact commands, options and implementation names.
-
-Each syllabus provides an ordered lesson-by-lesson route, the competency to
-build, the appropriate lab activity, and readiness checkpoints. Read lessons
-in that order: lab numbers identify files and are not a separate execution
-sequence. Early previews introduce vocabulary without requiring advanced
-experiments; optional branches are explicitly separated from core completion.
-
-Each complete topic and experiment has a primary course owner. Fundamentals
-explains hardware behavior; Optimizations teaches general measurement and
-intervention; Training owns learning updates and gradients; Inference owns
-request execution and serving; Custom Kernels owns CUDA implementation.
-Related vocabulary is not duplicate teaching. A preview, prerequisite refresher,
-baseline comparison or capstone revisit states what new question it serves. Standalone
-preflight and helper copies keep each course independently runnable.
-
-**Lab mechanisms and evidence** preserves additional worked procedures and
-deeper interpretation guides. Core and optional exercises are labeled separately.
-Official vendor references appear at the end of each course for deeper study
-and version checks.
-
-Each course closes with **Where to Go Next**, an optional reading list
-of current technologies and advanced concepts. Each entry defines its topic,
-offers a study question, states hardware or maturity limits, and links to
-official documentation. Find it in the sidebar or the course's NEXT-STEPS.md.
-These directions do not add required labs, guided hours or dependency upgrades.
-The shared renderer publishes each complete guide before the final references;
-standalone validators check placement, navigation, complete narrative parity
-and each reading link's destination.
-
-## Evidence boundaries
-
-Every course reports four independent evidence lanes:
-
-1. Source and static validation.
-2. Installed dependency compatibility.
-3. Runtime activation of CUDA, compilers, models, or engines.
-4. Live execution on the declared H100/Slurm target.
-
-Local or static checks never prove H100 performance. Raw runtime artifacts can
-contain environment details and remain private; only reviewed summaries belong
-in public course material.
-
-## Offline validation
-
-**For course maintainers.**
+**Login node:** the helper prints the private report path. Copy only a selected
+completed native report into the installed report submount. These copies are
+readable by viewer users; original results and logs remain private.
 
 ```bash
-python3 tools/build_course_html.py
-python3 tools/build_course_html.py --check
-python3 tools/validate_all_courses.py
-python3 -m pytest -q
+(
+set -eu
+report='<absolute path to the selected completed report>'
+if [ ! -f "$report" ] || [ -L "$report" ] || [ ! -s "$report" ]; then
+  printf 'Select a nonempty regular report file.\n' >&2
+  exit 1
+fi
+case "$report" in *.nsys-rep|*.ncu-rep) ;; *) exit 1 ;; esac
+viewer_dir="$(mktemp -d /data/nsight-reports/course-view-XXXXXXXX)"
+chmod 755 "$viewer_dir"
+install -m 644 "$report" "$viewer_dir/$(basename "$report")"
+sha256sum "$report" "$viewer_dir/$(basename "$report")"
+printf 'Viewer directory: /mnt/reports/%s\n' "$(basename "$viewer_dir")"
+)
 ```
 
-GPU and engine workloads are intentionally excluded from offline validation.
+Require identical hashes. `/data/nsight-reports` is the default producer root;
+use the actual submount selected by installation. The viewer exposes it at
+`/mnt/reports`. Finish report processing before opening its read-only copy.
 
-Navigation checks cover lesson order, lab identities and local destinations.
-The closing study section and its TOC link must both use the title from
-`NEXT-STEPS.md`; standalone validators reject a mismatch.
+Sign in to each Nsight URL with its installer-configured viewer credentials.
+In Compute, open the copied `.ncu-rep` under `/mnt/reports/<viewer-directory>`
+and inspect the kernel and counters specified by the lab. In Systems, open the
+copied `.nsys-rep`, expand the process tree, CUDA streams and NVTX rows, and zoom
+to the measured interval. Follow the lab's inspection steps; initialization-only
+activity does not establish that the experiment was captured.
 
-Lab narrative checks include comparison tables: headers, rows and cell text
-must survive rendering in order. Literal pipes in prose and fenced shell
-examples remain part of the content being checked.
+© 2026 Nebius B.V. Free educational material under [Apache License 2.0](../LICENSE).
 
-The CPU regression suite also exercises malformed capstone evidence, complete
-stream termination, generated-response validation, seeded initialization,
-profiler event fields, embedded preflight commands, and benchmark tokenizer
-revision forwarding. These checks use local fixtures and captured commands;
-they do not start serving engines or submit Slurm jobs.
-
-Fault-injection checks require training acceptance to reject missing backward
-or optimizer work. KV-cache checks require inference execution without saved
-autograd tensors and reject non-finite prompt or decode results. Standalone
-validators compile Python in memory and disable bytecode output for help probes,
-so validation does not leave shared temporary bytecode files.
-
-Numerical acceptance regressions also reject infinite scalar sums and non-finite
-errors in each sampled gradient, tensor-parallel comparison and padded prompt.
-They retain finite passing controls and check that invalid training errors reach
-the rank-consensus call before failure.
-
-The BF16 library-first lab checks each path against an independent FP64
-reference with an explicit intermediate-rounding allowance. CPU tests retain
-the cancellation case that defeated the former pairwise comparison and reject
-shared corruption, missing bias/ReLU, and invalid outputs before timing.
-
-Publication checks prune excluded `.venv*` directories before traversal while
-checking the same course files. The 24 BF16 corruption cases use small,
-independent CPU fixtures; the original 512-square cancellation and seeded
-acceptance cases remain. The complete offline test command above remains the
-correctness gate. Use `python3 -m pytest -q --durations=20` to inspect setup,
-call and teardown costs when investigating slower feedback.
-
-Presentation tests load a fresh renderer once per test invocation. Guide-command
-tests extract each lab's CLI options once within that course test, while still
-checking every command's shell syntax, source paths and options. This reuse
-does not share module state or option caches between tests, and the full serial
-pytest command remains the correctness gate.
-
-Launcher-to-client regressions also exercise the Triton evidence-directory and
-shared run-ID handoff with HTTP replaced by local fixtures. Quick-start checks
-require qualified-environment guidance and private submitter-side file settings
-before live-job examples; candidate dependency installation is not qualification.
-
-The checks cover course and lab identities, navigation, complete embedded
-source, evidence wording, and publication safety, including C++ headers.
-When a host C++ compiler is available, the test suite also compiles and exercises
-the CUDA course's device-independent argument parser. This does not compile or
-validate its CUDA kernels; use the separate target build and H100 gates.
-
-## Maintain a lab guide
-
-**For course maintainers.**
-
-Edit the canonical guide at `COURSE/reference/labs/SOURCE_STEM.md`, beside the
-course's existing reference guides. Its heading is `# Lab NN: Descriptive title`;
-the number matches the executable filename. Keep the seven section headings in
-the order above and put supported commands in Bash fences. Describe conceptual
-extensions explicitly rather than suggesting unimplemented flags or metrics.
-Define any new operation, tool, numerical measure or execution technique before
-requiring its use. Explain a formula's quantities before asking learners to
-interpret its result, and use the supplied code to verify the explanation.
-
-`reference/course.json` assigns each executable to its core/optional scope and
-one or more lesson numbers. The builder uses those records for exact titles,
-TOC entries, and lesson links; it rejects missing or orphaned guides. Rebuild
-HTML after changing a guide or source. Validators check narrative/source parity,
-lesson links, and command syntax without executing GPU jobs.
-
-Overview diagrams apply label-fit limits to the slots their selected layout
-actually uses. Full-width captions retain their complete text. After editing
-diagram metadata, SVGs, or shared styles, rebuild every page and run the
-diagram and source-parity checks; helper-level text checks alone do not prove
-that labels fit the rendered layout. Compact overview layouts keep labels
-readable when the article narrows. Arrows identify order, transfer or dependence;
-captions explain which relationship to follow. Comparisons have no causal
-arrows, timelines state their time direction, and decisions label their branches.
-
-Keep multiline labels vertically centered, wrap long wording without removing
-its meaning, and enlarge cards before reducing font size. Leave clear space
-around connectors and their captions. The shared SVG font stack is Arial,
-Helvetica, then sans-serif. Review all affected SVGs with the embedded course
-styles at wide and narrow widths, including an alternate-font fit check.
-Asset rendering does not replace the separate full-page browser review.
+The build requires Python 3 and Git. Each practical course downloads one
+`reference/<slug>-lab-results.zip` containing dashboards and Small/Large results.
+The build checks the complete repository publication candidate against a
+104,857,600-byte per-file cap and a conservative 1,000,000,000-byte site cap
+before replacing outputs, and reports remaining capacity. See
+`docs/course-builder.md` for inventory and failure behavior.

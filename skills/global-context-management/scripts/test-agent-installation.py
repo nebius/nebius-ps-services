@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -139,6 +140,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(normalize_payload({"prompt": "explain /skills:commit"}, "claude")["prompt"],
                          "explain /skills:commit")
         self.assertTrue(normalize_payload({**payload, "agent_id": "worker"}, "claude")["is_subagent"])
+        self.assertEqual(normalize_payload({"turn_id": PROMPT_ID}, "codex")["turn_id"], PROMPT_ID)
+        self.assertNotIn("turn_id", normalize_payload({"prompt_id": PROMPT_ID}, "codex"))
 
     def test_claude_state_write_exception_is_narrow(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -413,21 +416,45 @@ class InstallationTests(unittest.TestCase):
         self.assertFalse((home / "skills").exists())
         self.assertFalse((home / "hooks").exists())
 
-    def test_installed_claude_commit_hook_uses_claude_identity_and_state(self):
+    def test_installed_commit_hooks_record_receipts_in_each_native_home(self):
         project = self.base / "project"
         project.mkdir(exist_ok=True)
         for args in (["init", "-b", "feature"], ["config", "user.name", "Fixture"],
                      ["config", "user.email", "fixture@example.com"], ["commit", "--allow-empty", "-m", "fixture"]):
             subprocess.run(["git", "-C", str(project), *args], check=True, capture_output=True)
-        payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(project),
-                   "session_id": "claude-install-trial", "prompt_id": PROMPT_ID, "prompt": "/skills:commit"}
-        result = subprocess.run([sys.executable, str(self.base / "claude/hooks/hook_runtime.py"),
-                                 "--agent", "claude", "--hook", "commit_intent.py"],
-                                input=json.dumps(payload), env=self.env, capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0)
-        self.assertNotEqual(json.loads(result.stdout).get("continue"), False, result.stdout)
-        self.assertEqual(len(list((self.base / "claude/commit-transactions").rglob("authorization.json"))), 1)
-        self.assertFalse((self.base / "codex/commit-transactions").exists())
+        for agent in ("codex", "claude"):
+            with self.subTest(agent=agent):
+                payload = {"hook_event_name": "UserPromptSubmit", "cwd": str(project),
+                           "session_id": f"{agent}-install-trial", "prompt": "please commit and push"}
+                identity_field = "turn_id" if agent == "codex" else "prompt_id"
+                payload[identity_field] = PROMPT_ID
+                result = subprocess.run([sys.executable, str(self.base / agent / "hooks/hook_runtime.py"),
+                                         "--agent", agent, "--hook", "commit_intent.py"],
+                                        input=json.dumps(payload), env=self.env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0)
+                output = json.loads(result.stdout)
+                self.assertNotEqual(output.get("continue"), False, result.stdout)
+                self.assertIn("Commit intent receipt only", str(output))
+                state = self.base / agent / "commit-transactions"
+                receipts = list(state.rglob("intent.json"))
+                self.assertEqual(len(receipts), 1)
+                before = receipts[0].read_bytes()
+                receipt = json.loads(before)
+                self.assertEqual(receipt["turn_sha256"], hashlib.sha256(PROMPT_ID.encode()).hexdigest())
+                self.assertNotIn(payload["prompt"], before.decode())
+                self.assertEqual(len(list(state.rglob("authorization.json"))), 0)
+                self.assertEqual(len(list(state.glob("*/claims/*.json"))), 0)
+                del payload[identity_field]
+                missing = subprocess.run([sys.executable, str(self.base / agent / "hooks/hook_runtime.py"),
+                                          "--agent", agent, "--hook", "commit_intent.py"],
+                                         input=json.dumps(payload), env=self.env, capture_output=True,
+                                         text=True, timeout=15)
+                self.assertEqual(missing.returncode, 0)
+                unavailable = json.loads(missing.stdout)
+                self.assertIs(unavailable["continue"], True)
+                self.assertIn("NATIVE_IDENTITY_UNAVAILABLE", missing.stdout)
+                self.assertNotIn("--intent-sha256", missing.stdout)
+                self.assertEqual(receipts[0].read_bytes(), before)
 
 
     def test_every_claude_hook_entrypoint_runs_from_installed_payloads(self):

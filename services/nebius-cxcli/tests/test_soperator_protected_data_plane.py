@@ -349,6 +349,23 @@ def test_job_pod_identity_allows_only_controller_and_standard_pod_defaults() -> 
 
     assert protected_job_pod_identity(job=job, pod=pod).startswith("sha256:")
 
+    inherited = copy.deepcopy(pod)
+    inherited["metadata"]["labels"].update(
+        {"topology.kubernetes.io/region": "region-a", "topology.kubernetes.io/zone": "zone-a"}
+    )
+    assert protected_job_pod_identity(job=job, pod=inherited).startswith("sha256:")
+    unscheduled = copy.deepcopy(inherited)
+    unscheduled["spec"].pop("nodeName")
+    with pytest.raises(RuntimeError, match="changed workload identity"):
+        protected_job_pod_identity(job=job, pod=unscheduled)
+    declared = copy.deepcopy(job)
+    declared["spec"]["template"]["metadata"]["labels"]["topology.kubernetes.io/region"] = "declared"
+    with pytest.raises(RuntimeError, match="changed workload identity"):
+        protected_job_pod_identity(job=declared, pod=inherited)
+    inherited["metadata"]["labels"]["unrelated.example/label"] = "unexpected"
+    with pytest.raises(RuntimeError, match="changed workload identity"):
+        protected_job_pod_identity(job=job, pod=inherited)
+
     for field, value in (
         ("enableServiceLinks", False),
         ("preemptionPolicy", "Never"),

@@ -1,6 +1,21 @@
-# GPU Fundamentals for NVIDIA H100 Performance Engineering
+# GPU Fundamentals
 
 This course builds the hardware and system model needed to explain GPU behavior before changing code. Every conclusion must connect workload shape, H100 resources, and measured evidence.
+
+Hardware :
+
+The cluster uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
+
+Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use a separate two-worker 8-GPUs H100 cluster for it after these conceptual foundations.
+
+Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+
+Learn to explain H100 execution, memory, precision, scheduling,
+topology, sharing, and health evidence before attempting optimization.
+
+The course uses Python and PyTorch, one full non-MIG H100 for local effects,
+and a separate two-eight-H100 cluster for advanced collective mechanics. Operational labs are
+read-only and do not reconfigure the GPU or cluster.
 
 ## 1. CPU–GPU cooperation
 
@@ -95,6 +110,8 @@ Follow one calculation from the application to its result. The CPU prepares the 
 
 Where the data starts and where the answer is needed determine how much work this request involves. If the input is in host RAM, it must be copied to GPU memory before the kernel uses it. If the CPU needs the output, that output must be copied back after the kernel finishes. If the next operation also runs on the GPU, the output can stay there and become its input.
 
+The CPU requests these transfers through CUDA; dedicated copy hardware usually moves the bytes between CPU and GPU memory. Synchronization enforces dependencies: a CPU thread can wait for GPU work to finish, or a GPU operation can wait for earlier work it depends on. Waiting for a calculation to finish and copying its result are separate operations.
+
 Choose a timer and state exactly which operations it measures. A CPU timer records elapsed time between two points in the host program. Timing-enabled CUDA events record timestamps when the GPU reaches them in a stream; their difference measures that stream interval. Waiting for the end event makes the timestamps available, but does not copy a result to host memory. Lab 01 uses these tools for three comparisons:
 
 - **CPU execution time:** use a CPU timer around the CPU calculation.
@@ -111,14 +128,20 @@ Batching sends more useful work with each launch, so the launch cost is shared a
 
 Suppose a CPU operation takes 2 milliseconds. A resident GPU operation takes 0.3 milliseconds, but uploading inputs and obtaining the result add 3 milliseconds. For this hypothetical one-shot request the GPU path takes 3.3 milliseconds, so the CPU wins. If ten dependent operations keep intermediate data on the GPU, the same total transfer cost plus ten 0.3-millisecond operations is 6 milliseconds, compared with ten 2-millisecond CPU operations. These are teaching assumptions, not H100 measurements.
 
-**Practice labs**
+**Practice**
 
-- [Lab 01: Find the CPU–GPU crossover for vector work](reference/labs/01_cpu_gpu_crossover.md)
+Run the Lab 10 preflight, then use Lab 01 to compare CPU, resident-GPU and transfer-inclusive timings at the same element count.
+
 - [Lab 10: Identify the software layer behind GPU execution](reference/labs/10_compatibility_stack.md)
+- [Lab 01: Find the CPU–GPU crossover for vector work](reference/labs/01_cpu_gpu_crossover.md)
 
 **Mental model**
 
-The CPU prepares data and submits GPU work. Kernels execute on the GPU, transfers move data, and synchronization establishes when dependent work can proceed. For small jobs, transfer and launch overhead can exceed computation time.
+The CPU organizes the work, and the GPU performs the calculation. **Launch** means the CPU asks CUDA to run a kernel on the GPU. The CPU can continue working after submitting that request, before the GPU has finished.
+
+A **transfer** moves inputs from CPU memory to GPU memory and, when needed, results back. The CPU requests these copies; dedicated hardware usually moves the data. Results can stay on the GPU if the next operation needs them there.
+
+Think of **synchronization** as waiting until required work has finished so dependent CPU or GPU work can safely proceed. It does not copy results back to the CPU; that requires a transfer. For small jobs, launching work, moving data and waiting can take longer than the GPU calculation itself.
 
 ## 2. GPU execution software layers
 
@@ -146,10 +169,12 @@ Data copies use a related hardware path. With direct memory access (DMA), a tran
 
 CUDA failures are often “repaired” at the wrong layer. Installing a local toolkit cannot fix an insufficient kernel-mode driver, and a new driver does not make a Python package contain missing CUDA libraries or kernels for the correct architecture.
 
-**Practice labs**
+**Practice**
 
-- [Lab 08: Map PyTorch operations to GPU activity](reference/labs/08_operator_to_kernels.md)
+Revisit Lab 10 to identify each software layer, then use Lab 08 to connect a PyTorch operation to its launches and kernels.
+
 - [Lab 10: Identify the software layer behind GPU execution](reference/labs/10_compatibility_stack.md)
+- [Lab 08: Map PyTorch operations to GPU activity](reference/labs/08_operator_to_kernels.md)
 
 **Mental model**
 
@@ -181,7 +206,9 @@ For N elements and B elements per program, `ceil(N/B)` instances cover the input
 
 A high-level operator can be slow because it dispatches an unexpected kernel, launches too little parallel work, creates a partial final wave, or uses the wrong instruction path. None of those causes is visible from the Python name alone.
 
-**Practice labs**
+**Practice**
+
+Use Lab 09 to map logical work to launch geometry. Revisit Lab 08 for launch evidence; read Lab 11 as a preview, leaving its full resource and tail investigation until Lesson 6.
 
 - [Lab 08: Map PyTorch operations to GPU activity](reference/labs/08_operator_to_kernels.md)
 - [Lab 09: Sweep logical work per Triton program](reference/labs/09_triton_launch_geometry.md)
@@ -217,7 +244,9 @@ When that layout is not contiguous, `contiguous()` can create a compact copy. Th
 
 Performance is often limited by repeated movement rather than arithmetic. Correctly naming where a byte lives reveals whether the next change should improve reuse, remove an intermediate, alter layout, or reduce the workload's memory footprint.
 
-**Practice labs**
+**Practice**
+
+Use Lab 04 to count reads and writes and trace where values live. Preview the byte-count reasoning in Lab 05; its full roofline experiment belongs to Lesson 10.
 
 - [Lab 04: Evaluate strided access and the cost of repacking](reference/labs/04_layout_and_coalescing.md)
 - [Lab 05: Contrast memory-oriented and compute-oriented work](reference/labs/05_roofline_microbench.md)
@@ -250,7 +279,9 @@ Independent thread scheduling gives the hardware more flexibility in tracking an
 
 Divergence is commonly blamed for any uneven timeline. That diagnosis produces ineffective fixes when the real cause is block-duration skew, insufficient grid waves, memory dependencies, or rank imbalance.
 
-**Practice labs**
+**Practice**
+
+Inspect the active-lane model in Lab 11 and predict which lanes do useful work. Run its full launch comparison after Lesson 6 has introduced resource and residency limits.
 
 - [Lab 11: Separate lane utilization from grid-tail behavior](reference/labs/11_scheduler_tail.md)
 
@@ -286,7 +317,9 @@ A kernel needs enough independent ready work to cover instruction and memory lat
 
 For a simple resource example, suppose each 256-thread block needs 32 KiB of shared memory and an SM makes 64 KiB available to these blocks. Shared memory permits only two blocks, or 16 warps, even if the thread and register limits would allow more. Relative to a 64-warp ceiling, that is 16 / 64 = 25% theoretical occupancy. This hypothetical capacity calculation predicts what can fit, not which warps are ready or how fast the kernel runs.
 
-**Practice labs**
+**Practice**
+
+Revisit Labs 09 and 11 to separate launch size, resident capacity and the final scheduling wave; explain why more launched work does not mean more simultaneous execution.
 
 - [Lab 09: Sweep logical work per Triton program](reference/labs/09_triton_launch_geometry.md)
 - [Lab 11: Separate lane utilization from grid-tail behavior](reference/labs/11_scheduler_tail.md)
@@ -319,7 +352,9 @@ Repacking with `contiguous()` creates a copy when needed. It pays for an extra r
 
 A kernel can request the same logical number of elements while causing very different physical traffic. Effective bandwidth divides the counted read and write bytes by elapsed time. The lab calls its logical-byte estimate useful bandwidth. Profiler-observed traffic can differ because of cache reuse, intermediate operations and bytes transferred that no active lane uses.
 
-**Practice labs**
+**Practice**
+
+Revisit Lab 04 to compare strided consumption with repacking, including the copy cost in the complete result.
 
 - [Lab 04: Evaluate strided access and the cost of repacking](reference/labs/04_layout_and_coalescing.md)
 
@@ -353,7 +388,9 @@ Timing follows the same dependencies. Record timing-enabled CUDA events before a
 
 Apparent overlap can be a timestamp illusion, and accidental synchronization can erase real overlap. Incorrect stream dependencies can also expose partially produced tensors or surface an earlier asynchronous error at an unrelated later call.
 
-**Practice labs**
+**Practice**
+
+Use Lab 03 for host-transfer costs and Lab 07 for submission versus completion; state the start, stop and synchronization boundary of each timer.
 
 - [Lab 03: Measure pageable and pinned host transfers](reference/labs/03_transfer_and_pinning.md)
 - [Lab 07: Separate submission time from device completion](reference/labs/07_async_streams.md)
@@ -398,7 +435,9 @@ The Euclidean (L2) norm is the square root of the sum of squared elements. Relat
 
 Lower precision can reduce bytes and accelerate matrix operations, but a dtype annotation does not guarantee Tensor Core dispatch or acceptable training/inference behavior. Storage, input, multiply, accumulation, and output precision can differ.
 
-**Practice labs**
+**Practice**
+
+Run Lab 02 with its fixed operation and error checks, then relate numerical format to observed kernel execution and throughput.
 
 - [Lab 02: Compare matrix precision, error, and throughput](reference/labs/02_tensor_core_precision.md)
 
@@ -432,7 +471,9 @@ Optimizing arithmetic in a bandwidth-limited kernel or compressing bytes in a co
 
 For example, suppose a kernel performs 2 billion floating-point operations and transfers 1 billion bytes at the memory boundary being modeled. Its arithmetic intensity is 2 operations per byte. With an assumed sustainable bandwidth of 1 trillion bytes per second, the bandwidth bound is 2 trillion operations per second. If the assumed compute ceiling is 10 trillion operations per second, the lower bound on elapsed time is the larger of 1 millisecond for traffic and 0.2 milliseconds for arithmetic: 1 millisecond. These illustrative assumptions describe a bound; dependencies, launches and inefficient access can make the measured time longer.
 
-**Practice labs**
+**Practice**
+
+Run the full Lab 05 experiment: calculate bytes and operations first, derive a bound, then explain the measured result against it.
 
 - [Lab 05: Contrast memory-oriented and compute-oriented work](reference/labs/05_roofline_microbench.md)
 
@@ -466,7 +507,9 @@ A useful interpretation connects signals from the same interval to the applicati
 
 Sharing or clock/thermal events can change variance and throughput enough to invalidate a benchmark. They are context, not automatic root causes, and observing them must not silently reconfigure the node.
 
-**Practice labs**
+**Practice**
+
+Use Lab 12 to collect read-only health and sharing evidence, keeping unavailable measurements distinct from zero activity.
 
 - [Lab 12: Read GPU health and sharing signals safely](reference/labs/12_read_only_health.md)
 
@@ -478,7 +521,7 @@ MIG creates hardware-isolated instances, MPS coordinates CUDA processes, and sch
 
 **Objective**
 
-Explain the networking layers, trace GPU-to-GPU data movement, and select meaningful collective measurements for two one-GPU nodes.
+Explain the networking layers, trace GPU-to-GPU data movement, and select meaningful collective measurements on the separate advanced fabric cluster.
 
 **How it works**
 
@@ -528,11 +571,13 @@ Capability, transport selection and memory registration are distinct claims. An 
 
 A fast local kernel cannot improve a step dominated by synchronization or network transfer. Two ranks can teach collective mechanics and placement, but they cannot establish dense-node or large-cluster scaling.
 
-**Practice labs**
+**Practice**
 
-- [Lab 00: Verify the two-node H100 platform](reference/labs/00_cluster_preflight.md)
-- [Lab 06: Measure a two-node NCCL all-reduce](reference/labs/06_distributed_collectives.md)
+On the separate sixteen-H100 fabric cluster, complete Advanced Lab 02 before Lab 08. Explain the placement and collective evidence without extrapolating from the base cluster.
+
+- [Lab 02: Verify the two-node H100 platform](../advanced-gpu-communication/reference/labs/02_collective_readiness.md)
+- [Lab 08: Measure a two-node NCCL all-reduce](../advanced-gpu-communication/reference/labs/08_distributed_collectives.md)
 
 **Mental model**
 
-Collectives move and combine data across ranks. With one GPU per node, the relevant path includes GPU, host interconnect, network, and the remote node; it does not demonstrate intra-node NVLink or NVSwitch scaling. GPUDirect RDMA and GPUDirect Storage can remove selected CPU-staging paths only when the NIC, storage, driver, topology, and software stack support them.
+Collectives move and combine data across ranks. The bounded two-rank lab selects one GPU per node on the advanced cluster. Its path includes GPU, host interconnect, network and the remote node; use the eight-/sixteen-rank fabric labs to measure local NVLink/NVSwitch and full inter-node placement. GPUDirect RDMA and GPUDirect Storage can remove selected CPU-staging paths only when the NIC, storage, driver, topology, and software stack support them.

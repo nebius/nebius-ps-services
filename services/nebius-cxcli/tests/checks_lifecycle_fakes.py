@@ -1,6 +1,7 @@
 """Stateful transport fixture; exercises the real admission/lifecycle owners."""
 
 import copy
+import hashlib
 import json
 import shlex
 
@@ -19,6 +20,11 @@ def lifecycle_transport(cluster):
         "metadata": {"uid": "passive-config"},
         "data": {"checks.json": "[]", "check_runner.py": "# native fixture"},
     }
+    cluster.mounted_passive = {
+        worker: copy.deepcopy(cluster.configmaps["slurm-scripts"]["data"])
+        for worker in cluster.nodes
+    }
+    cluster.passive_modes = []
     cluster.pending = {}
     slurm = cluster.slurm
     kube = cluster.kube
@@ -80,11 +86,16 @@ def lifecycle_transport(cluster):
                 },
             }
         if args[0] == "exec":
-            expected = json.loads(args[-2])
+            cluster.passive_modes.append(args[-1])
+            data = cluster.mounted_passive[args[3]]
             return {
                 "worker": args[3],
-                "hashes": copy.deepcopy(expected["hashes"]),
-                "config": copy.deepcopy(expected["config"]),
+                "hashes": {
+                    name: hashlib.sha256(value.rstrip("\n").encode()).hexdigest()
+                    for name, value in data.items()
+                    if name != "checks.json"
+                },
+                "config": json.loads(data["checks.json"]),
                 "boot": "boot",
                 "running": [],
                 "observedAt": 1,

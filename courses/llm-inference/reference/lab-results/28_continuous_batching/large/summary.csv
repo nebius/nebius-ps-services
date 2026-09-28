@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,nonpreemptible_full_prefill_median_first_token_latency_quanta,value,134.5,none
+baseline-trial1,chunked_64_median_first_token_latency_quanta,value,10.0,none
+baseline-trial1,chunked_256_control_median_first_token_latency_quanta,value,9.5,none
+repeat-trial1,nonpreemptible_full_prefill_median_first_token_latency_quanta,value,134.5,none
+repeat-trial1,chunked_64_median_first_token_latency_quanta,value,10.0,none
+repeat-trial1,chunked_256_control_median_first_token_latency_quanta,value,9.5,none

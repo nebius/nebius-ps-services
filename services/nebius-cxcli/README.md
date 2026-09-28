@@ -7,6 +7,244 @@ After render, deployment still operates on the generated bundle. `deploy` takes
 the authoritative deploy contract so source changes after render do not silently
 change what gets applied.
 
+After resolving Terraform outputs, deployment keeps ordinary OCI chart sources
+pinned to the admitted digests and checks the refreshed application bundle before
+cluster writes. Resuming a sealed install preserves its exact repair receipt.
+The observation-only handoff after a completed Soperator release keeps the
+admitted Terraform plan digest in its operation identity, including when the
+plan contains no infrastructure changes.
+
+## Nsight profiling on Soperator
+
+Install both shared profiling CLIs and private browser viewers on an accepted
+Soperator target:
+
+```bash
+nebius-cxcli soperator profiling install ./config.yaml --target TARGET
+```
+
+The command installs Nsight Systems 2026.4.1 and Nsight Compute 2026.2.1, with
+two Nsight Streamer 2026.4.1 chart releases in `soperator`. The login wizard runs
+by default when `nsight-streamer-auth` is missing. It asks for a username
+(default `admin`) and a masked, confirmed password; blank or whitespace-only
+passwords are rejected and prompted again. For automation, pipe a password with
+`--password-stdin`, or use `--no-interactive` to require an existing Secret from
+your Secret-management workflow. `--username` selects another new username;
+`--secret-name` selects another Secret. Existing credentials are reused without
+prompts and never rotated by a rerun. Credentials never enter configuration or
+output. Success prints a copyable, context-qualified `kubectl` command that you
+can save and run to display the password when needed, using your Kubernetes
+Secret-read permissions. Cxcli never executes that retrieval command.
+The retrieval command finishes with a newline so the shell prompt stays separate.
+Preparation and shared-jail steps show descriptive spinners with elapsed time.
+Redirected output uses `START`/`OK`/`FAILED` lines; credential prompts and viewer
+deployment retain their own terminal display.
+Kubeconfig notices print above the active spinner, leaving one clean completion row.
+Reports use `/data/nsight-reports` on the accepted persistent shared data mount;
+each viewer mounts only that directory read-only. Successful installation prints
+complete, context-qualified HTTP and TURN TCP port-forward commands for your Mac.
+Pinned CLI setup is reapplied before a replacement jail is promoted.
+Rerun the same profiling command and options to resume interruptions. Healthy
+installations reuse completed stages and credentials. A proven terminal installer
+failure can reserve one successor within the existing three-Job stage limit;
+missing or still-running recorded Jobs remain blocked. Receipt-owned missing
+regular tool/profile files are restored from checksum-verified cached archives;
+changed files, symlinks and missing ownership evidence stop before replacement.
+Omission repair ends with verification; it preserves intact profiles and receipts.
+The same install and ordinary app apply paths reconcile stale initial-install
+records only after proving accepted cluster identity, ownership, storage, health
+and stopped prior writers. Original records remain in immutable receipts, with
+historical success explicitly unknown. No extra recovery command is needed for
+these cases. Existing explicit `soperator profiling recover` remains available
+for passive upgrade stages and the bounded repairs below.
+An initial mount-denial failure can use `--stage admit --repair runtime-mounts`
+to correct only the missing AppArmor setting while retaining failed history.
+For the known incompatible population image, `--repair runtime-image` selects
+the pinned Ubuntu execution runtime and supplies the missing AppArmor setting.
+For the exact login PATH failure after package installation, `--stage install
+--repair profile-order` adds the mandatory late shell activation hook before
+replaying the unchanged installer. Foreign hook files remain protected.
+Recovery supports initial installation and passive jail customization, permits
+at most three Jobs per stage, and prints the exact original command to continue.
+Missing Jobs or unprovable ownership remain blocked.
+Retained failed profiling attempts do not block Soperator service readiness once
+an identity-verified, terminal successful successor exists for the same operation,
+stage and PVC. Unresolved attempts and unhealthy services still block readiness;
+the profiling command remains responsible for validating installation results.
+Viewer ownership checks require Helm 4 and inspect all release statuses,
+including failed and pending releases.
+
+Generic MK8s projects can select either viewer from the **Profiling** Apps group
+in `component add`; its wizard asks for an existing reports PVC and login Secret.
+See [Nsight setup and report workflow](docs/nsight-profiling.md) for prerequisites,
+defaults, capture examples and recovery behavior.
+
+## Private course dashboards on Soperator
+
+After a successful, accepted Soperator deployment, ordinary application changes
+use `render CONFIG --force` followed by `flux apply GENERATED --target TARGET`.
+Rendered dashboard copies under `generated/grafana_dashboards/` remain valid
+JSON identical to the ConfigMap data. Kubernetes ownership annotations apply
+only to the ordinary Flux resources, never to those JSON documents.
+The ordinary Flux bundle uses server-side apply with kubectl's default field
+manager, which supports migration from its earlier client-side apply records.
+Kubernetes omits oversized last-applied annotations for large dashboard
+ConfigMaps. Field ownership conflicts stop the command; it does not force
+replacement of another manager's changes.
+This path checks the accepted deployment generation, immutable cluster identity,
+pending operations, protected configuration and artifacts, and both project and
+cluster ownership. Live target observation uses the same ordinary-app baseline
+validator before Kubernetes compatibility checks. It applies only the ordinary
+app bundle. It does not plan or
+apply Terraform, reconcile protected Soperator resources, or invoke Slurm job
+maintenance. Protected changes require their owning lifecycle workflow.
+Full deployment seals its Soperator operation record after required target
+checks and before installation completion. Same-target historical initial-install
+records can be reconciled by these existing commands after fresh accepted-state
+verification, with original evidence retained and old outcomes marked unknown.
+Local completion evidence alone is insufficient; unsupported histories remain with
+their exact original recovery workflow.
+OCI digest binding preserves resource ownership metadata. An unchanged accepted
+OCI source may remain a read-only prerequisite when its digest, readiness and
+complete set of accepted, owned Helm consumers agree. Ordinary apply omits that
+source from its mutation bundle; it never adopts or relabels an unowned source.
+Missing accepted consumers block reuse, even if absent from both desired and live
+state. Completion and historical-record updates recheck ownership fences after
+receipt preparation or reads, immediately before cluster mutation.
+Onboarding also records this baseline after successful backend registration and
+binds it to the accepted generation. If local source changes during acceptance,
+the newer edit is preserved and ordinary-app admission remains closed until
+onboarding accepts a matching configuration.
+
+A custom catalog can declare a Prometheus datasource with `auth: none` and an
+internal read endpoint. No cloud authorization header or read-token Secret is
+created for that datasource. For private Grafana, retain a ClusterIP Service,
+disable its route, and set the catalog's automatic Gateway component ID to an
+empty string. Status and dashboard validation use a temporary loopback
+port-forward pinned to the selected Kubernetes context and clean it up on both
+success and failure. A pending public Gateway is not classified as private.
+
+Grafana uses its official community OCI chart so deployment can pin the assessed
+artifact digest. Ordinary apps can combine OCI charts and HTTP/HTTPS Helm
+repositories, including NVIDIA's Nsight chart. HTTP charts use an exact version;
+deployment downloads them again and compares their extracted content with the
+rendered snapshot before effects. Changed or unavailable content blocks execution.
+Flux's later HTTP fetches still trust the upstream versioned repository; use OCI
+when digest-addressed execution is required. No private mirror is required.
+
+The courses provide the private catalog, release-owned Soperator database
+selection, per-lab JSON dashboards, and a single results scrape. See
+[course setup](../../courses/README.md#how-to-set-up-the-lab). Imported
+New JSON dashboards are API-owned; repeat `grafana import PATH --config CONFIG_YAML
+--target CLUSTER_TARGET --attach --overwrite` to update project intent, install
+immediately and refresh the catalog. Use `grafana validate` to check the result.
+Attachment rejects a UID already registered under another catalog key before
+changing the project or server; `--overwrite` does not transfer catalog ownership.
+For an existing classic file-provisioned dashboard with `allowUiUpdates: true`,
+keep its UID and use `--overwrite` without `--attach` for a temporary content
+update. Provisioning retains ownership and may replace it later. Its project
+copy is saved with `replay: false` and is excluded from deployment replay.
+Repeated imports with matching content, folder and ownership leave Grafana's
+version and unchanged local files untouched. See [dashboard imports](docs/grafana-dashboards.md).
+Source tests establish these guards; cluster/runtime qualification remains a
+separate acceptance step.
+
+Terraform owns shared infrastructure state and native locking in the configured
+S3 bucket. Cxcli stores command checkpoints locally; it does not read or write
+shared deployment journals or execution leases. Old S3 lifecycle objects are
+ignored and are not deleted or migrated.
+
+`render` reads current `config.yaml`, confirms artifact replacement (or accepts
+`--force`), and preserves command-owned local checkpoints. `deploy` captures the
+latest complete rendered bundle and plans against current Terraform and cluster
+state. Matching local attempts can resume; changed artifacts or execution options
+select a separate attempt without erasing earlier evidence. Dedicated commands
+such as `soperator upgrade` keep their existing local recovery rules and cluster locks.
+For Soperator telemetry routing changes, deployment admits the native release graph
+before entering maintenance. The qualified upstream token writer is retired by its
+own Helm controller: cxcli fences its exact parent and child, enables uninstall,
+publishes the desired parent, and waits for both the child release and its workload
+to disappear. Credentials and persistent volumes are retained. Other unexpected
+removals stop before maintenance; a matching name alone never authorizes removal.
+
+If a same-release deployment previously stopped on the unexpected native token
+writer, rerun `nebius-cxcli deploy CONFIG_YAML` with its original rendered bundle
+and execution options. Cxcli can seal a successor only when the exact failed-apply
+checkpoint, live ownership and maintenance preimages still agree. It preserves
+the original operation history and resumes application reconciliation. Do not
+rerender to recover that paused operation or manually delete the writer. A
+Terraform no-op does not prove that Flux applications have converged.
+Resolved application files and their compatibility metadata are published together.
+On an interrupted deployment, cxcli can repair stale private metadata only when the
+saved target checkpoint proves the exact resource inputs. It preserves the original
+render and admissions; unrelated changes still fail verification.
+Recovery keeps the saved source configuration separate from expanded runtime
+defaults. Subsequent checks phases and catch-up recovery retain the same native
+graph checkpoint, including parent publication and child-opening identities.
+Recovery rechecks current compatibility before reusing an identical frozen
+observation; a date change alone does not invalidate the publication. Changed
+support or artifact evidence still goes through admission. Fast readiness receipts
+remain owned by their lifecycle and are preserved across render planning.
+
+If server-side apply leaves an explicitly empty child values map as null after
+removing its previous entries, recovery materializes the exact published value
+under the suspended parent and child. The write is journaled and identity-checked;
+other specification differences still stop deployment. Ordinary first installs
+without a native graph transition keep their existing staging path.
+If the same empty-map issue rejects an existing VMAgent upgrade, the native
+transition verifies the failed revision, successful rollback, frozen chart and
+current ownership before changing that field. It then requests one normal Flux
+retry. Interrupted recovery retains the same intent and retry token; changed
+inputs or another failed retry stop safely. The workload is never replaced.
+
+The controller regression lane runs with
+`uv run python scripts/verify_soperator_native_retirement.py` (Docker, kind,
+kubectl and Helm required). It creates and removes its own local cluster and
+checks normal uninstall, interrupted publication, credential/storage preservation,
+empty-map materialization through real controllers, and a separate suspended-child
+failure control. It never uses a deployment target.
+
+After a later deployment, ordinary Apps and profiling use the completed
+configuration for their selected targets. Target-only deployments retain other
+targets' completion evidence. Explicit profiling recovery selects its original
+local owner by target, stage and failed Job UID, including during jail upgrades.
+
+Deploy proceeds through **Prepare → Assess changes → Deploy → Verify → Result**.
+A simple unchanged generation uses one Terraform observation for classification
+and admission, then a fresh scope-checked execution plan. Post-stage and final
+verification remain independent; distinct intermediate generations and changes
+between release reconciliation and Terraform apply require their own plans.
+Successful initialization and static validation are reused only within the same
+invocation and unchanged concrete Terraform root. Live authority, quota, source
+integrity, readiness and acceptance checks remain fresh. An internal admission
+assessment is not a user-requested dry run.
+Reinitializing a root discards its previous initialization and validation results
+before execution, including after an interrupted initializer or a recreated
+`.terraform` directory. Other unchanged roots retain their invocation-local reuse.
+
+Permanent or unknown errors stop the command with a nonzero exit status. Safe
+reads retry only recognized temporary transport errors, at most three attempts;
+there is no whole-deployment retry loop. Forward-only recovery preserves the
+operation's maintenance and restoration evidence. To resume, fix the reported
+cause and rerun `nebius-cxcli deploy CONFIG_YAML` with the **original frozen
+generated bundle and execution controls**. If the bundle changed, restore that
+exact generation first; rerendering similar YAML does not prove equivalent inputs.
+Cluster controllers may keep reconciling after the local command exits.
+Campaign interruptions use the same stop-reporting path, preserving active
+maintenance until recovery.
+
+A kernel lock excludes simultaneous mutations of the same backend on one machine.
+Artifact publication has a separate short local lock. Process supervisors retain
+execution ownership while stopping contained subprocesses after cancellation.
+Terraform locking does not serialize Helm, Flux or SDK operations across machines:
+operators and CI must serialize whole workflows for the same backend. Generated
+CI uses non-cancelling concurrency; separate repositories or workstations need
+shared scheduling. Cxcli never force-unlocks Terraform state.
+
+Deployment applies declared resources; it does not uninstall omitted Apps. It checks
+current target-owned HelmReleases and rejects an omitted release until it is
+explicitly removed. Unmarked or unrelated resources are never adopted or pruned.
+
 ## Table of Contents
 
 Use this guide by task:
@@ -111,12 +349,14 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - Authored `config.yaml` does not use `apps.charts[].target_ref`; any internal generated `target_ref` is derived from and must equal the same target `instance_id`.
 - Terraform outputs consumed by app bindings, deploy, or bootstrap behavior are stable interfaces. Renaming or changing one is a breaking contract change.
 - Generated-bundle commands recreate ignored Terraform tfvars from the generated manifest before Terraform runs. Use `nebius-cxcli terraform plan <generated>`, `nebius-cxcli terraform apply <generated>`, or `nebius-cxcli deploy <config.yaml>` from a fresh checkout.
-- `destroy` is the project-wide destructive path: it tears down all rendered
-  resources represented by that generated bundle/runtime snapshot rather than
-  rerendering from post-render source edits. For onboarded external MK8s
-  targets, the external cluster and its node groups stay outside Terraform
-  ownership and are not destroyed; only cxcli-managed app resources and
-  explicitly owned add-on infra are removed.
+- `destroy CONFIG --target CLUSTER_ID` deletes one project-bound managed or
+  onboarded MK8s cluster through the Nebius Python SDK, with or without Soperator.
+  The immutable cloud ID is required even for a sole cluster. Exact inventory and
+  confirmation or `--yes` bind the deletion; unrelated infrastructure is preserved.
+  Ethernet-only workers may report an empty optional GPU-cluster object; this
+  means no GPU-cluster attachment. Malformed nonempty references still block
+  deletion until their identity can be verified.
+  Projects without MK8s retain rendered-resource teardown.
 
 ## Generated ownership
 
@@ -258,6 +498,15 @@ sudo apt install -y python3 python3-venv python3-pip git build-essential awscli
 
 On Linux, install `kubectl` and `helm` from their vendor-maintained apt repositories when you need those command paths locally.
 
+Cluster connections use the selected target's kubeconfig and explicit context.
+The workstation's `current-context` never selects a deployment, validation,
+runtime Secret, or port-forward destination. Missing or conflicting target
+selection fails before connection. For managed deployments, the saved cluster
+ID is authoritative; cxcli generates an isolated kubeconfig when needed and
+verifies cluster identity. Reused local contexts must match the selected cluster's
+API endpoint and CA certificate. Multiple historical contexts are not disambiguated
+by the current context. Manual examples require a verified `<target-context>`.
+
 Tool notes:
 
 - `terraform` is used for Terraform-backed validation, render lockfile generation, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups. For those supported command paths, `nebius-cxcli` downloads Terraform into its local cache when it is missing instead of requiring a system-wide install. Managed Terraform downloads verify HashiCorp's published SHA256 manifest before installing or reusing a cached binary.
@@ -270,7 +519,7 @@ Tool notes:
   of the target API server.
 - `helm` is used for `validate-sources`, selected app chart source/metadata
   validation, and Soperator official-release snapshot and artifact verification.
-  It is therefore required for fresh `soperator install`, `soperator onboard`,
+  It is therefore required for fresh `soperator create`, `soperator onboard`,
   and `soperator upgrade` admission; live inspection of legacy direct-Helm
   installations also uses it. When source validation is enabled, `create`
   validates infra sources before any existing project overwrite confirmation,
@@ -289,6 +538,10 @@ Primary catalog files (repo root):
 - `component_sources.yaml` is the source catalog for reusable infra modules and Helm chart components.
 - `component_cli_settings.yaml` is the cxcli settings catalog. It is linked to `component_sources.yaml` by the same `components.<infra|apps>.<component-id>` keys and owns cxcli behavior such as managed tool versions, observability endpoint templates, Grafana bindings, and MK8s policy.
 - `src/nebius_cxcli/soperator_wizard.yaml` is the packaged install-policy contract for the dedicated Soperator lifecycle. It contains profiles, defaults, and wizard policy only; official source and release authority come from `nebius/soperator` and its OCI registry.
+- Soperator registry locations and additive chart dependencies come from the selected, Git-verified upstream release. Enabled child releases follow that release's Helm render with effective values, so compatible additions and registry moves do not require a matching cxcli release. Every selected artifact remains frozen and verified; missing required interfaces, ambiguous identities, dependency cycles, or enabled artifacts outside the frozen inventory fail before deployment. New features needing additional configuration semantics are not automatically activated.
+- Artifact discovery includes upstream defaults, supported optional features and remote dependencies declared by selected source charts. Effective values determine the final dependency ordering; alternative configurations are not combined into one execution graph.
+- Deployment release admission, execution, and application re-renders use each enabled Soperator target's verified snapshot from the frozen generation, including ordinary reconciliation and target-scoped stages. The common release engine receives that exact snapshot digest and content without depending on local discovery caches. Missing, conflicting, or altered snapshots fail before mutation.
+- Upstream optional charts remain in the verified release inventory even when disabled. For example, cxcli disables the upstream NFS server and its NFS CSI driver; configured Nebius SFS mounts do not require that server. An NFS chart verification error therefore does not mean the deployment enables NFS.
 
 The loader does not raw-merge the two YAML files. It loads the selected
 `component_sources.yaml`, loads the sibling `component_cli_settings.yaml`, then
@@ -480,7 +733,7 @@ Field guide:
   - `components.apps.grafana.cli.orgId`: optional Grafana organization ID used in generated dashboard and Explore links.
   - `components.apps.grafana.cli.logout-timeout`: optional Grafana idle session duration, defaulting to `20m`. It is rendered into `grafana.ini` under `[auth]` as `login_maximum_inactive_lifetime_duration`; use Grafana duration syntax such as `10m`, `1h`, or `7d`.
   - `components.apps.grafana.cli.explore_queries`: optional fallback Explore query templates keyed by `metrics`, `logs`, or `traces`; signal-bound Grafana status helpers can use them when a catalog-bound dashboard has not been imported yet.
-  - `components.apps.grafana.defaults.values.dashboards.*`: Grafana dashboard sources. Each dashboard entry owns `datasource` plus either a Grafana.com `gnetId` with pinned `revision` and imported `uid`, or dashboard JSON with a top-level `uid`; bundled cxcli-owned dashboards use `json_file` package assets so `component_sources.yaml` and project `config.yaml` do not carry large inline JSON. Custom catalog dashboards can also use `json_file`; relative paths resolve from the active `component_sources.yaml` file and absolute paths are accepted. Built-in dashboard JSON stays under `src/nebius_cxcli/grafana_dashboards/` so it ships in the Python wheel; operator-owned dashboard JSON should live next to the custom catalog file or in another operator-owned directory. During `render`, cxcli writes those JSON assets under `generated/grafana_dashboards/<target-id>/<folder>/` and points the generated Grafana HelmRelease at a generated dashboard ConfigMap. A Grafana Helm chart provider key must use either chart-managed `values.dashboards` imports or `dashboardsConfigMaps`, not both; the bundled catalog keeps one Grafana.com service-dashboard example under `nebius`, cxcli-owned Kubernetes JSON dashboards under `nebius-kubernetes`, and cxcli-owned VM JSON dashboards under `nebius-vm`. The cxcli-owned Kubernetes GPU dashboard uses `Nebius Services` because DCGM metrics are exposed through the service-provider Monitoring read endpoint, but it filters by `mk8s_cluster_id` and uses `query_result(...)` variables so stale project-wide label metadata cannot populate the GPU-node selector. The cxcli-owned VM Metrics dashboard also uses `Nebius Services` and built-in Nebius VM Monitoring-agent labels such as `job="nebius-observability-agent"` and `instance_id`; VM Logs binds to `Nebius Logs`, defaults to the `sp_serial` bucket used for Compute VM serial/journald logs, and keeps `default` selectable for user-ingested logs. `render`, `deploy`, and `validate-dashboards` do not dynamically generate or rewrite dashboard JSON to fit live datasources; the explicit `grafana --export-dashboard --attach` and `grafana --dashboard-json --attach` workflows can rewrite dashboard datasource references before catalog attachment. `validate-sources` fails if any dashboard source lacks a resolvable locator or if its datasource is not declared under `components.apps.grafana.cli.datasources`.
+  - `components.apps.grafana.defaults.values.dashboards.*`: reusable dashboard sources. Grafana.com entries require `gnetId`, pinned `revision`, imported `uid` and `datasource`. JSON entries accept `json_file` or inline `json` with a stable UID; `datasource` is optional so distinct embedded datasource references are preserved. Explicit dashboard signal bindings still require one unambiguous datasource. `grafana import PATH --config CONFIG_YAML --target CLUSTER_TARGET --attach` adds reusable JSON sources while retaining API ownership for the importing target; see [Grafana dashboards](docs/grafana-dashboards.md).
   - `components.apps.grafana.cli.dashboard_signals`: optional Grafana-app signal bindings for `metrics`, `logs`, and `traces`. Each signal value is a single `<folder>/<dashboard>` reference to a declared chart `defaults.values.dashboards.*` entry. Signal bindings do not create dashboards; the deploy report lists cxcli-owned bundled dashboards directly instead of adding separate Metrics, Logs, and Traces shortcut rows.
   - `wizard`: optional prompt metadata keyed by chart value path such as `values.image.tag`.
   - `input`: same binding syntax as infra, but target paths should land under `values.*`.
@@ -781,7 +1034,7 @@ Bundled SecretStash to Kubernetes sync:
 - After promoting a new MysteryBox version to primary, the default auto-primary sync path updates on the next ESO periodic refresh. To reconcile immediately instead of waiting up to the configured interval, annotate the generated ExternalSecret:
 
   ```bash
-  kubectl -n ns-1 annotate externalsecret app-config \
+  kubectl --context <target-context> -n ns-1 annotate externalsecret app-config \
     force-sync="$(date +%s)" \
     --overwrite
   ```
@@ -789,7 +1042,7 @@ Bundled SecretStash to Kubernetes sync:
 - During `deploy`, `flux bootstrap`, and `flux apply`, cxcli validates the actual in-cluster DNS, egress, and TLS path that ESO will use by running a temporary curl pod in the credentials Secret namespace against the configured `api_domain`. For configured native sync targets, `deploy` also runs a required ESO MysteryBox connectivity validation after the ESO controller, store, and ExternalSecrets are applied, checks `ClusterSecretStore Ready=True`, checks every configured `ExternalSecret Ready=True`, scans ESO controller logs since the current validation started for Nebius/MysteryBox TLS/auth/permission errors, and records the result in `generated/reports/deploy-report.md`. This validation is selected by design and is not disabled by the optional deploy validation skip flags. To run the same TLS check manually:
 
   ```bash
-  kubectl -n external-secrets run nebius-tls-check \
+  kubectl --context <target-context> -n external-secrets run nebius-tls-check \
     --rm -it \
     --restart=Never \
     --image=curlimages/curl:8.7.1 \
@@ -803,17 +1056,17 @@ Bundled SecretStash to Kubernetes sync:
        printf "%s\n" "$out" | grep -Eq "HTTP/[0-9.]+ [0-9]"'
   ```
 
-  A public-CA chain, hostname match for `api.nebius.cloud`, and any HTTP response prove the cluster can resolve, connect, and verify TLS. The check validates that an HTTP response was received but does not print the status code, because a root-endpoint `404` is expected and should not be mistaken for a TLS failure. A certificate error points to the pod image trust bundle or TLS interception; timeout, DNS, or connection failures point to egress, DNS, firewall, proxy, or NetworkPolicy. After applying the store and at least one `ExternalSecret`, check `kubectl get clustersecretstore nebius-mysterybox-shared -o yaml`, `kubectl -n <namespace> describe externalsecret <name>`, and `kubectl -n external-secrets logs deploy/external-secrets` for Nebius, MysteryBox, TLS, certificate, unauthorized, or permission errors. The desired ESO condition is `Ready=True`.
+  A public-CA chain, hostname match for `api.nebius.cloud`, and any HTTP response prove the cluster can resolve, connect, and verify TLS. The check validates that an HTTP response was received but does not print the status code, because a root-endpoint `404` is expected and should not be mistaken for a TLS failure. A certificate error points to the pod image trust bundle or TLS interception; timeout, DNS, or connection failures point to egress, DNS, firewall, proxy, or NetworkPolicy. After applying the store and at least one `ExternalSecret`, check `kubectl --context <target-context> get clustersecretstore nebius-mysterybox-shared -o yaml`, `kubectl --context <target-context> -n <namespace> describe externalsecret <name>`, and `kubectl --context <target-context> -n external-secrets logs deploy/external-secrets` for Nebius, MysteryBox, TLS, certificate, unauthorized, or permission errors. The desired ESO condition is `Ready=True`.
 
 Bundled observability architecture:
 
 - Observability is now a first-class deploy contract and stays disabled by default. MK8s Kubernetes observability is target-scoped under `deploy.targets[].observability.*`, with each row bound by the target cluster `instance_id`; VM observability remains under `deploy.observability.vm.*` because it is not a Kubernetes target install. MK8s switches control whether cxcli deploys/configures in-cluster collectors; VM switches control only cxcli-managed VM labels for Nebius built-in journald collection. They do not create the Nebius Monitoring/Logging/Tracing service endpoints themselves.
 - `create` and config normalization keep that customer contract scoped to the enabled infra set. MK8s-only projects get `deploy.targets[].observability.kubernetes.*`, VM-only projects get `deploy.observability.vm.logs.*`, mixed projects get both, and unrelated project-scope defaults such as MK8s GPU deploy validations are omitted when no MK8s component is selected.
-- When `deploy.targets[].observability.enabled=true` for an MK8s target, cxcli auto-enables the bundled `nebius-observability-agent`, `gateway-helm`, and `grafana` Helm releases for that target. The agent source is pinned to `oci://cr.nebius.cloud/observability/public/nebius-observability-agent-helm`, matching the current Nebius Observability Agent for Kubernetes docs. The agent values are materialized from `deploy.targets[].observability.kubernetes.{logs,metrics,traces}.*`; Grafana is materialized with Prometheus, Loki, and Tempo datasources that point at the project public read endpoints. The Grafana service stays `ClusterIP`; external access is through Envoy Gateway/Gateway API, which creates the Nebius load balancer instead of relying on NGINX Ingress. The bundled EnvoyProxy config sets the generated LoadBalancer service to `externalTrafficPolicy: Cluster`, matching Nebius load-balancer support. Grafana, Envoy Gateway control-plane pods, and the managed Envoy proxy use hard node affinity that excludes nodes labeled `nebius.com/gpu=true` so they stay on CPU nodes when the cluster has GPU workers. In the interactive wizard, the auto-selection notice appears while answering the target observability prompts; later app field prompts only ask whether to customize chart values, and answering `n` keeps the auto-selected apps with defaults.
+- Interactive and noninteractive Grafana Apps selection and `grafana install --config PATH --target TARGET` persist local-first routing under `deploy.targets[].observability.routing`. New installations use local VictoriaMetrics, VictoriaLogs, and VictoriaTraces, reusing native Soperator collectors and stores where present. Each signal can independently use local, remote, or both destinations. Fresh Grafana installations stay private (`ClusterIP`); existing access configuration is preserved. Explicit remote Nebius routing uses the catalog's public write/read endpoints and the Nebius agent where it owns the pipeline. Existing configurations without routing retain their declared collection until explicitly configured; see [observability installation](docs/observability.md) for ownership and cutover requirements.
 - When the operator explicitly selects observability apps such as `nebius-observability-agent` or `grafana` before the MK8s target prompt, the wizard treats that as target observability intent and defaults `deploy.targets[].observability.enabled` to `true` for the matching target. Selecting `gateway-helm` alone does not imply observability; it can be used by other Gateway API flows.
 - The `nebius-observability-agent` app entry is the Nebius Observability Agent for Kubernetes Helm chart. Do not select it for standalone VMs. VM observability uses `deploy.observability.vm.*`: the Nebius Compute Monitoring agent that is installed automatically on new VMs plus supported Compute labels for journald log collection.
 - In `component_sources.yaml`, that CPU-only scheduling policy is defined once as the YAML anchor `&nebius_cpu_only_node_affinity` under Grafana `values.affinity` and reused with `*nebius_cpu_only_node_affinity` for other non-GPU charts. The anchor is only catalog syntax to avoid duplicated affinity blocks; generated HelmRelease values contain normal Kubernetes affinity objects. Because this is hard affinity, GPU-only clusters need an operator override or CPU node capacity for these platform pods.
-- The bundled `mk8s` wizard exposes that same contract directly: `deploy.targets[].observability.enabled`, the main logs/metrics/traces toggles, and the `collect_k8s_cluster_metrics` switch are guided prompts; advanced namespace exclusions and agent self-scrape/self-log toggles stay available in `config.yaml` but are hidden from the interactive wizard by default. The catalog default excludes ordinary `kube-system` service/pod annotation scrapes for both logs and metrics while leaving chart-owned infrastructure targets under the agent chart's control. Because the cxcli-managed deploy contract is default-off, cxcli treats cluster-level K8s metrics as part of the enabled baseline once the operator turns this path on. This MK8s contract is separate from the preinstalled Nebius Monitoring agent that already runs on the cluster's node VMs and sends VM/node system metrics through Nebius-managed ingestion to Monitoring dashboards and read APIs.
+- The MK8s wizard asks whether to enable observability, then shares the guided Grafana storage, remote-destination, and optional Pushgateway setup with `grafana install`. Standard datasources are automatic; a preview shows their query URLs and default before optional customization. Advanced collector exclusions remain chart-configurable. This cluster collection is separate from the preinstalled Nebius Monitoring agent on node VMs; local routing does not disable Nebius-managed VM service metrics.
 - The built-in VM Monitoring agent path is always present for Nebius Compute VMs. `deploy.observability.enabled` does not install or remove that built-in agent and does not change how VM service metrics are ingested. The platform-native branch remains `deploy.observability.vm.logs.enabled` plus optional `deploy.observability.vm.logs.systemd_units`, which is the wizard's "collect journald logs?" switch. Answering yes makes cxcli turn on the supported Compute journald collection labels for systemd services. The bundled VM catalog keeps that logs branch enabled by default, but cxcli only materializes the VM journald labels when the parent `deploy.observability.enabled` switch is true.
 - VM observability field guide:
   - `deploy.observability.vm.logs.enabled`: applies Nebius Compute journald labels when the parent `deploy.observability.enabled` switch is true.
@@ -825,10 +1078,11 @@ Bundled observability architecture:
 - Custom MK8s scrape targets stay chart-native and YAML-configurable. Operators can put extra Prometheus scrape configs under the `nebius-observability-agent` chart row at `values.config.metrics.additionalTargets`; cxcli preserves those entries and removes only stale catalog-owned jobs. For Nebius Observability Agent scrape config, source `config.yaml` stores the observability intent under `deploy.targets[].observability.*`; when `collect_k8s_cluster_metrics=true`, render emits cxcli's safe kubelet, cAdvisor, API server, and Hubble scrape jobs into the generated HelmRelease `additionalTargets` and disables the chart's broad built-in cluster-metrics jobs so NFD or other high-volume node labels are not copied into every container metric. The bundled DCGM exporter target uses the Nebius agent's Prometheus annotation discovery instead of a duplicate `additionalTargets` scrape job.
 - The collector-side auth path stays public-safe: the bundled MK8s chart uses `auth_scheme: iam-token-file`, reads `/mnt/cloud-metadata/tsa-token` from the node metadata mount, and talks to `tokens.iam.api.nebius.cloud:443`. Direct external collectors use `Authorization: Bearer <observability static token or IAM token>` with ingest permissions; cxcli does not ask users to paste write-side tokens or static keys into repo config.
 - GPU monitoring stays aligned with NVIDIA's current split: For GPU-enabled MK8s, DCGM Exporter must stay enabled in GPU Operator. Omitting `nvidia-gpu-operator.values.dcgmExporter.enabled` is valid because the bundled GPU Operator chart defaults it to enabled; explicitly setting it to `false` is rejected. Scraping and pushing those metrics to Nebius Monitoring happens only when the MK8s observability metrics path is enabled. cxcli does not invent a `ServiceMonitor` dependency or a duplicate DCGM scrape job. Instead, the bundled catalog declares the `nvidia-dcgm-exporter` service as an app metric target with `discovery.kind: prometheus_annotations`, matching the Nebius agent's documented service endpoint discovery for `prometheus.io/scrape=true`. On Nebius driverful GPU images (`gpu_stack_source: nebius_image`), the bundled GPU Operator values pin the NFD worker to Nebius GPU nodes only when Network Operator is not part of the target. That lets NFD own standard NVIDIA discovery labels such as `nvidia.com/gpu.present=true` on non-GPU-cluster targets while GPU-cluster / InfiniBand targets keep Network Operator as the single NFD owner. Those nodes can still default to `nvidia.com/gpu.deploy.operands=false`, which leaves GPU Operator operand DaemonSets, including `nvidia-dcgm-exporter`, at desired count `0`. When `deploy.targets[].observability.enabled=true`, Kubernetes metrics are enabled, and the GPU Operator app is selected on the `nebius_image` stack, cxcli materializes the catalog-owned GPU node labels required to run only DCGM Exporter plus the GPU Operator validator while keeping GPU Operator device-plugin/GFD disabled so they do not duplicate the Nebius-managed path. `deploy` also reconciles those operand labels onto existing live GPU nodes using the catalog-owned selector, because MK8s node-group label updates apply cleanly to future nodes but may not relabel already-running Node objects. The deploy report still tells operators to verify live `nvidia-dcgm-exporter` endpoints after deploy, because the final signal is runtime readiness, not config presence alone.
-- MK8s observability also has a generated deploy-time guardrail. When a target requires the Nebius Observability Agent and the settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled, `render` writes a target-scoped `mk8s_observability_ingestion` validation into `generated/nebius-cxcli-manifest.json`; `deploy` runs it after Flux convergence using the same handed-off kubeconfig. The check verifies the agent HelmRelease is Ready, rendered signal values match the enabled logs/metrics/traces contract, the agent DaemonSet is Ready, and the OTLP/gRPC service has a ready EndpointSlice when traces are enabled. The settings catalog exposes only the boolean `validation` switch, defaulting to enabled; cxcli keeps the Nebius-agent object names, value paths, selectors, and bounded check limits internal. The pass path uses named or limited Kubernetes API reads instead of listing every agent pod or endpoint, so the guardrail stays fast on large clusters. Results are written to `generated/reports/observability-ingestion-report-<target>.json` and summarized in `deploy-report.md`. This is the default-enabled in-cluster health guardrail; `validate-dashboards` remains the read-side dashboard/datasource/read-endpoint fit check.
-- Read-side Grafana wiring is automated but still kept out of `config.yaml` secrets. The bundled `grafana` app uses the maintained Grafana community Helm repository and leaves Grafana image registry/repository/tag on the chart defaults so the chart version and chart `appVersion` stay the single source of truth. It keeps one Nebius service dashboard import as an example and references cxcli-owned Kubernetes and VM dashboard JSON assets from `component_sources.yaml`; operators can change the bundled dashboard import or dashboard-file references there when they need a different dashboard set. Source `config.yaml` does not embed cxcli-owned dashboard JSON. During `render`, cxcli writes those JSON files under `generated/grafana_dashboards/<target-id>/<folder>/`, renders a Grafana dashboard ConfigMap into the generated Flux target, and points the generated HelmRelease at that ConfigMap with `dashboardsConfigMaps`. The bundled catalog keeps the Grafana.com service-dashboard example under the `nebius` provider, cxcli-owned Kubernetes JSON dashboards under the `nebius-kubernetes` provider, and cxcli-owned VM JSON dashboards under the `nebius-vm` provider because the Grafana Helm chart does not support mixing chart-managed imports and external ConfigMaps on the same provider key. During `deploy`, cxcli creates or reuses Kubernetes Secrets for the Grafana admin password and the Observability read token, ensures a project service account with `viewer`, issues an Observability static key when the token Secret is missing, and mounts that token into Grafana datasource provisioning. If the token Secret already exists but a catalog-bound Prometheus read endpoint clearly rejects the token with `401` or `403`, cxcli replaces the Secret with a fresh Observability static key. The Grafana admin username, admin Secret name/keys, read-token Secret name/key/env var, datasource names, UIDs, types, default marker, read endpoint bindings, deploy-report datasource descriptions, dashboard signal bindings, org ID, fallback Explore queries, and idle session timeout are settings-owned in `component_cli_settings.yaml`; dashboard sources stay source-owned in `component_sources.yaml`. The binding chain is read endpoint -> Grafana datasource -> dashboard source. `Nebius Services` points at the service-provider Monitoring read endpoint used by Nebius/provider service metrics, including built-in VM agent metrics; `Nebius User Metrics` points at the user-ingested Prometheus read endpoint used by Kubernetes workload metrics. The bundled Kubernetes Metrics dashboard uses Nebius-agent/cAdvisor and API-server metrics for cluster and node discovery, CPU, memory, CPU throttling, memory failures, network throughput, network errors/drops, filesystem usage/IO, API-server request rate, and top-pod tables. The Kubernetes Logs dashboard uses Nebius Loki labels for cluster, namespace, and pod selection, log-volume panels, noisy-pod ranking, and warning/error streams. The Kubernetes GPU dashboard uses `Nebius Services`, filters DCGM metrics by `mk8s_cluster_id`, builds GPU-node variables with `query_result(...)`, and keeps GPU utilization, memory, power, temperature, clocks, the current XID code mapped to `No XID` only when the XID read point reports zero, ECC, PCIe replay, and NVLink panels per GPU UUID with `instance_id` as node context. The bundled VM Metrics dashboard uses built-in Nebius Monitoring-agent labels such as `job="nebius-observability-agent"` and `instance_id` from `Nebius Services`; VM Logs uses `Nebius Logs`, defaults to the service-provider `sp_serial` bucket, and can be switched to `default` for user-ingested logs. Bundled Kubernetes dashboard links include the target cluster variable when deploy/flux can resolve the MK8s cluster ID; bundled VM dashboard links do not add that Kubernetes variable. The bundled Traces dashboard stays generic because Tempo resource attributes depend on the emitting workload and are not normalized to a required cluster label by cxcli; it includes recent, slow, and error TraceQL searches that stay valid before workload-specific attributes exist. The generated deploy report now separates public write endpoints, public read endpoints, and Grafana links per configured target, and its Grafana section explains the Prometheus datasource split using the settings-owned datasource descriptions. It lists every cxcli-owned dashboard JSON asset shipped under `src/nebius_cxcli/grafana_dashboards/` and declared in the active catalog, so adding another packaged dashboard makes it visible in `deploy-report.md`; operator-owned external dashboard JSON is still imported into Grafana but is not listed in that report shortcut list. Endpoint labels, URL templates, inclusion conditions, and bucket expansion are settings-owned under the global `observability.endpoints` section, so adding a future tenant/project read endpoint plus a matching Grafana datasource is a settings-catalog change rather than a Python allowlist change. Before live Gateway status is captured, target Grafana links are shown as pending; after the Envoy Gateway `Gateway` has an address and `deploy` or `flux apply` reads it, cxcli waits briefly for the address and the report includes only the Grafana root plus bundled-dashboard links. Separate dashboard-index, Metrics, Logs, and Traces shortcut rows are intentionally omitted from `deploy-report.md` because the bundled dashboard list is the canonical dashboard handoff. `validate-sources` validates every declared dashboard source and then validates that each `components.apps.grafana.cli.dashboard_signals` signal from the settings catalog references one of those dashboard sources. `validate-dashboards <config.yaml>` goes further after deploy by querying the live Grafana datasource proxy for the bound Prometheus, Loki, and Tempo read endpoints and checking each bundled dashboard source against its datasource/read-endpoint chain; Prometheus validation scopes both `k8s.cluster.id` and `mk8s_cluster_id` selectors to the target cluster when that ID is available, and Loki validation uses dashboard variable defaults such as the VM Logs `sp_serial` bucket instead of replacing every variable with a wildcard. The command shows dashboard-level progress with the current `<target-id>: <folder>/<dashboard>` binding while it waits on live Grafana calls. The same section includes a `kubectl --context=...` command to retrieve the target cluster's admin password. cxcli keeps static tokens and Grafana passwords out of repo config and generated Flux manifests.
-- For target-scoped Grafana rows, `validate-dashboards` resolves an explicit kube context from generated Grafana status, the deploy report, the matching current local kubeconfig context, an unambiguous local kubeconfig context, or the generated MK8s handoff before running `kubectl`; unresolved targets fail fast instead of using an unrelated ambient current context.
-- `grafana --export-dashboard <grafana-base-or-folder-url>` exports dashboards through the Grafana API into operator-owned JSON files under `./dashboards` by default, while `grafana --dashboard-json <path>` normalizes local dashboard JSON through the same file-writing and attach path without calling Grafana APIs. API export authenticates with `GRAFANA_TOKEN`, `NEBIUS_IAM_TOKEN`, `nebius iam get-access-token`, `--token-env`, or Basic auth from `--username` plus `--password-env`. Export-only never changes the catalog. Adding `--attach` updates the active `component_sources.yaml` with JSON dashboard entries under the bundled Grafana app, creates the matching dashboard provider when needed, rewrites dashboard datasource refs to one selected cxcli datasource UID/type, refuses to mix JSON dashboards into a Grafana.com `gnetId` provider, and validates the updated catalog before keeping the edit.
+- MK8s observability also has a generated deploy-time guardrail. When a target requires the Nebius Observability Agent and the settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled, `render` writes a target-scoped `mk8s_observability_ingestion` validation into `generated/nebius-cxcli-manifest.json`; `deploy` runs it after Flux convergence using the same handed-off kubeconfig. The check verifies the agent HelmRelease is Ready, rendered signal values match the enabled logs/metrics/traces contract, the agent DaemonSet is Ready, and the OTLP/gRPC service has a ready EndpointSlice when traces are enabled. The settings catalog exposes only the boolean `validation` switch, defaulting to enabled; cxcli keeps the Nebius-agent object names, value paths, selectors, and bounded check limits internal. The pass path uses named or limited Kubernetes API reads instead of listing every agent pod or endpoint, so the guardrail stays fast on large clusters. Results are written to `generated/reports/observability-ingestion-report-<target>.json` and summarized in `deploy-report.md`. This is the default-enabled in-cluster health guardrail; `grafana validate` remains the read-side dashboard/datasource/read-endpoint fit check.
+- Read-side Grafana wiring is automated but still kept out of `config.yaml` secrets. The bundled `grafana` app uses the maintained Grafana community Helm repository and leaves Grafana image registry/repository/tag on the chart defaults so the chart version and chart `appVersion` stay the single source of truth. It keeps one Nebius service dashboard import as an example and references cxcli-owned Kubernetes and VM dashboard JSON assets from `component_sources.yaml`; operators can change the bundled dashboard import or dashboard-file references there when they need a different dashboard set. Source `config.yaml` does not embed cxcli-owned dashboard JSON. During `render`, cxcli writes those JSON files under `generated/grafana_dashboards/<target-id>/<folder>/`, renders a Grafana dashboard ConfigMap into the generated Flux target, and points the generated HelmRelease at that ConfigMap with `dashboardsConfigMaps`. The bundled catalog keeps the Grafana.com service-dashboard example under the `nebius` provider, cxcli-owned Kubernetes JSON dashboards under the `nebius-kubernetes` provider, and cxcli-owned VM JSON dashboards under the `nebius-vm` provider because the Grafana Helm chart does not support mixing chart-managed imports and external ConfigMaps on the same provider key. During `deploy`, cxcli creates or reuses Kubernetes Secrets for the Grafana admin password and the Observability read token, ensures a project service account with `viewer`, issues an Observability static key when the token Secret is missing, and mounts that token into Grafana datasource provisioning. If the token Secret already exists but a catalog-bound Prometheus read endpoint clearly rejects the token with `401` or `403`, cxcli replaces the Secret with a fresh Observability static key. The Grafana admin username, admin Secret name/keys, read-token Secret name/key/env var, datasource names, UIDs, types, default marker, read endpoint bindings, deploy-report datasource descriptions, dashboard signal bindings, org ID, fallback Explore queries, and idle session timeout are settings-owned in `component_cli_settings.yaml`; dashboard sources stay source-owned in `component_sources.yaml`. The binding chain is read endpoint -> Grafana datasource -> dashboard source. `Nebius Services` points at the service-provider Monitoring read endpoint used by Nebius/provider service metrics, including built-in VM agent metrics; `Nebius User Metrics` points at the user-ingested Prometheus read endpoint used by Kubernetes workload metrics. The bundled Kubernetes Metrics dashboard uses Nebius-agent/cAdvisor and API-server metrics for cluster and node discovery, CPU, memory, CPU throttling, memory failures, network throughput, network errors/drops, filesystem usage/IO, API-server request rate, and top-pod tables. The Kubernetes Logs dashboard uses Nebius Loki labels for cluster, namespace, and pod selection, log-volume panels, noisy-pod ranking, and warning/error streams. The Kubernetes GPU dashboard uses `Nebius Services`, filters DCGM metrics by `mk8s_cluster_id`, builds GPU-node variables with `query_result(...)`, and keeps GPU utilization, memory, power, temperature, clocks, the current XID code mapped to `No XID` only when the XID read point reports zero, ECC, PCIe replay, and NVLink panels per GPU UUID with `instance_id` as node context. The bundled VM Metrics dashboard uses built-in Nebius Monitoring-agent labels such as `job="nebius-observability-agent"` and `instance_id` from `Nebius Services`; VM Logs uses `Nebius Logs`, defaults to the service-provider `sp_serial` bucket, and can be switched to `default` for user-ingested logs. Bundled Kubernetes dashboard links include the target cluster variable when deploy/flux can resolve the MK8s cluster ID; bundled VM dashboard links do not add that Kubernetes variable. The bundled Traces dashboard stays generic because Tempo resource attributes depend on the emitting workload and are not normalized to a required cluster label by cxcli; it includes recent, slow, and error TraceQL searches that stay valid before workload-specific attributes exist. The generated deploy report now separates public write endpoints, public read endpoints, and Grafana links per configured target, and its Grafana section explains the Prometheus datasource split using the settings-owned datasource descriptions. It lists every cxcli-owned dashboard JSON asset shipped under `src/nebius_cxcli/grafana_dashboards/` and declared in the active catalog, so adding another packaged dashboard makes it visible in `deploy-report.md`; operator-owned external dashboard JSON is still imported into Grafana but is not listed in that report shortcut list. Endpoint labels, URL templates, inclusion conditions, and bucket expansion are settings-owned under the global `observability.endpoints` section, so adding a future tenant/project read endpoint plus a matching Grafana datasource is a settings-catalog change rather than a Python allowlist change. Before live Gateway status is captured, target Grafana links are shown as pending; after the Envoy Gateway `Gateway` has an address and `deploy` or `flux apply` reads it, cxcli waits briefly for the address and the report includes only the Grafana root plus bundled-dashboard links. Separate dashboard-index, Metrics, Logs, and Traces shortcut rows are intentionally omitted from `deploy-report.md` because the bundled dashboard list is the canonical dashboard handoff. `validate-sources` validates every declared dashboard source and then validates that each `components.apps.grafana.cli.dashboard_signals` signal from the settings catalog references one of those dashboard sources. `grafana validate --config <config.yaml> --target <target>` goes further after deploy by querying the live Grafana datasource proxy for the bound Prometheus, Loki, and Tempo read endpoints and checking each bundled dashboard source against its datasource/read-endpoint chain; Prometheus validation scopes both `k8s.cluster.id` and `mk8s_cluster_id` selectors to the target cluster when that ID is available, and Loki validation uses dashboard variable defaults such as the VM Logs `sp_serial` bucket instead of replacing every variable with a wildcard. The command shows dashboard-level progress with the current `<target-id>: <folder>/<dashboard>` binding while it waits on live Grafana calls. The same section includes a `kubectl --context=...` command to retrieve the target cluster's admin password. cxcli keeps static tokens and Grafana passwords out of repo config and generated Flux manifests.
+- Cluster Grafana commands bind access to the accepted immutable cluster identity, owned ready release and existing admin Secret over a temporary loopback tunnel; they never fall back to an unrelated ambient kube context.
+- Grafana import checks managed dashboard ownership before datasource selection. Cluster imports reuse Kubernetes authentication setup across selection, then refresh locked admission, credentials and the Grafana connection before writing. `--overwrite` allows temporary updates to editable classic file-provisioned UIDs while preserving ownership and folder. Other managed UIDs require source updates or a separate copy with a new UID.
+- Install and configure local-first observability with `grafana install --config PATH --target TARGET`; see [storage, collectors and routing](docs/observability.md). Dashboard commands are `grafana import`, `grafana export`, and `grafana validate`. Run `nebius-cxcli grafana --help` for copyable file/directory import, attachment, cluster/external authentication, export and offline validation examples. See [Grafana dashboards](docs/grafana-dashboards.md) for cluster Secret authentication, external token/SSO flows, attachment and recovery.
 - Grafana intentionally has two Prometheus datasources. `Nebius Services` reads `https://read.monitoring.api.nebius.cloud/projects/<project-id>/service-provider/prometheus`, which exposes Nebius/provider service metrics such as platform, node, GPU, and managed service telemetry. `Nebius User Metrics` reads `https://read.monitoring.api.nebius.cloud/projects/<project-id>/prometheus`, which exposes customer/user-ingested Prometheus metrics such as Kubernetes API, cAdvisor/container, namespace, pod, and workload metrics. These endpoints are server-side metric-domain views, not automatic PromQL aggregation; dashboards choose the appropriate datasource through the catalog metadata.
 - cxcli does not vendor or redistribute third-party binaries, Helm charts, container images, package repositories, or Grafana.com dashboards referenced by the bundled catalog. Those upstream artifacts, including Grafana, Envoy Gateway, NVIDIA operators, Flux, Terraform, Helm, kubectl, Grafana.com dashboard imports, and any Nebius/public package repositories used at deploy time, remain governed by their own licenses, support terms, usage terms, and image/chart/package distribution policies. This project's license covers the cxcli source, bundled cxcli-owned dashboard JSON, and generated automation, not the operator's deployed use of referenced third-party artifacts.
 - For the full public-safe architecture, endpoint map, agent split, and onboarding model, see [docs/design.md](docs/design.md#observability).
@@ -836,14 +1090,14 @@ Bundled observability architecture:
 Bundled MK8s GPU app policy:
 
 - MK8s GPU software defaults are policy-driven in code and source-driven in the catalog.
-- The bundled catalog keeps chart source selection, release metadata, and default Helm values in `component_sources.yaml`; activation rules, validation images, thresholds, and timeouts live in `component_cli_settings.yaml`. The CLI only evaluates those rules against the selected MK8s context. Platform charts with documented safe HA knobs default to two replicas where upstream defaults are one: Grafana's Envoy data plane, Envoy Gateway, cert-manager controller/webhook/cainjector, and External Secrets controller/webhook/cert-controller. External Secrets also enables leader election with that default. Grafana itself stays on the upstream one-replica default because the bundled chart path uses per-pod SQLite/emptyDir storage; runtime validation rejects `grafana.values.replicas > 1` unless the chart values configure a shared MySQL or Postgres database. DaemonSets, validation jobs, n8n's enterprise-only multi-main path, and charts without a chart-native safe replica knob stay on upstream defaults.
+- The bundled catalog keeps chart source selection, release metadata, and default Helm values in `component_sources.yaml`; activation rules, validation images, thresholds, and timeouts live in `component_cli_settings.yaml`. The CLI only evaluates those rules against the selected MK8s context. Platform charts with documented safe HA knobs default to two replicas where upstream defaults are one: Grafana's Envoy data plane, Envoy Gateway, cert-manager controller/webhook/cainjector, and External Secrets controller/webhook/cert-controller. External Secrets also enables leader election with that default. Grafana defaults to two stateless replicas sharing an automatically selected PostgreSQL component, runtime-only credentials and a retained 10Gi RWO database PVC. New installations use Grafana chart 13.2.5/application 13.2.2 and PostgreSQL chart 0.20.6/application 18.6. Existing SQLite installations fail before application changes; no migration is provided. PostgreSQL remains a single primary, so durable storage does not imply database HA or backups. See [Grafana persistence and dashboards](docs/grafana-dashboards.md#persistent-storage-and-replicas). DaemonSets, validation jobs, n8n's enterprise-only multi-main path, and charts without a chart-native safe replica knob stay on upstream defaults.
 - The same `source.portable` / `source.local` contract now applies to first-party Helm charts as well as Terraform modules.
 - The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and `operator_managed` node groups. On Nebius-managed images the CLI disables the driver, the NVIDIA Container Toolkit runtime (`values.toolkit.enabled`), and the Nebius `NVIDIADriver` CRD path. On `operator_managed` stacks it keeps the normal GPU Operator driver and toolkit paths enabled but still forces `values.driver.nvidiaDriverCRD.enabled=false`, because the bundled GPU Operator chart's Nebius `NVIDIADriver` CRD template is currently broken during Flux install. The catalog now keeps only those Nebius-specific operator deltas instead of restating live chart defaults. cxcli does not pre-label operator-managed nodes with `nvidia.com/gpu.deploy.operands=true` or `nvidia.com/gpu.deploy.device-plugin=true`; those operand labels are manual escape hatches for preinstalled-driver or forced-operand workflows, while the operator-managed path lets GPU Operator bring the stack up in dependency order and validates readiness through ClusterPolicy, DaemonSets, and allocatable `nvidia.com/gpu`.
 - The `gpu_stack_source` wizard menu is part of the GPU-enabled MK8s flow and keeps the same stored values but labels them with the driver ownership difference: `nebius_image` means the Nebius GPU node image already includes the host NVIDIA driver/toolkit, while `operator_managed` means GPU Operator installs and manages those host components. CPU-only MK8s configs omit `inputs.node_group_defaults.gpu.gpu_stack_source` and per-node-group `gpu_stack_source`; when GPU node groups are enabled and the field is omitted, the module and cxcli GPU policy fallback still use `nebius_image`.
 - Because that bundled operator baseline assumes the DCGM source remains available to the operator, GPU-enabled MK8s config now fails fast if it explicitly sets `nvidia-gpu-operator.values.dcgmExporter.enabled: false`. Prometheus scrape wiring remains the chart-native `values.dcgmExporter.serviceMonitor.*` surface rather than a `deploy` toggle, and it should only be enabled when the target cluster already has a Prometheus-operator-compatible observability stack.
 - cxcli treats GPU-cluster / RDMA as a two-stage decision. First it queries the live Nebius project platform/preset inventory for the exact selected GPU platform and preset and uses `allow_gpu_clustering` as the source of truth for whether the shape is cluster-capable at all. Second, the deployment only enters the GPU-cluster / InfiniBand / GPUDirect-RDMA path when a GPU node group references `inputs.gpu_clusters` with an `infiniband_fabric`. Resource-name preflight still checks every GPU cluster referenced by a node group's `gpu_cluster_key`, even before a fabric is selected, so stale live GPU-cluster names are caught early. In the plain MK8s node-group wizard, selecting a live cluster-capable Capacity Dashboard row materializes that row's fabric automatically; omitting the referenced fabric in manual config keeps the target on the Ethernet-only path for rendering, validation, and app auto-selection.
 - `nvidia-gpu-operator` is auto-enabled for every MK8s cluster with at least one GPU `inputs.node_groups` entry. `inputs.node_group_defaults.gpu.*` helper values alone never make a target GPU-enabled; they must be materialized into a real GPU node group first. `nvidia-network-operator` is auto-enabled only on that actual GPU-cluster path, plus the special `gpu_stack_source: operator_managed` B200/B200A path that still needs RDMA plumbing. When Network Operator is required, cxcli renders a Flux `dependsOn` edge so it reconciles before GPU Operator, suppresses GPU Operator's own NFD so the bundled stack keeps only one NFD instance, explicitly enables Network Operator NFD/NodeFeatureRules because the chart defaults them off, and renders an explicit `NicClusterPolicy` patch for `rdma/shared_device` on the InfiniBand path instead of relying on chart defaults. That patch disables the RDMA shared-device plugin's periodic host-device rescan with `periodicUpdateInterval: 0`, while preserving startup discovery and pod-facing RDMA resource advertisement. The bundled catalog keeps Network Operator NFD enablement, Network Operator driverful node selection, and GPU Operator non-cluster Nebius-image NFD affinity as separate named policy sets, so NFD ownership stays explicit and selector details stay catalog-owned without being repeated inline in multiple rules. Those MK8s GPU policy-managed chart-value paths are authoritative on `create`, `component add`, direct `config.yaml` normalization, and `render`: cxcli rewrites the currently applicable paths from the catalog and clears no-longer-applicable policy paths instead of preserving stale older operator values from `config.yaml`. Stale policy-managed GPU app rows can be pruned when no target needs them, including auto target-scoped rows that carry catalog source metadata, but explicitly authored enabled app rows with their own repo/version/namespace remain selected. In multi-target projects, cxcli seeds any missing target-bound required app rows and evaluates policy per target-bound app row, so an RDMA cluster and an Ethernet-only 1-GPU test cluster can coexist without sharing incompatible GPU Operator or Network Operator values.
-- MK8s node inventory smoke is required for every MK8s deploy target as a fast read-only all-node gate. It performs one bulk Kubernetes node inventory read, reports every node's Ready state plus CPU/GPU/node-group totals, groups node details by node group in the JSON detail report, and checks that GPU-enabled targets have scheduler-visible `nvidia.com/gpu` allocatable resources, including configured or inventoried GPU node-group presence and minimum expected Ready GPU node counts when available, before any sampled CUDA pod or explicit benchmark workload starts. Rendered MK8s node groups carry the canonical `nebius.com/node-group` label so that the Kubernetes-only inventory can match live nodes back to the configured node-group keys. On onboarded clusters, inventory accepts the provider-native `nebius.com/node-group-id` label as the group identity when the rendered name label is absent; the rendered label remains authoritative when both are present. Soperator smoke validates the canonical `sconfigcontroller` deployment and the adapter-owned read-only `nvidia-driver-root` mount; CUDA libraries and device access are proven separately by the runtime Slurm GPU jail check. Runtime inventory, deploy-smoke, acceptance, benchmark, GPU-stack, and CUDA-visibility reports are lifecycle evidence under `generated/reports/`, so their creation does not alter the render-owned project snapshot used for upgrade recovery.
+- MK8s node inventory smoke is required for every MK8s deploy target as a fast read-only all-node gate. It performs one bulk Kubernetes node inventory read, reports every node's Ready state plus CPU/GPU/node-group totals, groups node details by node group in the JSON detail report, and checks that GPU-enabled targets have scheduler-visible `nvidia.com/gpu` allocatable resources, including configured or inventoried GPU node-group presence and minimum expected Ready GPU node counts when available, before any sampled CUDA pod or explicit benchmark workload starts. Rendered MK8s node groups carry the canonical `nebius.com/node-group` label so that the Kubernetes-only inventory can match live nodes back to the configured node-group keys. On onboarded clusters, inventory accepts the provider-native `nebius.com/node-group-id` label as the group identity when the rendered name label is absent; the rendered label remains authoritative when both are present. Soperator smoke validates the canonical `sconfigcontroller` deployment and the adapter-owned read-only `nvidia-driver-root` mount; CUDA libraries and device access are proven separately by the runtime Slurm GPU jail check. Runtime inventory, compatibility admission, deploy-smoke, acceptance, benchmark, GPU-stack, and CUDA-visibility reports are lifecycle evidence under `generated/reports/`, so their creation does not alter the render-owned project snapshot used for upgrade recovery.
 - During final Soperator upgrade validation, a GPU visibility probe that cannot
   schedule because every target GPU is already owned by a Slurm worker is
   completed inside the exact Ready `slurmd` pod on each bounded sampled node.
@@ -1028,7 +1282,7 @@ Source profile selection:
 
 - `portable` is the default. It always uses `source.portable`.
 - `local` prefers `source.local` and falls back to `source.portable` when `source.local` is unset.
-- Choose the active profile with the global CLI flag `--source-profile {portable|local}`. When omitted, the CLI defaults to `portable`.
+- Choose the active profile with the global CLI flag `--source-profile {portable|local}`. When omitted, `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE` selects the profile; otherwise it defaults to `portable`.
 - Or set `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE={portable|local}`.
 - For schema/output introspection, nebius-cxcli prefers a resolvable `source.local` when one exists, even while the active profile is `portable`. This keeps workstation/CI validation fast without changing the emitted portable module source addresses.
 
@@ -1069,10 +1323,72 @@ Source requirements enforced by `validate-sources`:
   - HTTP repo format: `source.portable.repo` must be a Helm repo base URL, `repo/index.yaml` must be readable, chart must exist in `entries`, and configured version must exist.
   - OCI format: `source.portable.repo` must be an OCI repo prefix (`oci://...`), and `source.portable.chart` supplies the chart name.
   - Git-hosted chart format: `source.portable.repo` may be a GitHub tree URL, and `source.portable.chart` supplies the logical chart name.
-  - Generic catalog chart versions must be exact and immutable; `latest` is
-    rejected. Soperator is not a generic catalog chart. Its lifecycle commands
+  - Generic catalog chart versions must identify one exact `X.Y.Z` release;
+    catalog validation and rendering reject `latest`, version ranges, wildcards,
+    and incomplete versions. Exact prerelease and build suffixes are allowed.
+    An exact version selector alone does not guarantee immutable package bytes.
+    Soperator is not a generic catalog chart. Its lifecycle commands
     resolve `latest` through the official release authority, freeze one exact
     release, and validate that official OCI release before execution.
+    The [shared compatibility matrix](docs/compatibility-matrix.md) owns exact
+    GPU/Network version-set defaults and evidence for MK8s/Soperator. Validate,
+    render, deploy and upgrade use its closed evaluator internally. Unknown vendor
+    support records an internal warning outcome; known unsupported combinations
+    and failed hard checks block with actionable errors. Commands omit compatibility
+    tables and routine assessment details while retaining progress, operational
+    plans and runtime health. Existing manifests and operation reports keep the
+    complete evidence; plain validation adds no report files. An omitted
+    or empty chart `kubeVersion` means no declared constraint, including on enabled
+    dependencies; it does not establish Kubernetes support. Native chart checks
+    reject malformed SHA-256 image digests and duplicate environment names within
+    a container before deployment.
+    Grafana uses its chart-provided Pod IP binding for alerting peer addresses.
+    A failed first PostgreSQL-backed Grafana install can resume after its stored
+    Helm manifest proves the backend and all retained credentials are present;
+    SQLite and ambiguous history remain blocked. Render
+    freezes the selected catalog, matrix, effective values and chart inputs;
+    OCI execution is pinned to the assessed digest. HTTP/HTTPS repositories use
+    exact chart versions and a fresh content check against the frozen snapshot
+    before deployment effects. Changed content, mismatched chart identity and
+    unavailable repositories block execution. This checks source freshness at
+    admission; subsequent Flux HTTP fetches still trust the publisher and are not
+    continuously digest-pinned. Prefer HTTPS, or OCI for digest-addressed
+    execution. Local charts replay from frozen bytes. Git chart execution remains
+    blocked until a dedicated adapter is available.
+    Resuming deploy checks compatibility against the original rendered generation
+    and its projection of the accepted jail state before restoring checkpointed
+    execution files. The effective admission must match the original run exactly;
+    the compatibility guard remains strict. Hydrated output values and
+    temporary maintenance settings therefore do not require another render.
+    Recovery then prepares runtime inputs and Terraform from the restored
+    configuration; cached reports cannot replace fresh compatibility admission.
+    Release resume retains the checks proposal from the immutable deployment
+    inputs. Completed render publications retain their admitted transaction and
+    preimage hashes even after deleted files disappear; recovery independently
+    verifies current render-owned files and leaves lifecycle receipt contents
+    with their owning writers. It does not replay completed deletions or replace
+    the interrupted operation's identity.
+    Desired-resource verification uses the same shared-prerequisite rules as
+    ordinary application staging. A namespace reference in both bundles keeps
+    its protected declaration; the ordinary app ownership marker cannot adopt
+    that namespace. Conflicting namespace settings still stop execution.
+    Deployment recovery snapshots and command receipts stay in owner-only local
+    files. Matching attempts reuse recorded stage admissions and independently
+    verify effects; changed inputs create another attempt. No deployment checkpoint
+    or execution lease is stored in S3. Terraform retains native state and locking.
+    Static Nebius credentials do not inherit AWS session tokens. Backend buckets
+    must be active, belong to the selected project and use atomic Object Storage.
+    Anonymous access to Terraform state or locks is rejected; disjoint public
+    prefixes remain supported. Policies and versioning settings are preserved.
+
+    Chart `appVersion`, controller image tags, and verified binary versions
+    remain separate evidence fields.
+    Direct `flux apply` admits all selected application targets before setup or
+    effects, rejects unresolved NFS/MysteryBox bindings, and executes a private
+    copy of the frozen generation. `upgrade
+    helm-chart` stages artifacts and assesses operator transitions before
+    publishing; `--dry-run` performs the same assessment without project writes.
+    See the [application admission contract](docs/compatibility-matrix.md#application-command-admission).
   - Local chart format: `source.local.path` must resolve to an existing chart directory when the active source profile is `local`.
   - Local chart staging copies symlink targets into the staging tree, rebuilds
     `file://` chart dependencies in that temporary staging tree so local child
@@ -1084,9 +1400,9 @@ Source requirements enforced by `validate-sources`:
     post-Flux apply path.
   - Portable build/release verification strips `source.local` and fails if an app chart still has no usable `source.portable`.
   - GitHub tree format: `source.portable.repo` may point at a chart directory in git (`https://github.com/<owner>/<repo>/tree/<ref>/<chart-path>`). Helm validates the chart from that path directly.
-  - Helm chart sources are fail-fast validated with `helm show chart`; missing Helm or Git for Git tree chart sources, unreachable repos, bad refs, missing charts, and version mismatches are hard failures.
-  - Set `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS` to raise the Helm validation timeout for slow OCI registries or chart sources without changing the catalog.
-  - `validate-sources` validates the full catalog, including optional app charts. `create` and `component add` first validate infra sources, then validate only the app chart sources selected for that operation plus any app dependencies they auto-enable, and run a final app-source check after the wizard to catch late auto-enabled rows before `config.yaml` is written. If a transient Helm repository or registry timeout blocks an interactive create, retry, raise `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS`, or rerun with `--no-validate-sources` to skip that source check.
+  - Helm chart sources are validated with `helm show chart` and downloaded with `helm pull --untar` for layout checks. Metadata, values, and chart downloads retry transport timeouts and connection resets up to three attempts, with one- then two-second backoff plus up to 250 milliseconds of jitter per delay. Each download attempt uses a fresh extraction directory; failed or interrupted downloads are removed. Missing Helm or Git, authentication/certificate errors, bad refs, missing charts, and version mismatches remain hard failures; unresolved transport errors fail after the retry budget. Diagnostics omit signed download URLs. Failed downloads are not cached as validation results, so a later check can recover.
+  - `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS` sets the per-attempt Helm timeout for slow OCI registries or chart sources without changing the catalog.
+  - `validate-sources` validates the full catalog, including optional app charts. `create` and `component add` first validate infra sources, then validate only the app chart sources selected for that operation plus any app dependencies they auto-enable, and run a final app-source check after the wizard to catch late auto-enabled rows before `config.yaml` is written. If transient download failures persist, retry the command; for timeouts, raise `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS`. Ordinary `create` and `component add` also support `--no-validate-sources` to skip this source check. `soperator create` requires source validation and does not expose that flag.
   - `validate-sources` also materializes the resolved chart and checks the CLI-facing chart contract:
     - fails when `Chart.yaml`, `values.yaml`, or `templates/` are missing
     - fails when `Chart.yaml` is missing `apiVersion`, `name`, or `version`
@@ -1483,8 +1799,8 @@ Wizard field behavior:
   capacity without QoS objects. The former downstream-only `with-qos-preemption`
   profile is no longer offered, and configs containing downstream-only
   `qosConfiguration` or `schedulingConfig` fields fail validation. Supported direct
-  upstream chart values can be supplied through fresh-install `--values-file`.
-  Saved plans retain that configuration; resume does not accept new values.
+  upstream chart values can be supplied through `soperator create --values-file`.
+  Deploy uses those settings from the frozen rendered configuration.
   `values.rebooter.enabled=false` is also the default; the normal wizard does not prompt
   this raw host-maintenance helper. Enabling it turns on the NodeConfigurator reboot
   helper and RBAC. The chart still keeps a no-op NodeConfigurator custom container
@@ -1519,7 +1835,9 @@ Wizard field behavior:
   production resource defaults, and operators can still override the rendered Helm
   values in `config.yaml`. The production wizard exposes curated service-role count and
   autoscaling helpers for `login` and `accounting`. Login and accounting default to two
-  fixed nodes each, and worker capacity defaults to one node. When an eligible
+  fixed nodes each, and each enabled CPU or GPU worker shape defaults to two
+  worker hosts (two CPU and two GPU workers for mixed profiles). Explicit worker
+  counts remain unchanged. When an eligible
   service-role helper is enabled, cxcli materializes the matching concrete
   `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it writes
   the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay hidden. The app
@@ -1539,7 +1857,136 @@ Wizard field behavior:
   clusters. Each `worker_*_total_nodes` value is a Kubernetes worker host count for that
   shape, not total GPU count and not an aggregate CPU/GPU split. cxcli maps it to
   matching worker NodeSet replicas, while GPU count per host comes from the selected
-  preset and is written to `slurmd.resources.gpu`. Each `worker_*_nodes_per_group` value
+  preset and is written to `slurmd.resources.gpu`. New managed workers derive
+  missing `slurmd.resources.cpu` and `memory` from the selected preset using the
+  [Nebius reference reserve policy](https://github.com/nebius/nebius-solutions-library/blob/400d53abbcc7daa5553216aab1f0973ac40cb406/soperator/modules/available_resources/reserve.tf):
+  reserve one CPU and 10% of RAM plus 2 GiB, deduct configured Munge and enabled
+  SSSD resources, then apply upstream rounding and its Kruise daemon reserve.
+  The `8gpu-128vcpu-1600gb` preset with the bundled sidecars produces `125950m`
+  CPU and `1436Gi` memory per slurmd. Slurm's physical CPU topology remains
+  independent of that CPU-time quota. These defaults leave room for node services;
+  the complete Pod and agent requests must fit actual Kubernetes allocatable
+  capacity. Missing `nodeConfig.gresConfig` lists exactly the selected GPU devices:
+  `/dev/nvidia0` for one GPU and `/dev/nvidia[0-7]` for eight. The Soperator row's
+  `worker-defaults` map records generated CPU, memory, physical topology and GPU
+  device-list values, so changing the preset updates unchanged
+  defaults. A value edited away from its recorded default becomes operator-owned.
+  Remove a field from `worker-defaults` to pin its current value.
+  Existing values without that metadata are preserved; remove a CPU or memory
+  field or `nodeConfig.gresConfig` to request a newly derived default before
+  deployment. Impossible allocations fail instead of being silently reduced.
+  Registered workers retain their discovered topology. These authoring defaults
+  do not rewrite frozen inputs for an unfinished deployment; existing incorrect
+  GPU device lists need an explicitly admitted recovery.
+  Rendered recurring ActiveChecks derive `slurmJob.gpusPerNode` from homogeneous
+  GPU worker counts, so one-GPU workers request one GPU and eight-GPU workers
+  request eight. An explicit positive allocation must fit every GPU NodeSet;
+  mixed GPU counts require an explicit fitting allocation. Native single-worker
+  NCCL acceptance distinguishes a validated single-GPU smoke test (whose bus
+  bandwidth can be zero) from multi-GPU transfer validation, which still requires
+  positive bandwidth.
+
+  Non-interactive `soperator create --no-interactive` defaults to **Standard**.
+  An explicit `--fast-deploy` or `--no-fast-deploy` takes precedence over
+  `values.deploymentProfile` in `--values-file`; without either, Standard applies.
+  Interactive `soperator create` always asks about deployment mode. A supplied
+  flag, then a values-file profile, provides the initial selection; the final
+  answer wins. Without a supplied mode there is no default: enter `y` for Fast
+  Dev/Test or `n` for Standard; blank Enter repeats the question. The completed
+  field wizard preserves that answer without asking again. Fast supports CPU,
+  one-GPU, eight-GPU and mixed workers. These flags are separate from the
+  hardware `--profile cpu|gpu|mixed`. This creation policy applies only to
+  `soperator create`; other commands and generic wizard defaults are unchanged.
+  The saved value is `fast-dev-test` or `standard`; an existing configuration
+  without it remains standard. The retired `diagnosticsProfile` key is rejected.
+  Finish any active operation with its original executable before converting it.
+
+  Standard preserves native diagnostic defaults and valid configured overrides;
+  it does not force every diagnostic on. Standard with a one-GPU worker is
+  rejected before saving or rendering: revise worker sizing or explicitly choose
+  Fast Dev/Test. Creation prints the saved intent, render prints the profile in
+  successfully published Soperator artifacts and their values-file path, and
+  deployment describes its frozen inputs. Compact summaries report counts and
+  explicitly recorded controls only when that evidence is available. They do not
+  perform additional chart resolution or network checks, and do not claim live
+  qualification. Policies remain in the existing Python implementation.
+
+  **Fast deploy — Dev/Test only. Slurm readiness and a test job are verified.
+  GPU health and performance qualification are disabled.** Fast installation
+  retains user creation, jail/packages, storage, topology and operational job
+  hooks. It disables reviewed GPU diagnostics, prepull and redundant SSH,
+  scheduler and healthy-node probes, their diagnostic launchers and reviewed
+  passive diagnostics. Housekeeping remains enabled without gating setup.
+  Fast Dev/Test does not use a release-version or chart-digest allowlist. Compatible
+  official upstream releases remain usable without a cxcli update. It disables
+  these diagnostics on the rendered copy even when their controls are absent from
+  the authored configuration; required setup checks remain enabled. Rendering
+  verifies effective active/passive suppression, retained dependencies and
+  operational hooks, and rejects conflicting overrides or unsupported controls.
+  Unrelated custom Slurm settings are allowed when effective hooks remain valid.
+  Source, package and recovery identities remain frozen and verified.
+
+  Fresh fast installation applies the release graph once and performs required
+  bootstrap before final readiness. During recovery, worker registration is
+  checked while maintenance still protects scheduling. Only checkpoint-owned
+  drains and reservations can be restored; final ordinary-user admission still
+  rejects drained or maintenance workers. An ordinary `nebius` user runs a bounded
+  hostname job on every initially active worker, grouped by partition and
+  CPU/GPU; GPU jobs allocate one GPU per worker. This proves scheduling and
+  allocation, not GPU health or performance. Ephemeral maximum capacity is not
+  awakened for acceptance. Standard one-GPU configurations fail before deployment;
+  one-GPU workers require the explicit Dev/Test profile. Coordinated updates run
+  the smoke job after the parent restores ordinary scheduling. Completed recovery
+  verifies the original job proof without submitting or cancelling a job.
+  Fast day-2 acceptance reuses completed bootstrap receipts and verifies current
+  passive policy on every worker. It does not require diagnostic hook reports
+  from waived checks or count those checks as passed. Standard diagnostic hook
+  coverage and the mandatory final Fast ordinary-user smoke remain required.
+  Smoke output and the job working directory use the ordinary user's resolved
+  account home, including Soperator's retained `/opt/soperator-home` layout.
+  Recovery preserves canceled attempts that never submitted a job; submitted
+  attempts remain bound to their original user identity and home.
+  Workspace preparation precedes the two-minute scheduling/execution budget.
+  Submission rechecks operation authority after saving its intent; losing
+  authority during that checkpoint prevents job submission.
+  A deadline rejection before submission transport is durably recorded as not
+  dispatched. Transport failures remain uncertain until owned job evidence is
+  found; an empty queue or accounting response alone cannot retire that intent.
+  For an expired unresolved smoke intent, interactive deploy can offer retirement
+  of that exact attempt after successful queue and accounting checks. Explicit
+  confirmation preserves the original intent and records its outcome as unknown
+  in the shared recovery checkpoint. Deployment then requires a new passing smoke
+  job. Late active jobs, changed receipts or lost authority still block acceptance;
+  completed recovery verifies the new proof without submitting another job.
+  Recovery accepts equivalent wait/refresh durations such as `1m` and `60s`, while
+  retaining the recorded options and rejecting actual policy changes.
+
+  Both profiles size vmagent `remoteWrite.queues` as
+  `2 + floor(total configured worker capacity / 60)`, including ephemeral maxima
+  and excluding service nodes. The derived string exists only in rendered values;
+  an explicit `observability.vmStack.values.vmagent.spec.extraArgs` override is
+  retained. New generations resize automatically; recovery uses frozen values.
+  Alerting stays enabled, and queue sizing does not guarantee absence of every
+  ingestion alert.
+
+  Deployment writes `generated/reports/deploy-timing-*.json` outside its temporary
+  cache, with phase/subprocess duration, parent, attempt and outcome. Use exclusive
+  durations to avoid double-counting nested work. For an exclusively selected fast
+  Soperator target, timing updates stay local instead of repeatedly republishing
+  the recovery bundle. Actual lifecycle checkpoints remain enforced. Standard,
+  unspecified and mixed-target deployments retain their existing behavior.
+  The console shows elapsed duration, outcome and the report path. The fifteen-minute
+  fresh two-worker performance target stays in the JSON report without a console
+  overrun warning. Required provisioning and jail setup must finish before success.
+  Final verification checks graph readiness once through the desired-state verifier,
+  retaining its receipt freshness checks and independent storage/settings checks.
+  Target-selection errors are rejected before timing files are created. If report
+  publication fails while deployment is already failing, the original deployment
+  error remains primary; a timing-publication error alone still fails the command.
+
+  The optional `with-h100-infiniband-debug-long` partition profile contains
+  eight-GPU settings; use the standard managed profile for one-GPU authoring.
+  Each `worker_*_nodes_per_group` value
   must be less than or equal to the selected profile's per-group limit; Nebius
   production profiles cap worker shards at 100 MK8s nodes per generated group. Each
   shard has canonical `autoscaling` and `ephemeral_nodes` controls. During installation, the
@@ -1695,7 +2142,7 @@ With that default, `create`/`component add` materialize `shared.admin_ssh.user_n
 The bundled `component_sources.yaml` omits `shared.admin_ssh.public_key`; a private/customer-local catalog may still set it as a bootstrap seed when the file exists on the machine running cxcli.
 If a private active `component_sources.yaml` sets `shared.admin_ssh.public_key`, `create` and `component add` accept either inline `ssh-rsa`, `ssh-ed25519`, or ECDSA content or a readable local `.pub` path such as `~/.ssh/my_ssh_key.pub`, then copy the normalized inline key into `infra.components[].inputs.ssh_public_key` for enabled infra modules that actually declare an `ssh_public_key` variable.
 In interactive wizard mode, required `inputs.ssh_public_key` fields list supported public key files from `~/.ssh/*.pub`; selecting one stores the file content in `config.yaml`, not the local path.
-The same normalization also applies when an operator edits `config.yaml` directly and sets `infra.components[].inputs.ssh_public_key` to a local `.pub` path: config-based commands resolve the file locally and rewrite the config back to inline key text before continuing.
+The same normalization also applies when an operator edits `config.yaml` directly and sets `infra.components[].inputs.ssh_public_key` to a local `.pub` path. Render resolves the file locally into its in-memory configuration and generated artifacts without rewriting the source file; configuration-writing commands persist inline key text.
 If an enabled infra module declares `ssh_public_key` and neither the private catalog seed nor the project `config.yaml` provides it, `validate`/`render` fail with the missing `inputs.ssh_public_key` field.
 Once shared-derived defaults are materialized, the values in `config.yaml` become the customer-owned contract and may be edited explicitly without conflicting with the catalog seed.
 
@@ -1786,7 +2233,8 @@ Resolution model:
    > **IMPORTANT:** After any manual or wizard change to `config.yaml`, run
    > `nebius-cxcli render <config.yaml>` again before `nebius-cxcli deploy`,
    > `nebius-cxcli terraform plan`, `nebius-cxcli terraform apply`,
-   > `nebius-cxcli flux apply`, `nebius-cxcli flux bootstrap`, or CI.
+   > `nebius-cxcli flux apply`, or `nebius-cxcli flux bootstrap`.
+   > The generated CI workflow runs render itself before deployment.
    > Render updates `generated/nebius-cxcli-manifest.json`; `deploy` then
    > recreates `generated/infra/terraform.auto.tfvars.json` from that manifest
    > before Terraform runs. Passing `config.yaml` to `deploy` only locates the
@@ -1798,10 +2246,11 @@ Resolution model:
    - `nebius-cxcli deploy <config.yaml>`
    - `nebius-cxcli terraform apply <generated-dir>`
    - `nebius-cxcli flux apply <generated-dir>`
-   - CI workflow deploys from `generated/`, not from `config.yaml`
+   - CI validates `config.yaml`, renders the complete bundle, validates it, and runs `deploy`.
+   - Soperator projects use `deploy`; raw Terraform and Flux mutation commands reject them.
 9. Optional CI setup:
    - `nebius-cxcli bootstrap-ci <config.yaml>`
-   - The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/generated/**` paths only. Editing `config.yaml` in the customer repo does not trigger CI deploys; rerendering from `config.yaml` is a manual replace action.
+   - The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/config.yaml` and `generated/**` paths. Config-only changes trigger validation, rendering, and deployment.
 
 `create` is the bootstrap path, not the day-2 component-editing path. When the same resolved project folder for the same `tenant_id`/`project_id` already exists, `create` now warns and overwrites from scratch instead of reconciling the existing component selection. Use `component list/add/remove --config <config.yaml>` for normal edits after the project already exists.
 
@@ -1817,10 +2266,10 @@ The first `render` after `create` should not require overwrite confirmation just
 
 In the customer private repo, keep both:
 
-- `config.yaml` as the original render/replace contract
+- `config.yaml` as the desired configuration and CI render input
 - `generated/` as the deploy contract used by day-2 operations and CI
 
-Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacing render-owned generated artifacts. In non-interactive contexts, rerendering over those artifacts requires `--force`.
+Locally, rerender explicitly after editing `config.yaml`; CI performs that render step automatically. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacing render-owned generated artifacts. In non-interactive contexts, rerendering over those artifacts requires `--force`.
 
 Unreferenced stale report files are removed with the rest of the old generated bundle.
 
@@ -1842,22 +2291,72 @@ Project-scoped values such as jump-host SSH public keys belong in the private pr
 Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` component are enabled:
 
 - `deploy` runs generated-bundle preflight and Terraform validation before
-  Terraform apply; it does not rerender `config.yaml`.
+  Terraform apply; it does not rerender `config.yaml`. The same private execution
+  reuses that preflight and its in-memory runtime inputs before apply. Lease
+  acquisition reuses the prepared backend, and each campaign stage lets its
+  preflight initialize Terraform once for that stage's configuration.
+- With unchanged Soperator release and infrastructure, deployment compares live
+  settings with desired values resolved from the frozen bundle and current
+  Terraform outputs. Equivalent selector order and restored Slurm defaults do
+  not trigger maintenance; real settings changes still require reconciliation.
+- Terraform plans are labeled by purpose: admission, a fresh execution check,
+  and convergence verification. Plan numbers count snapshots within an executor,
+  not failures or retries; inspection completion rows retain the purpose. After
+  Terraform prints its saved-plan message,
+  cxcli inspects that plan before continuing automatically. This inspection shows
+  a spinner with elapsed time in a terminal, or start/outcome lines on stderr
+  when redirected. Do not run the printed `terraform apply` command separately
+  while `deploy` is running. Later plans verify distinct execution boundaries;
+  an unexecuted simple stage skips the otherwise ineffective verification plan.
+- Post-apply output reads reuse the initialized Terraform root. Apply progress
+  coalesces rapid transitions and repeats unchanged status only as a heartbeat;
+  resource instance keys remain visible, and completed operations stop aging.
+- After Terraform apply or a no-change plan, deploy shows named progress while
+  resolving application manifests and compatibility, refreshing Flux manifests,
+  connecting to each target, acquiring application authority and admitting its
+  inputs. Soperator state observation, frozen install-input validation, admission
+  rendering and recovery-input replay also show their active purpose. Terminals
+  show a spinner and elapsed time; redirected stderr receives
+  start/outcome records. The Flux refresh message completes manifest preparation;
+  cluster handoff and application deployment follow it.
+- Initial Soperator readiness waits for controller-created check CronJobs after
+  bootstrap prerequisites complete. Missing schedules show which objects are
+  pending; conflicting scheduling or ownership reports the resource and field
+  and stops before restoration. Helm readiness alone does not finish this gate.
+  Slurm job policy uses the workload namespace even when Helm stores the release
+  in `flux-system`.
+- Shared deployment plans stay in the private Terraform runtime directory
+  (`generated/infra/.terraform/cxcli-plans/`), excluded from the sealed
+  configuration snapshot and portable recovery cache. Planning therefore
+  preserves configuration authority while actual configuration edits still fail
+  the ownership check.
+- Coordinated application prerequisites consume resolved Terraform outputs from
+  a disposable bundle. The release workflow records and publishes the final
+  generated files; prerequisite preparation preserves the sealed configuration.
+- Recovery requires the original execution options, including target selection,
+  validation skips, and job wait/refresh settings. `soperator upgrade` defaults
+  to `--job-wait-timeout 0s`; `deploy` defaults to `1h`. Pass the original timeout
+  explicitly when resuming an upgrade with `deploy`.
 - When Terraform is not already in `PATH`, `deploy`, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups use a managed Terraform CLI download pinned by `component_cli_settings.yaml` `cli.terraform.version`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide. Managed tool cache entries are reused only when their local checksum sidecar still matches the binary.
 - During long-running Terraform apply or destroy operations, `deploy`, `terraform apply`, and `terraform destroy` print one merged status surface: Terraform transitions plus a light Nebius MK8s API snapshot. When an enabled `mk8s` component is present and Nebius SDK auth is available, the CLI polls Nebius MK8s API for cluster/node-group status, suppresses SDK retry tracebacks for requests that are still being retried, and omits completed MK8s operations that predate the current watcher run; otherwise it falls back to a simple elapsed heartbeat for the API side.
 - The merged status surface is rendered as a multi-line block with distinct TF and API sections so Terraform progress and Nebius resource state are visually separate in the terminal. Only fixed labels and explicit severity markers use color; Nebius resource names, IDs, counts, and states stay plain text instead of being syntax-highlighted.
+- Terraform completion counts track planned creates, updates, and deletions;
+  data reads and no-op events do not inflate the count. Replacements count as
+  one deletion and one creation.
 - Severity colors are standardized across explicit CLI diagnostics: warnings render in amber and errors render in red.
 - If Terraform apply fails, the CLI exits with the Terraform error as the canonical failure and appends the last known merged Terraform/API status snapshot.
+- Terraform token-exchange DNS failures are reported as connectivity failures. Successful initialization and validation do not prove that provider API calls can resolve or reach the token service. Restore DNS/network connectivity, then rerun `nebius-cxcli deploy <config.yaml>` with the existing rendered bundle; a DNS failure alone does not require rerendering. Module filenames in diagnostics identify the affected configuration, not necessarily defective module code. Error details are displayed without terminal color escapes.
 - Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
 - When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts from the live SDK event objects and prefers the event's human error text over raw SDK object reprs. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
-- If the live MK8s API reports an active terminal node-group error during apply or destroy, `deploy` / `terraform apply` / `terraform destroy` now abort the Terraform wait loop early and surface that SDK error directly instead of waiting for a generic Terraform timeout.
+- If the live MK8s API reports an active terminal node-group error during apply or destroy, `deploy` / `terraform apply` / `terraform destroy` abort the Terraform wait loop early and surface that SDK error directly. A recurrent `ComputeInstanceCreationFailed / UNAVAILABLE` event while a node group is provisioning or updating remains a visible cloud provisioning retry; Terraform continues waiting within its existing timeout.
 - After apply, `deploy` reads the rendered Terraform output `cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
 - The bundled `mk8s` component derives endpoint access from `inputs.cluster.public_endpoint`, so the CLI automatically selects the public or private control-plane endpoint instead of assuming public access.
 - When more than one built-in cluster target is enabled, enabled app charts bind to one target by setting `apps.charts[].instance_id` to that target id, and target-scoped deploy settings live under `deploy.targets[]` rows with the same `instance_id`. For MK8s, the target id is the normalized cluster resource name stored as that row's `instance_id`. Render writes internal generated target metadata with `target_ref` equal to that `instance_id` and Flux manifests under `generated/flux/targets/<target-id>/`; generated-bundle commands reject stale manifests where those two fields diverge. A plain `deploy <config.yaml>` reconciles every generated target by default; use `deploy --target <target-id>` to narrow one target or `deploy --all-targets` to spell out the default. `flux apply`, `flux destroy`, and `flux bootstrap` still require `--target <target-id>` or `--all-targets` when the generated bundle contains more than one target that needs Kubernetes access.
-- On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, creating the `.kube` directory and `config` file when they do not already exist, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
+- On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, creating the `.kube` directory and `config` file when they do not already exist, so `kubectl` can be used against the target cluster after `deploy` or `flux bootstrap` without installing a separate Nebius CLI. Direct `flux apply` uses its temporary preflight context and leaves the local current-context unchanged.
 - Each MK8s exec-credential request has a 28-second total budget and retries one transient Nebius credential-service timeout with a fresh SDK client, an eight-second exchange cap, and one-second backoff. Temporary cxcli-owned kubeconfigs add an owner-only command-lifetime credential cache: a file lock single-flights concurrent kubectl subprocesses, refresh begins before expiry, and a still-valid token remains usable if that refresh transiently fails. A sanitized 60-second refresh-failure cooldown lets lock waiters immediately reuse that valid token instead of serially repeating the failed exchange. The temporary kubeconfig and cache are atomic `0600` files and disappear with the command. SDK cleanup is separately bounded, permanent failures and empty credentials fail immediately, all Nebius SDK logs are suppressed in the credential child process, failed requests write only a redacted reason code to stderr, and stdout contains only one complete Kubernetes `ExecCredential` document on success.
-- `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when they need to reach rendered app resources directly, but they do not persist or switch the user's local `~/.kube/config`.
-- When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
+- MK8s `destroy` uses only cloud APIs and requires no Kubernetes API access.
+- `flux destroy` uses the same built-in MK8s handoff for temporary cluster access when they need to reach rendered app resources directly, but they do not persist or switch the user's local `~/.kube/config`.
+- When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
 - When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` now print a Kubernetes node-status snapshot first, then proceed directly into Flux or validation-specific readiness checks instead of blocking on a generic "all nodes Ready" gate before useful work starts.
 - When the generated manifest declares deploy-time validations, local `deploy` uses the
   same handed-off kubeconfig after Terraform/Flux work to run them directly with
@@ -1893,16 +2392,16 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips Flux apply entirely; `flux apply` still refuses to run because there are no enabled charts to apply.
 - In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
 - Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating the rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`) as the final GitOps payload.
-- Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k` against the rendered Flux tree does not fail with `namespaces "<name>" not found`.
+- Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl --context <target-context> apply -k` against the rendered Flux tree does not fail with `namespaces "<name>" not found`.
 - Flux uses a split namespace model in this project: shared Flux control-plane and source objects such as `HelmRepository` / `GitRepository` typically live in `flux-system`, while the actual `HelmRelease` and workload pods live in their target app namespace. A workload namespace does not need its own dedicated source object unless it truly uses a different chart or repo source.
 - If Flux controllers are missing, `deploy` installs the core Flux controllers into the target cluster automatically using the official Flux install manifest. `flux` CLI is not required for local `deploy`.
 - The install manifest version used by local `deploy` comes from `component_cli_settings.yaml` `cli.flux.version`.
-- After `kubectl apply -k generated/flux`, `deploy` waits for the rendered Flux `source.toolkit` and `helm.toolkit` resources to report `Ready`, so local deploy does not exit before chart source fetch or Helm reconciliation has actually succeeded.
+- After `kubectl --context <target-context> apply -k generated/flux`, `deploy` waits for the rendered Flux `source.toolkit` and `helm.toolkit` resources to report `Ready`, so local deploy does not exit before chart source fetch or Helm reconciliation has actually succeeded.
 - Helm chart timeout policy stays catalog-driven: `components.apps.<id>.release.timeout` renders into `HelmRelease.spec.timeout`, and the local Flux wait budget now honors the longest rendered workload timeout plus a short grace window when no explicit CLI timeout override is supplied.
 - If Flux controllers had to be installed during `deploy`, the CLI also waits for the required Flux CRD-backed APIs to become discoverable before applying the rendered Flux bundle. This avoids transient `the server could not find the requested resource` races immediately after controller install.
-- While that Flux wait is in progress, `deploy` and `flux apply` poll the rendered Flux resources from the cluster with `kubectl get -o json` and print a generic status block showing which `HelmRepository`, `GitRepository`, `HelmRelease`, or `Kustomization` objects are still progressing. This is chart-agnostic and does not hardcode a specific release name.
+- While that Flux wait is in progress, `deploy` and `flux apply` poll the rendered Flux resources from the cluster with `kubectl --context <target-context> get -o json` and print a generic status block showing which `HelmRepository`, `GitRepository`, `HelmRelease`, or `Kustomization` objects are still progressing. This is chart-agnostic and does not hardcode a specific release name.
 - When one rendered workload resource reaches a terminal Flux failure state while other rendered workloads are still progressing, the CLI keeps watching the remaining workloads until they settle, then exits non-zero with the failed-resource summary instead of sitting on an unrelated source object until the full outer timeout expires.
-- If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without publishing a `Ready` condition, the CLI stops waiting and completes with a concise note instead of hanging until the full timeout. The note points operators at `kubectl get helmreleases.helm.toolkit.fluxcd.io -A` to verify the installed workload releases directly.
+- If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without publishing a `Ready` condition, the CLI stops waiting and completes with a concise note instead of hanging until the full timeout. The note points operators at `kubectl --context <target-context> get helmreleases.helm.toolkit.fluxcd.io -A` to verify the installed workload releases directly.
 - `deploy` and `flux apply` are intentionally local direct-apply paths. They do not bootstrap GitOps automatically, because that would require implicit GitHub/Flux bootstrap side effects and some customers intentionally operate without continuous GitOps sync. If the cluster is not bootstrapped yet, the CLI finishes the local apply and prints an informational GitOps note with the exact optional `nebius-cxcli flux bootstrap <generated-dir>` follow-up command. That command takes the local generated bundle path; `flux bootstrap` resolves the GitHub repository separately from `GITHUB_REPOSITORY` or the local git `origin`, and the rendered `generated/flux` path must be committed and pushed before continuous GitOps sync can reproduce local apply. Customers who use local direct apply as the intended workflow can skip that GitOps step.
 - At the end of `deploy`, cxcli prints a compact `Deployment summary` footer with three sections: target-grouped validation PASS/FAIL, copy-paste commands such as `wg-quick up/down`, SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important paths limited to the generated bundle plus `generated/reports/deploy-report.md`. Machine-readable validation JSON reports remain under `generated/reports/` for troubleshooting but are not printed in the footer.
 - For day-2 component upgrades, use the top-level `upgrade` command group. See
@@ -2002,44 +2501,166 @@ Common benchmark commands:
 
 ## Soperator lifecycle
 
-Soperator has one product-specific root command with exactly six subcommands:
+Soperator has one product-specific root command with exactly five subcommands:
 
 ```text
-soperator install  -> create role-separated Nebius MK8s infrastructure, then reconcile upstream
-soperator discover -> inspect an existing MK8s/Soperator cluster before onboarding, without config.yaml
-soperator onboard  -> register an existing Nebius MK8s cluster and its installed release
-soperator upgrade  -> upgrade Soperator, Kubernetes, node OS/GPU drivers, and Jail CUDA end to end
-soperator status   -> report ownership/live state and optionally verify observability
-soperator destroy  -> delete one registered cluster while preserving its physical storage
+soperator create   -> run the complete wizard and write desired configuration
+validate           -> validate configuration and applicable Soperator requirements
+render             -> freeze infrastructure and application artifacts
+validate-generated -> validate the generated deployment bundle
+deploy             -> plan and execute the complete rendered workflow
+soperator discover -> inspect an unregistered installation
+soperator onboard  -> register an existing installation and establish ownership
+soperator upgrade  -> select coordinated release and platform transitions, then deploy
+soperator status   -> report ownership, deployment progress, and health
 ```
 
-Named options may be supplied in any invocation order. Help, examples, and the
-checked CLI contract use each command's stable declaration order:
+`deploy CONFIG_YAML` executes directly; `--dry-run` provides an optional preview.
+`CONFIG_YAML` locates the sibling generated bundle. Run `render` explicitly after
+editing YAML: unrendered edits do not alter execution. Repeating deploy resumes
+an interrupted matching generation automatically. There is no install alias,
+approval fingerprint, execute flag, or separate resume/replan command.
+Internal coordinated-stage configuration is exported from frozen component rows
+before validation and publication. Derived runtime aliases never become source
+configuration; component instance IDs and selected values remain authoritative.
+Stage previews bind portable manifest paths to their temporary bundle while
+preserving the frozen generation identity and target ownership checks.
 
-| Command | Required positional | Always-required options | Conditional requirements |
-| --- | --- | --- | --- |
-| `install` | `CONFIG_OR_DEPLOYMENTS_ROOT` | none at parse time | A fresh `--no-interactive` plan requires project identity, profile, release, and `--dry-run`; non-interactive execution requires the exact resume approval contract. |
-| `discover` | `OUTPUT_ROOT` | `--tenant-id`, `--project-id`, `--cluster-id` | `--region-id` is optional but must match the derived live region; `--kube-context` is optional but UID-bound to the cluster ID. |
-| `onboard` | `CONFIG_OR_DEPLOYMENTS_ROOT` | none at parse time | `--cluster-id` is required with `--no-interactive`; project-creation flags apply only to a deployments root and are rejected for an existing config. |
-| `upgrade` | `CONFIG_YAML` | none at parse time | Exactly one of `--dry-run`/`--execute`; execute requires `--approve`; fresh non-interactive planning requires all four target selectors. |
-| `status` | `CONFIG_YAML` | none at parse time | `--target` may be omitted only for one configured target or interactive selection; `--verify-observability` requires live mode. |
-| `destroy` | `CONFIG_YAML` | `--target` | Mutation requires a TTY and the exact cluster-ID phrase; there is no approval bypass. |
+| Command | Required positional | Required or conditional options |
+| --- | --- | --- |
+| `soperator create` | `DEPLOYMENTS_ROOT` | Noninteractive creation requires project identity, profile, and an exact release or `latest`. |
+| `deploy` | `CONFIG_YAML` | Optional `--dry-run`; existing job controls apply to maintenance. |
+| `soperator discover` | `OUTPUT_ROOT` | `--tenant-id`, `--project-id`, `--cluster-id`. |
+| `soperator onboard` | `CONFIG_OR_DEPLOYMENTS_ROOT` | Noninteractive onboarding requires `--cluster-id`. |
+| `soperator upgrade` | `CONFIG_YAML` | Fresh noninteractive selection requires all four target selectors; optional `--dry-run`. |
+| `soperator status` | `CONFIG_YAML` | `--target` for ambiguous targets; observability verification requires live mode. |
+| `destroy` (global) | `CONFIG_YAML` | `--target CLUSTER_ID` for every MK8s cluster; optional `--dry-run`, `--yes`, `--delete-sfs`, `--preserve-pvc-disks`. |
 
-Prompt-capable install, onboard, upgrade, and status commands expose
-`--interactive/--no-interactive`. Discover is fully explicit and
-non-interactive. Region stays syntactically optional: fresh install defaults to
-`eu-north1`; discover and a fresh deployments-root onboard derive the existing
-cluster region, while established onboarding keeps its configured region
-authoritative. Every supplied region is an additional assertion and all
-applicable region values must agree.
+### Soperator readiness and optional acceptance
+
+Both `deploy` and `soperator upgrade` accept `--acceptance readiness|full`.
+In a terminal, omitting the option prompts after mandatory readiness, with No
+as the default. Unattended runs default to `full`. The choice is frozen for
+recovery; changing it cannot bypass a failed acceptance run.
+
+Readiness always covers rollout, capacity, storage, Slurm, bounded GPU smoke,
+and applicable native passive checks. New CPU, GPU and mixed profiles enable
+`ensure-healthy-nodes` with `runAfterCreation: true`. These are desired settings;
+maintenance uses temporary policy overlays to pause checks. Target worker
+inventory requires native Slurm smoke on every worker and CUDA smoke on every
+GPU worker; disabling their
+creation flags fails policy compilation. Pending optional checks are exempt
+only when their native templates, Pod executables and Slurm scripts match the
+frozen policy. Auxiliary pending work retains its ordinary readiness gate.
+Full acceptance additionally runs the
+selected upstream extended diagnostics. While they run, **Ctrl+G** requests a
+safe finish for this invocation and all remaining targets: cxcli stops starting
+optional work, drains already-running native diagnostics, verifies quiescence,
+and completes all remaining required deployment work. Current diagnostic
+wrappers can leave untracked children, so they finish naturally; Ctrl+G is not
+an immediate termination promise. **Ctrl+C** keeps interruption/recovery behavior.
+The terminal hint says "Ctrl+G interrupts extended testing safely" and shows
+**Ctrl+G** in green and **Ctrl+C** in red when terminal colors are enabled.
+
+Before successful exit, cxcli verifies desired Active/Passive policy, reopens
+owned job holds and partitions, and releases maintenance. Health failures,
+uncertain job ownership, timeout or failed restoration remain errors requiring
+recovery. Reports distinguish extended tests `passed`, `skipped`, and `cancelled`;
+skipping is never a successful extended-test result. Status shows the recorded
+acceptance outcome independently from current live health.
+
+```bash
+nebius-cxcli deploy ./config.yaml --acceptance readiness
+nebius-cxcli soperator upgrade ./config.yaml --acceptance full
+```
+
+Create retains the standard project authentication bootstrap and writes only
+configuration. It supports CPU, GPU and mixed profiles and the complete field
+wizard. Ordinary apps can be added before the first deployment or afterward.
+Optional quota-check/quota-request and bootstrap-ci use the common project pipeline.
+
+Deployment compares the latest rendered configuration with refreshed Terraform
+state and independently observed Soperator resources and immutable cluster identity. Same-release settings are reconciled;
+unchanged settings avoid Slurm maintenance. Combined topology and platform edits
+retire/downsize affected groups, upgrade survivors, add/grow target-version groups,
+then reconcile and verify under one maintenance owner. Every intermediate bundle
+is admitted before retirement. Protected storage/cluster replacement and downgrade
+are rejected. Admission includes dependencies recreated after retirement, even if
+Terraform initially reports them unchanged. Diagnostic replacement plans are never
+executed; recovery distinguishes the retired resource from a later resource at the
+same Terraform address.
+
+Managed and onboarded campaigns publish the frozen desired application settings.
+Application verification uses the same stable Soperator transformations as execution
+and resolves declared Terraform-derived values from authoritative outputs. The
+checks owner supplies its exact maintenance-phase settings; restored settings are
+verified before the campaign completes.
+
+The reviewed Soperator 4.1.8, 4.1.9 and 4.1.11 monitoring-dashboard charts have the same
+malformed document separator as earlier reviewed packages. Their exact digests use the
+existing source adapter: seven validated upstream JSON dashboards are delivered
+as owned ConfigMaps after Flux, with their source content preserved. Other
+chart digests continue through the upstream HelmRelease path. Each deployment
+uses its pinned release; adding a reviewed digest retains the existing entries.
+
+Rerunning an interrupted initial deployment can admit this exact dashboard
+repair through the shared application checkpoint. The repair requires the
+original failed chart, an unstarted main release, unchanged scheduling authority,
+and the authenticated predecessor bundle. It retains the original history and
+rejects unrelated render changes. Stage readiness timeouts identify the blocking
+HelmRelease and its structured Ready reason.
+Recovery validates and removes both dashboard child patches, including the
+ownership labels bound to the frozen graph stage and release, while preserving
+all other release wiring.
+The checkpoint check uses the frozen deployment profile and accepts the exact
+pre-main apply interruption or recorded failure, with its original evidence.
+
+Other selected application targets run after Soperator scheduling is restored.
+If another target fails, the deployment stays incomplete and retains its previous
+acceptance. Retry verifies completed Soperator work without repeating the upgrade.
+Acceptance is recorded per target; `--target` preserves unselected target evidence.
+Fresh Soperator deployment and preview reach the shared planner without requiring
+an ordinary-application baseline from a previous installation.
+Both root and ordinary application bundles are applied and verified. Omitted
+installed HelmReleases with the target's exact ownership annotation are rejected
+before application mutation. Deploy does not uninstall omitted or unrelated
+resources; removing values within retained resources remains supported.
+
+Execution snapshots, checkpoints and completion evidence live locally under
+`.nebius-cxcli/deployment-journals/`. Each deploy attempt binds the backend,
+artifacts and semantic options. Dedicated command journals stay in their existing
+locations. Render replaces artifacts independently of old attempts.
+
+After pre-render validation, it shows the current stage with a spinner and elapsed
+time in terminals, or plain-text stage outcomes on stderr in captured logs.
+Stages cover input preparation, output discovery, rendering, quota checks,
+manifest preparation, provider resolution and publication. Errors and Ctrl-C
+during preparation close progress and discard the unfinished staging bundle while
+preserving the previous generated artifacts. Overwrite confirmation happens
+between stages.
+Native chart inspection accepts bare `=` enum values in upstream CRDs without
+rewriting chart packages; malformed YAML and unsafe tags remain errors.
+Manifest preparation captures ordinary OCI charts separately from the Soperator
+release graph. A reset or timeout during this download receives up to three
+attempts with bounded backoff and isolated temporary files. Verified package
+bytes remain available until capture finishes; permanent validation failures
+stop immediately, and frozen-generation replay requires no new chart download.
+A different render or changed options start a new local deploy attempt.
+Concurrent artifact publication is serialized by the short render lock.
+Unknown ownership and failed observations are errors; matching names never grant
+ownership. Refreshed Terraform plans must remain inside each admitted stage.
+
+CI uses validate, render, validate-generated and deploy for source-config and
+generated-artifact changes. PR preview is optional; push/manual execution uses
+the same direct deployment path with non-cancelling concurrency and existing
+GitHub environment protections.
 
 Generic `create` and component commands cannot install Soperator. Terraform
 owns only Nebius resources outside Kubernetes; Helm, Flux, and Kubernetes APIs
 own in-cluster reconciliation.
 
-Installation fences planning and apply with a conditional Object Storage lease.
-Metadata header names are case-insensitive; ownership values, ETags, expiry,
-and cluster bindings remain exact. Ambiguous metadata names are rejected.
+Installation uses local process ownership and Terraform's native state lock.
+Dedicated Soperator operations retain their own cluster locks and recovery checks.
 
 Soperator is not declared in `component_sources.yaml` or
 `component_cli_settings.yaml`. Install-only defaults, CPU/GPU/mixed profiles,
@@ -2048,7 +2669,7 @@ not carry a repository or version. Every lifecycle path constructs its internal
 runtime entry from the official OCI namespace and an exact frozen upstream
 release, while `apps.charts[id=soperator]` remains the persisted project intent.
 
-Install and upgrade accept `latest` or an exact stable `X.Y.Z` release. When a
+Create and upgrade accept `latest` or an exact stable `X.Y.Z` release. When a
 new interactive operation omits the selector, cxcli resolves current official
 metadata and prompts with a runtime default such as `latest(4.1.7)`. The
 full-stack upgrade wizard also queries the Nebius control-plane versions API,
@@ -2064,7 +2685,7 @@ When Slurm needs to show a job table, wait dashboard, or prompt, cxcli pauses
 the maintenance row and resumes it after that nested interface closes.
 Zero-capacity groups are handled automatically: cxcli upgrades and
 stably verifies their desired node template without requiring temporary capacity.
-A fresh non-interactive install requires
+A non-interactive create requires
 `--release`; a fresh non-interactive upgrade requires `--to-release`,
 `--to-k8s-version`, `--to-os`, and `--to-gpu-stack-preset`. Missing selectors
 fail before configuration or cloud access.
@@ -2072,22 +2693,21 @@ cxcli resolves the accepted selector from the official
 [`nebius/soperator`](https://github.com/nebius/soperator) release API, then
 freezes the tag, commit, tree, source archive, source manifest, chart graph,
 scripts, image references, and direct package digests before mutation. Official
+root Markdown aliases are retained as inert link-target text and verified
+against their Git blobs; cxcli never creates or follows archive links. Runtime
+links, hard links, submodules, and unsafe paths remain unsupported. Official
 API reads use `GH_TOKEN` or `GITHUB_TOKEN` from the process environment when
 present; cxcli sends it only as a request header and never writes it to the
-project, cache, receipts, or logs. Install
-`--resume` and automatic upgrade recovery use saved snapshots and never
-resolve `latest` again. Upgrade recovery may omit every selector in interactive
-or non-interactive mode; any repeated selector or policy must exactly match the
-active parent campaign receipt. Install `--resume` instead rejects release,
-identity, profile, network, subnet, and overwrite options because the saved plan
-owns that authority. An interrupted upgrade is recovered by rerunning the same
-approved `soperator upgrade --execute --approve` command; upgrade has no separate
-resume command or flag. Execute performs fresh discovery,
-transactionally renders and validates the prospective Flux
-bundle in scratch storage, captures protected-state, job, partition, and login
-observations, and writes one owner-only admission receipt and fingerprint before
-canonical config, Slurm, release, Service, or customer-PVC mutation. An approved
-protected upgrade first acquires its Kubernetes Lease and seals a content-free
+project, cache, receipts, or logs. Matching interrupted deployments use their
+saved local attempt and never resolve `latest` again within that attempt. Rerun `deploy` on
+the same rendered configuration with the same job policy to recover. A resolved
+exact-release handoff preserves the original snapshot and selector provenance;
+it verifies the admitted digest without resealing that content. If pending Soperator
+changes exist, select its target or deploy all targets; selecting only an ordinary
+target fails before execution. Deploy
+performs fresh discovery, validates prospective stages in scratch storage, and
+captures protected-state, job, partition, and login observations before mutation.
+A protected upgrade first acquires its Kubernetes Lease and seals a content-free
 target-wins rootfs decision over the official target image, selected persistent
 paths, active PVC identity, and the staged passive PVC storage contract.
 Every child mutation reuses the parent campaign's current fencing authority;
@@ -2138,6 +2758,11 @@ suspension must be acknowledged at the current generation, and target handoff
 uses the same exact rendered umbrella identity as staged apply. GPU profile
 materialization fills a missing Slurm `Gres` count independently of CPU resizing;
 Kubernetes GPU visibility alone does not prove Slurm GPU registration.
+Before native Slurm acceptance submissions and while waiting for their results,
+cxcli checks the selected workers for `DOWN`, `DRAIN` or `FAIL` states. It reports
+the blocked worker immediately and preserves existing jobs and scheduling
+isolation for recovery. Host driver initialization failures require repair at
+the host prerequisite owner; cxcli does not automatically clear health drains.
 The acceptance guard validates Slurm's native 365-day representation of an
 unlimited maintenance reservation, together with its active state, complete
 worker coverage and restricted authorization. Initial execution, interrupted
@@ -2190,6 +2815,8 @@ requires fresh acceptance; it does not change the upstream diagnostic body.
 
 GPU workers also use the upstream Supervisor configuration that starts Docker,
 with its read-only daemon settings and a pod-local disposable image cache.
+Persistent jail mount compilation preserves that private cache and rejects
+conflicting mount names or paths, so workers cannot share Docker's metadata.
 The native jail shares the worker's runtime socket. Cache usage counts against
 the existing worker storage allowance; no extra shared filesystem is created.
 An initial Docker NCCL missing-socket failure can receive an exact sealed values
@@ -2202,9 +2829,63 @@ cancels only its pending Slurm submission and verifies terminal accounting.
 After proving Docker readiness and restoring those drains under maintenance,
 it resumes the same native Job with a fresh Pod and verifies acceptance.
 
+If an initial Docker NCCL check fails while downloading its image with a proven
+registry connection reset, rerunning the same `deploy` can admit one replacement
+per worker. Recovery retains the failed Job and evidence, verifies the native
+policy, allocation, worker runtime and reservation, then restores only the drain
+caused by that failure. The replacement uses a distinct identity and must pass
+normal native acceptance. Other failures and a failed replacement stop recovery.
+
+Acceptance progress shows the check name, elapsed heartbeats and completion;
+polling does not resubmit Jobs. Live progress pauses while the extended-testing
+prompt owns the terminal and resumes after an answer or interruption.
+After staged check configuration, the phase display returns to native acceptance.
+Terminal job failures include the job identity,
+Slurm state and exit code. Failed and successful deployments retain their local
+`generated/reports/deploy-report.md` and a projected `deploy-report.json` summary
+after the private execution cache is removed. Final convergence or backend
+acceptance failures also mark the saved deployment summary failed, retaining
+successful validation results and preserving the original error if reporting fails.
+Follow-up commands reference the
+original generated bundle. Final live-cluster and per-target acceptance verification
+show named progress with elapsed time. Raw runtime logs and recovery
+receipts are excluded. Skipped GPU probes are labeled `SKIPPED`; a skipped probe
+does not prove GPU execution. OCI HelmRepository data objects display availability
+without a Ready condition; other Flux sources still require readiness.
+
+Final Helm values verification accepts null map entries cleared by client-side
+`kubectl apply`. Unexpected keys, missing non-null settings, and retained values
+that should have been cleared still fail verification. Lists and embedded
+ConfigMap values remain exact.
+
+An interrupted first installation affected by the missing private cache mount
+can receive a separate sealed storage-only repair through `deploy`. It requires
+terminal native checks, an attributed Docker connection failure, and proof that
+the worker daemons share the jail metadata directory. Peer timeouts remain
+recorded as timeouts. Recovery preserves persistent storage and the reservation,
+reconciles new worker Pods, verifies private storage and Docker readiness, and
+runs fresh acceptance without importing the earlier results.
+The application checkpoint retains its original bundle until the cluster seals
+the exact repair. Unrelated rendered changes remain rejected during recovery.
+Unused rootfs-retention metadata is omitted so an unchanged installation keeps
+the same application bundle identity when deployment resumes.
+The portable recovery cache includes sealed install-repair receipts. A retained
+timeout may finalize its termination signal as SIGTERM or SIGKILL; every other
+accounting field and the handled native Job identity must still match, and the
+timeout never counts as successful acceptance.
+
+Recovery archives include current render-owned files and dashboard JSON, the
+ordinary-app acceptance baseline, and only the staged postimages referenced by a pending project
+transaction. Completed and uncommitted historical staging copies stay on disk
+without accumulating in the portable cache. A completed journal can be inspected
+against current targets without its staged directory; pending transactions still
+require every staged postimage and its exact digest. The 64 MiB recovery-object
+limit and file, path, ownership and generation checks remain enforced.
+
 For the managed eight-H200, 128-vCPU preset, Slurm describes the physical
 two-socket topology and all 128 hardware CPU IDs. Kubernetes independently enforces
-the configured CPU-time quota; a 32-CPU limit remains unchanged. cxcli does not
+the configured CPU-time quota; an explicitly configured 32-CPU limit remains
+unchanged by topology repair. cxcli does not
 convert that quota into `CpuSpecList`, because upstream memory diagnostics use
 all hardware threads. Conflicting custom topology is rejected. Exact initial
 affinity recovery preserves storage, retains failed evidence, changes only the
@@ -2255,8 +2936,8 @@ digest-pinned VictoriaMetrics stack package whose operator and dependent custom
 resources share one fresh Helm action, cxcli uses Flux `RetryOnFailure` at a
 30-second interval so the operator endpoint can become Ready without an
 uninstall/reinstall loop or user intervention. Any unexpected non-main
-`Stalled` child is returned immediately to the same forward supervisor for an
-exact-graph retry instead of consuming the full stage-readiness window.
+`Stalled` child stops the invocation promptly with its recovery evidence;
+recovery observes the existing controller state before advancing the exact graph.
 
 Artifacts are downloaded directly from the authorities declared by the
 verified upstream release. There is no local product chart, bundled target
@@ -2286,7 +2967,7 @@ release is the sole target-rootfs authority. `jailRootfs.targetImage`, direct
 rejected. The official image is bound into render, operation, journal,
 recovery, and receipt identity and cannot change during recovery.
 
-Fresh `soperator install` selects MK8s, SFS, and Soperator automatically. The
+Fresh `soperator create` selects MK8s, SFS, and Soperator automatically. The
 interactive flow retains the full MK8s, shared-filesystem, and Soperator field
 wizards, including optional upstream features. It asks for the release once
 and uses that frozen release throughout configuration, rendering, and planning.
@@ -2295,40 +2976,160 @@ defaults. GPU and Network Operators are derived from the final MK8s topology;
 Soperator's upstream release owns cert-manager and its other in-cluster child
 charts. There is no separate cert-manager selection.
 
+Generated node service-account names use the configured MK8s cluster name and
+node-group key, so separate clusters in one project receive distinct defaults.
+The wizard waits for the cluster name before generating these identities. Saved
+account names and explicit IDs remain unchanged during normalization and worker
+resizing for surviving groups.
+
+Before applying a plan that creates named service accounts, deploy checks for
+existing accounts in the same project. A collision stops the plan with the exact
+Terraform addresses and account IDs; an inconclusive lookup also stops it.
+Restore the original state or verify ownership and import those exact identities
+before retrying. Matching names alone never authorize adoption or deletion.
+Rerendering retains saved account names and does not rewrite an approved failed
+plan.
+
+Keep the backend bucket until managed cleanup completes. Deleting the cluster,
+SFS, or local config does not delete project-level IAM accounts. Deleting the
+bucket also removes Terraform's resource mappings and cxcli's recovery records;
+recreating the bucket does not reconstruct them. A completely cleaned deployment
+can start with fresh state. For routine teardown, use `destroy CONFIG --target
+CLUSTER_ID` while the config and state still exist: it includes owned ancillary
+IAM resources and preserves SFS unless `--delete-sfs` is selected.
+
+For shared storage, the install wizard asks **Create new** or **Use existing**
+for Accounting, Controller spool, and Jail in that order. Create new is the
+default unless that role already has an existing filesystem ID configured.
+
+- **Create new** asks for name, size, block size, mount tag, and deletion
+  protection. It does not look up existing filesystems. The shared filesystem
+  type is asked once afterward if any role creates storage.
+- **Use existing** requires a selection from the current project's filesystem
+  list, then asks for its attachment mount tag. It skips creation properties.
+  An empty list or lookup failure returns to the role's source choice; it never
+  silently creates a replacement. Filesystem IDs and mount tags must be distinct
+  across roles.
+
+Mount tags must fit the virtio-fs device's 36-byte UTF-8 field. Although the
+Compute API admits 37 characters, a longer device tag can prevent VM startup.
+Soperator shortens
+overlong generated defaults with a deterministic hash suffix; the wizard and
+configuration validation reject overlong explicit tags before deployment.
+The wizard trims surrounding whitespace before saving. For authored YAML,
+validation counts every UTF-8 byte of the stored tag, including whitespace.
+
+A summary shows which filesystems will be created or reused, including when you
+skip customization and accept the configured defaults. Reused filesystems are
+identified by ID and attachment tag; retained profile values are not presented
+as live filesystem properties. Creation happens during the normal install apply
+stage. Use `q` to revisit the previous visible step and `qq` to quit. An unfinished
+fresh-install wizard exits without saving config, generating output, or planning,
+even when defaults already fill every required field. These choices apply only
+to interactive `soperator create`; noninteractive creation consumes explicit configuration. Deployment recovery
+uses its frozen configuration without reopening the wizard.
+
 The wizard groups fields into **Infrastructure**, **Soperator configuration**,
-and **Required platform or integration components**. The internal `soperator`
-configuration row represents the official upstream charts and is not an ordinary
+and **Required platform or integration components**. Required integration prompts,
+including NVIDIA GPU Operator and Network Operator, ask **Customize settings?**
+with default **`n`**. Press Enter or answer `n` to retain the enabled component
+and the settings shown in its preview; answer `y` to open the detailed fields.
+The **Configure upstream Soperator settings now?** prompt also defaults to
+**`n`**: Enter keeps the previewed settings and frozen release; `y` opens the
+upstream fields. Infrastructure defaults to `y`, and ordinary app prompts require
+an explicit choice. Use `q` to go back or `qq` to quit.
+
+Before saving a fresh project, installation compiles the completed Soperator
+configuration against its frozen release. A compilation error stops before
+configuration or generated output is written and before install planning.
+Storage preparation and slot switching retain layout and consumer intent;
+the adapter alone generates the jail, controller-spool, slot, and persistent-mount
+volume sources. Supplied sources that conflict with those names are rejected.
+Malformed saved configurations are not automatically repaired or migrated. A
+failure before install-plan creation has no resumable receipt; preserve that
+project and start a corrected fresh install instead of forcing an overwrite.
+
+The internal `soperator` configuration row represents the official upstream charts and is not an ordinary
 catalog app. Worker autoscaling configures MK8s minimum/maximum capacity;
 ephemeral workers are a separate upstream NodeSet setting that requires
 autoscaling. Profiles, placements, and storage settings connect the upstream
 workloads to the configured infrastructure.
 
-Soperator uses [public Nebius Grafana](https://grafana.nebius.dev/) by default.
+For local-first Grafana with metrics, logs and traces, run
+`nebius-cxcli grafana install --config CONFIG_YAML --target CLUSTER_TARGET`.
+The same configuration is available through the Apps wizard. Storage defaults
+are local on both MK8s and Soperator, and each signal can use local, remote or
+both destinations. Standard Grafana datasources are automatic: the wizard previews
+their query connections and default, then offers optional guided customization.
+Local setup requires no datasource fields. Pushgateway is optional and disabled
+by default. Setup resolves backends only for the selected target; plain MK8s setup
+does not look up Soperator sources for other targets. Soperator setup explains native
+collector reuse and resolves addresses without downloading the full release chart
+graph. After confirmation, installation saves changed settings, always renders
+current configuration and runs normal project deployment with its usual approvals.
+Pending changes to other components are included. Unchanged settings retain
+datasource identities and authentication; `--no-interactive` reuses saved choices.
+Prior cancelled deployments do not block this workflow. See
+[Grafana installation and telemetry routing](docs/observability.md).
+
+Before opting into this routing, a native Soperator installation follows the
+exact frozen upstream telemetry configuration and can use
+[public Nebius Grafana](https://grafana.nebius.dev/). cxcli disables the upstream
+bundled Grafana. Selecting local routing replaces the native collector's remote
+write destinations; it does not patch a live Pod's command line.
+Routing updates preserve the frozen child-release identities during ordinary
+deployment and staged reconciliation.
+
+Configure upstream telemetry through `values.observability` in the Soperator
+row. The removed `values.soperator-dcgm-exporter` subtree fails validation;
+reauthor it using the selected release's native values. For example,
+`values.observability.dcgmExporter.values.validateToolkit` configures the
+upstream exporter. The separate NVIDIA GPU Operator exporter is disabled on
+Soperator targets; its other GPU functions remain configured. Ordinary MK8s
+retains its GPU Operator telemetry path.
+
+`deploy` validates saved Soperator feature values before authentication, backend
+setup, or Terraform preflight. After correcting an obsolete value in
+`config.yaml`, run `nebius-cxcli render CONFIG_YAML --force` to regenerate the
+bundle before deploying. Editing the source alone does not change the frozen
+render that `deploy` executes. Rerendering corrected configuration selects a new
+local deploy attempt; unchanged artifacts and controls can resume the matching
+checkpoint. Dedicated command repair receipts retain their existing rules.
+
 Fresh install includes only its core and configuration-derived prerequisites.
-It has no optional-app questions, generic observability wizard, or `--app`
-option. Add optional catalog apps afterward using the normal MK8s workflow:
+Deployment and upgrade prepare those applications under local execution
+ownership, with ownership checks for any managed Grafana runtime resources.
+When cert-manager is part of the release, staged deployment waits for it before
+starting Security Profiles Operator, which needs its certificate APIs.
+An interrupted install retains its original infrastructure identity when
+`deploy` verifies a fresh no-op Terraform plan and resumes application setup.
+Before resuming infrastructure, it replays the frozen application bundle with
+saved inputs, even if no application has started yet. Changed bundles fail
+before execution; this check does not require current Terraform outputs.
+The Soperator core installer has no optional-app questions or `--app` option.
+Install Grafana and its configured observability components afterward:
 
 ```bash
-nebius-cxcli component add grafana@CLUSTER_TARGET --config CONFIG_YAML --no-interactive
-nebius-cxcli render CONFIG_YAML --force
-nebius-cxcli deploy CONFIG_YAML --target CLUSTER_TARGET
-# Alternatively, apply the rendered apps directly:
-nebius-cxcli flux apply GENERATED_PATH --target CLUSTER_TARGET
+nebius-cxcli grafana install --config CONFIG_YAML --target CLUSTER_TARGET
 ```
 
-The target is the existing `deploy.targets[].instance_id`. The local Grafana
-retains cxcli dashboards, Gateway access, and project read datasources; no
-upstream dashboards are imported. The existing Flux post-render patch disables
-upstream Grafana in cxcli-controlled renders. Onboarding does not remove or
-adopt an already-running upstream Grafana.
+The command persists settings, renders and applies through the protected
+lifecycle. It reuses native metrics/log collectors and stores, and adds the
+selected missing components. Query endpoints and datasource types are explicit;
+local Grafana uses private access by default. Existing access settings and
+unrelated applications are preserved. Native dashboards are not automatically
+imported; use `grafana import` with explicit datasource mappings.
 
-Adding `grafana` selects its Gateway without selecting the extra telemetry
-agent. Add `nebius-observability-agent@CLUSTER_TARGET` separately when ordinary
-application logs, metrics, or OTLP traces are needed; this does not select
-Grafana. On a Soperator target, the observability switch alone cannot install
-the agent: explicitly select it with `component add`. Collector selection and
-signal configuration apply only to that target. Removing the collector clears
-the target's additional-telemetry switch.
+Explicitly selecting the Nebius observability agent remains available for a
+Nebius-only remote pipeline. A routed target never installs that agent for a
+signal already owned by a native collector or another managed collector.
+
+For a newly selected agent on Soperator, infrastructure scraping defaults off
+(`deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics: false`).
+Explicit signal settings, infrastructure-scraping opt-in, and custom scrape
+targets remain intact. The extra agent does not add GPU Operator scrape targets
+or create or clean up GPU scheduling labels on Soperator nodes. These defaults
+and exclusions are scoped to the Soperator target in mixed-cluster projects.
 
 Upstream Soperator configures its VM agent to export metrics to the selected
 Nebius project and region using the `soperator` bucket, and OpenTelemetry to
@@ -2338,21 +3139,24 @@ exclusions do not prove that all cluster-wide metric series are disjoint.
 Declining app field customization preserves the selected apps and their
 defaults. Chart installation alone does not verify ingestion or Grafana queries.
 
-On a completed Soperator project, ordinary render and apply use separate app
-bundles under `generated/flux/targets/<target>/ordinary/`. They preserve the accepted
-Terraform files and Soperator graph, require the exact accepted cluster identity,
-and reject protected drift, unfinished lifecycle operations, or foreign resource
-ownership. App deployment does not run Terraform or Slurm maintenance. A project
-without an accepted baseline must first complete its Soperator install, onboard,
-or upgrade. Ordinary Helm chart upgrades use `upgrade helm-chart` as usual.
-Repeated app deployments reuse existing namespaces without changing them or the
-saved generated bundle.
+Ordinary apps can be configured before or after Soperator deployment using
+`component add` and `component remove`. Standard render freezes the complete
+configuration; deploy classifies the whole change before Terraform or application
+mutation. Ordinary-only edits preserve Soperator scheduling. Soperator settings,
+capacity and platform edits use the corresponding maintenance workflow. Unknown
+ownership and unfinished conflicting operations stop execution.
 
-`component add` and `component remove` only edit configuration. Removing an app
-and applying the next bundle does not prune or uninstall its live release.
-Saved ordinary app resources are preserved through Soperator upgrade and recovery.
-Resume of `soperator install` preserves the saved frozen operation and its app
-selections.
+Ordinary Helm chart upgrades also remain available through `upgrade helm-chart`.
+The command verifies the live release and cluster identity, prepares a private
+candidate, checks compatibility and transitions, then atomically publishes the
+configuration and artifacts before applying them. `--dry-run` performs the same
+preparation and assessment without publication or cluster changes. Retries use
+the admitted artifacts and cluster identity; a target version in YAML does not
+mean the upgrade completed. Pinned version-set conflicts and unsupported operator
+downgrades fail before publication.
+Removing an ordinary app from configuration does not uninstall its live release;
+use the explicit chart lifecycle for removal. Upgrade stages preserve the admitted
+ordinary app configuration.
 
 Release downloads, project authentication, service-account creation or reuse,
 provider lookups, rendering, and Terraform planning report progress on stderr.
@@ -2366,18 +3170,24 @@ managed node groups before disk recommendations are refreshed. Subnet discovery
 uses supported status pool fields without SDK deprecation warnings and keeps
 explicit subnet ranges distinct from inherited network ranges.
 
-Create and review a fresh-install plan (`--no-interactive` skips field prompts):
+Create fresh-install configuration (`--no-interactive` skips field prompts):
 
 ```bash
-uv run nebius-cxcli soperator install ./deployments \
+uv run nebius-cxcli soperator create ./deployments \
   --client-name example \
   --tenant-id TENANT_ID \
   --project-id PROJECT_ID \
   --profile gpu \
   --release latest \
-  --no-interactive \
-  --dry-run
+  --no-interactive
 ```
+
+If root SSH keys have not been explicitly configured, the Soperator section
+requires key selection before **Configure upstream Soperator settings now?**.
+Accepting that optional prompt's default `n` keeps the selected key. Answering
+`y` opens detailed settings without asking for the newly selected key again.
+Back returns to the preceding component, retaining completed choices; Quit
+ends creation without saving or planning.
 
 The login wizard selects a public key for `root`, preferring `~/.ssh/id_ed25519.pub`,
 then `id_ecdsa.pub`, `id_rsa.pub`, and other supported public key files. Fresh
@@ -2410,6 +3220,12 @@ values; confirmed answers take precedence. Upstream defaults and the selected
 profile supply omitted fields. Explicit false, default-equal values, and lists
 remain explicit through save/load and upgrades. Chart-row
 `values-explicit-paths` records this intent as JSON Pointers; lists are atomic.
+
+Render verifies the selected release's ActiveChecks waiter before transferring
+its install and upgrade wait to cxcli acceptance. A registry hostname change
+alone is accepted; the image repository/version, executable template and full
+affected hook inventory must still match the reviewed contract. The frozen
+upstream chart and image remain unchanged.
 
 For example, the same file can enable backups to an existing bucket and shared
 SSSD directory integration:
@@ -2466,7 +3282,7 @@ repair and are never overwritten. Local paths and contents are not saved in
 file availability and noninteractive backup credentials before Terraform apply.
 Dry-run does not request runtime files/credentials or write these objects.
 
-`--resume` rejects `--values-file` and uses its exact saved configuration.
+Deployment recovery uses its exact saved configuration; values files belong to creation.
 Upgrades preserve saved choices and validate them against the frozen target
 release; incompatible inputs fail. Unknown top-level routes, inline credential
 fields and release/image/storage/generated-topology overrides are rejected.
@@ -2479,54 +3295,19 @@ upstream open mapping without a schema cannot guarantee detection of nested
 typos. Credential rotation, workload restarts, backup/restore execution and live
 directory authentication are separate operational actions.
 
-Execute the exact saved plan only with its printed fingerprint:
+Deploy the frozen configuration:
 
 ```bash
-uv run nebius-cxcli soperator install "$CONFIG" \
-  --resume \
-  --no-interactive \
-  --execute \
-  --approve \
-  --approval-fingerprint sha256:REVIEWED_FINGERPRINT
+uv run nebius-cxcli validate "$CONFIG"
+uv run nebius-cxcli render "$CONFIG" --force
+uv run nebius-cxcli validate-generated "$(dirname "$CONFIG")/generated"
+uv run nebius-cxcli deploy "$CONFIG" --dry-run  # optional preview
+uv run nebius-cxcli deploy "$CONFIG"
 ```
 
-If that saved Terraform plan becomes stale before execution starts, refresh it
-without changing the saved project, target, config, generated manifest, or
-frozen release authority:
-
-```bash
-uv run nebius-cxcli soperator install "$CONFIG" \
-  --resume \
-  --no-interactive \
-  --dry-run \
-  --replan
-```
-
-`--replan` accepts an owner-only never-executed `planned` receipt or a failed
-infrastructure apply with no infrastructure-complete checkpoint. Failed-apply
-recovery requires the exact prior approved plan, preserves infrastructure and
-shared-group addresses, known settings and IDs, and archives the failed receipt.
-Provider-computed status changes are allowed; configured values and resource
-identities remain protected.
-It refreshes root `main.tf` transactionally only when all other root artifacts,
-module sources, and inputs match the frozen manifest. Uncreated access permits
-may receive corrected renderer-owned wiring for the original project and retained
-groups. Existing grants, infrastructure identities, state, Flux files, and
-lifecycle evidence remain protected from removal or replacement. It prints a new approval fingerprint;
-the prior fingerprint cannot authorize the replacement. Executing, completed,
-post-infrastructure, and ambiguous receipts cannot be replanned. After repairing
-a failed apply, use this command before executing the newly approved resume.
-
-A resumed install retains its installation steps after the target release first
-appears; it does not become a no-op.
-
-After infrastructure completes, `install --resume --execute` can repair the
-known pinned upstream dashboard chart separator failure at its exact pre-main
-checkpoint. It keeps the existing approval and compiled values, then delivers
-the verified upstream dashboards through the post-Flux adapter. The original
-failed history and a cluster-bound repair receipt are retained. This path rejects
-unrelated manifest changes, successful dashboard history, and a main release
-that has already started; it does not replan infrastructure.
+Repeat the final command to recover a matching interrupted deployment. Recovery
+retains the admitted installation steps even after a release first appears live.
+It never reuses a consumed Terraform binary or infers completion from a local receipt.
 
 Register an existing cluster without choosing an upgrade target:
 
@@ -2566,12 +3347,14 @@ uv run nebius-cxcli soperator upgrade "$CONFIG" \
   --to-release latest \
   --to-k8s-version latest \
   --to-os auto \
-  --to-gpu-stack-preset auto \
-  --execute \
-  --approve
+  --to-gpu-stack-preset auto
 ```
 
-One approval freezes and runs the entire campaign. cxcli holds operation-owned
+Upgrade planning binds the configuration it first reads and rejects concurrent
+edits during discovery or admission before saving desired targets. Rerun target
+selection from the current configuration after resolving such an edit.
+
+Deploy freezes and runs the entire campaign. cxcli holds operation-owned
 Slurm maintenance while it reconciles the official Soperator release, upgrades
 the MK8s control plane through every required sequential minor hop, rolls each
 node group to its provider-compatible Kubernetes, OS, and GPU driver target,
@@ -2582,10 +3365,12 @@ before it waits on the retained graph, so a source-controller restart cannot
 leave a stale-positive artifact status blocking recovery. Final readiness
 repeats that source proof against the selected target's Flux directory,
 re-freezes each HelmChart artifact identity, and requires the complete rendered
-release graph to report its current generation Ready. Replaying the exact
-command for an already-completed campaign reruns only
-this final postcondition; it does not reopen Slurm maintenance or repeat
-provider mutations. The release catalog's
+release graph to report its current generation Ready. Recover an interrupted
+matching deployment with `nebius-cxcli deploy CONFIG_YAML`, keeping its frozen
+generation and job controls. Repeating `soperator upgrade` resolves a new
+upgrade intent; it is not the recovery command. Retained completed child
+release replays verify final postconditions without repeating provider
+mutations. The release catalog's
 Jail CUDA version and the Nebius node-image GPU driver preset are recorded as
 separate layers. For `auto`, cxcli selects the latest provider OS first and then
 the latest compatible Nebius `drivers_preset` independently for every node group
@@ -2613,14 +3398,22 @@ remain authoritative. The campaign table renders exactly one row per node
 group, including its ready/target count and complete per-hop OS/driver path;
 exact per-node evidence remains in owner-only reports rather than scaling the
 terminal output with cluster size. Non-TTY logs use stable, ANSI-free
-`START`/`RETRY`/`OK`/`FAILED` phase lines. A supervisor backoff remains one live
-`RETRY` row with elapsed time until the next attempt starts, and the static
-direct-upstream release plan is emitted only once per command invocation.
+`START`/`RETRY`/`OK`/`FAILED` phase lines. Safe transport reads have bounded
+retries; release and campaign failures do not repeat the whole workflow. The
+static release assessment is emitted once per deploy invocation.
+
+The guided command writes resolved rollout choices to
+`deploy.targets[].soperator_rollout` (`strategy`, `max_surge_count`, and
+`drain_timeout`) so common deploy and recovery retain them. Saved zero-surge
+and force-delete counts remain `0`; campaign admission interprets that resolved
+count without treating it as the safe-surge-only CLI option. External targets
+store exact Kubernetes and per-group OS/driver choices in
+`soperator_desired_platform`; managed targets store them in MK8s inputs.
 
 Admission selects exactly one fail-closed infrastructure backend. A
 cxcli-managed target uses Terraform for control-plane, node-template, OS, and
 provider GPU-driver mutations. An onboarded target never initializes or applies
-that Terraform module; its approved `--execute --approve` campaign uses the Nebius
+that Terraform module; its admitted campaign uses the Nebius
 provider API selected by the target's proven onboarded ownership. The
 ownership/backend digest is frozen in the parent receipt and cannot be
 overridden, switched, or used as a fallback during recovery. Both backends use
@@ -2676,6 +3469,21 @@ across both workers. This validates supported install recovery and the managed
 upgrade; it does not establish a fresh clean-install rerun with the final source,
 1,000-node behavior, or a comparative maintenance-time improvement.
 
+The 2026-09-16 managed lab completed installation of Soperator 4.1.5 on
+Kubernetes 1.35 through public deploy replay from a recovered baseline, followed
+by upgrade to Soperator 4.1.8 and Kubernetes 1.36 through supported resumes.
+Both installation and upgrade passed 21 fresh native acceptance executions.
+Independent final verification confirmed 11 Ready nodes, 16 H200 GPUs, all
+25 desired ActiveCheck policies with 10 recurring checks enabled, restored
+passive scheduler and worker policy, UP partitions, and released maintenance.
+All five original node groups reached Kubernetes 1.36 with zero outdated nodes;
+the three original filesystems remained Ready. The public deploy exited
+successfully, Terraform reported no changes, and the remote deployment record
+was accepted with no active operation. Earlier failed trials, host recovery,
+and checkpoint recovery remain separate evidence. This validates supported
+recovery and completion, not a fresh uninterrupted install and upgrade using
+the final source throughout.
+
 Soperator maintenance preserves the selected job policy, including wait,
 cancel, requeue and hold choices. Running jobs and cleanup follow that policy
 before passive diagnostics are paused; pending and held jobs may remain.
@@ -2688,6 +3496,9 @@ required bootstrap, operational prolog/epilog work and controllers remain active
 | Fresh acceptance | Explicit bounded upstream jobs; recurrence paused | Restored mounts and scheduler verified; fresh native evidence collected | Native checks partition restricted to the checks group |
 | Ready | Desired recurrence restored | Desired policy verified | Owned holds and original partition state restored after authorization |
 
+Each phase reports its release-stage progress, including maintenance recovery
+and scheduling restoration after acceptance.
+
 For a fresh installation, reviewed diagnostic entries are omitted until
 acceptance, so suppression takes effect before a Slurm reservation exists.
 Upgrades use the upstream reservation exclusion only after all user allocations
@@ -2695,9 +3506,57 @@ and cleanup leave the whole-cluster maintenance scope. Unknown passive behavior
 keeps the desired policy unchanged and emits a warning; cxcli verifies its
 frozen rendered configuration and worker mounts. Partial suppression must be
 restored and verified before that fallback is reported.
+Known unsupported policies stay enabled from the first maintenance apply;
+failure to verify an already enabled policy stops without repeating the apply.
+
+Reservation release follows recorded ownership. An install reconciliation of an
+existing Slurm cluster can use a reservation owned by the scheduling journal;
+its release and verification remain with that journal. The checks executor
+releases only reservations it created or received through a sealed handoff.
+An interrupted install whose scheduling events contain the proven node-tuple
+hash defect can repair those IDs during the same deploy resume. The frozen
+install receipt, both journal copies and the recorded gate scope must agree. The original events remain in
+a bound repair record, and accepted diagnostics keep their existing identity.
+Other journal discrepancies remain errors.
+
+Completion also verifies the live health-check interval, program, node-state
+selector, and all prolog/epilog hooks against the selected release's rendered
+SlurmCluster configuration. This includes the enabled fallback. Completed
+operations and resumed handoffs recheck mounted policy and scheduler settings
+without rerunning accepted diagnostics. Temporary exclusions must be removed;
+intentional desired suspension remains unchanged.
+
+Final policy reconciliation retains the campaign's existing workload authority
+while maintenance is being restored. Restoration requires completed upgrade
+segments and the same cluster, release identity, and exclusive lease. Progress
+events and completion preserve the latest callback-owned authority and recovery
+evidence, so an interrupted handoff can resume without repeating completed work.
+
+Final deployment verification compares effective settings: explicit native
+partition defaults, Kubernetes storage quantities, and API-added workload
+defaults may differ in representation. Soperator node-filter `In`/`NotIn`
+selector values may be reordered without changing placement. Membership,
+selector keys and operators, other ordered lists, removed owned fields, and
+resource identities must still match.
+
+After Terraform output resolution, deploy publishes the exact admitted target
+bundle and its dashboard assets into the private execution cache. Recovery does
+not rerender from mutable execution configuration. Publication retains the
+lease, preimage and bundle-identity checks and preserves unrelated targets,
+infrastructure files and recovery receipts.
+Restoring an interrupted execution reapplies its frozen chart digests before
+lifecycle validation; it does not resolve new chart versions or accept value drift.
 
 Native periodic and job-hook logs provide fresh passive evidence; cxcli does not
 install replacement scripts or launch another passive diagnostics runner.
+Worker observations compare Kubernetes resource-health and volume-mount map
+lists by their declared keys. Reordered entries do not imply a worker restart;
+real health, resource, container, readiness, and mount changes still invalidate
+the observation. Duplicate or malformed map identities are rejected.
+The observer transports the selected Slurm worker identity with its pod and
+container binding; it does not require a Slurm hook environment in `kubectl
+exec`. A conflicting worker identity or a changed pod/container rejects the
+observation.
 Applicable GPU-health, boot-disk and memory checks require positive native
 child-log measurements; a successful wrapper exit alone cannot satisfy them.
 GPU-busy and optional NVMe scripts provide supporting evidence because their
@@ -2707,15 +3566,17 @@ PASS results. These results never replace required measurements or the fresh
 native active acceptance jobs. Evidence roles are frozen with the upstream
 policy, and child logs must be bounded, stable and tied to the same runner
 execution and worker or Slurm attempt.
-Per-worker progress uses bounded transport and separate private receipts.
+Per-worker progress uses bounded transport and separate private receipts beside
+the main checks receipt. Render preserves this evidence, configuration authority
+excludes it, and authenticated recovery carries it across interrupted execution.
 Periodic evidence follows the desired Slurm `HealthCheckNodeState` selector;
 an idle worker does not wait for an allocation-only periodic run. Inapplicability
 is recorded separately from PASS, and applicable native job-hook checks remain
 required. Baseline collection retains valid worker observations across sweeps,
 so a busy worker does not reset progress on other workers.
 New operations use the new checks receipt contract; finish an older operation
-with its original executable. The completed lab campaign above predates this
-redesign and is not live qualification of the new admission barrier.
+with its original executable. The 2026-09-09 lab campaign predates this redesign
+and is not live qualification of the new admission barrier.
 Temporary policy is applied to the umbrella HelmRelease inline values and its
 matching values record. Saved steady values remain unchanged for restoration.
 Native checks and the auxiliary reservation-check CronJob use the active jail
@@ -2728,7 +3589,7 @@ Restoration verifies the exact desired cron expressions and time zones, in
 addition to suspension flags and storage bindings.
 Interrupted first installs can resume with a fenced checks-binding repair; the
 installer ends only the verified old read-only wait hook and lets Flux retry
-the failed installation. The original approval and storage remain in force.
+the failed installation. The frozen intent and storage protections remain in force.
 After that uninstall, the resume accepts Flux’s retained retry condition only
 when the exact admitted release has acknowledged suspension and completed its
 failed-install remediation.
@@ -2829,6 +3690,11 @@ updates do not alter configuration authority; generated configuration and
 `.terraform.lock.hcl` remain fingerprinted. An applied generation resumes only
 when its recorded configuration postimage matches. An interrupted commit still
 requires exact transaction recovery before it can be marked applied.
+Before an application bundle is first bound, recovery compares the generated
+Soperator Helm values as typed YAML data, so JSON checkpoint serialization cannot
+turn mapping key order into configuration drift. Changed values, list order,
+resource metadata, duplicate keys and malformed YAML remain rejected. Existing
+bundle digests and admitted files are preserved.
 The campaign's approved release snapshot is retained by digest in the private
 source cache. Discovery cache expiry or an upstream chart tag replacement cannot
 change that snapshot. Checks and the release child use the same frozen digest;
@@ -2861,11 +3727,30 @@ scheduling changes after infrastructure, workload, storage, and product gates
 pass. Observability verification is a separate explicit status action and
 never delays scheduling recovery or upgrade success.
 
-A fully verified release resolution is cached as an owner-only sealed snapshot
-for 15 minutes. A matching dry-run-to-execute handoff revalidates its digest,
-first-seen tag identity, and content-addressed source before reuse, avoiding a
-second unauthenticated GitHub lookup; stale or mismatched evidence returns to
-the official resolver and never becomes a release mirror.
+Soperator source discovery and chart admission are separate. `soperator create`
+loads verified source defaults before its wizard and validates the completed
+selection before saving. `validate`, `render`, and `grafana install` admit only
+the charts consumed by that target's declared deployment phases, their packaging
+dependencies, and explicit adapter consumers such as dashboard delivery. An
+unused chart such as `helm-nfs-server` is neither downloaded nor validated.
+Required charts still undergo strict source/package comparison, including registry
+hostnames; a mismatch remains an error.
+
+Within one `grafana install` invocation, verified native datasource defaults are
+reused across setup, configuration qualification, saving and rendering. Repeated
+configuration processing does not restart source discovery. Render still performs
+full required-package admission and rechecks release identity before sealing its
+snapshot; deploy uses that frozen generation. A new invocation verifies again.
+
+Verified selections are cached for 15 minutes by source identity, target, requested
+configuration, patches, and deployment phases. Two targets on the same release
+have independent snapshots. Generated v3 snapshots retain exact digests and
+transformations for deploy/retry; replay never rediscovers mutable chart tags or
+adds an unadmitted chart. Older snapshots have no conversion path: finish any
+unfinished operation with its previous cxcli binary before upgrading; otherwise
+run `nebius-cxcli render <config.yaml>` to create a new generation. Do not delete
+unfinished-operation evidence to bypass this check.
+
 Upgrade admission checks official source/package render equivalence with the
 same adapter-compiled upstream umbrella values used by the staged target render,
 so cxcli-only declarative values do not leak into the upstream chart schema.
@@ -2958,13 +3843,34 @@ target image, selected persistent paths, active rootfs PVC identity, and exact
 passive-slot PVC storage contract. It does not extract or inventory a source or
 reference image before commit. `/home`, `/data`, `/scripts`, `/models`, and
 `/opt/soperator-home` are always retained as path-specific PVC mounts outside the
-versioned slots. The
-interactive upgrade wizard can add dedicated data directories; its normalized
-selection is approval-bound and persisted only with successful promotion. New
-optional paths are zero-copy selections available during first rootfs adoption;
-once the installation is slot-backed, later upgrades may retain or remove only
-already-backed optional mounts and fail before maintenance if asked to relocate
-a new live path.
+versioned slots. On every interactive upgrade, the wizard asks
+`Keep any additional folders during the Jail upgrade?` (default No).
+Answer Yes to enter comma-separated absolute directory paths, for example
+`/workspace,/opt/customer-data`. No or an empty list keeps all current
+protections. Additional folders must already exist on the jail filesystem as
+real directories without symlink traversal or overlap with other mounts.
+They use the same retained PVC mount pattern, directly referencing their existing
+backing; no data is copied or moved. The normalized plan is saved in desired
+configuration, rendered and frozen for deployment; accepted evidence advances
+only after successful promotion. Dry-run does not save the selection, and
+unattended execution or recovery never prompts.
+
+After jail activation, growth and final reconciliation preserve the verified
+active storage mapping. Interrupted campaigns reuse the exact saved application
+bundle. The next upgrade reads the accepted physical state before offering new
+folders, so additional selections bind to the current active rootFS. Conflicting
+storage edits stop before publication; acceptance advances only after final
+readiness and fresh storage checks.
+
+If a new protected folder is inside the active rootFS slot, its physical
+generation is retained. When a later upgrade needs that logical slot, it allocates
+a fresh directory and PV/PVC identities on the same filesystem. The old storage
+remains rendered and protected from inventory, cleanup and population. The
+preview reports retained generations and the extra storage requirement;
+automatic reclamation is not performed. Existing protected paths and backing
+cannot be removed or redirected during an upgrade.
+Interrupted release recovery reconstructs the same admitted physical allocation
+and rejects a changed transition or target PVC identity.
 Selected paths are customer-data ownership boundaries: their retained PVCs
 intentionally shadow source- and target-image content at the same subtrees.
 Every unselected path is target-owned: target content replaces live content,
@@ -2972,7 +3878,7 @@ live-only content is discarded, and source content absent from the target is
 removed. This includes unselected package or system drift under `/usr`, `/opt`,
 and `/etc`; it is informational and does not block admission. A first adoption
 requires the passive slot empty and
-unconsumed. A later upgrade may recycle only the exact unconsumed inactive slot
+unconsumed. A later upgrade may recycle only the exact unconsumed, unretained inactive slot
 through its identity-bound write-ahead cleanup stage, while the previous active
 slot remains intact until that approved recycle. Every rootfs Job is pinned to
 the explicit Kubernetes context, exact PVC, fence, and full workload identity.
@@ -3030,11 +3936,11 @@ applied. Ordinary discovery remains strict about ambiguous Helm ownership, but
 collects optional Kruise StatefulSets independently so an absent optional API
 cannot discard required built-in workload inventory.
 Once canonical promotion commits the admitted operation or Slurm/customer-state
-transition begins, cxcli keeps the same invocation alive and reconciles forward
-until every completion gate passes. Ordinary API, Flux, Slurm-path,
-product-readiness, and login-access failures retry with capped backoff and no
-terminal attempt budget. Upgrade completion contains no telemetry phase or
-observability credential lifecycle.
+transition begins, recovery remains forward-only. Completed transitions stay
+sealed, and safe transport reads have bounded retries. A failed readiness gate,
+permanent error, or exhausted read budget stops the local invocation with its
+unfinished operation and restoration evidence preserved. Upgrade completion
+contains no telemetry phase or observability credential lifecycle.
 cxcli first creates every child suspended, then suspends the outer release and
 applies its final child specifications without the temporary child-suspending
 post-renderer. It activates each dependency stage by removing the child
@@ -3043,14 +3949,14 @@ the first current-generation observation of the graph-declared main Soperator
 HelmRelease with its exact Ready source binding, cxcli freezes the GVK,
 namespace, name, source identity, UID, generation, and observed generation in
 the cluster operation anchor before interpreting either `Stalled` or `Ready`;
-`Stalled` wins if both are present. Only that authenticated terminal condition
-can stop a started upgrade. A recreated or drifted main object, another failed
-component, or missing identity evidence enters retry or safety pause and cannot
-become a terminal failure.
+`Stalled` wins if both are present. That authenticated condition is recorded as
+a terminal product failure. Other failed gates stop the invocation for recovery
+without inventing a terminal product classification or rolling back the upgrade.
 Lost or ambiguous fencing authority, protected identity, journal integrity,
-single-writer ownership, or mutate-once outcome enters a non-mutating safety
-pause; the process keeps re-proving the condition and resumes automatically.
-Ctrl-C or process loss leaves the exact operation resumable from its receipts.
+single-writer ownership, or mutate-once outcome stops in a non-mutating safety
+pause. Correct the cause and rerun with the original frozen inputs and controls;
+the new invocation re-proves safety before proceeding. Ctrl-C or process loss
+also leaves the exact operation resumable from its receipts.
 Nebius SDK cleanup runs on the SDK-owned runtime through its native close
 boundary. cxcli does not stop a borrowed loop or filter shutdown failures, so a
 real cleanup failure remains visible while successful finalization stays quiet.
@@ -3058,8 +3964,12 @@ The upgrade handoff regenerates a renewable exec credential configuration from
 the campaign's immutable cluster identity rather than copying an existing
 context's launcher path. If an external edit removes the active cxcli Python
 environment, the invocation exits instead of retrying a missing credential
-plugin forever; restore that environment and rerun the same approved command to
-continue from the durable campaign and child journals.
+plugin forever; restore that environment and run `nebius-cxcli deploy CONFIG_YAML`
+with the same frozen generation and execution controls to continue from the
+durable campaign and child journals. Local `soperator status` reports the known
+frozen Slurm options, but campaign and child receipts do not contain every target
+and validation selection. Status therefore requires the original deploy options
+and does not offer an incomplete copy/paste recovery command.
 During replay, an exact captured legacy HelmRelease is considered retired only
 when Kubernetes' optional-object lookup succeeds with no object; other lookup
 failures remain errors and do not get parsed as absence.
@@ -3082,45 +3992,119 @@ the storage identities that remain outside both rootfs generations.
 
 ![Content-free target-wins active/passive jail rootfs](docs/jail-rootfs-active-passive-storage.svg)
 
-Destroy exactly one registered managed or onboarded cluster:
+### MK8s deletion with global destroy
+
+Destroy exactly one project-bound managed or onboarded cluster, with or without
+Soperator. `--target` is the immutable Nebius cloud cluster ID, required even for
+one cluster. Internal target names and kube-context names are not accepted;
+there is no bulk selector. Managed identity must agree across configuration,
+generated metadata and Terraform state/outputs. Onboarded targets require an
+explicit `cluster_id`; a kube-context alone cannot authorize deletion.
 
 ```bash
-uv run nebius-cxcli soperator destroy "$CONFIG" \
-  --target TARGET \
-  --dry-run
-
-uv run nebius-cxcli soperator destroy "$CONFIG" \
-  --target TARGET
+uv run nebius-cxcli destroy "$CONFIG" --target CLUSTER_ID --dry-run
+uv run nebius-cxcli destroy "$CONFIG" --target CLUSTER_ID
+uv run nebius-cxcli destroy "$CONFIG" --target CLUSTER_ID --yes
+uv run nebius-cxcli destroy "$CONFIG" --target CLUSTER_ID --delete-sfs
+uv run nebius-cxcli destroy "$CONFIG" --target CLUSTER_ID --preserve-pvc-disks
 ```
 
-Dry-run writes an owner-only immutable receipt and prints explicit `DESTROY`
-and `PRESERVE` inventories. Execution has no `--yes`, `--approve`, or
-non-interactive bypass: it requires a TTY and the exact phrase
-`destroy <actual-cluster-id>`. Active install or upgrade state blocks destroy.
-After approval, cxcli acquires the shared local and Kubernetes writer fences,
-rechecks the complete cluster workload and PVC/PV/CSI inventories, proves each
-exact SFS identity exists, removes in-cluster Soperator resources, and then deletes
-the exact cluster. Managed targets use a saved Terraform destroy plan
-constrained to the selected MK8s module closure and require exactly one cluster
-deletion whose prior ID matches the approved receipt; onboarded targets use the
-exact Nebius MK8s API identity. Both paths preserve physical SFS/PVC backing
-storage or the explicit VM-NFS instance, disks, allocations, and export. Only
-after cluster absence and post-delete storage verification does cxcli remove
-the selected Soperator app, deploy target, and managed MK8s config row. The
-receipt checkpoints every frontier and binds both the approved and cleaned
-config digests. Rerunning the same command resumes without repeating a
-completed delete request, including a stop after the config write but before
-the final render checkpoint. Cleanup first renders the complete remaining
-project in scratch, then commits config plus every render-owned generated write
-and deletion as one forward-recoverable generation. A pre-commit render failure
-leaves canonical files untouched; a post-commit interruption completes forward
-on rerun. After completion the journal is historical, so later operator edits
-and later generations are never overwritten or permanently fenced.
+Both ownership modes issue one Nebius SDK cluster-delete request, including all
+node groups. Kubernetes access, Helm/Flux cleanup, PVC/PV scans and finalizer
+handling are not prerequisites. Every workload and node-local ephemeral datum
+is lost. Provider completion time still depends on the cluster; the CLI does not
+promise a fixed speedup for large clusters.
 
-Generic destroy, Terraform, Flux teardown, and protected component-target removal
-reject Soperator lifecycle state, including disabled or partial registration.
-Destructive commands direct operators to `soperator destroy`. Ordinary app
-render, deploy, Flux apply, and Helm upgrades use the scoped workflow above.
+Dedicated GPU clusters and cluster-owned CSI PVC block disks are deleted by
+default through the SDK after all workers disappear. GPU discovery includes
+node-group templates, actual workers and exact selected-component Terraform
+resources, including unused GPU clusters. Outside members, external instance
+references or another cluster's template reference block before cluster deletion.
+GPU clusters must be empty and no longer reconciling before their deletion.
+
+PVC disk discovery covers attached and detached disks from every node group,
+using consistent cloud cluster/PV/PVC labels. The inventory shows each disk's
+ID, namespace, claim and size. Boot and instance-managed disks are excluded from
+separate PVC deletion. Missing ownership, outside attachments/references,
+deletion protection or active snapshot/image locks block default deletion.
+`--preserve-pvc-disks` retains the discovered PVC disks independently of SFS
+policy. Unknown attached disks are reported as preserved with this flag.
+Disk operations are bounded to eight in flight, with one durable receipt writer.
+New PVC disks discovered after approval are never silently added: completion
+waits for separate cleanup of those unapproved IDs, then resumes the frozen work.
+
+SFS is preserved by default. `--delete-sfs` deletes only the exact attached SFS
+IDs shown in the inventory, after cluster, node-group and worker absence and
+storage detachment are proven. Discovery includes zero-node group templates,
+actual worker attachments and arbitrary mount tags. Another cluster's template,
+a stopped or running external instance, an unknown attachment, remaining config
+references, or `forbid_deletion` blocks execution before cluster deletion.
+Deletion protection is never disabled. Imported SFS can be deleted by this flag;
+external IaC must be reconciled by its owner. Independent automation that could
+attach or reuse this storage must remain paused through completion. VM-NFS
+instances, disks and allocations are preserved and checked through cloud APIs.
+
+Dry-run is optional and writes only an owner-only local preview receipt. A new
+execution builds fresh evidence. Confirmation includes the actual cluster ID
+and each nonzero deletion count, for example
+`destroy <actual-cluster-id> and delete 1 GPU cluster and delete 2 PVC disks and delete 3 SFS`.
+`--yes` explicitly approves the same validated inventory without a prompt,
+including in noninteractive runs. Without it, exact confirmation requires a TTY.
+The progress display starts before startup reads and pauses while inventory and
+confirmation are visible; the TTY observation is retained when progress resumes.
+Deletion wait progress shows the actual cluster, GPU cluster, disk or filesystem ID. The separate
+provider operation ID remains in the receipt for polling and recovery.
+
+The command-owned `nebius-cxcli.destroy.v1` receipt lives locally. It freezes cloud
+IDs, storage disposition, config and final artifacts before approval. Destroy
+retains its exact-target recovery and approval rules. Generic render and deploy
+do not consult old destroy history. Validation, quota checks and required
+Terraform output reads still apply. Config writers check for concurrent edits.
+Resume destroy with the same target and flags using its local receipt. Accepted
+operations are polled; uncertain acceptance requires matching provider evidence.
+The CLI never blindly replays a delete.
+
+A conclusively failed operation requires renewed exact confirmation or explicit
+`--yes` before another attempt. Only `nebius-cxcli.destroy.v1` receipts are supported. Unsupported local receipts are rejected regardless of status, including completed records;
+they are never imported, archived or migrated automatically. Dedicated command recovery does not migrate receipt schemas. Rollback is unsupported while a current destroy
+remains active. Unregistered orphan resources are outside the inventory.
+
+An unapproved current-format local preview is rebuilt from fresh inventory and requires new
+confirmation. Failed planning preserves that preview, and concurrent cache changes
+stop replacement, including during dry-run. A matching authoritative current-format backend
+receipt can restore the local cache without interpreting its previous contents.
+
+The CLI stages the cleaned config and uses normal, untargeted Terraform plans.
+Before deletion it freezes exact managed ancillary resource IDs and the expected
+remaining state. After SDK deletion, a fresh saved plan may delete only those
+ancillary IAM resources and reconcile the expected disappeared resources and
+outputs. Provider refresh changes, such as status, counts or attachments, are
+accepted only for the same address, type and immutable ID already scheduled for
+deletion. After SDK deletion this applies only to remaining ancillary deletions.
+Drift on retained resources, changed or unknown IDs, and planned creates, updates
+or replacements stop recovery. Terraform runs behind the phase progress display;
+raw plans, state values and provider diagnostics are not printed by destroy.
+Temporary execution paths are canonicalized before saved-plan checks, including
+on systems where the temporary directory has a filesystem alias. A failure after
+`storage_resolved` resumes cleanup from the saved deletion checkpoints.
+Terraform never applies the SDK-owned cluster or SFS delete requests. Only after
+cloud and authoritative-state checks pass does cxcli publish the frozen config
+and generated files, clear the selected accepted-deployment baseline, and mark
+the remote receipt complete. Local edits are not overwritten. Selected SFS
+config entries are removed only when explicitly deleted; removing the final
+entry removes its component to avoid recreating a default filesystem.
+
+The command reads backend recovery authority before resolving the current target,
+so a retry can finish publication after the target is removed from config. A
+completed replay must match both the cloud ID and the final config digest.
+It cannot delete a replacement cluster that reuses an internal target name.
+Completion covers the selected cluster and approved inventory; arbitrary external
+resources created by application controllers require their own cleanup.
+
+Global teardown without `--target` and low-level `terraform destroy` reject MK8s
+config, generated targets and remaining MK8s Terraform state. Flux teardown and
+protected component-target removal retain their Soperator lifecycle guards.
+Ordinary app render, deploy, Flux apply, and Helm upgrades use the scoped workflow above.
 
 Inspect an existing cluster before it has a cxcli config:
 
@@ -3132,8 +4116,9 @@ uv run nebius-cxcli soperator discover ./support-bundles \
   --region-id eu-north1
 ```
 
-The region assertion is optional; when omitted, cxcli derives it from live
-provider/Kubernetes evidence. An optional `--kube-context` is accepted only
+Provider scope lookup failures show a controlled access error without raw SDK
+transport details. The region assertion is optional; when omitted, cxcli derives
+it from live provider/Kubernetes evidence. An optional `--kube-context` is accepted only
 when its kube-system UID matches provider-generated access for the requested
 cluster ID. The command never reads or creates `config.yaml`, registers a
 target, renders a project, writes lifecycle receipts, or creates a workload.
@@ -3178,16 +4163,74 @@ registered onboarded target or provider-generated managed-cluster identity. For
 an onboarded target registered only by cluster ID, it generates a
 scoped temporary kubeconfig from the stored cluster ID/access and removes it
 after collection; managed targets likewise use a nonpersistent cluster handoff
-without changing the current context. For cxcli-owned Flux installs, live status
+without changing the current context. For managed targets, live status
+uses the immutable cluster identity from the remote deployment journal or accepted
+deployment evidence, including an interrupted installation whose final local
+handoff has not been published. It validates the exact project, frozen generation
+and target selection, and the live Kubernetes UID without restoring checkpoints
+or reading Terraform state. Before the deployment publishes an identity, status
+reports that live identity is pending. For cxcli-owned Flux installs, live status
 reads the unique canonical main HelmRelease and reports `deployed` only when its
 observed generation is current, its `Ready` condition is true, and its deployed
 history matches the release graph version. Legacy direct-Helm installations
-continue to use Helm storage discovery. Live status fails instead of reporting
-`unknown` when collection is incomplete or Flux identity conflicts. The
+continue to use Helm storage discovery. Identity conflicts stop live collection.
+Other failed current-health queries retain the available observations as a partial report,
+mark unverified health as `Unknown`, and exit nonzero. The
 discovery bundle created internally during a successful onboard remains
 registration evidence under the project reports; it is distinct from the
 public pre-onboarding report and onboarding freshly collects it rather than
 importing it.
+
+Status shows a spinner, elapsed time, and the current activity on stderr while
+reading deployment records, establishing access, inspecting workloads, and
+querying Slurm. Redirected output uses bounded plain-text progress records.
+The report replaces `Operation: none` with explicit idle lifecycle wording and
+shows one installed chart release, retaining build metadata; a genuinely
+different app version is reported separately.
+
+The component table includes `Component`, `K8s Ready`, `Health`, and `Details`.
+It covers the operator, controller, login, each worker NodeSet, enabled accounting
+and database, REST, exporter, SConfig, and relevant node-configuration/controller-
+placement support. Healthy is green; degraded yellow; unhealthy/error red;
+unknown magenta; disabled dim gray; intentional zero capacity cyan. Terminal
+color settings, including `NO_COLOR`, are respected. Healthy details are empty.
+Other details identify the observed problem and its operational impact, such as
+a drained worker reducing capacity or an unavailable REST service affecting API
+clients. Kubernetes readiness and read-only Slurm responses are both required;
+allocated/mixed workers remain healthy, while dynamic workers use their current
+active capacity. Declared maintenance remains visible as reduced scheduling
+availability. Helm workload ownership uses the release target namespace,
+separately from Flux's Helm storage namespace. The operator and relevant
+NodeConfigurator workloads remain in the report; missing or ambiguous expected
+NodeConfigurator resources are Unknown.
+
+Recorded ActiveCheck history is summarized by outcome. The default report shows
+at most five recorded Failed, Error, or Cancelled entries, with a hint when more
+exist. `--show-checks` displays every recorded check with its result, scheduling
+state, and available timestamps. It adds no queries and runs no checks.
+Suspended checks without recorded results are identified separately and do not
+imply failure. Timestamps are labeled Submitted, Scheduled, Last successful, or
+Status updated according to their actual source; missing timestamps are omitted.
+Historical outcomes do not determine current service health. Unavailable history
+produces a warning and leaves current health and the exit code unchanged, even
+with `--show-checks`. A successful empty inventory reports No recorded checks;
+an absent ActiveCheck API reports Not installed.
+
+```bash
+nebius-cxcli soperator status ./deployments/tenant/project/config.yaml --show-checks
+```
+
+The final `Overall health` line aggregates every enabled, applicable component.
+Known unhealthy components take precedence over degraded and unknown states;
+unknown counts and partial collection remain visible. Disabled and intentional
+zero capacity are excluded, and absent evidence never counts as healthy.
+Live status exits nonzero for unhealthy, degraded, or incomplete health, including
+identity not yet published. `--no-live` performs no live queries and ends with
+`Overall health: Not checked`; adding `--show-checks` also reports history Not
+checked without querying the cluster. Failed explicit observability verification also
+prevents an overall Healthy result. Component inventory subprocesses are bounded
+to 30 seconds each and Slurm queries to 10 seconds each, without retries,
+readiness polling, test jobs, or cluster mutation.
 
 Live status is the default. `--verify-observability` reuses its exact validated
 target and Kubernetes context and is therefore incompatible with `--no-live`.
@@ -3255,8 +4298,8 @@ changes a generic VM image family, or changes a chart source family such as
   platform, OS image, GPU stack, CPU preset, and GPU preset choices are resolved
   from the live SDK-backed compatibility matrix, compute platform inventory,
   and compute preset inventory before falling back to manual input.
-- `--dry-run` performs live discovery and prints the plan plus a
-  live compatibility-matrix summary and copy/paste-ready repeat dry-run command
+- `--dry-run` performs live discovery and prints the operational plan and
+  copy/paste-ready repeat dry-run command, keeping compatibility findings internal
   without changing `config.yaml`, `generated/`, Terraform backend state, or live
   Nebius resources. For repeat commands printed by `upgrade`, removing only
   `--dry-run` keeps the apply command aligned with the reviewed plan.
@@ -3572,7 +4615,11 @@ Idempotency guide:
   `y` or `n`. Wizard confirmations that advertise `q`/`qq` retain those
   navigation controls but also reprompt on blank input. Configuration-value
   prompts keep their documented defaults; this rule applies to action approval,
-  cancellation, overwrite, resize, recovery, and deletion decisions.
+  cancellation, overwrite, resize, recovery, and deletion decisions. The
+  generic Soperator fast-deploy question is a configuration choice: `[Y/n]`
+  retains the Dev/Test default, while `n` selects Standard. For `soperator create`,
+  the wizard always asks using a supplied mode as its initial selection; without
+  one it shows `[y/n]` and requires an answer.
 - Read-only commands are safe to repeat: `validate-sources`, `validate`, `quota-check`, `validate-generated`, `discover`, `terraform plan`, and `auth --validate-profile`.
 - Reconcile/apply commands are sequentially idempotent or convergent for the same target: `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, `bootstrap-ci`, targeted `auth`, and `auth --bootstrap-ci`.
 - `create`: create-if-missing for a new resolved project folder; existing resolved targets for the same `tenant_id`/`project_id` require explicit overwrite confirmation unless `--force` is provided, and are not reconciled in place.
@@ -3594,14 +4641,19 @@ Global options:
 - `--component-sources-file <path>`
 - `--source-profile {portable|local}`
 
+Help examples use placeholder paths and resource identities; substitute the actual
+folders printed by `create` and the target IDs in your configuration. The
+whole-tree CLI contract checks every public help surface, and a parser-only
+regression checks displayed examples without invoking product callbacks.
+
 ### Generator-side Commands
 
 ```bash
 nebius-cxcli validate-sources
-nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
-nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
+nebius-cxcli grafana export --url https://grafana.example.com/ --token-env GRAFANA_TOKEN --dashboard-uid dashboard-uid
+nebius-cxcli grafana import ./dashboards --config ./config.yaml --target CLUSTER_TARGET --attach
 nebius-cxcli validate /path/to/config.yaml
-nebius-cxcli validate-dashboards /path/to/config.yaml
+nebius-cxcli grafana validate --config /path/to/config.yaml --target CLUSTER_TARGET
 nebius-cxcli quota-check /path/to/config.yaml
 nebius-cxcli render /path/to/config.yaml
 ```
@@ -3610,15 +4662,13 @@ nebius-cxcli render /path/to/config.yaml
   - Validates the active `component_sources.yaml` catalog plus sibling `component_cli_settings.yaml`: Terraform module sources, Helm chart sources, settings contract shape, and fast source-structure checks for CLI-friendly Terraform modules and Helm charts.
   - Accepts an optional positional catalog path, for example `nebius-cxcli validate-sources ./component_sources.yaml`.
   - Example: `nebius-cxcli validate-sources ./component_sources.yaml`
-- `grafana --export-dashboard <grafana-base-or-folder-url>` / `grafana --dashboard-json <path>`
-  - Exports selected dashboards from a Grafana API or normalizes local dashboard JSON into `./dashboards/<folder>/` by default. Use `--output-dir` for a different destination, `--folder-uid` and repeatable `--dashboard-uid` for non-interactive API exports, repeat `--dashboard-json` for multiple local files, and `--overwrite` to replace existing JSON files.
-  - Interactive API exports show folders and dashboards sorted by title, then UID, and support first-character jump keys in the selector.
-  - Authentication tries `GRAFANA_TOKEN`, `NEBIUS_IAM_TOKEN`, `nebius iam get-access-token --format text`, `--token-env <ENV_NAME>`, then Basic auth when `--username` is provided with `--password-env` or an interactive password prompt.
-  - Export-only is read-only for the catalog. Add `--attach` to update the active `component_sources.yaml` with `json_file` dashboard entries under `components.apps.grafana.defaults.values.dashboards`; `--component-sources` can select a different catalog, `--dashboard-folder` can select the dashboard folder/provider key, and `--datasource` is required in non-interactive mode when datasource mapping is ambiguous.
-  - `--attach` writes only the Grafana `dashboard` object, removes runtime `id` and `version`, preserves the top-level `uid`, rewrites dashboard datasource refs to the selected cxcli datasource UID/type, creates the matching dashboard provider when needed, refuses to mix JSON dashboards into a Grafana.com `gnetId` provider, and restores the catalog if post-write validation fails.
-  - `nebius-cxcli grafana --help` includes scenario examples for interactive API export, non-interactive API export, API export with catalog attach, local JSON attach, and multi-file local JSON attach with an explicit catalog.
-  - Example: `nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/dashboards/f/folder-uid/mk8s --folder-uid folder-uid --dashboard-uid dashboard-uid --datasource "Nebius User Metrics" --attach`
-  - Example: `nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
+- `grafana install --config PATH --target TARGET`, `grafana import PATH...`, `grafana export`, `grafana validate [PATH...]`
+  - Cluster mode uses `--config` (default `./config.yaml`) and one exact `--target`, authenticating through its existing admin Secret.
+  - Import saves project JSON/config and installs immediately; `--attach` additionally registers catalog sources. Export only writes local JSON.
+  - Interactive API imports offer a searchable list of compatible existing datasources, displaying each name, type and UID. Use arrows or type to filter, then press Enter, including when only one choice exists. Automation supplies `--datasource-map SOURCE=UID`.
+  - API import shows its current stage and elapsed time during access checks, validation and installation. Progress pauses for selection and uses plain stderr messages when redirected. Active operation leases block concurrent writes; takeover requires observing the same holder and ETag unchanged for five minutes, then fresh confirmation and conditional acquisition.
+  - External `--url` uses explicit `--token-env ENV`, or interactive import preparation through `--sso` (exit 3, manual completion pending).
+  - See [Grafana dashboard workflows and flags](docs/grafana-dashboards.md).
 - `validate <config.yaml>`
   - Validates the project config contract and deployment-readiness shape in one canonical command.
   - Runs phased validation with visible progress: config/catalog load, active source checks, dependency checks, Terraform module input/schema checks, strict readiness checks, VPC networking preflight, then a fail-fast live Nebius quota/capacity phase.
@@ -3627,13 +4677,6 @@ nebius-cxcli render /path/to/config.yaml
   - For day-2 edits to an already rendered/deployed MK8s bundle, `validate` uses the same sibling generated manifest plus Terraform state discount as `quota-check`, so an unchanged existing cluster is not treated as a fresh capacity request. Without generated state, it falls back to the full desired shape from `config.yaml`.
   - Defaults to the global source profile `portable`, so validation fails when the requested render contract would rely on non-portable local Terraform module paths.
   - Example: `nebius-cxcli validate ~/deployments/tenant-name-example/project-name-example/config.yaml`
-- `validate-dashboards <config.yaml>`
-  - Validates each enabled bundled Grafana dashboard source against the live bundled Grafana datasources for the project config. Signal-bound dashboard sources are validated for runtime status, while `deploy-report.md` lists the bundled dashboard set directly instead of separate Metrics, Logs, and Traces shortcut links.
-  - Checks the concrete binding chain: `observability.endpoints.read` key -> Grafana datasource UID/type -> dashboard JSON query contract. It validates the fixed dashboard sources; it does not generate, mutate, or repair dashboards. Prometheus checks metric names and required label keys for every dashboard source, runs representative PromQL queries where the validator has a target-scoped query contract, and summarizes no-data service-dashboard metrics as warnings. For target-scoped dashboards, it resolves the target MK8s cluster ID from generated Grafana status, generated reports, or the persisted kube context and validates cluster-filtered selectors such as `k8s.cluster.id` and `mk8s_cluster_id` instead of letting another cluster's data satisfy the check. Loki checks bucket and Kubernetes log labels plus representative LogQL in the same target-aware way; Tempo checks TraceQL reachability and reports a warning when the endpoint is reachable but no traces exist in the selected window.
-  - Prints each dashboard with a simple `Source:` line, optional `Checks:`, grouped `Warnings:`, and grouped `Errors:`. Grafana.com imports are shown as source provenance, not as warnings.
-  - Shows live dashboard progress while it waits on Grafana datasource/dashboard API calls, with the total based on every target-bound Grafana.com and cxcli-owned dashboard binding and the current item labeled as `<target-id>: <folder>/<dashboard>`.
-  - Use `--target <target-id>` to validate one target-scoped Grafana row in a multi-target config. For MK8s, the target id is the normalized cluster resource name stored as that row's `instance_id`. When omitted, every enabled Grafana row is checked and each target must resolve an explicit kube context; the current kube context is accepted only when its generated Nebius name matches that target.
-  - Example: `nebius-cxcli validate-dashboards ~/deployments/tenant-name-example/project-name-example/config.yaml --target cluster1`
 - `quota-check <config.yaml>`
   - Runs the same live Nebius quota/capacity assessment used by `create`, `render`, and `deploy`, but as an explicit read-only operator command against one project config. It reruns against current Nebius state every time; it does not reuse or trust a cached create-time result.
   - For day-2 edits to an already rendered/deployed MK8s bundle, `quota-check` best-effort reads the sibling generated manifest plus Terraform state and discounts capacity already managed by that bundle. For example, editing a node count from 4 to 6 checks the net-new 2 nodes when state is available; without generated state, it falls back to the full desired shape from `config.yaml`.
@@ -3678,8 +4721,9 @@ nebius-cxcli render /path/to/config.yaml
 ```bash
 nebius-cxcli validate-generated /path/to/generated
 nebius-cxcli deploy /path/to/config.yaml
-nebius-cxcli destroy /path/to/config.yaml --yes
+nebius-cxcli destroy /path/to/config.yaml --target CLUSTER_ID --yes
 nebius-cxcli terraform apply /path/to/generated
+# Projects and Terraform state without MK8s only
 nebius-cxcli terraform destroy /path/to/generated --yes
 nebius-cxcli flux apply /path/to/generated
 nebius-cxcli flux destroy /path/to/generated --yes
@@ -3696,8 +4740,8 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
   - Example: `nebius-cxcli validate-generated ~/deployments/tenant-name-example/project-name-example/generated --portable`
 - `deploy <config.yaml>`
-  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and MK8s GPU-stack compatibility for Nebius-image GPU node groups; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/reports/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI includes the optional `flux bootstrap` command in the copy-paste footer when Flux work actually runs; customers who intend to manage the cluster through local direct apply can ignore that GitOps handoff.
-  - The live quota/capacity preflight uses the Capacity Dashboard for GPU quota dimensions, converts matching VM-slot availability to GPU units, and is rerun-safe for existing bundled MK8s clusters: after backend init, cxcli subtracts the MK8s quota already managed in the current Terraform state before comparing the desired bundle against live quota/capacity. Unchanged reruns therefore stay idempotent instead of failing like first deploys, while real extra requested capacity still fails fast with an explicit quota/capacity message and the exact `quota-request` / `quota-check --all-regions` follow-up commands when it exceeds live availability.
+  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and MK8s GPU-stack compatibility for Nebius-image GPU node groups; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/reports/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux bootstrap --all-targets` leaves every selected target available through `kubectl config use-context ...`. Direct `flux apply --all-targets` uses temporary contexts without changing the local kubeconfig. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI includes the optional `flux bootstrap` command in the copy-paste footer when Flux work actually runs; customers who intend to manage the cluster through local direct apply can ignore that GitOps handoff.
+  - The live quota/capacity preflight uses the Capacity Dashboard for GPU quota dimensions, converts matching VM-slot availability to GPU units, and is rerun-safe for existing bundled MK8s clusters: after backend init, cxcli subtracts the MK8s quota already managed in the current Terraform state before comparing the desired bundle against live quota/capacity. Unchanged reruns therefore stay idempotent instead of failing like first deploys. Confirmed tenant/project quota allowance shortages still fail fast after aggregating net-new GPU demand across shapes sharing one quota. Temporary GPU physical-capacity shortages are advisory: deploy continues infrastructure submission and reports pending capacity. Provider errors, execution deadlines, and final readiness/acceptance checks remain enforced; pending nodes are not reported ready.
 - Deploy-time optional MK8s GPU checks are configured per target under `deploy.targets[].deployment_testing.mk8s_gpu.*`, where each row uses `instance_id` to bind to the cluster target. The fast MK8s node inventory smoke is generated outside that config block as a required manifest validation for every MK8s target, writes `cluster-inventory-report-<target>.json` under `generated/reports/`, and cannot be disabled by `--skip-validations` or `--skip-validation`. GPU stack readiness writes `deploy-gpu-stack-readiness-report-<target>.json`, and bounded GPU visibility writes `deploy-gpu-visibility-report-<target>.json`. NCCL settings are not persisted in `config.yaml`; they are command-only options for explicit `acceptance-test benchmark` runs. The Observability Agent ingestion check is generated for each observability-enabled MK8s target when the active settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled; that settings-catalog switch defaults to enabled and is separate from customer `config.yaml`. Native ESO MysteryBox connectivity is generated as a required guardrail whenever target-scoped MysteryBox sync is configured, so `--skip-validations` and repeatable `--skip-validation <kind>` only skip optional deploy checks such as `gpu-visibility` or `observability-ingestion`; those CLI flags do not rewrite `config.yaml`. If a validation fails before its normal report is complete, `deploy` still writes a failure JSON report so the combined deploy summary shows `FAIL` with the underlying error instead of `NOT RUN`.
 - Ongoing GPU health and performance monitoring is intentionally outside that fast deploy loop. NVIDIA positions DCGM Exporter as the Kubernetes telemetry path for Prometheus/Grafana, while deeper DCGM diagnostics are invasive administrator workflows with different run levels and runtimes, so cxcli does not fold those checks into every local `deploy`.
   - Non-blocking quota coverage gaps remain recorded in the generated manifest, but routine `deploy` output focuses on confirmed shortages and live lookup failures. Use `quota-check` for the full coverage-gap summary in the terminal.
@@ -3705,20 +4749,18 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Use `nebius-cxcli terraform plan <generated-dir>` first when you need a non-mutating preview of the next reconcile.
   - Nebius API status polling for infra is catalog-driven per Terraform module. The generated manifest snapshots enabled module watcher specs, and `deploy`/`terraform apply` fall back to the active catalog when older generated bundles do not have that metadata yet.
   - Each watcher resolves its `parent_id` and `resource_name` from the enabled component row in `config.yaml`, using the catalog's `status.parent_input` and `status.name_input` paths. For example, `mk8s` reads `inputs.cluster.parent_id` plus `inputs.cluster.cluster_name`, `managed-postgresql` reads `inputs.parent_id` plus `inputs.name`, `object-storage` reads `inputs.parent_id` plus `inputs.name`, SSH/WireGuard public VM wrappers read `inputs.parent_id` plus `inputs.name`, and `mysterybox` expands the canonical `inputs.secrets` list into one watcher per configured secret `name`.
-  - Status output reads Nebius service-native response fields directly. MK8s watchers fail fast from node-group error events, and the PostgreSQL, SFS, object-storage, compute-instance, and MysteryBox watchers fail fast from terminal Nebius operation status once the resource is visible, so long-running applies do not sit on generic Terraform timeouts after the API already knows the operation has failed.
+  - Status output reads Nebius service-native response fields directly. MK8s watchers report recognized `RESOURCE_EXHAUSTED: VM schedule timeout` creation events as waiting for cloud capacity, and `ComputeInstanceCreationFailed / UNAVAILABLE` as waiting for a cloud provisioning retry, while node groups are provisioning or updating. Unknown resource exhaustion, quota/permission failures and other terminal node-group events still fail fast. The PostgreSQL, SFS, object-storage, compute-instance, and MysteryBox watchers fail fast from terminal Nebius operation status once the resource is visible, so long-running applies do not sit on generic Terraform timeouts after the API already knows the operation has failed.
   - A watcher terminal-check failure is shown as an API status diagnostic but does not abort Terraform unless a watcher reports an actual terminal Nebius resource failure.
   - `deploy` does not run `flux bootstrap`; use `flux bootstrap` itself or the generated CI apply workflow when you want GitOps bootstrap/reconcile.
   - `deploy` does not run `bootstrap-ci` automatically, even when the bundle lives inside a git repository. GitHub workflow/environment bootstrap stays an explicit generator-side step.
   - Example: `nebius-cxcli deploy ~/deployments/tenant-name-example/project-name-example/config.yaml`
-- `destroy <config.yaml>`
-  - Full local teardown from the generated bundle. `destroy` resolves sibling `generated/` from the project config, then uses the generated manifest as the authoritative teardown contract for all rendered project resources. When app charts are enabled, it deletes rendered Flux and locally applied post-Flux app resources first so Kubernetes finalizers and CSI cleanup can run, then runs Terraform destroy against the rendered infra bundle. For generated bundles with built-in MK8s handoff metadata, Terraform still removes the handed-off cluster after app teardown.
-  - For onboarded external MK8s targets, the cluster and node groups are not Terraform-owned and are not destroyed. `destroy` removes only rendered app resources from that external target plus any explicitly cxcli-owned add-on infra in the generated bundle.
-  - `destroy` is the destructive inverse of `deploy` and is intentionally project-wide. It does not rerender from `config.yaml`, and it does not uninstall Flux controllers or mutate GitHub CI/bootstrap state.
-  - Rendered app teardown failure is fatal before Terraform destroy when app charts are enabled, even for managed clusters that Terraform will remove afterward. In multi-target generated bundles, cxcli attempts all selected targets first and then reports the collected teardown failure so Kubernetes finalizers and CSI cleanup are not skipped silently.
-  - During destroy recovery, the CLI can automatically clear a stale Terraform backend lock and retry once. If destroy is still blocked by a live MK8s node-group create that is stuck in terminal-error provisioning, the CLI can delete that stuck node group via the Nebius SDK and retry destroy again.
-  - The command requires explicit confirmation in interactive mode and `--yes` in non-interactive mode.
-  - If you only want the infra teardown, use `terraform destroy`. If you only want the rendered app teardown, use `flux destroy`.
-  - Example: `nebius-cxcli destroy ~/deployments/tenant-name-example/project-name-example/config.yaml --yes`
+- `destroy <config.yaml> --target CLUSTER_ID`
+  - Deletes one explicitly selected managed or onboarded MK8s cluster through the Nebius Python SDK, with or without Soperator. The immutable cloud ID is required even for one cluster; internal target names and bulk selection are rejected.
+  - `--dry-run` previews exact DESTROY/PRESERVE inventory. Execution uses exact interactive confirmation or `--yes` after identical validation.
+  - Deletes dedicated GPU clusters and owned PVC disks by default; `--preserve-pvc-disks` retains PVC disks. SFS is preserved unless `--delete-sfs` is explicit. VM-NFS and unrelated infrastructure remain preserved.
+  - No Kubernetes, Helm or Flux teardown prerequisite. Durable backend receipts resume deletion and constrained Terraform reconciliation, then publish the cleaned selected-target configuration and generated bundle transactionally.
+  - Projects without MK8s retain `destroy CONFIG [--yes]`: rendered app teardown followed by Terraform destroy. Low-level `terraform destroy` rejects MK8s.
+  - Example: `nebius-cxcli destroy ~/deployments/tenant-name-example/project-name-example/config.yaml --target CLUSTER_ID --yes`
 - `terraform apply <generated-dir>`
   - Infra-only apply from the generated Terraform bundle. Safe to rerun sequentially for convergence, and does not depend on resolving the original source catalog's module paths.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees such as `generated/flux/` are rejected so infra-only commands cannot accidentally target app manifests.
@@ -3728,10 +4770,10 @@ nebius-cxcli flux bootstrap /path/to/generated
 - `terraform destroy <generated-dir>`
   - Infra-only destroy from the generated Terraform bundle. Destructive by intent, requires confirmation or `--yes`, and reuses the same generated-bundle runtime auth/backend/status machinery as `terraform apply`.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees are rejected.
-  - Uses the same guarded destroy-recovery path as top-level `destroy`: stale-lock auto-unlock/retry first, then direct MK8s node-group cleanup only for live stuck create operations.
+  - Only accepts projects and Terraform state without MK8s; retries once after clearing a verified stale backend lock. Use global `destroy CONFIG --target CLUSTER_ID` for MK8s deletion.
   - Example: `nebius-cxcli terraform destroy ~/deployments/tenant-name-example/project-name-example/generated --yes`
 - `flux apply <generated-dir>`
-  - Apps-only direct apply from the rendered Flux tree. Safe to rerun sequentially for day-2 reconciliation. If the rendered manifest needs Terraform-backed handoff or app-input outputs, `flux apply` initializes `generated/infra` first and reads the current outputs from state, but it does not run `terraform apply`. Its Flux API discovery check is resource-type based, so it does not require the app target namespaces to exist before the manifests create them. Use `--target <target-id>` or `--all-targets` when the generated bundle declares more than one built-in cluster target. If GitOps bootstrap is not configured yet, the CLI prints an optional GitOps handoff command; local direct apply remains valid when continuous Git sync is not part of the customer's operating model.
+  - Apps-only direct apply from an admitted private copy of the rendered Flux tree. All selected targets pass frozen-input, artifact, native Kubernetes and support checks before runtime setup or application effects. It uses temporary kube contexts and may read an existing Terraform cluster-ID output without initialization. It does not initialize Terraform or refresh app inputs; missing or changed render evidence requires render/deploy first. Use `--target <target-id>` or `--all-targets` for multi-target bundles. Sequential reruns reconcile the same admitted generation. Flux API discovery is resource-type based, so target namespaces can be created by the manifests. GitOps bootstrap remains optional.
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees such as `generated/infra/` are rejected so apps-only commands cannot accidentally target Terraform artifacts.
   - Example: `nebius-cxcli flux apply ~/deployments/tenant-name-example/project-name-example/generated`
 - `flux destroy <generated-dir>`
@@ -3826,11 +4868,12 @@ nebius-cxcli validate-generated --portable /path/to/generated
 nebius-cxcli deploy /path/to/config.yaml
 
 # Local destroy from the project entrypoint
-nebius-cxcli destroy /path/to/config.yaml --yes
+nebius-cxcli destroy /path/to/config.yaml --target CLUSTER_ID --yes
 
 # Infra only
 nebius-cxcli terraform plan /path/to/generated
 nebius-cxcli terraform apply /path/to/generated
+# Projects and Terraform state without MK8s only
 nebius-cxcli terraform destroy /path/to/generated --yes
 
 # Safe to rerun sequentially after artifact changes or partial failures
@@ -3854,7 +4897,7 @@ nebius-cxcli flux bootstrap /path/to/generated
 # Flux CLI into its local cache automatically before bootstrapping.
 nebius-cxcli flux bootstrap /path/to/generated
 
-# Supporting: bootstrap generated-only customer CI workflow
+# Supporting: bootstrap the validate/render/deploy customer CI workflow
 nebius-cxcli bootstrap-ci /path/to/config.yaml
 
 # Ensure the canonical project runtime identity (also automatic on project commands)
@@ -3877,7 +4920,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
     cxcli creates it before writing the tenant/project scaffold.
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
-  - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
+  - `grafana import`: positional JSON files/directories; `grafana export`: remote read to local files; `grafana validate`: optional JSON paths. Cluster access uses `--config` and `--target`.
   - `upgrade node-template`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, OS, GPU stack, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus one or more of `--to-version <major.minor>`, `--to-os <os>`, and `--to-gpu-stack-preset <preset>` for automation. Supports Terraform-managed MK8s targets only.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
   - `terraform *`: pass the project `generated/` directory or a path under `generated/infra/`.
@@ -3888,11 +4931,11 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
   - Shows enabled and available catalog entries for the current project, split between infra modules and app charts.
   - Read-only inspection command for deciding the next add/remove action against the current `config.yaml`.
   - Example: `nebius-cxcli component list --config ~/deployments/tenant-name-example/project-name-example/config.yaml`
-- `grafana --export-dashboard <grafana-base-or-folder-url>` / `grafana --dashboard-json <path>`
-  - Exports selected Grafana dashboards or normalizes local dashboard JSON, and only updates `component_sources.yaml` when `--attach` is passed.
-  - Interactive API exports show sorted folder/dashboard lists; type a starting letter or digit to jump within the list.
-  - Example: `nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
-  - Example: `nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
+- `grafana install --config PATH --target TARGET`, `grafana import PATH...`, `grafana export`, `grafana validate [PATH...]`
+  - Cluster mode uses `--config` (default `./config.yaml`) and one exact `--target`, authenticating through its existing admin Secret.
+  - Import saves project JSON/config and installs immediately; `--attach` additionally registers catalog sources. Export only writes local JSON.
+  - External `--url` uses explicit `--token-env ENV`, or interactive import preparation through `--sso` (exit 3, manual completion pending).
+  - See [Grafana dashboard workflows and flags](docs/grafana-dashboards.md).
 - Upgrade commands have a dedicated operator section. See [Upgrade](#upgrade)
   for the copy-paste commands, upgrade strategies, drain-timeout defaults,
   Terraform/SDK ownership model, node-group migrations, Helm chart upgrades, and
@@ -4000,7 +5043,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
   - When the resolved project folder for the same `tenant_id`/`project_id` already exists, interactive `create` warns and asks for confirmation before recreating that folder from scratch unless `--force` is provided; non-interactive reruns require `--force`.
   - Uses exactly one cxcli-managed `.gitignore` at the deployments root for all tenant/project folders below it; nested cxcli-managed deployments roots are rejected instead of supported as a compatibility path.
   - Existing project `client_info` values are not offered back as defaults; overwrite restarts those prompts from the normal create defaults, existing component rows are not merged, and files already under that resolved project path are deleted during the overwrite.
-  - After writing the resulting `config.yaml`, `create` runs the internal warning-only post-create validation by default. Use `--no-validate-config` only when you intentionally want to skip that post-write validation; the separate warning-only live quota/capacity assessment still runs.
+  - After writing the resulting `config.yaml`, `create` runs the internal warning-only post-create validation by default. If it fails, the configuration stays saved, validation is reported as incomplete, and quota assessment and next-step guidance still run. Run `nebius-cxcli validate <config.yaml>` against that saved configuration before rendering or deploying; there is no need to repeat the wizard. This also applies to `soperator create`. Explicit validation and source checks before configuration publication still fail on unresolved sources. Use `--no-validate-config` only when you intentionally want to skip generic create's post-write validation; the separate warning-only live quota/capacity assessment still runs.
   - `create` also runs a best-effort live Nebius quota check for bundled infra components and warns when the selected shape already exceeds current quota. GPU quota dimensions come from the Capacity Dashboard for the selected platform/preset/fabric shape. It does not block render or config edits, does not reserve capacity, and is not a wizard-selectable deploy gate. Confirmed requestable quota shortages print the exact `quota-request <config.yaml>` follow-up command, while capacity-only GPU shortages point to choosing another available shape or region.
   - Non-blocking quota coverage-gap detail stays available through `quota-check` and the generated manifest rather than being repeated during normal `create` output.
   - CPU defaults are prompted first as `inputs.node_group_defaults.cpu.platform` and
@@ -4078,7 +5121,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
   - Unresolved live limits and estimator coverage gaps remain report-only; they are not requested automatically.
   - Example: `nebius-cxcli quota-request ~/deployments/tenant-name-example/project-name-example/config.yaml`
 - `bootstrap-ci <config.yaml>`
-  - Generates or reconciles the customer GitHub Actions workflow, always reconciles GitHub email settings from local `email --setup`, and syncs the canonical project identity to the required Nebius CI auth secrets. The generated workflow watches and deploys only canonical `<tenant-folder>/<project-folder>/generated/**` paths.
+  - Generates or reconciles the customer GitHub Actions workflow, always reconciles GitHub email settings from local `email --setup`, and syncs the canonical project identity to the required Nebius CI auth secrets. The generated workflow watches canonical `<tenant-folder>/<project-folder>/config.yaml` and `generated/**` paths, then runs validate, render, validate-generated, and deploy.
   - If the deployments root is the repository root, the generated workflow uses `NEBIUS_DISCOVER_TARGET: .` and the canonical `*/*/generated/**` trigger glob instead of embedding `./` in path filters.
   - The workflow file is CLI-managed. Re-running `bootstrap-ci` automatically reconciles `.github/workflows/nebius-deployments.yml` to the latest generated contract and is idempotent when no drift exists.
   - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before `nebius-cxcli terraform plan` and `nebius-cxcli terraform apply`. That generated-bundle validation now includes the same strict readiness, VPC networking preflight, and live quota/capacity gate used by local deploy preflight.
@@ -4106,7 +5149,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
   - Example: `nebius-cxcli bootstrap-ci ~/deployments/tenant-name-example/project-name-example/config.yaml`
 - `discover <deployment-scope-dir>`
   - Returns changed deployment projects for CI matrix generation.
-  - Uses local git change detection plus readable project `config.yaml` files; it does not call Nebius APIs or require Nebius credentials.
+  - Compares committed changes through HEAD using the CI event base, or HEAD~1 locally (with an initial-commit fallback), plus readable project `config.yaml` files. Uncommitted edits are excluded. It does not call Nebius APIs or require Nebius credentials.
   - Accepts the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - Scope filtering is project-aware: both `--all` and normal changed-file discovery still resolve the matching project when the scope is a project subdirectory such as `generated/`.
   - Example: `nebius-cxcli discover ~/deployments --all`
@@ -4147,20 +5190,21 @@ nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-
   - Example: `nebius-cxcli terraform plan ~/deployments/tenant-name-example/project-name-example/generated`
 - `terraform destroy <generated-path>`
   - Destroys the generated Terraform bundle in place after an explicit confirmation or `--yes`.
-  - Can auto-clear a stale Terraform state lock and retry once, and can clean up a live stuck MK8s node-group create before retrying again when that is the remaining destroy blocker.
+  - Only accepts projects and state without MK8s. Can clear a verified stale Terraform lock and retry once; use global `destroy CONFIG --target CLUSTER_ID` for MK8s.
   - Example: `nebius-cxcli terraform destroy ~/deployments/tenant-name-example/project-name-example/generated --yes`
 - `terraform unlock <generated-path>`
-  - Inspects and clears a stale remote Terraform state lock for the generated infra bundle.
+  - Checks local processes and lock ownership, then clears a stale remote Terraform state lock without a confirmation prompt. `--force` bypasses those checks; use it only after proving there is no active writer.
   - Example: `nebius-cxcli terraform unlock ~/deployments/tenant-name-example/project-name-example/generated --force`
 - `flux destroy <generated-path>`
   - Deletes the rendered Flux resources from the target cluster after an explicit confirmation or `--yes`.
   - Example: `nebius-cxcli flux destroy ~/deployments/tenant-name-example/project-name-example/generated --yes`
-- `destroy <config.yaml>`
-  - Destroys all rendered project resources represented by the sibling generated bundle after an explicit confirmation or `--yes`.
-  - Deletes rendered apps first for enabled app charts, including managed MK8s handoff bundles, so Kubernetes finalizers and CSI cleanup can remove app-owned resources such as PVC-backed disks before Terraform destroys the cluster.
-  - For onboarded external MK8s targets, deletes only cxcli-managed rendered app/add-on resources and never destroys the external cluster or node groups.
-  - Resolves sibling `generated/` automatically and still uses the generated manifest as the authoritative teardown contract.
-  - Example: `nebius-cxcli destroy ~/deployments/tenant-name-example/project-name-example/config.yaml --yes`
+- `destroy <config.yaml> --target CLUSTER_ID`
+  - Deletes one explicitly selected managed or onboarded MK8s cluster through the Nebius Python SDK, with or without Soperator. The immutable cloud ID is required even for one cluster; internal target names and bulk selection are rejected.
+  - `--dry-run` previews exact DESTROY/PRESERVE inventory. Execution uses exact interactive confirmation or `--yes` after identical validation.
+  - Deletes dedicated GPU clusters and owned PVC disks by default; `--preserve-pvc-disks` retains PVC disks. SFS is preserved unless `--delete-sfs` is explicit. VM-NFS and unrelated infrastructure remain preserved.
+  - No Kubernetes, Helm or Flux teardown prerequisite. Durable backend receipts resume deletion and constrained Terraform reconciliation, then publish the cleaned selected-target configuration and generated bundle transactionally.
+  - Projects without MK8s retain `destroy CONFIG [--yes]`: rendered app teardown followed by Terraform destroy. Low-level `terraform destroy` rejects MK8s.
+  - Example: `nebius-cxcli destroy ~/deployments/tenant-name-example/project-name-example/config.yaml --target CLUSTER_ID --yes`
 - `email [config.yaml]`
   - Sends only `generated/reports/deploy-report.md` to `client_info.notifications.email` via SMTP and fails fast if that file is missing.
   - Omit the path only when using `--setup`.
@@ -4190,13 +5234,15 @@ Selected command-specific flags (the canonical fixture and each command's
   `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--app-version`, `--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, `--validate-sources/--no-validate-sources`, `--validate-config/--no-validate-config`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
   `--github-repo`, `--github-token-env`, `--cli-ref`
-- `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, `--dashboard-uid`, `--overwrite`, `--attach`, `--component-sources`, `--dashboard-folder`, `--datasource`, `--token-env`, `--username`, `--password-env`
-- `validate-dashboards`: `--target`
+- `grafana install`: required `--config`, `--target`; optional storage, remote write URL/protocol, typed datasource, default datasource, Pushgateway and interactive flags. See [all options](docs/observability.md#defaults-and-flags).
+- `grafana import`: `PATH...`, `--config`, `--target`, `--url`, `--token-env`, `--sso`, `--attach`, `--component-sources`, `--folder-uid`, `--recursive`, `--datasource-map`, `--overwrite`, `--output-dir`
+- `grafana export`: `--config`, `--target`, `--url`, `--token-env`, `--folder-uid`, `--dashboard-uid`, `--output-dir`, `--overwrite`
+- `grafana validate`: `[PATH...]`, `--config`, `--target`, `--url`, `--token-env`, `--recursive`, `--datasource-map`
 - `quota-check`: `--all-regions`
 - Global source-selection for config-based commands: `--source-profile`, `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE`
 - `validate-generated`: `--portable`
 - `render`: `--force`
-- `deploy`: `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`,
+- `deploy`: `--dry-run`, `--acceptance readiness|full`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`,
   `--job-policy`, `--cancel-job`, `--requeue-job`, `--job-wait-timeout`,
   `--job-refresh-interval`
 - `acceptance-test smoke`: `--target`, `--all-targets`, `--suite`,
@@ -4209,7 +5255,7 @@ Selected command-specific flags (the canonical fixture and each command's
 - `migrate node-group`: `--node-group`, `--replacement-node-group`, `--replacement-name`, `--to-platform`, `--to-preset`, `--to-os`, `--to-gpu-stack-preset`, `--to-fabric`, `--to-gpu-cluster-key`, `--to-reservation-policy`, `--to-reservation-id`, Slurm job controls, `--dry-run/--execute`, `--approve/--no-approve`, `--interactive/--no-interactive`
 - `upgrade helm-chart`: `--to-version`, `--dry-run`,
   `--interactive/--no-interactive`
-- `destroy`: `--yes`
+- `destroy`: `--target CLUSTER_ID`, `--yes`, `--dry-run`, `--delete-sfs`, `--preserve-pvc-disks`
 - `discover`: `--all`
 - `wireguard`:
   `--gen-client-conf`, `--add-local-subnets`, `--remove-local-subnets`,
@@ -4256,13 +5302,18 @@ Canonical project authentication behavior:
   source.
 - A completed cached key is checked with the Nebius token service before any IAM
   mutation. A healthy cached run validates project permissions read-only and does
-  not depend on the operator profile. Missing permissions require explicit
-  targeted `auth`; ordinary commands never elevate roles or rotate a healthy key.
+  not depend on the operator profile. Normal project commands, including `create`,
+  automatically reconcile confirmed managed group, membership, or project-role
+  drift using the operator's IAM authority, then verify access with the canonical
+  service account. A separate `auth` command is not required and a healthy key is
+  reused. Missing operator authority fails with guidance to restore access and
+  retry the original command. Provider failures do not trigger permission repair.
 - Creation and recovery reconciliation are strict and idempotent. A same-name service
   account with a different managed description, an unexpected member in its
   deterministic permit group, or a permit on another resource scope fails closed.
-  Explicit targeted `auth` reconciles managed project roles under operator IAM
-  authority, creating the desired role before deleting exact obsolete permits.
+  Normal setup and targeted `auth` use the same strict reconciliation, creating
+  project `admin` before deleting exact obsolete managed project permits.
+  Deployment preview and CI credential imports remain read-only.
 - The project-only cache lives under
   `~/.config/nebius-cxcli/projects/<project-id>-<digest>/`. Its directory, lock,
   metadata, private key, and recoverable key-intent files use owner-only `0700` and
@@ -4323,7 +5374,7 @@ Canonical project authentication behavior:
   into its ephemeral strict cache, and never creates or repairs cloud IAM resources
   merely because local cache state is absent.
 
-`bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config. The generated customer workflow is artifact-driven: it watches and deploys only canonical `<tenant-folder>/<project-folder>/generated/**` paths, using `*/*/generated/**` when the deployments root is the repository root. Re-running the command automatically reconciles the CLI-managed workflow file to the latest template, always reconciles local SMTP settings into the matching GitHub Environment, and uses `--github-repo` only as an explicit override when repo auto-detection is wrong or unavailable.
+`bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config. The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/config.yaml` and `generated/**` paths, using `*/*/config.yaml` and `*/*/generated/**` when the deployments root is the repository root. It validates the source configuration, renders and validates the complete bundle, then runs `deploy`. Re-running the command automatically reconciles the CLI-managed workflow file to the latest template, always reconciles local SMTP settings into the matching GitHub Environment, and uses `--github-repo` only as an explicit override when repo auto-detection is wrong or unavailable.
 
 `deploy <config.yaml>` is intentionally separate from `bootstrap-ci <config.yaml>`. Local/customer-side deploy commands operate only on the committed generated bundle and runtime auth material; they do not create or update GitHub workflows, GitHub environments, or CI secrets automatically.
 
@@ -4348,6 +5399,12 @@ Project-aware commands wait until Nebius token exchange accepts a newly uploaded
 authorized key before continuing. Expected propagation retries stay bounded and
 quiet; credential revocation or an outage beyond the retry budget fails closed so
 checkpointed operations can be resumed safely after authentication is restored.
+During ordinary commands, a token-refresh timeout is shown as a short warning
+while the SDK retains its existing retry policy; a terminal request failure is
+still reported by the command. A Capacity Dashboard `DATA_STATE_STALE` warning
+is separate: Nebius has not supplied fresh availability for the selected lane,
+so GPU capacity remains unconfirmed. Rerun `quota-check <config.yaml>` to check
+for fresh data; stale counts are not evidence that the requested GPUs are free.
 
 ## Validation
 
@@ -4373,6 +5430,10 @@ CLI admission regressions cover both colored and plain output while checking
 the same error text, exit status, and absence of side effects.
 Use the Soperator glob above for the complete offline Soperator lane so new test
 modules are included automatically instead of extending a manual file list.
+Soperator CLI fixtures use the shared typed release snapshots and supply the
+source registry metadata consumed by onboarding. Stub external release
+acquisition at its lookup boundary; keep repository validation, admission hashes
+and the unit-test network guard active.
 
 To run the optional networked, non-mutating structural sweep against selected
 official stable releases, use the complete enforced capability matrix:
@@ -4460,6 +5521,17 @@ the reviewed lock. Every Python-backed target enters the
 same `make env` boundary; concurrent synchronizations of a custom or default
 VENV are serialized.
 
+The wheel smoke verifies status failure handling without exposing raw exceptions:
+it proves the configuration-read callback was reached, requires the sanitized
+diagnostic and overall Error with a nonzero exit, and rejects the injected error
+text. These offline checks perform no live cluster operations.
+
+Soperator source-contract tests locate exact top-level function definitions in
+their current source files, so edits before a function cannot redirect inspection
+to a neighboring definition through stale imported line numbers. Runtime tests
+still execute imported code; rerun validation after editing an active test run's
+source to verify the final checkout.
+
 Developer workflow targets:
 
 - `make lock-check`: reject a missing or stale `uv.lock` without changing it.
@@ -4471,20 +5543,28 @@ Developer workflow targets:
   Nebius CLI cannot enter interactive auth discovery, and blocks live network
   access through `tests/conftest.py`. Tests of missing-token behavior remove the
   inert value explicitly.
-- `make test-integration`: explicit integration lane. It collects `tests/integration`; the Soperator official-release sweep runs only when `NEBIUS_CXCLI_TEST_OFFICIAL_SOPERATOR_RELEASES` supplies `latest` and the desired exact capability representatives.
+- `make test-integration`: explicit integration lane. It collects integration-marked tests across `tests`, including the local Terraform dependency fixture; the Soperator official-release sweep runs only when `NEBIUS_CXCLI_TEST_OFFICIAL_SOPERATOR_RELEASES` supplies `latest` and the desired exact capability representatives.
 - `make format-check`: rejects any newly unformatted Python file while the
-  recorded 55-file formatting backlog is retired.
-- `make typecheck`: rejects an increase above the recorded 496 package mypy
+  recorded formatting backlog is retired.
+- `make typecheck`: rejects an increase above the recorded 493 package mypy
   errors; this is a debt ratchet, not a claim that the package is type-clean.
 - `make coverage-check`: runs branch-mode coverage, requires at least 70%
   combined global coverage, and enforces per-module non-regression floors for
   the upgrade supervisor, ownership, VM-NFS identity, project transaction, and
   credential compensation modules. The focused-module target remains 90%.
-- `make ci-quality`: runs Ruff lint, the format and mypy ratchets, branch
-  coverage, the full offline suite, and diff hygiene. CI runs the offline suite
+- `make ci-quality`: runs Ruff lint, baseline integrity and CLI architecture
+  checks, the format and mypy ratchets, branch coverage, the full offline suite,
+  and diff hygiene. CI runs the offline suite
   on Python 3.12, 3.13, and 3.14 and verifies the installed wheel separately.
 - `make coverage`: alias of `make coverage-check`.
 - `make test`: alias of `make test-unit`.
+
+CI also runs `scripts/verify_grafana_persistence.py` against disposable, pinned
+Docker images. It checks a saved dashboard edit and an existing login session
+across two Grafana instances, Grafana/PostgreSQL restarts, and PostgreSQL volume
+reuse. After each database transition, it waits for an authenticated TCP query
+before observing Grafana; the cached health endpoint alone is insufficient.
+It does not replay imports or renew the session during persistence checks.
 
 Useful checks:
 
@@ -4537,7 +5617,7 @@ sanitized and must never contain secret values or raw customer data.
 - Keep deployment repositories private.
 - Never commit credentials or secret values.
 - The shipped catalogs avoid tenant/admin-specific key material. Project-scoped SSH public keys belong in the private deployment repo `config.yaml`; a private customer-local `component_sources.yaml` may carry `shared.admin_ssh.public_key` only as a seed that `create`/`component add` resolve and copy into that config.
-- Operator-facing SSH public key inputs accept `ssh-rsa`, `ssh-ed25519`, and ECDSA keys, either inline or via a readable local `.pub` file path. Local paths are a convenience input only; `config.yaml` and generated manifests are normalized back to inline key text.
+- Operator-facing SSH public key inputs accept `ssh-rsa`, `ssh-ed25519`, and ECDSA keys, either inline or via a readable local `.pub` file path. Configuration-writing commands persist inline key text. Render resolves paths into inline keys for generated artifacts while preserving `config.yaml`.
 - `config.yaml` is the canonical render/reset contract and should be versioned in the private deployment repo.
 - `generated/` is the deploy contract and should also be versioned, except for ignored runtime/transient files.
 - Managed deployments `.gitignore` keeps generated Terraform runtime files and generated tfvars out of git, but does not ignore `config.yaml` or deployable generated manifests, and it intentionally does not add unrelated repo-development ignores such as `.coverage` or `*.tgz`.

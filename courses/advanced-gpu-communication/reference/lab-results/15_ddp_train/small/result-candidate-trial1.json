@@ -1,0 +1,30 @@
+{
+  "correctness": {
+    "finite_mean_loss": true,
+    "parameter_updated": true
+  },
+  "lab": "15_ddp_train",
+  "measurements": {
+    "final_mean_loss": 4.30184,
+    "global_tokens": 40960,
+    "max_rank_peak_allocated_mib": 667.11,
+    "model_shape": {
+      "batch": 8,
+      "hidden": 512,
+      "layers": 4,
+      "sequence": 256,
+      "vocab_size": 4096
+    },
+    "slowest_rank_elapsed_ms": 58.7956,
+    "world_size": 2
+  },
+  "parameters": {
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 2,
+    "zero_grad_fill": true
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}

@@ -11,10 +11,11 @@ from typing import Any
 from common import (
     add_common_args,
     load_torch,
-    require_h100,
+    require_course_gpu,
     validate_common_args,
     write_result,
 )
+from course_evidence import annotated_operation
 
 
 class DeterministicSlowDataset:
@@ -71,9 +72,9 @@ def main() -> None:
     if args.workers < 1 or args.prefetch < 1 or args.producer_delay_ms < 0:
         raise SystemExit("workers/prefetch must be positive and delay non-negative")
     torch = load_torch()
-    environment = require_h100(torch)
-    batch_size = 8 if args.profile == "smoke" else 32
-    sequence_length = 256 if args.profile == "smoke" else 2_048
+    environment = require_course_gpu(torch)
+    batch_size = 8 if args.profile == "small" else 32
+    sequence_length = 256 if args.profile == "small" else 2_048
     sample_count = args.batches * batch_size
 
     def run_case(*, workers: int, prefetch: int | None) -> dict[str, Any]:
@@ -188,4 +189,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    annotated_operation(main, "lab_workload")()

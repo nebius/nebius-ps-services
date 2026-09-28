@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+openai-repeat-trial1,elapsed_seconds,value,0.393325,s
+openai-repeat-trial1,model_count,value,2,none
+openai-trial1,elapsed_seconds,value,0.411265,s
+openai-trial1,model_count,value,2,none
+triton-repeat-trial1,elapsed_seconds,value,0.39862000000000003,s
+triton-trial1,elapsed_seconds,value,0.41149,s

@@ -1,0 +1,148 @@
+{
+  "correctness": {
+    "all_batches_consumed_in_both_cases": true,
+    "all_timings_positive": true,
+    "identical_sample_order_and_content": true
+  },
+  "lab": "26_input_pipeline",
+  "measurements": {
+    "batch_size": 32,
+    "sequence_length": 2048,
+    "serial_slow_producer": {
+      "batch_ready_ms": [
+        300.0229389872402,
+        106.6836710087955,
+        106.1180429533124,
+        105.72516499087214,
+        105.63828097656369,
+        106.19912098627537,
+        105.83611996844411,
+        105.84017296787351
+      ],
+      "batch_ready_p50_ms": 105.9791,
+      "batch_ready_p90_ms": 106.6837,
+      "configured_producer_service_delay_ms_per_sample": 3.0,
+      "configured_queue_capacity_batches": 0,
+      "consumer_step_ms": [
+        141.40025329589844,
+        0.16060799360275269,
+        0.12905600666999817,
+        0.13196800649166107,
+        0.14815999567508698,
+        0.1496960073709488,
+        0.11497599631547928,
+        0.1467839926481247
+      ],
+      "gpu_idle_gap_proxy_ms": [
+        300.0229389872402,
+        106.6836710087955,
+        106.1180429533124,
+        105.72516499087214,
+        105.63828097656369,
+        106.19912098627537,
+        105.83611996844411,
+        105.84017296787351
+      ],
+      "h2d_ms": [
+        71.38355255126953,
+        0.0628800019621849,
+        0.05183999985456467,
+        0.05193600058555603,
+        0.05475199967622757,
+        0.05862399935722351,
+        0.048287998884916306,
+        0.07088000327348709
+      ],
+      "h2d_p50_ms": 0.0567,
+      "prefetch_factor": null,
+      "producer_cpu_ms_per_sample_p50": 0.1208,
+      "queue_depth_before_fetch": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "tokens_per_second": 427409.383,
+      "wall_seconds": 1.2267,
+      "workers": 0
+    },
+    "worker_prefetched": {
+      "batch_ready_ms": [
+        171.72649002168328,
+        0.49361702986061573,
+        99.64993107132614,
+        0.09308906737715006,
+        103.30223303753883,
+        0.40664791595190763,
+        103.73005107976496,
+        0.3209649585187435
+      ],
+      "batch_ready_p50_ms": 50.0718,
+      "batch_ready_p90_ms": 103.7301,
+      "configured_producer_service_delay_ms_per_sample": 3.0,
+      "configured_queue_capacity_batches": 4,
+      "consumer_step_ms": [
+        0.53302401304245,
+        0.11558400094509125,
+        0.2566719949245453,
+        0.1035199984908104,
+        0.21212799847126007,
+        0.10249599814414978,
+        0.19142399728298187,
+        0.100832000374794
+      ],
+      "gpu_idle_gap_proxy_ms": [
+        171.72649002168328,
+        0.49361702986061573,
+        99.64993107132614,
+        0.09308906737715006,
+        103.30223303753883,
+        0.40664791595190763,
+        103.73005107976496,
+        0.3209649585187435
+      ],
+      "h2d_ms": [
+        0.1982080042362213,
+        0.04831999912858009,
+        0.09030400216579437,
+        0.04294399917125702,
+        0.1260479986667633,
+        0.04025600105524063,
+        0.08399999886751175,
+        0.0416640006005764
+      ],
+      "h2d_p50_ms": 0.0662,
+      "prefetch_factor": 2,
+      "producer_cpu_ms_per_sample_p50": 0.1185,
+      "queue_depth_before_fetch": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "tokens_per_second": 1075672.281,
+      "wall_seconds": 0.4874,
+      "workers": 2
+    }
+  },
+  "parameters": {
+    "batches": 8,
+    "iterations": 10,
+    "prefetch": 2,
+    "producer_delay_ms": 3.0,
+    "seed": 17,
+    "warmup": 3,
+    "workers": 2,
+    "world_size": 1
+  },
+  "profile": "large",
+  "schema": "course-student-result/v1"
+}

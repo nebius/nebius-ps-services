@@ -1,8 +1,25 @@
 # Project Agent Instructions Decision Contract
 
-The layered TOML/profile algorithm below is the Codex variant. On Claude, read
+The managed-generation algorithm below is the Codex variant. On Claude, read
 [Claude discovery](claude-discovery.md) and use its native declaration/import
 contract with the same canonical target, rules, ownership and transactions.
+
+## Explicit Human-Rule Repair
+
+An explicit request to repair restrictive project instructions authorizes a
+focused native patch to the affected human-owned clauses. Read the active
+instruction chain, recheck the preimage, preserve unrelated bytes and intact
+managed regions, review the diff and reread the result. Repair the source
+owner too when a template would restore the obsolete rule. Existing overrides
+or fallbacks are active sources; never create a dormant alternative.
+
+This human-rule path needs no spec receipt solely to edit prose and returns
+`human-rules-repaired`, with the target digest and exact file effect, without
+invented helper receipts. Managed generation and refresh still use the
+receipt-bound workflow below. Ownership, recovery, concurrent-change and
+higher-priority policy checks remain binding. Routine project work cannot
+invoke instruction repair; an explicit repair request already supplies the
+mutation authority and does not need another confirmation.
 
 ## Contents
 

@@ -1,0 +1,11 @@
+variant,metric,case,value,unit
+baseline-trial1,cases_mha_ideal_bytes,value,17179869184.0,bytes
+baseline-trial1,cases_gqa_ideal_bytes,value,4294967296.0,bytes
+baseline-trial1,cases_mqa_ideal_bytes,value,536870912.0,bytes
+baseline-trial1,concurrency,value,8,none
+baseline-trial1,sequence,value,4096,none
+candidate-trial1,cases_mha_ideal_bytes,value,34359738368.0,bytes
+candidate-trial1,cases_gqa_ideal_bytes,value,8589934592.0,bytes
+candidate-trial1,cases_mqa_ideal_bytes,value,1073741824.0,bytes
+candidate-trial1,concurrency,value,8,none
+candidate-trial1,sequence,value,8192,none

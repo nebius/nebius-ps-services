@@ -1,29 +1,24 @@
 {
   "slug": "gpu-optimizations",
   "title": "GPU Performance Optimization",
-  "estimated_guided_hours": 36,
+  "estimated_guided_hours": 44,
   "labs": [
-    {
-      "path": "labs/00_cluster_preflight.py",
-      "optional": false,
-      "lessons": [
-        11
-      ]
-    },
     {
       "path": "labs/01_timing_basics.py",
       "optional": false,
       "lessons": [
         1,
         2
-      ]
+      ],
+      "dashboard": "reference/grafana/01_timing_basics.json"
     },
     {
       "path": "labs/02_sync_trap.py",
       "optional": false,
       "lessons": [
         2
-      ]
+      ],
+      "dashboard": "reference/grafana/02_sync_trap.json"
     },
     {
       "path": "labs/03_compile_fusion.py",
@@ -31,42 +26,40 @@
       "lessons": [
         4,
         7
-      ]
+      ],
+      "dashboard": "reference/grafana/03_compile_fusion.json"
     },
     {
       "path": "labs/04_cuda_graphs.py",
       "optional": false,
       "lessons": [
         5
-      ]
+      ],
+      "dashboard": "reference/grafana/04_cuda_graphs.json"
     },
     {
       "path": "labs/05_input_pipeline.py",
       "optional": false,
       "lessons": [
         6
-      ]
+      ],
+      "dashboard": "reference/grafana/05_input_pipeline.json"
     },
     {
       "path": "labs/07_profile_workload.py",
       "optional": false,
       "lessons": [
         3
-      ]
-    },
-    {
-      "path": "labs/08_distributed_scaling.py",
-      "optional": false,
-      "lessons": [
-        12
-      ]
+      ],
+      "dashboard": "reference/grafana/07_profile_workload.json"
     },
     {
       "path": "labs/09_capstone.py",
       "optional": false,
       "lessons": [
         13
-      ]
+      ],
+      "dashboard": "reference/grafana/09_capstone.json"
     },
     {
       "path": "labs/10_shape_precision.py",
@@ -74,71 +67,142 @@
       "lessons": [
         7,
         9
-      ]
+      ],
+      "dashboard": "reference/grafana/10_shape_precision.json"
     },
     {
       "path": "labs/12_allocator_lifetime.py",
       "optional": false,
       "lessons": [
         8
-      ]
-    },
-    {
-      "path": "labs/13_collective_overlap.py",
-      "optional": false,
-      "lessons": [
-        12
-      ]
+      ],
+      "dashboard": "reference/grafana/12_allocator_lifetime.json"
     },
     {
       "path": "labs/14_profiler_bottlenecks.py",
       "optional": false,
       "lessons": [
         3
-      ]
+      ],
+      "dashboard": "reference/grafana/14_profiler_bottlenecks.json"
     },
     {
       "path": "labs/15_tail_load_balance.py",
       "optional": false,
       "lessons": [
         10
-      ]
+      ],
+      "dashboard": "reference/grafana/15_tail_load_balance.json"
     },
     {
       "path": "labs/16_library_first_decision.py",
       "optional": false,
       "lessons": [
         13
-      ]
-    },
-    {
-      "path": "labs/17_nccl_transport_sweep.py",
-      "optional": false,
-      "lessons": [
-        11
-      ]
-    },
-    {
-      "path": "labs/18_nccl_tests_report.py",
-      "optional": false,
-      "lessons": [
-        11
-      ]
+      ],
+      "dashboard": "reference/grafana/16_library_first_decision.json"
     },
     {
       "path": "labs/19_h2d_pipeline.py",
       "optional": false,
       "lessons": [
         6
-      ]
+      ],
+      "dashboard": "reference/grafana/19_h2d_pipeline.json"
     },
     {
       "path": "labs/20_d2h_pipeline.py",
       "optional": false,
       "lessons": [
         8
-      ]
+      ],
+      "dashboard": "reference/grafana/20_d2h_pipeline.json"
     }
   ],
-  "extensions": []
+  "extensions": [],
+  "performance_tools": "reference/performance-tools.md",
+  "observability": "reference/observability.json",
+  "advanced_lessons": [],
+  "external_labs": [
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/01_fabric_topology.py",
+      "lessons": [
+        14
+      ],
+      "title": "Lab 01: Verify the GPU fabric and rank placement"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/05_transport_readiness.py",
+      "lessons": [
+        11
+      ],
+      "title": "Lab 05: Establish the optimization platform contract"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/06_nvlink_bandwidth.py",
+      "lessons": [
+        14
+      ],
+      "title": "Lab 06: Compare copy engines and SM peer traffic"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/07_rdma_bandwidth.py",
+      "lessons": [
+        15
+      ],
+      "title": "Lab 07: Validate host and GPU memory over InfiniBand"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/09_nccl_transport_sweep.py",
+      "lessons": [
+        11
+      ],
+      "title": "Lab 09: Measure a two-node NCCL message-size curve"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/10_nccl_tests_report.py",
+      "lessons": [
+        11
+      ],
+      "title": "Lab 10: Run and interpret NVIDIA NCCL Tests on Slurm"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/11_collective_layout.py",
+      "lessons": [
+        16
+      ],
+      "title": "Lab 11: Compare flat and hierarchical all-reduce"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/12_distributed_scaling.py",
+      "lessons": [
+        12
+      ],
+      "title": "Lab 12: Compare one GPU with two-node DDP"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/13_collective_overlap.py",
+      "lessons": [
+        12
+      ],
+      "title": "Lab 13: Test whether communication can overlap independent compute"
+    },
+    {
+      "course": "advanced-gpu-communication",
+      "path": "labs/14_distributed_profiling.py",
+      "lessons": [
+        16
+      ],
+      "title": "Lab 14: Correlate PyTorch and Systems traces across ranks"
+    }
+  ]
 }

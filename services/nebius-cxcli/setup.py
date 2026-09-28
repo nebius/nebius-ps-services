@@ -127,6 +127,10 @@ class build_py(_build_py):
             Path(self.build_lib) / "nebius_cxcli" / "component_cli_settings.yaml"
         )
         cli_settings_target.write_text(cli_settings.read_text(encoding="utf-8"), encoding="utf-8")
+        (target.parent / "compatibility-matrix.yaml").write_text(
+            (project_root / "compatibility-matrix.yaml").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
 
 
 setup(cmdclass={"build_py": build_py})

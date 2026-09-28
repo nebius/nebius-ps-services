@@ -1,0 +1,7 @@
+variant,metric,case,value,unit
+baseline-trial1,kernel_median_seconds,value,4.992e-06,s
+baseline-trial1,blocks,value,4,none
+baseline-trial1,threads_per_block,value,256,none
+candidate-trial1,kernel_median_seconds,value,5.152000000000001e-06,s
+candidate-trial1,blocks,value,8,none
+candidate-trial1,threads_per_block,value,128,none

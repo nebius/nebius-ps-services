@@ -206,6 +206,7 @@ class SdlcStartContractTests(unittest.TestCase):
             '"queue-cancel"',
             '"queue-next"',
             '"verify"',
+            '"refinement-ready"',
             '"refinement-verify"',
         ):
             self.assertIn(term, helper)
@@ -220,7 +221,9 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-start/SKILL.md",
             [
+                "prompt_workspace.py refinement-ready",
                 "prompt_workspace.py refinement-verify",
+                "After design is ready and before planning",
                 "complete private impact claim",
                 "exact current canonical specs",
                 "immutable impact receipt",
@@ -229,18 +232,36 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assert_terms(
             "sdlc-create-requirements/SKILL.md",
             [
-                "private `refinement-verify` action owned by `sdlc-start`",
-                "latest\n  accepted prompt identity and intent",
-                "every extracted statement occurrence",
+                "private `refinement-ready` action owned by `sdlc-start`",
+                "latest accepted prompt identity and intent",
+                "This read-only check publishes no impact receipt",
+                "After design is ready",
             ],
         )
         self.assert_terms(
             "sdlc-start/scripts/prompt_workspace.py",
             [
+                "def verify_requirements_refinement_ready",
                 "def verify_requirements_refinement_contract",
                 "REQUIREMENTS_REFINEMENT_REQUIRED",
                 "publish_prompt_impact",
             ],
+        )
+
+    def test_missing_pair_bootstrap_preserves_adapter_ownership(self) -> None:
+        self.assert_terms(
+            "maintain-project-specs/SKILL.md",
+            ["Missing-Spec Bootstrap", "existing counterpart byte for byte",
+             "`status=draft`", "`delivery=not-started`", "pair remains\n`pending`"],
+        )
+        self.assert_terms(
+            "sdlc-create-requirements/SKILL.md",
+            ["Do not\n  create the missing design yourself", "draft-pair bootstrap"],
+        )
+        self.assert_terms(
+            "sdlc-create-design/SKILL.md",
+            ["This adapter owns substantive architecture", "transition to ready",
+             "Before planning", "`refinement-verify`"],
         )
 
 

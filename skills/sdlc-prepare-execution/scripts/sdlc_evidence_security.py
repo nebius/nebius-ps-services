@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 
 
@@ -11,10 +12,11 @@ SENSITIVE_PATTERNS = (
     re.compile(r"\bAWS_SECRET_ACCESS_KEY\b\s*[:=]\s*[A-Za-z0-9/+=]{30,}"),
     re.compile(r"\bGITHUB_TOKEN\b\s*[:=]\s*[A-Za-z0-9_ghopsu-]{20,}"),
     re.compile(r"\bOPENAI_API_KEY\b\s*[:=]\s*sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(
-        r"(?i)\b(password|secret|token)\b\s*[:=]\s*[\"']?[A-Za-z0-9_./+=:-]{12,}"
-    ),
     re.compile(r"(?i)https?://[^\s/]+\.(?:internal|corp|local)(?::[0-9]+)?(?:/|\b)"),
+)
+GENERIC_ASSIGNMENT = re.compile(
+    r"(?i)\b(password|secret|token)\b\s*[:=]\s*"
+    r"(?P<quote>[\"']?)(?P<value>[A-Za-z0-9_./+=:-]{12,})"
 )
 PLACEHOLDERS = (
     "example",
@@ -37,5 +39,21 @@ def contains_sensitive(value: str) -> bool:
         if any(marker in lowered for marker in PLACEHOLDERS):
             continue
         if any(pattern.search(line) for pattern in SENSITIVE_PATTERNS):
+            return True
+        for match in GENERIC_ASSIGNMENT.finditer(line):
+            # A dynamic lookup/call is code, not a credential literal. Parse
+            # only the bounded, unquoted RHS; quoted and ambiguous text still
+            # fails closed, and other assignments on the line are still scanned.
+            rhs = line[match.start("value") :].strip()
+            if not match.group("quote") and len(rhs) <= 4096:
+                try:
+                    expression = ast.parse(rhs, mode="eval").body
+                except (SyntaxError, ValueError, RecursionError):
+                    pass
+                else:
+                    while isinstance(expression, ast.Attribute):
+                        expression = expression.value
+                    if isinstance(expression, (ast.Call, ast.Subscript)):
+                        continue
             return True
     return False

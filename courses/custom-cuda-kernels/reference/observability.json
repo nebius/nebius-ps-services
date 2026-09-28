@@ -1,0 +1,886 @@
+{
+  "schema": "gpu-course-observability/v1",
+  "course": "custom-cuda-kernels",
+  "labs": {
+    "01_vector_add": {
+      "lab": "01_vector_add",
+      "title": "Lab 01: Launch and validate a bounds-safe vector kernel",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "threads"
+      ],
+      "metrics": [
+        {
+          "name": "kernel_median_seconds",
+          "path": "kernel_median_ms",
+          "title": "Kernel median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.kernel_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "blocks",
+          "path": "blocks",
+          "title": "Blocks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.blocks. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "threads_per_block",
+          "path": "threads_per_block",
+          "title": "Threads per block",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.threads_per_block. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Calculate the block count and number of inactive final-block threads for 1,003 elements. Which bytes are read and written per useful element? Explain why transfer-inclusive application time differs from the distribution of kernel execution times.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/01_vector_add.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 01_vector_add --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 01_vector_add --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add\" --profile small",
+      "tuning_control": "`--threads 128|256|512`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Kernel median (seconds)",
+        "Blocks",
+        "Threads per block"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare 256 with 128 threads per block using the same 1,003 small-profile elements. Independently test 512 threads and explain the final-block waste and Compute occupancy; keep the fastest correct measured configuration.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "02_fused_elementwise": {
+      "lab": "02_fused_elementwise",
+      "title": "Lab 02: Remove an intermediate with elementwise fusion",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "separate_median_seconds",
+          "path": "separate_median_ms",
+          "title": "Separate median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.separate_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "fused_median_seconds",
+          "path": "fused_median_ms",
+          "title": "Fused median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.fused_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "logical_fused_bytes",
+          "path": "logical_fused_bytes",
+          "title": "Logical fused bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.logical_fused_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Draw the intermediate write/read removed by fusion. Which cost matters more for a tiny array: bytes or launches? What extra live values could increase register pressure if many more operations were fused?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/02_fused_elementwise.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 02_fused_elementwise slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/02_fused_elementwise\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 02_fused_elementwise --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/02_fused_elementwise\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 02_fused_elementwise --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/02_fused_elementwise\" --profile small",
+      "tuning_control": "Compare separate kernels with the fused expression",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Separate median (seconds)",
+        "Fused median (seconds)",
+        "Logical fused bytes"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare separate kernels with the fused expression. Independently change the source threads constant from 256 to 128, rebuild, and inspect whether launch geometry changes the conclusion while preserving elements and tolerances.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "03_tiled_transpose": {
+      "lab": "03_tiled_transpose",
+      "title": "Lab 03: Coalesce a transpose and reduce shared-memory conflicts",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "naive_median_seconds",
+          "path": "naive_median_ms",
+          "title": "Naive median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.naive_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "tiled_unpadded_median_seconds",
+          "path": "tiled_unpadded_median_ms",
+          "title": "Tiled unpadded median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.tiled_unpadded_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "tiled_padded_median_seconds",
+          "path": "tiled_padded_median_ms",
+          "title": "Tiled padded median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.tiled_padded_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Map a warp's load and transposed shared-memory read addresses. How does the extra column alter bank indices? Why can padding help the shared phase but still leave another resource as the overall limiter?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/03_tiled_transpose.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 03_tiled_transpose --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 03_tiled_transpose --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose\" --profile small",
+      "tuning_control": "Compare naive, unpadded-tile, and padded-tile transpose",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Naive median (seconds)",
+        "Tiled unpadded median (seconds)",
+        "Tiled padded median (seconds)"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "rows",
+        "columns",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare naive, unpadded-tile, and padded-tile transpose. Independently test tile_width=16 instead of 32, update the reported shared-column counts to match, rebuild, and inspect bank conflicts at fixed rows and columns.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "04_reduction": {
+      "lab": "04_reduction",
+      "title": "Lab 04: Compare atomic, hierarchical, and CUB reductions",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "per_element_atomic_median_seconds",
+          "path": "per_element_atomic_median_ms",
+          "title": "Per element atomic median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.per_element_atomic_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "warp_block_atomic_median_seconds",
+          "path": "warp_block_atomic_median_ms",
+          "title": "Warp block atomic median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.warp_block_atomic_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cub_median_seconds",
+          "path": "cub_median_ms",
+          "title": "Cub median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cub_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Calculate how many atomic updates the block strategy removes. Why do inactive tail lanes contribute zero while still participating in the shuffle/barrier structure? Explain how CUB affects workspace requirements and maintenance effort.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/04_reduction.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 04_reduction slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/04_reduction\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 04_reduction --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/04_reduction\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 04_reduction --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/04_reduction\" --profile small",
+      "tuning_control": "Compare per-element atomics, block aggregation, and the CUB reference",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Per element atomic median (seconds)",
+        "Warp block atomic median (seconds)",
+        "Cub median (seconds)"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare per-element atomics, block aggregation, and the CUB reference. Independently change threads from 256 to 128, retaining a power-of-two warp multiple, rebuild, and compare atomic traffic with kernel duration.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "05_tiled_stencil": {
+      "lab": "05_tiled_stencil",
+      "title": "Lab 05: Reuse neighboring values with a shared-memory halo",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "kernel_median_seconds",
+          "path": "kernel_median_ms",
+          "title": "Kernel median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.kernel_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "shared_bytes_per_block",
+          "path": "shared_bytes_per_block",
+          "title": "Shared bytes per block",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.shared_bytes_per_block. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "halo_values_per_full_block",
+          "path": "halo_values_per_full_block",
+          "title": "Halo values per full block",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.halo_values_per_full_block. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Trace one interior point, a block-boundary point, and the final valid input. Which values are reused by neighboring threads? Why must masked threads still respect the block barrier?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/05_tiled_stencil.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 05_tiled_stencil slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 05_tiled_stencil --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 05_tiled_stencil --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil\" --profile small",
+      "tuning_control": "Compare the global-memory stencil with shared-memory staging",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Kernel median (seconds)",
+        "Shared bytes per block",
+        "Halo values per full block"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the global-memory stencil with shared-memory staging. Independently test threads=128 instead of 256, rebuild, and explain halo overhead versus occupancy at fixed elements.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "06_divergence_tail": {
+      "lab": "06_divergence_tail",
+      "title": "Lab 06: Group unequal work while preserving output order",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "divergent_median_seconds",
+          "path": "divergent_median_ms",
+          "title": "Divergent median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.divergent_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "grouped_end_to_end_median_seconds",
+          "path": "grouped_end_to_end_median_ms",
+          "title": "Grouped end to end median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.grouped_end_to_end_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "grouped_core_only_median_seconds",
+          "path": "grouped_core_only_median_ms",
+          "title": "Grouped core only median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.grouped_core_only_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Trace an odd logical index through its packed position and return mapping. Which work is unchanged and which overhead is added? Use compiler/profiler evidence to inspect the actual branch and residency behavior.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/06_divergence_tail.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 06_divergence_tail slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/06_divergence_tail\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 06_divergence_tail --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/06_divergence_tail\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 06_divergence_tail --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/06_divergence_tail\" --profile small",
+      "tuning_control": "Compare divergent execution with grouping plus pack/scatter",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Divergent median (seconds)",
+        "Grouped end to end median (seconds)",
+        "Grouped core only median (seconds)"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare divergent execution with grouping plus pack/scatter. Independently test threads=128 instead of 256, rebuild, and retain both preprocessing passes in the application decision.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "07_resource_sweep": {
+      "lab": "07_resource_sweep",
+      "title": "Lab 07: Relate block size, live state, and occupancy limits",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "cases_median_seconds",
+          "path": "cases.*.median_ms",
+          "title": "Cases / case / median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cases.*.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cases_registers_per_thread",
+          "path": "cases.*.registers_per_thread",
+          "title": "Cases / case / registers per thread",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cases.*.registers_per_thread. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "cases_active_blocks_per_sm",
+          "path": "cases.*.active_blocks_per_sm",
+          "title": "Cases / case / active blocks per sm",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cases.*.active_blocks_per_sm. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Compare block sizes at fixed state count while keeping the amount of arithmetic fixed. Separately explain the state-count survey's changed arithmetic. Does the fastest case maximize theoretical resident warps, and what profiler evidence could explain a difference?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/07_resource_sweep.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 07_resource_sweep slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/07_resource_sweep\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 07_resource_sweep --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/07_resource_sweep\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 07_resource_sweep --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/07_resource_sweep\" --profile small",
+      "tuning_control": "Compare the block-size cases at state_values=4; then inspect the separate changed-work state survey",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Cases / case / median (seconds)",
+        "Cases / case / registers per thread",
+        "Cases / case / active blocks per sm"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "cases.*.state_values"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the block-size cases at state_values=4; then inspect the separate changed-work state survey. Independently change the resource_kernel loop unroll pragma, rebuild, and compare register/stall evidence while preserving all six cases and eight arithmetic iterations.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "08_async_pipeline": {
+      "lab": "08_async_pipeline",
+      "title": "Lab 08: Double-buffer global-to-shared copies",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [
+        "work_iterations"
+      ],
+      "metrics": [
+        {
+          "name": "cases_serial_median_seconds",
+          "path": "cases.*.serial_median_ms",
+          "title": "Cases / case / serial median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cases.*.serial_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cases_pipelined_median_seconds",
+          "path": "cases.*.pipelined_median_ms",
+          "title": "Cases / case / pipelined median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cases.*.pipelined_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cases_work_iterations",
+          "path": "cases.*.work_iterations",
+          "title": "Cases / case / work iterations",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cases.*.work_iterations. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Which interval can hide the next copy, and when must the consumer wait? Why might the zero-compute case gain nothing? Explain how double buffering increases shared storage and can affect a future multi-block implementation.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/08_async_pipeline.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 08_async_pipeline --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 08_async_pipeline --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline\" --profile small",
+      "tuning_control": "`--work-iterations`",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Cases / case / serial median (seconds)",
+        "Cases / case / pipelined median (seconds)",
+        "Cases / case / work iterations"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "cases.*.elements",
+        {
+          "path": "cases.*.work_iterations",
+          "varies_with": [
+            "work_iterations"
+          ]
+        },
+        "cases.*.logical_flops",
+        "cases.*.logical_global_bytes",
+        "cases.*.warmup_samples",
+        "cases.*.kernel_samples"
+      ],
+      "workload_parameters": [
+        "work_iterations"
+      ],
+      "guided_comparison": "Compare serial staging with the two-stage pipeline at each fixed work_iterations value. Independently change threads from 256 to 128, rebuild, and explain the shared-memory/occupancy trade-off. Different work_iterations values are separate workload campaigns. Changing `work_iterations` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "09_library_epilogue": {
+      "lab": "09_library_epilogue",
+      "title": "Lab 09: Compare a library GEMM with a fused epilogue",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "cublas_plus_separate_bias_relu_median_seconds",
+          "path": "cublas_plus_separate_bias_relu_median_ms",
+          "title": "Cublas plus separate bias relu median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cublas_plus_separate_bias_relu_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cutlass_fused_bias_relu_median_seconds",
+          "path": "cutlass_fused_bias_relu_median_ms",
+          "title": "Cutlass fused bias relu median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.cutlass_fused_bias_relu_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "rows",
+          "path": "rows",
+          "title": "Rows",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.rows. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Count the extra output pass in the cuBLAS path and the expanded-bias storage in CUTLASS. Why can a fused SIMT implementation lose to a faster library GEMM? Which initialization/copy costs would matter for a one-shot application?",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/09_library_epilogue.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 09_library_epilogue slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/09_library_epilogue\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 09_library_epilogue --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/09_library_epilogue\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 09_library_epilogue --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/09_library_epilogue\" --profile small",
+      "tuning_control": "Compare the library GEMM plus epilogue with the available fused path at fixed GEMM dimensions",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Cublas plus separate bias relu median (seconds)",
+        "Cutlass fused bias relu median (seconds)",
+        "Rows"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "rows",
+        "columns",
+        "depth",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the library GEMM plus epilogue with the available fused path at fixed GEMM dimensions. Independently change the separate epilogue threads from 256 to 128, rebuild, and determine whether the GEMM still dominates.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "10_hopper_cluster": {
+      "lab": "10_hopper_cluster",
+      "title": "Lab 10: Qualify an optional thread-block-cluster launch",
+      "kind": "qualification",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "kernel_median_seconds",
+          "path": "kernel_median_ms",
+          "title": "Kernel median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.kernel_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "cluster_blocks",
+          "path": "cluster_blocks",
+          "title": "Cluster blocks",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.cluster_blocks. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "elements",
+          "path": "elements",
+          "title": "Elements",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.elements. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Explain how block grouping differs from a two-node distributed job. Which synchronization and ownership rules would be needed before one block reads another's shared data? Which would be needed for an asynchronous TMA transfer?",
+      "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
+      "dashboard": "reference/grafana/10_hopper_cluster.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 10_hopper_cluster slurm/single_gpu.sbatch \"${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 10_hopper_cluster --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster\" --profile small",
+      "compute_command": null,
+      "tuning_control": "Verify clustered block execution and its correctness checks",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Kernel median (seconds)",
+        "Cluster blocks",
+        "Elements"
+      ],
+      "allow_source_change": false,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Verify clustered block execution and its correctness checks. Independently explain the cluster barrier and ownership requirements; this qualification dashboard does not justify a kernel speedup.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Expand course_measure and CUDA GPU kernel rows. Locate the cluster kernel and inspect launch gaps and its device duration. Check cluster capability and numerical correctness first; a capture does not prove a cluster-launch speedup."
+      },
+      "gpu_telemetry": true
+    },
+    "11_residual_rmsnorm": {
+      "lab": "11_residual_rmsnorm",
+      "title": "Lab 11: Fuse residual addition with row-wise RMS normalization",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "kernel_median_seconds",
+          "path": "kernel_median_ms",
+          "title": "Kernel median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.kernel_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "elements",
+          "path": "elements",
+          "title": "Elements",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.elements. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "epsilon",
+          "path": "epsilon",
+          "title": "Epsilon",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.epsilon. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Why can the sum of the input and residual stay in a register through the reduction? Which barrier makes the final sum safe to read? Explain why merely launching 256 threads cannot process a 4096-column row correctly with this indexing.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/11_residual_rmsnorm.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm\" --profile small",
+      "systems_command": "python3 tools/submit_lab.py --lab 11_residual_rmsnorm --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm\" --profile small",
+      "compute_command": "python3 tools/submit_lab.py --lab 11_residual_rmsnorm --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm\" --profile small",
+      "tuning_control": "Compare the fused kernel with its CPU reference, then independently replace its shared-tree reduction with a warp/block reduction and rebuild",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Kernel median (seconds)",
+        "Elements",
+        "Epsilon"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "rows",
+        "width",
+        "epsilon",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the fused kernel with its CPU reference, then independently replace its shared-tree reduction with a warp/block reduction and rebuild. Preserve rows, width=256, epsilon and tolerance; use memory traffic and stalls to assess the candidate.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "12_capstone": {
+      "lab": "12_capstone",
+      "title": "Lab 12: Assemble a kernel acceptance report",
+      "kind": "single_gpu",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "baseline_median_seconds",
+          "path": "baseline_median_ms",
+          "title": "Baseline median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.baseline_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        },
+        {
+          "name": "candidate_median_seconds",
+          "path": "candidate_median_ms",
+          "title": "Candidate median (seconds)",
+          "unit": "s",
+          "scale": 0.001,
+          "description": "Measured artifact field measurements.candidate_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "optional": false
+        }
+      ],
+      "question": "Use a selected-kernel profile to explain removed intermediate traffic and launch cost. Does the result survive order reversal? Estimate the maximum application gain from the hotspot's fraction of total runtime before prioritizing integration.",
+      "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
+      "dashboard": "reference/grafana/12_capstone.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 12_capstone slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?completed build}/12_capstone\" --profile small --variant-order baseline-first",
+      "systems_command": "python3 tools/submit_lab.py --lab 12_capstone --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?completed build}/12_capstone\" --profile small --variant-order baseline-first",
+      "compute_command": "python3 tools/submit_lab.py --lab 12_capstone --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?completed build}/12_capstone\" --profile small --variant-order baseline-first",
+      "tuning_control": "Compare the separate baseline with the fused candidate across three trials",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Baseline median (seconds)",
+        "Candidate median (seconds)"
+      ],
+      "allow_source_change": true,
+      "invariants": [
+        "elements",
+        "warmup_samples",
+        "kernel_samples"
+      ],
+      "workload_parameters": [],
+      "guided_comparison": "Compare the separate baseline with the fused candidate across three trials. Independently change threads from 256 to 128, rebuild, and repeat the complete campaign with unchanged element count and operation semantics.",
+      "systems": {
+        "applicable": true,
+        "target": "worker",
+        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
+      },
+      "gpu_telemetry": true
+    },
+    "13_h100_preflight": {
+      "lab": "13_h100_preflight",
+      "title": "Lab 13: Build and identify the H100 CUDA execution target",
+      "kind": "qualification",
+      "nvtx_range": "course_measure",
+      "tuning_parameters": [],
+      "metrics": [
+        {
+          "name": "sm_count",
+          "path": "sm_count",
+          "title": "Sm count",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.sm_count. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "global_memory_bytes",
+          "path": "global_memory_bytes",
+          "title": "Global memory bytes",
+          "unit": "bytes",
+          "scale": 1,
+          "description": "Measured artifact field measurements.global_memory_bytes. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        },
+        {
+          "name": "runtime_version",
+          "path": "runtime_version",
+          "title": "Runtime version",
+          "unit": "none",
+          "scale": 1,
+          "description": "Measured artifact field measurements.runtime_version. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions.",
+          "optional": false
+        }
+      ],
+      "question": "Explain which component compiles CUDA C++ and which launches the resulting binary. Why is the required SM90 build distinct from the optional SM90a profile? Identify what must be requalified after a toolkit change.",
+      "interpretation": "This device-attribute preflight establishes hardware capability, not kernel performance; use the reported attributes and readiness checks. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
+      "dashboard": "reference/grafana/13_h100_preflight.json",
+      "baseline_command": "python3 tools/submit_lab.py --lab 13_h100_preflight slurm/single_gpu.sbatch \"${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight\"",
+      "systems_command": null,
+      "compute_command": null,
+      "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
+      "evidence_views": [
+        "Selected comparison generation",
+        "Correctness of selected results",
+        "Sm count",
+        "Global memory bytes",
+        "Runtime version"
+      ],
+      "allow_source_change": false,
+      "invariants": [],
+      "workload_parameters": [],
+      "guided_comparison": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields. Independently explain one prerequisite that this check cannot establish. Do not tune a health check or interpret snapshots as a performance speedup.",
+      "systems": {
+        "applicable": false,
+        "target": "none",
+        "reason": "This device-attribute preflight establishes hardware capability, not kernel performance; use the reported attributes and readiness checks.",
+        "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
+      },
+      "gpu_telemetry": true
+    }
+  },
+  "setup": {
+    "lab": "environment_readiness",
+    "title": "Environment readiness",
+    "kind": "qualification",
+    "nvtx_range": "ready_kernel",
+    "tuning_parameters": [],
+    "metrics": [
+      {
+        "name": "systems_report_bytes",
+        "path": "systems_report_bytes",
+        "title": "Systems report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      },
+      {
+        "name": "compute_report_bytes",
+        "path": "compute_report_bytes",
+        "title": "Compute report exists",
+        "unit": "bytes",
+        "scale": 1,
+        "description": "A readable local report from the readiness canary; report size does not measure GPU performance."
+      }
+    ],
+    "question": "Can both workers execute the canary and produce readable reports?",
+    "interpretation": "Baseline and candidate slots contain the two worker readiness results. They are readiness records, not optimization candidates. Inspect GPU telemetry and require fresh publication confirmation.",
+    "dashboard": "reference/grafana/environment_readiness.json"
+  }
+}

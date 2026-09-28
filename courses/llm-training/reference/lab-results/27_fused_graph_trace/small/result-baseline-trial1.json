@@ -1,0 +1,45 @@
+{
+  "correctness": {
+    "captured_next_update_close": true,
+    "compiled_expression_close": true
+  },
+  "lab": "27_fused_graph_trace",
+  "measurements": {
+    "compile_fullgraph_required": true,
+    "compiled_first_call_ms": 9234.0303,
+    "cuda_graph_training_step": {
+      "median_ms": 0.0387,
+      "min_ms": 0.0383,
+      "p90_ms": 0.0391
+    },
+    "eager_training_step": {
+      "median_ms": 0.3543,
+      "min_ms": 0.322,
+      "p90_ms": 0.3913
+    },
+    "profile_dispatch_keys": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "shape": [
+      64,
+      256
+    ]
+  },
+  "parameters": {
+    "external_only": false,
+    "iterations": 10,
+    "seed": 17,
+    "warmup": 3,
+    "world_size": 1
+  },
+  "profile": "small",
+  "schema": "course-student-result/v1"
+}
