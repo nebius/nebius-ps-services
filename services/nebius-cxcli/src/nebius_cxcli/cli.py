@@ -234,6 +234,7 @@ from .github_secrets import (
     upsert_environment_secrets,
     upsert_environment_variables,
 )
+from .grafana_access import GrafanaAccess
 from .grafana_cli import app as grafana_app
 from .grafana_dashboard_validation import validate_grafana_dashboard_fits
 from .grafana_runtime import (
@@ -319,6 +320,7 @@ from .mk8s_upgrade import (
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
     format_node_template_upgrade_plan,
+    is_upgrade_followup_command,
     node_group_node_template_rollout_complete,
     node_group_uses_nebius_gpu_image,
     node_template_target_drivers_preset,
@@ -938,9 +940,10 @@ from .ssh_public_keys import discover_ssh_public_key_files, normalize_ssh_public
 from .ssh_trust import resolve_ssh_known_hosts_file
 from .templates import customer_workflow_yaml, default_cli_ref
 from .terminal_styles import (
-    COPY_PASTE_COMMAND_COLOR,
-    copy_paste_command_markup,
+    HELP_EXAMPLE_SEPARATOR_COLOR,
     error_markup,
+    highlight_copy_paste_examples,
+    print_copy_paste_command,
     warning_markup,
 )
 from .terraform_backend import (
@@ -1024,7 +1027,7 @@ def _managed_node_template_batch_selection(
     return tuple(by_alias[name] for name in group_names)
 
 
-_HELP_EXAMPLE_SEPARATOR_MARKUP = f"[bold {COPY_PASTE_COMMAND_COLOR}]|[/]"
+_HELP_EXAMPLE_SEPARATOR_MARKUP = f"[bold {HELP_EXAMPLE_SEPARATOR_COLOR}]|[/]"
 _HELP_EXAMPLE_COMMAND_DELIMITER_RE = re.compile(
     r"(?P<terminator>[.;])\s+(?=(?:[^.;|]*?:[ \t]+)?nebius-cxcli\b)"
     r"|\s+\|\s+(?=(?:[^.;|]*?:[ \t]+)?nebius-cxcli\b)"
@@ -1162,12 +1165,6 @@ def _print_live_quota_report(report: QuotaReport, *, phase: str) -> None:
         console.print(line)
 
 
-def _print_copy_paste_command(command: str) -> None:
-    normalized = str(command or "").strip()
-    if normalized:
-        console.print(copy_paste_command_markup(normalized), highlight=False, soft_wrap=True)
-
-
 def _style_help_example_body(body: str, *, normalize: bool) -> str:
     normalized = " ".join(body.split()) if normalize else body.strip()
     if not normalized:
@@ -1280,7 +1277,10 @@ def _style_help_example_text(text: str, *, normalize_body: bool) -> str:
     before_section = source[: match.start()]
     section_start = match.group("section_start")
     prefix = match.group("prefix")
-    body = _style_help_example_body(match.group("body"), normalize=normalize_body)
+    body = highlight_copy_paste_examples(
+        _style_help_example_body(match.group("body"), normalize=normalize_body),
+        prefix=f"{_HELP_EXAMPLE_SEPARATOR_MARKUP} ",
+    )
     return f"{before_section}{section_start}{prefix}\n\n{body}"
 
 
@@ -1346,7 +1346,7 @@ def _quota_request_command(config_path: Path) -> str:
 
 def _print_quota_request_hint(config_path: Path) -> None:
     console.print("Next step: review and submit quota requests with:")
-    _print_copy_paste_command(_quota_request_command(config_path))
+    print_copy_paste_command(console, _quota_request_command(config_path))
 
 
 def _quota_report_has_capacity_dashboard_shortage(report: QuotaReport) -> bool:
@@ -1376,7 +1376,7 @@ def _print_quota_check_all_regions_hint(config_path: Path, *, enabled: bool) -> 
     if not enabled:
         return
     console.print("Next step: compare quota availability across regions with:")
-    _print_copy_paste_command(_quota_check_all_regions_command(config_path))
+    print_copy_paste_command(console, _quota_check_all_regions_command(config_path))
 
 
 def _warn_on_live_quota_issues(
@@ -8054,26 +8054,18 @@ def _verify_helm_chart_upgrade_ready(
 
 def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
     in_warnings = False
-    in_copy_paste_command = False
     for line in lines:
         if line == "- warnings:":
             in_warnings = True
-            in_copy_paste_command = False
             console.print(f"- {warning_markup('warnings:', bold=True)}")
             continue
         if in_warnings and line.startswith("  - "):
             console.print(f"  - {warning_markup(line[4:])}")
             continue
-        if line in {"- repeat dry-run command:", "- approved execute command:"}:
-            in_warnings = False
-            in_copy_paste_command = True
-            console.print(line)
-            continue
-        if in_copy_paste_command and line.strip().startswith("nebius-cxcli "):
-            _print_copy_paste_command(line)
+        if is_upgrade_followup_command(line):
+            print_copy_paste_command(console, line)
             continue
         in_warnings = False
-        in_copy_paste_command = False
         console.print(line)
 
 
@@ -12397,10 +12389,15 @@ def soperator_create_command(
         if config_path is None:
             return
         console.print(f"Soperator configuration: {config_path}")
-        console.print(f"Next: nebius-cxcli validate {config_path}")
-        console.print(f"      nebius-cxcli render {config_path}")
-        console.print(f"      nebius-cxcli validate-generated {config_path.parent / 'generated'}")
-        console.print(f"      nebius-cxcli deploy {config_path}")
+        console.print("Next steps:")
+        config_arg = _config_cli_arg(config_path)
+        for command in (
+            f"nebius-cxcli validate {config_arg}",
+            f"nebius-cxcli render {config_arg}",
+            f"nebius-cxcli validate-generated {shlex.quote(str(config_path.parent / 'generated'))}",
+            f"nebius-cxcli deploy {config_arg}",
+        ):
+            print_copy_paste_command(console, command)
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -12673,7 +12670,8 @@ def soperator_status_command(
                 console.print(f"Recovery: {operation.detail}")
             console.print(f"Operation receipt: {operation.receipt_path}")
             if operation.resume_command:
-                console.print(f"Resume: {operation.resume_command}")
+                console.print("Resume:")
+                print_copy_paste_command(console, operation.resume_command)
         completed_upgrade = read_soperator_completed_upgrade_evidence(
             paths=resolve_project_paths(config_path),
             target_ref=target.target_ref,
@@ -19810,7 +19808,7 @@ def _config_cli_arg(config_path: Path) -> str:
 def _print_render_deploy_hint(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print("Next step: deploy the rendered bundle:")
-    _print_copy_paste_command(f"nebius-cxcli deploy {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli deploy {config_arg}")
 
 
 @contextmanager
@@ -19852,18 +19850,18 @@ def _temporary_env(overrides: Mapping[str, str]) -> Iterator[None]:
 def _print_component_edit_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print("Next steps:")
-    _print_copy_paste_command(f"nebius-cxcli validate {config_arg}")
-    _print_copy_paste_command(f"nebius-cxcli render {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli validate {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli render {config_arg}")
 
 
 def _print_create_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print("Next steps:")
-    _print_copy_paste_command(f"nebius-cxcli validate {config_arg}")
-    _print_copy_paste_command(f"nebius-cxcli render {config_arg}")
-    _print_copy_paste_command(f"nebius-cxcli deploy {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli validate {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli render {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli deploy {config_arg}")
     console.print("Optional CI bootstrap:")
-    _print_copy_paste_command(f"nebius-cxcli bootstrap-ci {config_arg}")
+    print_copy_paste_command(console, f"nebius-cxcli bootstrap-ci {config_arg}")
 
 
 def _print_component_edit_config_only_note() -> None:
@@ -47300,6 +47298,8 @@ class DeployRunSummary:
     validation_report: DeployValidationReport | None = None
     gitops_bootstrap_commands: tuple[str, ...] = ()
     cluster_identities: Mapping[str, Mapping[str, str]] | None = None
+    grafana_access: tuple[GrafanaAccess, ...] = ()
+    grafana_access_errors: tuple[str, ...] = ()
 
 
 def _deploy_kubectl_json(
@@ -50061,9 +50061,9 @@ def _print_deploy_command_footer(
     console.print("[bright_magenta]Copy/paste commands:[/bright_magenta]")
     for line in _deploy_footer_command_lines(config, paths, summary):
         if _deploy_footer_line_is_command(line):
-            _print_copy_paste_command(line)
+            print_copy_paste_command(console, line)
         else:
-            console.print(line, soft_wrap=True)
+            console.print(line, markup=False, soft_wrap=True)
     console.print("[bright_magenta]Important paths:[/bright_magenta]")
     for line in _deploy_footer_path_lines(paths, summary):
         console.print(line, soft_wrap=True)
@@ -50127,6 +50127,10 @@ def _deploy_footer_command_lines(
     summary: DeployRunSummary,
 ) -> list[str]:
     lines: list[str] = []
+    for access in summary.grafana_access:
+        lines.extend(access.terminal_lines(paths.config_path))
+    for message in summary.grafana_access_errors:
+        lines.append(f"# Grafana access unavailable: {message}")
     for hint in wireguard_access_command_hints(config, paths):
         lines.extend([f"# {hint['label']}", hint["command"]])
     for hint in ssh_jump_access_hints(config, paths):
@@ -50753,7 +50757,7 @@ def _warn_if_flux_gitops_not_bootstrapped(
     )
     if print_command:
         console.print("Optional command to enable GitOps sync:")
-        _print_copy_paste_command(command)
+        print_copy_paste_command(console, command)
     return command
 
 
@@ -52520,6 +52524,7 @@ _ordinary_app_workflow = OrdinaryAppWorkflow(
         apply_flux=_apply_rendered_flux,
         collect_grafana=_collect_grafana_status_after_flux,
         emit=console.print,
+        emit_command=lambda command: print_copy_paste_command(console, command),
     ),
     resolve_targets=lambda *args, **kwargs: _resolve_selected_deploy_targets(*args, **kwargs),
 )
@@ -54918,14 +54923,14 @@ def wireguard_command(
         connect_command = f"wg-quick up {shlex.quote(str(result.output_path))}"
         disconnect_command = f"wg-quick down {shlex.quote(str(result.output_path))}"
         console.print("Run this command to connect:")
-        _print_copy_paste_command(connect_command)
+        print_copy_paste_command(console, connect_command)
         console.print("Run this command to disconnect:")
-        _print_copy_paste_command(disconnect_command)
+        print_copy_paste_command(console, disconnect_command)
         if _wireguard_client_tool_missing():
             install_command = _wireguard_client_install_command()
             console.print("[yellow]WireGuard client tool not found locally:[/yellow] wg-quick")
             console.print("Install it with:")
-            _print_copy_paste_command(install_command)
+            print_copy_paste_command(console, install_command)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 

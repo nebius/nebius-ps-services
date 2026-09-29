@@ -42,14 +42,12 @@ h1 span { color: var(--teal); }
 .path-foundations { margin: 0; padding: 0; list-style: none; }
 .path-foundations li { display: flex; position: relative; align-items: center; gap: 14px; padding-bottom: 20px; }
 .path-foundations li:not(:last-child)::after { content: ""; position: absolute; top: calc(50% + 9px); bottom: -9px; left: 18px; border-left: 1px solid #9cbcac; }
+.path-group-specializations li::after { display: none; }
+.path-group-label { border-top: 1px solid #cbdcd2; padding-top: 12px; margin: 4px 0 14px; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .path-step { background: white; border: 1px solid #bbd3c5; border-radius: 8px; width: 37px; height: 37px; display: grid; place-items: center; flex: 0 0 auto; color: var(--teal); font: 12px ui-monospace, monospace; }
 .path-foundations a { text-decoration: none; font-size: 13px; font-weight: 650; }
-.path-foundations a:hover, .path-branches a:hover { text-decoration: underline; }
+.path-foundations a:hover { text-decoration: underline; }
 .path-foundations small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; margin-top: 2px; }
-.path-branches { border-top: 1px solid #cbdcd2; padding-top: 14px; }
-.path-branches > p { color: var(--muted); font-size: 11px; margin: 0 0 10px; }
-.path-branches ul { display: grid; grid-template-columns: 1fr; gap: 7px; list-style: none; padding: 0; margin: 0; }
-.path-branches a { display: flex; justify-content: space-between; background: #ffffffb8; padding: 8px 12px; border: 1px solid #d3e1d9; border-radius: 6px; text-decoration: none; font-size: 12px; }
 .path-note { font-size: 11px; line-height: 1.6; color: var(--muted); margin: 14px 0 0; }
 .catalog-facts { display: grid; grid-template-columns: repeat(3, 1fr) 1.15fr; align-items: center; gap: 26px; border-block: 1px solid var(--line); padding: 22px 0; }
 .catalog-facts p { margin: 0; font-size: 12px; color: var(--muted); }
@@ -70,8 +68,8 @@ h1 span { color: var(--teal); }
 .course-card:target { border-color: var(--teal); }
 .card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
 .course-number { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 7px; background: #edf6f0; color: var(--teal); font: 13px ui-monospace, monospace; }
-.course-2 .course-number, .course-4 .course-number { background: #eef5fc; color: var(--blue); }
-.course-5 .course-number { background: #fff7e7; color: #86500e; }
+.resource-gpu-fundamentals .course-number, .resource-llm-training .course-number { background: #eef5fc; color: var(--blue); }
+.resource-llm-inference .course-number { background: #fff7e7; color: #86500e; }
 .course-hours { color: var(--muted); font-size: 11px; }
 .card-eyebrow { color: var(--teal); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; line-height: 1.5; margin: 0 0 10px; }
 .course-card h3 { font-size: 23px; line-height: 1.2; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 650; text-wrap: balance; }
@@ -112,8 +110,6 @@ h1 span { color: var(--teal); }
   h1 { font-size: clamp(2.7rem, 8vw, 4.5rem); }
   .hero-description { max-width: 600px; }
   .learning-map { max-width: 100%; }
-  .path-branches ul { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .path-branches a { height: 100%; gap: 10px; }
   .specializations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .section-heading { gap: 24px; }
   .section-heading > p { max-width: 250px; }
@@ -131,7 +127,6 @@ h1 span { color: var(--teal); }
   .hero-actions { flex-direction: column; align-items: stretch; }
   .button { justify-content: space-between; }
   .learning-map { padding: 24px; }
-  .path-branches ul { grid-template-columns: 1fr; }
   .catalog-facts { grid-template-columns: repeat(2, 1fr); gap: 20px; }
   .catalog-facts .fact-note { padding-left: 0; border-left: 0; }
   .catalog-facts strong { font-size: 26px; }

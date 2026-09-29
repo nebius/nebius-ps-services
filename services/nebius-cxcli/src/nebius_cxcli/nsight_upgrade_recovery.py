@@ -21,6 +21,7 @@ from .soperator_operation import (
 from .soperator_operation_lock import SoperatorLeaseAuthority, SoperatorOperationLease
 from .soperator_receipt_io import read_owner_only_json
 from .soperator_recovery_journal import SoperatorRecoveryIdentity, SoperatorRecoveryJournal
+from .terminal_styles import print_copy_paste_command
 
 
 def deploy_resume_command(config_path, controls):
@@ -409,4 +410,4 @@ def recover_upgrade(
         env=env,
         dry_run=dry_run,
     )
-    cli.console.print(command, markup=False, soft_wrap=True)
+    print_copy_paste_command(cli.console, command)

@@ -297,7 +297,7 @@ def tool_figure(course: Path, relative: str, title: str) -> str:
     svg, description = passive_svg(course, path, id_prefix=path.stem + "-")
     return (
         f'<figure class="detail-diagram tools-diagram" id="{path.stem}" '
-        f'data-diagram-source="reference/{relative}" style="max-width: 440px; margin-inline: auto">{svg}'
+        f'data-diagram-source="reference/{relative}">{svg}'
         f"<figcaption><strong>{html.escape(title)}</strong>"
         f"<p>{html.escape(description)}</p></figcaption></figure>"
     )

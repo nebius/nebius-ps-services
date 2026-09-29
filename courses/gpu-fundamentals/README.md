@@ -4,7 +4,7 @@
 
 The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
 
-Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a separate two-worker, sixteen-H100 cluster. The conceptual lessons here remain useful prerequisites.
+Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
 Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
@@ -12,7 +12,7 @@ Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to pre
 
 Start Lesson 1 with the whole H100 SXM 80 GB: SMs, L2 cache and HBM, then distinguish physical hardware from grids, blocks, warps and threads, including how block size limits residency. Open Lab 10 for readiness checks and Lab 01 for its formula, timing procedure and numerical acceptance.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Its worked diagrams show how to read Systems timelines, Compute reports and Grafana panels; a short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Its four landscape diagrams read from left to right: Systems and NVTX timelines, Compute counters leading to an investigation, and Grafana results beside sampled telemetry. A short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 

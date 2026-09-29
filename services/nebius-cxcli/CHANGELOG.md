@@ -6,6 +6,27 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Add `soperator profiling show CONFIG --target TARGET` to reconstruct two
+  complete loopback HTTP/TURN forwards and one shared-password retrieval command
+  from live, owned, ready Nsight viewers. Verify the recorded Soperator target and
+  durable kubeconfig, preserve the current context and persistence opt-outs, and
+  print exactly three highlighted commands without reading password values or
+  changing cluster resources.
+
+- Highlight copyable workflow commands and help examples with bold dark text on
+  a light-gray background. Use one shared style across create/render/deploy,
+  Grafana and Nsight access, quota, upgrade, recovery and connection instructions;
+  preserve command text, color opt-outs and plain redirected output.
+
+- Add `grafana show --config PATH --target TARGET` to verify live Grafana access
+  and print copyable loopback port-forward and admin-password retrieval commands.
+  Refresh verified local kubeconfig entries while preserving the current context
+  and honoring persistence opt-outs; never read or print the password itself.
+  Reject aliased username/password Secret keys before reading credentials.
+- Include the same Grafana instructions and a `grafana show` reminder in successful
+  deployment output and reports, including local-only observability and resumed
+  or unchanged runs. Access handoff failures remain separate from deployment success.
+
 - Wait for authenticated PostgreSQL queries after restart and volume reuse in
   the disposable Grafana persistence check, avoiding stale Grafana health-cache
   results without replaying imports or renewing the saved login session.

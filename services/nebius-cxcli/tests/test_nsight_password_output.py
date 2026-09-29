@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from nebius_cxcli.nsight_runtime import password_command
-from test_nsight import viewer
 
 
 def run_password_command(tmp_path, shell, payload):
@@ -18,7 +17,13 @@ def run_password_command(tmp_path, shell, payload):
     kubectl = tmp_path / "kubectl"
     kubectl.write_text("#!/bin/sh\nprintf '%s' \"$CXCLI_TEST_BASE64\"\n")
     kubectl.chmod(0o700)
-    command = password_command(viewer(), kubeconfig=Path("fixture config"), context="fixture")
+    command = password_command(
+        kubeconfig=Path("fixture config"),
+        context="fixture",
+        namespace="soperator",
+        secret_name="nsight-streamer-auth",
+        secret_key="password",
+    )
     return subprocess.run(
         [executable, "-f", "-c", command],
         env={"PATH": f"{tmp_path}:/usr/bin:/bin", "CXCLI_TEST_BASE64": payload},

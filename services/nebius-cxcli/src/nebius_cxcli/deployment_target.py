@@ -450,12 +450,14 @@ def deploy_application_target(
                 )
             )
             from .nsight_runtime import collect_nsight_status
+            from .terminal_styles import print_copy_paste_command
 
             collect_nsight_status(
                 config,
                 extra_env=kube_env,
                 target_ref=target_ref,
                 emit=lambda message: cli.console.print(message, markup=False, soft_wrap=True),
+                emit_command=lambda command: print_copy_paste_command(cli.console, command),
             )
             bootstrap_command = cli._warn_if_flux_gitops_not_bootstrapped(
                 config,

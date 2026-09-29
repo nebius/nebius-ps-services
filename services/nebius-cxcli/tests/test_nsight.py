@@ -87,7 +87,12 @@ def test_wizard_preserves_custom_ports_and_does_not_prompt_for_credentials():
 
 def test_mac_access_forwards_both_tcp_ports_with_exact_context():
     cmd = access_command(
-        viewer(), kubeconfig=Path("/Users/person/.kube/config"), context="my cluster"
+        kubeconfig=Path("/Users/person/.kube/config"),
+        context="my cluster",
+        namespace="soperator",
+        service_name="nsight-streamer-service",
+        http_port=30080,
+        turn_port=30478,
     )
     assert "--kubeconfig /Users/person/.kube/config --context 'my cluster'" in cmd
     assert "--namespace soperator port-forward --address 127.0.0.1" in cmd
@@ -100,7 +105,13 @@ def test_password_command_quotes_target_and_selects_only_configured_key():
     row["values"]["webPassword"] = {"secretName": "custom-login", "secretKey": "login.password"}
     context = "cluster ' $(echo unexpected)"
     path = Path("/Users/person/kube configs/selected")
-    command = password_command(row, kubeconfig=path, context=context)
+    command = password_command(
+        kubeconfig=path,
+        context=context,
+        namespace=row["namespace"],
+        secret_name=row["values"]["webPassword"]["secretName"],
+        secret_key=row["values"]["webPassword"]["secretKey"],
+    )
     assert shlex.split(command) == [
         "kubectl",
         "--kubeconfig",
@@ -180,16 +191,31 @@ def test_status_only_builds_password_command_with_verified_persistent_access(mon
     monkeypatch.setattr(nsight_runtime, "validate_viewer_deployment", lambda *a: None)
     monkeypatch.setattr(nsight_runtime, "validate_login_secret", lambda *a: None)
     monkeypatch.setattr(nsight_runtime, "validate_reports_pvc", lambda *a: {})
-    (status,) = nsight_runtime.collect_nsight_status({}, extra_env={}, target_ref="cluster")
+    messages, commands = [], []
+    (status,) = nsight_runtime.collect_nsight_status(
+        {}, extra_env={}, target_ref="cluster", emit=messages.append, emit_command=commands.append
+    )
     assert observed
     if durable:
+        assert commands == [status["port_forward_command"]]
+        assert status["port_forward_command"] not in messages
         assert status["password_command"] == password_command(
-            row, kubeconfig=path, context=ReadyKube.context
+            kubeconfig=path,
+            context=ReadyKube.context,
+            namespace=row["namespace"],
+            secret_name="selected-login",
+            secret_key="password",
         )
         assert status["port_forward_command"] == access_command(
-            row, kubeconfig=path, context=ReadyKube.context
+            kubeconfig=path,
+            context=ReadyKube.context,
+            namespace=row["namespace"],
+            service_name="nsight-streamer-service",
+            http_port=30080,
+            turn_port=30478,
         )
     else:
+        assert commands == []
         assert status["access_status"] == "persistent-context-required"
         assert "password_command" not in status and "port_forward_command" not in status
 

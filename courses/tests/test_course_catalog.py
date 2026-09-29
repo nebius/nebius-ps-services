@@ -16,6 +16,7 @@ from test_course_content_contract import ROOT
 from test_practice_integration import load_validator
 
 COURSES = ("soperator", *GPU_COURSES, "advanced-gpu-communication")
+RESOURCES = ("soperator", "lab-guide", *GPU_COURSES, "advanced-gpu-communication")
 
 
 class PageLinks(HTMLParser):
@@ -51,8 +52,17 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     cards = re.findall(
         r'<article class="course-card .*?</article>', document, re.DOTALL
     )
-    assert len(cards) == 7
-    for name, card in zip(COURSES, cards):
+    assert len(cards) == 8
+    assert re.findall(r'<article[^>]+id="([^"]+)"', document) == list(RESOURCES)
+    assert re.findall(r'class="course-number">(\d+)<', document) == [f"{n:02d}" for n in range(1, 9)]
+    guide = cards[1]
+    assert '<h3>Lab Guide</h3>' in guide
+    assert 'href="lab-guide.html"' in guide
+    assert 'Read guide' in guide
+    assert 'guided hours' not in guide
+    for name, card in zip(RESOURCES, cards, strict=True):
+        if name == "lab-guide":
+            continue
         assert f"<h3>{html.escape(metadata[name]['title'])}</h3>" in card
         assert f"{metadata[name]['estimated_guided_hours']} guided hours" in card
         assert f'href="{name}/index.html"' in card
@@ -60,6 +70,11 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     assert "Start here" in cards[0]
     assert "Fundamentals + Optimization" not in cards[0]
     assert "Text only · No labs" in cards[0]
+    learning_path = document.split('<aside class="learning-map"', 1)[1].split('</aside>', 1)[0]
+    assert re.findall(r'<li[^>]*>.*?<a href="#([^"]+)"', learning_path) == list(RESOURCES)
+    assert '<strong>6</strong> courses' in document
+    assert '<strong>1</strong> Advanced Labs collection' in document
+    assert '<strong>1</strong> Lab Guide' in document
     metadata["gpu-fundamentals"]["title"] = 'GPU <execution> & "memory"'
     metadata["gpu-fundamentals"]["estimated_guided_hours"] = 99
     monkeypatch.setattr(cb_pages, "catalog_metadata", lambda: metadata)
@@ -67,6 +82,42 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     assert "GPU &lt;execution&gt; &amp; &quot;memory&quot;" in cb_pages.render_catalog()
     switcher = cb_shell.course_switcher("llm-training", metadata)
     assert "GPU &lt;execution&gt; &amp; &quot;memory&quot;" in switcher
+
+
+@pytest.mark.parametrize("current", RESOURCES)
+def test_every_reading_page_has_the_same_ordered_menu(current):
+    guide = current == "lab-guide"
+    path = ROOT / ("lab-guide.html" if guide else f"{current}/index.html")
+    document = path.read_text()
+    menu = re.search(r'<div class="catalog-navigation">(.*?)</div>', document, re.S).group(1)
+    prefix = "" if guide else "../"
+    assert f'class="catalog-home" href="{prefix}index.html"' in menu
+    items = re.findall(r'<li>(.*?)</li>', menu, re.S)
+    assert len(items) == len(RESOURCES)
+    assert menu.count('aria-current="page"') == 1
+    for name, item in zip(RESOURCES, items, strict=True):
+        if name == current:
+            kind = "guide" if guide else "course"
+            assert f'aria-current="page" data-{kind}="{name}"' in item
+            assert f'Current {kind}' in item
+            assert '<a ' not in item
+        else:
+            target = "lab-guide.html" if name == "lab-guide" else f"{name}/index.html"
+            assert f'href="{prefix}{target}"' in item
+    if guide:
+        assert '<h1>Lab Guide</h1>' in document
+        assert '<summary>Table of contents</summary>' in document
+
+
+def test_readme_leads_to_the_published_catalog_and_keeps_local_access():
+    introduction = (ROOT / "README.md").read_text().split('\n## ', 1)[0]
+    assert introduction.split('\n\n')[1] == (
+        '**[Explore the courses](https://nebius.github.io/nebius-ps-services/courses/index.html)**'
+    )
+    assert '[Browse the courses catalog](index.html)' in introduction
+    destinations = re.findall(r'\]\(([^)]+)\)', introduction)
+    route = [target for target in destinations if target in {"lab-guide.html", *[f"{name}/index.html" for name in COURSES]}]
+    assert route == ["lab-guide.html" if name == "lab-guide" else f"{name}/index.html" for name in RESOURCES]
 
 
 @pytest.mark.parametrize(
@@ -106,7 +157,7 @@ def test_all_site_links_resolve_without_external_assets(relative):
 
 
 @pytest.mark.parametrize("course", GPU_COURSES)
-def test_each_gpu_course_has_catalog_five_siblings_and_current_marker(course):
+def test_each_gpu_course_has_catalog_guide_siblings_and_current_marker(course):
     validator = load_validator()
     parser = validator.Parser()
     parser.feed((ROOT / course / "index.html").read_text())
@@ -121,6 +172,28 @@ def test_each_gpu_course_has_catalog_five_siblings_and_current_marker(course):
         validator.validate_course_navigation(parser, course)
 
 
+@pytest.mark.parametrize("course", (*GPU_COURSES, "advanced-gpu-communication"))
+@pytest.mark.parametrize("defect", ["reorder", "missing-guide", "duplicate-guide", "wrong-current", "extra-fragment"])
+def test_standalone_navigation_rejects_broken_resource_menus(course, defect):
+    validator = load_validator()
+    document = (ROOT / course / "index.html").read_text()
+    match = re.search(r'<details class="course-switcher">.*?<ul>(.*?)</ul>', document, re.S)
+    items = re.findall(r'<li>.*?</li>', match.group(1), re.S)
+    if defect == "reorder":
+        items[0], items[1] = items[1], items[0]
+    elif defect == "missing-guide":
+        items.pop(1)
+    elif defect == "duplicate-guide":
+        items.insert(1, items[1])
+    elif defect == "wrong-current":
+        items = [item.replace(f'data-course="{course}"', 'data-course="soperator"') for item in items]
+    else:
+        items.append('<li><a href="#main">Extra menu item</a></li>')
+    document = document[:match.start(1)] + ''.join(items) + document[match.end(1):]
+    parser = validator.Parser()
+    parser.feed(document)
+    with pytest.raises(SystemExit, match="course navigation"):
+        validator.validate_course_navigation(parser, course)
 @pytest.mark.parametrize("in_navigation", [False, True])
 @pytest.mark.parametrize(
     "destination",

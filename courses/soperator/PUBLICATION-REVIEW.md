@@ -1,6 +1,46 @@
 # Publication review
 
-## Shared jail wording — current source verification
+## Course overview cleanup — current local verification: 2026-09-29
+
+Current HTML SHA-256: `004fb475f1d1ca1fd265713618018da8e0789d9b4f032789e510b62588cd64f4`.
+
+The overview follows the shared purpose, prerequisites and practical-scope
+pattern. Soperator already matched the pattern and its teaching and HTML are unchanged.
+Advanced measurement and completion guidance remains in its embedded course
+guide. The Lab Guide now uses cxcli-generated access and password commands.
+
+Source/static: 261 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent review pass. All numbered lesson
+bodies and 3,479 protected source/reference/evidence files are unchanged.
+Browser/visual: 27 isolated headless Chrome 154.0.8037.58 cases pass at
+1440px, 390px and 320px, including keyboard access and enlarged-text reflow.
+Overview and connection screenshots were reviewed. Generic skill-checker
+findings match baseline and are not reported as a pass.
+
+See the [overview validation record](../docs/course-overview-validation.md) for
+artifact hashes, screenshots, the retained initial harness stall and successful
+retry, cleanup and limitations. No new installed-runtime, live-target or public
+deployment qualification is claimed.
+
+## Historical: Catalog navigation — local verification: 2026-09-28
+
+Current HTML SHA-256: `004fb475f1d1ca1fd265713618018da8e0789d9b4f032789e510b62588cd64f4`.
+
+The shared resource menu now includes Lab Guide second after Soperator and keeps
+one current-page marker. This course's HTML is byte-identical outside that menu;
+its teaching, lab sources, diagrams and existing evidence remain unchanged.
+
+Source/static: 161 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent read-only review pass.
+Browser/visual: all 27 page/viewport cases pass in isolated headless Chrome
+153.0.8010.53 at desktop, 390px and 320px, with keyboard navigation and reflow.
+The generic checker retains baseline diagnostics and is not reported as passing.
+
+See the [catalog validation record](../docs/catalog-navigation-validation.md)
+for artifact identities, preservation, screenshots and limitations. No external
+publication, dependency installation or new live lab execution occurred.
+
+## Historical: Shared jail wording — current source verification
 
 Current `index.html` SHA-256: `e59ceaa3f692ab2fc98dc2e4bc03ac4cddb64f3017b43301395a40b53cee5c0e`.
 

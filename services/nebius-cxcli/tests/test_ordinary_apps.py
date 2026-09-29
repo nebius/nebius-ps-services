@@ -648,6 +648,14 @@ def test_apply_binds_identity_and_never_uses_terraform_or_protected_resources(
     )
     applied = []
     checks = []
+    commands = []
+    access_command = "kubectl --context exact-context port-forward service/nsight-systems 8080:80"
+
+    def collect_nsight(_config, **kwargs):
+        kwargs["emit_command"](access_command)
+        return ()
+
+    monkeypatch.setattr("nebius_cxcli.nsight_runtime.collect_nsight_status", collect_nsight)
 
     def handoff(_config, _paths, **kwargs):
         assert kwargs["allow_terraform_output"] is False
@@ -686,6 +694,7 @@ def test_apply_binds_identity_and_never_uses_terraform_or_protected_resources(
         apply_flux=apply,
         collect_grafana=lambda *_a, **_k: [],
         emit=lambda *_a: None,
+        emit_command=commands.append,
     )
     ordinary_apps.apply_ordinary_apps(
         payload,
@@ -696,6 +705,7 @@ def test_apply_binds_identity_and_never_uses_terraform_or_protected_resources(
         assert_project_authority=lambda: None,
     )
     assert checks and any(doc["kind"] == "HelmRelease" for doc in applied)
+    assert commands == [access_command]
     assert not any(doc.get("metadata", {}).get("name") == "soperator-values" for doc in applied)
     assert any(doc["kind"] == "Namespace" for doc in applied) is not existing_namespace
     assert {path: path.read_bytes() for path in source_files} == source_files
@@ -948,6 +958,7 @@ def test_lifecycle_accepts_and_applies_both_mixed_target_identities(project, mon
         apply_flux=apply,
         collect_grafana=lambda *_a, **_k: [],
         emit=lambda *_a: None,
+        emit_command=lambda *_a: None,
     )
     workflow = ordinary_apps.OrdinaryAppWorkflow(
         services=lambda: services, resolve_targets=cli._resolve_selected_deploy_targets

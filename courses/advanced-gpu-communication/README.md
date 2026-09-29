@@ -2,7 +2,11 @@
 
 [Open the complete course](index.html) · [Lab route](SYLLABUS.md) · [Setup](../README.md#how-to-set-up-the-lab) · [Environment candidates](VERSIONS.md)
 
-Course seven contains **34 executable labs**, plus [shared environment setup](../README.md#how-to-set-up-the-lab). It owns the 25 distributed activities previously spread across four courses and adds nine experiments on network latency, adapter selection, NIXL, Megatron Bridge, hierarchical context parallelism, Dynamo and AIPerf goodput.
+This course contains **34 executable labs**, supported by the
+[shared environment setup](../README.md#how-to-set-up-the-lab). Follow the lab
+route from placement and fabric qualification through collective mechanics,
+distributed training, inference and serving goodput. Each guide contains its
+definitions, commands, correctness checks, dashboard and investigation.
 
 Use two eight-H100 Soperator workers with NVLink/NVSwitch and InfiniBand. The two one-GPU TCP workers used for the earlier local labs are insufficient for fabric qualification. Sixteen GPUs are allocated; two-rank mechanics deliberately use fewer participating GPUs. Every guide identifies the relevant evidence and a one-variable comparison.
 
@@ -241,3 +245,36 @@ Complete shared environment setup once. Keep these identities in filenames, dash
 ### Final investigation
 
 Choose a training or inference workload family. Write a hypothesis before the candidate run, retain one changed control, and repeat both variants in reversed order. Explain why a bandwidth result can disagree with a latency result. Use a later trace to distinguish a communication tail from a delayed producer, then decide whether to keep the change. Include correctness, variation and a limitation; a negative result can pass.
+
+Build a reproducible causal report: retain matching baseline and candidate
+artifacts, numerical or delivery validity, the selected dashboard generation,
+topology and software identity, relevant rank or server traces, and the reasoning
+behind the decision. A faster synthetic test or a configuration flag alone does
+not establish production improvement. Fresh jobs and reversed comparison order
+help expose warm-cache and temporal effects.
+
+For training, explain useful tokens per second and the collective tail. For
+inference, explain first-token latency, streamed delivery and the requests that
+meet latency objectives. Apply the owning lab's acceptance contract:
+[Labs 32](reference/labs/32_dynamo_disaggregation.md) and
+[33](reference/labs/33_dynamo_routing.md) require equivalent outputs;
+[Lab 34](reference/labs/34_serving_goodput.md) instead fixes transmitted requests
+and server-verified generated-token work, allowing different answer text and
+valid zero-goodput outcomes. These contracts are not interchangeable.
+
+The **64 hours** of guided work exclude provisioning and queue time. Independent
+experiments and production convergence studies require additional time.
+
+### Interpreting measurements
+
+Name the units, population and timing boundary before comparing values. GB/s
+uses decimal billions of bytes; GiB uses powers of 1024. A p99 is the 99th
+percentile of a stated population: requests, samples and token intervals describe
+different populations and cannot be substituted for one another.
+
+Use Systems timelines to explain phase overlap and rank skew, PyTorch profiling
+for framework attribution, and Compute for an isolated local kernel. Grafana
+shows selected measured outcomes alongside device telemetry for the job window.
+Short network operations need measured distributions; sampled GPU utilization
+alone cannot explain them. Keep vendor runtime candidates and live qualification
+limits attached to their recorded hardware in [Versions and environment](VERSIONS.md).

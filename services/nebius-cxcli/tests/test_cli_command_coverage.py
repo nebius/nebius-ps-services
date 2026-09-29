@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from rich.text import Text
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
@@ -61,7 +62,6 @@ pytestmark = pytest.mark.usefixtures("offline_shared_lease")
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-_COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m")
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
@@ -140,17 +140,22 @@ def _bundled_tool_versions() -> tuple[str, str]:
 
 
 def _assert_copy_paste_command_styled(rendered: str, command: str) -> None:
-    styled_texts = {
-        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
-    }
-    assert command in styled_texts
+    text = Text.from_ansi(rendered)
+    start = text.plain.index(command)
+    for offset in range(start, start + len(command)):
+        style = text.get_style_at_offset(cli.console, offset)
+        assert style.bold and style.bgcolor is not None
+        assert style.bgcolor.get_truecolor() == (229, 231, 235)
+        assert style.color is not None and style.color.get_truecolor() == (32, 32, 32)
 
 
-def _assert_not_copy_paste_command_styled(rendered: str, text: str) -> None:
-    styled_texts = {
-        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
-    }
-    assert text not in styled_texts
+def _assert_not_copy_paste_command_styled(rendered: str, value: str) -> None:
+    text = Text.from_ansi(rendered)
+    start = text.plain.index(value)
+    assert all(
+        text.get_style_at_offset(cli.console, offset).bgcolor is None
+        for offset in range(start, start + len(value))
+    )
 
 
 def _confirmation_sources() -> dict[str, str]:
@@ -8684,16 +8689,8 @@ def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     assert f"nebius-cxcli quota-request {fake_paths.config_path}" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in output
-    assert (
-        cli.copy_paste_command_markup(f"nebius-cxcli quota-request {fake_paths.config_path}")
-        in rendered_messages
-    )
-    assert (
-        cli.copy_paste_command_markup(
-            f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}"
-        )
-        in rendered_messages
-    )
+    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in rendered_messages
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in rendered_messages
 
 
 def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_capacity() -> None:
@@ -12909,7 +12906,9 @@ def test_print_copy_paste_command_styles_command_and_escapes_markup(
     )
     monkeypatch.setattr(cli, "console", rich_console)
 
-    cli._print_copy_paste_command("nebius-cxcli render /tmp/[red]project[/red]/config.yaml")
+    cli.print_copy_paste_command(
+        cli.console, "nebius-cxcli render /tmp/[red]project[/red]/config.yaml"
+    )
 
     rendered = rich_console.export_text(styles=True)
     plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
@@ -13006,6 +13005,17 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
         "infra:mk8s@cluster1 --to-os ubuntu24.04 --strategy zero-surge --dry-run"
     ) in rendered
     assert "Dry run only: no changes." in rendered
+
+
+def test_upgrade_compatibility_followups_share_command_highlighting(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    console = cli.Console(force_terminal=True, color_system="truecolor", record=True)
+    monkeypatch.setattr(cli, "console", console)
+    command = "kubectl --context verified get nodes"
+    cli._print_upgrade_plan_lines(("    follow-up:", command, "      Check node readiness."))
+    rendered = console.export_text(styles=True)
+    _assert_copy_paste_command_styled(rendered, command)
+    _assert_not_copy_paste_command_styled(rendered, "follow-up:")
 
 
 def test_deploy_validation_warning_cache_dedupes_nested_upgrade_warnings(
@@ -16757,10 +16767,7 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
     assert "Commit and push the rendered generated/flux path" in messages[2]
     assert "skip this step when local direct apply is the intended workflow" in messages[2]
     assert "Optional command to enable GitOps sync:" in messages[3]
-    assert (
-        cli.copy_paste_command_markup(f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}")
-        == messages[4]
-    )
+    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
     messages.clear()
@@ -16874,7 +16881,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "nebius-cxcli upgrade --help" in top_help
     assert "live nebius quota/capacity assessment" in quota_check_help
     assert "quota allowances to confirm the shortage" in quota_request_help
-    assert "import, export and validate grafana dashboards" in grafana_help
+    assert "show live access commands, or manage dashboards" in grafana_help
     for name in ("import", "export", "validate"):
         assert name in grafana_help
     assert "--export-dashboard" not in grafana_help
@@ -17082,7 +17089,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
-    assert "grafana Install Grafana and manage dashboards" in output
+    assert "grafana Install Grafana, show access commands" in output
     assert "validate Use CONFIG_YAML" in output
     assert "validate-dashboards" not in output
     assert "source config" in output

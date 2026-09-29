@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import copy
 import json
+import shlex
 from contextlib import contextmanager, nullcontext
 from io import StringIO
 from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 from typer.testing import CliRunner
 
 from destroy_fakes import SETTINGS, Cloud, Store, receipt
@@ -504,13 +506,41 @@ def test_backend_receipt_resumes_after_local_cache_loss(project):
     result = invoke(project)
     assert result.exit_code == 1 and "poll timeout" in result.output
     assert "Provider operation for mk8scluster-a: operation-cluster" in result.output
-    assert "Resume: nebius-cxcli destroy" in result.output
+    assert "Resume:\nnebius-cxcli destroy" in result.output
     owner.destroy_receipt_path(project.paths, "mk8scluster-a").unlink()
     project.cloud.fail_poll = False
     result = invoke(project, phrase="")
     assert result.exit_code == 0, result.output
     assert len(project.cloud.calls) == 1
     assert "Type exactly" not in result.output
+
+
+def test_destroy_failure_highlights_complete_resume_command(project, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, color_system="truecolor", width=40)
+    monkeypatch.setattr(cli, "console", console)
+    project.cloud.fail_poll = True
+    flags = ["--yes", "--delete-sfs", "--preserve-pvc-disks"]
+    result = invoke(project, *flags, phrase="destroy mk8scluster-a and delete 1 SFS")
+    assert result.exit_code == 1
+    command = shlex.join(
+        [
+            "nebius-cxcli",
+            "destroy",
+            str(project.paths.config_path),
+            "--target",
+            "mk8scluster-a",
+            *flags,
+        ]
+    )
+    text = Text.from_ansi(output.getvalue())
+    start = text.plain.index(command)
+    assert all(
+        text.get_style_at_offset(console, i).bgcolor is not None
+        for i in range(start, start + len(command))
+    )
+    assert text.get_style_at_offset(console, text.plain.index("Resume:")).bgcolor is None
 
 
 @pytest.mark.parametrize("terminal", [False, True])

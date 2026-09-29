@@ -1283,7 +1283,7 @@ def _safe_surge_warning_line(max_surge_count: int) -> str:
     )
 
 
-def _looks_like_copy_paste_command(line: str) -> bool:
+def is_upgrade_followup_command(line: str) -> bool:
     return line.strip().startswith(
         (
             "nebius-cxcli ",
@@ -1307,7 +1307,7 @@ def _append_compatibility_failure_lines(
         line = raw_line.strip()
         if not line:
             continue
-        if _looks_like_copy_paste_command(line):
+        if is_upgrade_followup_command(line):
             lines.append(line)
         else:
             lines.append(f"      {line}")

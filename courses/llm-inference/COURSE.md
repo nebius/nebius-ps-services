@@ -1,24 +1,20 @@
 # LLM Inference
 
-This course connects autoregressive generation mechanics to memory, scheduling, latency, throughput, quality, and serving-engine behavior. Every optimization keeps workload and decoding semantics explicit.
+LLM Inference connects large language model generation to memory capacity,
+request scheduling, latency, throughput and output quality. Learn to explain
+serving-engine behavior and compare changes while keeping workload and decoding
+semantics explicit.
 
-Hardware routes:
+Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
+execution, timing and profiling skills. No training-course prerequisite is
+required. Begin with generation mechanics, then develop local serving-engine
+comparisons and request measurement.
 
-The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
-
-Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
-
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
-
-Learn to connect autoregressive model mechanics with KV capacity,
-scheduling, latency, throughput, quality, parallel placement, and serving
-engine behavior through single-GPU experiments and distributed-serving concepts.
-
-The course owns local serving-engine comparisons and request measurement.
-Distributed practice, Dynamo placement/routing and multi-worker goodput belong
-to the advanced communication course on two eight-H100 workers. Engine
-experiments require their exact runtime and model artifacts to pass target
-qualification before any performance claim.
+Local GPU practice uses one full H100; distributed serving and multi-worker
+placement belong to [Advanced Labs](../advanced-gpu-communication/index.html).
+Serving experiments require qualified runtimes and model artifacts before making
+performance claims. Use the shared Lab Guide's
+[environment setup](../README.md#how-to-set-up-the-lab) before practice.
 
 ## 1. Model inference and artifact preparation
 

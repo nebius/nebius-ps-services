@@ -1,18 +1,20 @@
 # Custom CUDA Kernels for GPU Optimization
 
-This CUDA C++20 course teaches when custom kernels are justified and how to prove correctness, safety, hardware behavior, and end-to-end value on one NVIDIA H100.
+Custom CUDA Kernels teaches when writing a kernel is justified and how to prove
+its correctness, safety and end-to-end value. Build CUDA C++20 implementations,
+inspect their hardware behavior and compare them with mature library operations
+before deciding which implementation to keep.
 
-Hardware routes:
+Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
+execution, memory and profiling skills, together with basic C++ knowledge. Neither
+LLM specialization is a prerequisite. The course progresses from a correct vector
+kernel through memory, fusion and reduction techniques to a measured optimization
+decision.
 
-The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
-
-This course has no multi-node executable labs. Hopper thread-block clusters in Lab 10 operate inside one GPU and remain in the base route. Use [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html) for cross-GPU practice.
-
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
-
-Learn to decide when a custom kernel is warranted and to build,
-validate, sanitize, profile, and accept CUDA C++20 kernels on one full NVIDIA
-H100 without replacing mature libraries by default.
+All executable labs use one full H100; even Hopper thread-block clusters operate
+within one GPU. Optional extensions retain their own prerequisites. Start with
+the shared Lab Guide's [environment setup](../README.md#how-to-set-up-the-lab),
+then follow the course's runtime preparation and lab order.
 
 ## 1. Custom kernel decision making
 

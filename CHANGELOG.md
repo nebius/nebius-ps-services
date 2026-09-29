@@ -6,6 +6,30 @@ project folder.
 
 ## [Unreleased]
 
+- Rework the first four GPU Fundamentals performance-tool diagrams into
+  landscape layouts that use the available page width, with left-to-right
+  timelines and matching explanations, captions and accessible descriptions.
+
+- Give all seven course overviews a consistent introduction, prerequisite and
+  practical-scope pattern. Consolidate shared operations in the Lab Guide,
+  preserve Advanced Labs' measurement and completion guidance in its course
+  guide, and use cxcli-generated Grafana/Nsight connection and password commands.
+
+- Simplify the shared Lab Guide introduction with hosting-neutral course links,
+  and remove maintainer/build commentary and the repeated reading-format paragraph
+  from its canonical README and generated HTML.
+
+- Clarify the courses README catalog link and place its browser-edition link
+  under lab setup. Keep the README as the shared Lab Guide source, move build
+  details into maintainer documentation, and put attribution last without
+  duplicating it in the generated guide.
+
+- Lead the courses README with the GitHub Pages catalog. Introduce six courses,
+  Advanced Labs and the shared Lab Guide as eight ordered resources, with the
+  guide second after Soperator. Use the same order and current-page navigation
+  across the catalog, learning path, seven course pages and Lab Guide, while
+  preserving course content, prerequisites and downloads.
+
 - Clarify that the Soperator course's shared jail is mounted by login, controller
   and worker Pods, including the controller's shared user information and Slurm
   configuration, with versioned public references.

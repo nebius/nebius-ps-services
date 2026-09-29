@@ -3337,7 +3337,7 @@ Other feature evidence predating this change remains unassessed.
 
 <!-- /FEATURE: FEAT-025 -->
 
-<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=8 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=9 -->
 ### FEAT-026: Layered CLI services and ratcheted repository gates
 
 #### Requirements Covered
@@ -3353,6 +3353,38 @@ Python 3.12 test job but no enforced branch coverage, formatting, package-wide
 static-type ratchet, or every-supported-minor offline matrix.
 
 #### Design Details
+
+Revision 9 adds one shared copy/run command presentation owner in
+`terminal_styles.py`: bold foreground `#202020` on background `#e5e7eb`, applied
+only to command text. The printer accepts the existing caller Console, renders
+literal text without syntax highlighting and retains runtime soft wrapping.
+Help uses the same style after existing example/comment normalization; separators
+retain their own color. Rich owns terminal capability detection and color opt-out.
+Normal redirected output stays plain. No new theme settings or dependencies are
+introduced, and raw command builders plus saved reports remain unchanged.
+
+Replace the CLI-local printer with this owner and route create/render/deploy,
+component and quota hints, Grafana access, Flux/SSH/WireGuard handoffs, upgrade
+follow-ups and Nsight access/recovery output through it. Split inline action
+labels from complete commands. Do not infer executable commands from arbitrary
+logs, exception prose, JSON or progress records. Preserve all command arguments,
+quoting, target checks, password handling and lifecycle behavior.
+
+Use the existing recursive help formatter rather than a second help renderer.
+Style normalized command bodies once, escape literal markup, and keep explanatory
+labels/comments outside the style. Example parser checks extract plain commands
+before tokenization; canonical CLI metadata is regenerated and reviewed. Validate
+terminal colors, opt-outs, long runtime commands and help at 80/160 columns, then
+focused workflow/output tests and installed-wheel CLI verification. Text-only
+highlighting is selected over cyan-only text or full-width panels to improve
+contrast without adding copied decoration. Revision 9 presentation is implemented:
+focused terminal/help, workflow, access, recovery and report tests pass, including
+explicit command-channel wiring for ordinary-app deployment. Ruff and formatting
+pass for all changed Python files, and the existing mypy and CLI architecture
+ratchets pass. A fresh isolated wheel verifies all 52 public and one hidden CLI
+surfaces against the canonical contract. This evidence is local source and
+installed-package validation; no live deployment was performed. Broader
+architecture delivery retains its existing unassessed state.
 
 Decompose incrementally in dependency order: move leaf normalization helpers
 first, then the Soperator supervisor and command adapter, project persistence,
@@ -6533,7 +6565,7 @@ performed to test this second repair.
 
 <!-- /FEATURE: FEAT-038 -->
 
-<!-- FEATURE: FEAT-039 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-039: Nsight tools and catalog viewers
 
 #### Requirements Covered
@@ -6548,6 +6580,58 @@ rootfs population. The official 2026.4.1 chart renders separate nsys 2026.4.1
 and ncu 2026.2.1 Deployments with HTTP and TURN TCP Services.
 
 #### Design Details
+
+Revision 13 adds `soperator profiling show CONFIG --target TARGET`, using the
+existing positional configuration convention. A separate live access reader
+resolves recorded accepted Soperator identity and verifies the cluster UID,
+then discovers the two owned Nsight HelmReleases, ready Deployments and matching
+Services. Live chart roles, container bindings, names, namespaces, HTTP/TURN
+ports and Secret references own access instructions; local desired viewer values
+and saved reports do not. Use HelmRelease application-owner annotations followed
+by Helm release annotations and Service selectors; this chart uses app/release
+labels, not Grafana's instance labels. Require one Systems and one Compute viewer,
+completed rollouts and stable resource snapshots. Preserve the live TURN port
+locally, reject colliding mappings and require one shared password reference.
+
+Read only Secret metadata and nonempty key names, rejecting literal, optional,
+duplicate or aliased credential references without retrieving values. Reuse
+explicit-input Nsight command builders for both installation and show. Render
+exactly two loopback HTTP/TURN forwards and one quoted password-retrieval command
+with a display newline using the shared command style; print browser URLs and
+labels separately. Complete all verification before printing commands.
+
+Follow Grafana's existing kubeconfig handoff and persistence owner, preserving
+the current context, honoring opt-outs and independently proving durable access.
+Bound reads and sanitize failures. Do not acquire execution leases, run Pod
+probes, invoke installation/reconciliation, mutate cluster resources or execute
+displayed commands. Local verified kubeconfig refresh is the only persistent
+side effect. Existing installation, recovery, report and credential semantics
+remain unchanged. No schema migration, new dependency or compatibility alias is
+needed. The current installation collector intentionally remains separate because
+it validates desired values and probes Pods. Cached report replay would not meet
+freshness. Revision 13 access-command delivery is implemented in the dedicated
+live reader, registered show callback and explicit-input shared command builders.
+Read-only review identified a selector that could match another viewer release;
+the implementation now requires the exact role and release in both Deployment
+labels and the Service selector, with omitted-label regressions.
+
+Validation passed 318 focused access, installation, recovery, ordinary-app,
+deployment, Grafana, CLI-contract, architecture and presentation tests. The
+SHA256-pinned official chart rendered both viewers with production patches and
+passed live-discovery port, label and Secret-reference contract checks. Changed
+Python Ruff/format, Markdown and diff checks pass; the new access module passes
+mypy and the full-source debt remains 485 errors below its 493-error ceiling.
+The CLI architecture ratchet passes. A fresh isolated wheel built with locked,
+hashed dependencies verifies 53 public and one hidden CLI surfaces; an additional
+installed callback smoke reproduces exactly three commands from synthetic access
+evidence. No live deployment or browser-streaming validation was performed.
+
+Validate live drift, target/ownership/readiness, HTTP/TURN linkage, shared Secret
+references, safe projections, changing snapshots, persistence opt-outs, command
+quoting, exactly three styled outputs and no partial failure output. Extend the
+pinned chart-render contract, refresh CLI metadata, verify the isolated installed
+wheel, and align README, profiling guide and changelog. Source, installed-package
+and live browser evidence remain separate; no live deployment is required.
 
 Add nsight-streamer and nsight-streamer-ncu catalog entries sharing the official
 NGC Helm repository. Default to ClusterIP, one software-rendered replica,
@@ -8511,7 +8595,7 @@ and live deployment qualification were not rerun in this alignment.
 
 <!-- /FEATURE: FEAT-046 -->
 
-<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-047: Shared Grafana installation and telemetry routing
 
 Current shared deployment admission follows FEAT-048; descriptions below of
@@ -8530,6 +8614,57 @@ identity checks. Soperator owns a separate frozen native graph and protected
 lifecycle. Grafana uses shared PostgreSQL and generic dashboard import mapping.
 
 #### Design Details
+
+Revision 13 adds one shared, deterministic live Grafana access handoff used by
+successful deployment reporting and `grafana show --config PATH --target TARGET`.
+Resolve the exact managed target through existing immutable cluster handoff;
+inspect its ready owned Grafana release, Service and runtime Secret references.
+Live resources, not saved reports or undeployed settings, determine the commands.
+Keep this read path separate from dashboard sessions, credential retrieval and
+Grafana URL reconciliation. Missing or ambiguous evidence fails explicitly.
+
+Reuse the existing local kubeconfig persistence owner, preserving an existing
+current context and honoring CI/persistence opt-outs; independently verify the
+durable context. Print explicit kubeconfig/context/namespace arguments, loopback
+127.0.0.1 with local port 3000, the actual Service port, a browser URL and login
+username, plus a quoted password extraction command with newline termination.
+Never execute the displayed commands or read password data for this handoff.
+
+Carry bounded access results in the deployment summary, refresh the final
+Markdown report before disposable execution paths disappear, and include Grafana
+independently of cloud-observability settings. Cover fresh, unchanged and resumed
+runs. Retain Gateway readiness semantics. A handoff failure after acceptance is a
+warning, while explicit show fails nonzero. No offline fallback, extra dependency,
+compatibility alias, cluster mutation or validation-summary schema change is needed.
+
+The selected shared helper avoids duplicated install-only rendering and report
+parsing. Tests cover live drift versus stale configuration, identity and ownership,
+Secret bindings, command quoting, durable context refresh, opt-outs, error paths,
+publication and output parity. Update CLI help, README, observability guide and
+changelog. Normal CLI release requires no cluster migration.
+
+Revision 13 delivery is implemented in the shared access helper, CLI, accepted
+deployment finalizer and report renderer. Alignment added the required leaf help
+example and regenerated the canonical CLI contract. Access discovery rejects
+identical username/password Secret references before any Secret read, preserving
+the no-password-presentation boundary even for a misconfigured live workload.
+A regression first reproduced the unsafe projection and then passed with the guard.
+
+Validation passed 282 focused tests covering access, CLI contracts and architecture,
+shared deployment, reports, Grafana workflows and observability. Prior validation
+also passed 10 footer/kubeconfig tests and two digest-pinned Grafana/PostgreSQL
+chart renders. Changed-scope Ruff, formatting, Markdown lint, architecture checks
+and access-helper type checking passed. The full-source mypy ratchet passed with
+485 existing errors against a maximum of 493; this is not a clean full-source
+type check. Independent final review found no remaining blocking issue.
+
+An isolated wheel built offline from the current source, installed with locked
+runtime dependencies and passed dependency checks plus the repository's installed
+CLI verifier for 52 public and one hidden surface. Coverage includes fresh,
+resumed and unchanged handoffs, live-resource drift via mocks, Secret projections,
+identity/timeouts, persistence opt-outs, shell quoting and report publication.
+No live deployment, remote CI or full coverage qualification was run. Prior
+revision evidence below remains historical.
 
 Revision 9 adds a shared native graph transition owner before checks or scheduling
 maintenance. Classify fresh predecessor releases against frozen desired identities;

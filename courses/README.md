@@ -1,30 +1,34 @@
 # Performance Engineering Courses
 
-Start with [Soperator](soperator/index.html), then [GPU Fundamentals](gpu-fundamentals/index.html)
+**[Explore the courses](https://nebius.github.io/nebius-ps-services/courses/index.html)**
+
+The website introduces six courses, an Advanced Labs collection, and one shared
+Lab Guide, with a suggested reading order and direct links to every resource.
+
+Start with [Soperator](soperator/index.html), use the [Lab Guide](lab-guide.html)
+to prepare for practice, then study [GPU Fundamentals](gpu-fundamentals/index.html)
 and [GPU Performance Optimization](gpu-optimizations/index.html). Continue with
 [LLM Training](llm-training/index.html), [LLM Inference](llm-inference/index.html),
 or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
-are independent. [Advanced GPU Communication](advanced-gpu-communication/index.html)
+are independent. [Advanced Labs](advanced-gpu-communication/index.html)
 owns the multi-GPU, multi-node experiments.
 
 Every course ends with one Where to Go Next, one A–Z Glossary, and then
 Official references. Lessons and performance-tool guides share these course-wide
 sections; optional lesson References follow Mental model and come last.
 
-[Browse the catalog](index.html) · [Read this guide online](https://nebius.github.io/nebius-ps-services/courses/lab-guide.html) ·
-[Course maintainer guide](docs/maintaining-courses.md)
+[Browse the courses catalog](index.html)
 
 Each practical course offers one combined Grafana dashboards, Small and Large
 results ZIP for comparison, plus a link to this lab setup guide. Use
-`sync-labs.sh` to copy the original lab scripts and runtime files to the cluster;
-no lab-kit ZIP is needed. `./build-courses.sh` rebuilds and checks course HTML
-and the combined results archives.
-
-The seven courses share one reading format: numbered references, bulleted next
-steps and a separate glossary. Use each lesson’s Objective and Practice to
-follow its learning route.
+`sync-labs.sh` to copy the original lab scripts and runtime files to the cluster.
 
 ## How to set up the lab
+
+[Read this guide online](https://nebius.github.io/nebius-ps-services/courses/lab-guide.html).
+
+The browser edition is generated from this README and contains the same setup,
+execution, and profiling instructions.
 
 Prepare the shared cluster and monitoring once, then each course runtime you need.
 **Workstation** means your local computer; **Login node** means after SSH.
@@ -32,10 +36,11 @@ Workloads run on GPU workers through Slurm.
 
 ### Prerequisites and hardware
 
-The five ordinary GPU courses use one full H100 per allocation. Prepare two workers
+The five ordinary GPU courses use one full, non-MIG H100 per allocation. Prepare two workers
 with one H100 each, or reuse the advanced cluster with one-GPU allocations.
 Advanced communication requires two eight-H100 SXM workers, local NVLink/NVSwitch
-and active InfiniBand. TCP/IP connectivity alone does not qualify that route.
+and active InfiniBand. TCP/IP connectivity alone does not qualify that route;
+the two one-GPU workers support local exercises, not GPU-fabric qualification.
 
 **Workstation:** install [nebius-cxcli](https://github.com/nebius/nebius-ps-services/tree/main/services/nebius-cxcli),
 authenticate the Nebius CLI, and have kubectl, Python 3, Git, Bash, SSH and rsync.
@@ -77,9 +82,11 @@ and their private browser viewers. First-time setup uses masked credential promp
 nebius-cxcli soperator profiling install "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --interactive
 ```
 
-With valid existing viewer credentials, use
-`nebius-cxcli soperator profiling install <config.yaml> --target <target>`.
-Keep the two forwarding commands printed by the installer. Install profiling
+The installer prints complete connection and password-retrieval commands.
+For later access, use `soperator profiling show` as described in
+[Browsing Grafana and Nsight Profilers](#browsing-grafana-and-nsight-profilers).
+If installation must be rerun, omit `--interactive` to reuse valid existing
+viewer credentials. Install profiling
 before monitoring changes and dashboard imports: installation requires an accepted
 deployment with matching configuration and rendered state.
 
@@ -110,7 +117,7 @@ Arrows show data flow. VMAgent initiates scrapes; Grafana initiates queries.
 VMAgent results scrape. Substitute the deployment configuration and exact target:
 
 ```bash
-nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway
+nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway
 ```
 
 Keep metrics storage **local** in the installer; **both** also supports course
@@ -291,7 +298,8 @@ python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
 Use each lab's own command and runtime prerequisites for other courses.
 `small` and `large` select workload presets, independently of GPU model or the baseline/candidate choice. Some qualification, modeling and fixed server experiments use identical parameters in both profiles. Compare the effective configuration recorded by each lab, and keep the same profile within a comparison.
 
-The submitter prints its job ID and private log directory. Slurm writes
+Use `tools/submit_lab.py` for each submission; it creates private log files before
+calling Slurm and prints the job ID and log directory. Slurm writes
 `results/<lab>/logs/<job>.out` and `.err` in the remote course directory.
 After completion inspect the job and authoritative JSON results:
 
@@ -302,8 +310,10 @@ sacct -j '<job-id>' --format=JobID,State,ExitCode
 
 ### Capture a profile
 
-Submit separate diagnostic runs; instrumentation changes timing. Systems shows
-CUDA activity and dependencies; Compute examines one selected kernel's counters.
+Submit separate diagnostic runs; instrumentation changes timing. Nsight Systems
+shows CUDA activity, phase overlap and dependencies; Nsight Compute examines one
+selected kernel's counters. PyTorch profiling can attribute framework operations.
+Use the tool and capture recipe assigned by the lab.
 
 ```bash
 python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
@@ -408,51 +418,35 @@ model outputs, not measured storage or serving latency.
 
 ### Connect from your workstation
 
-Run **one forwarding command per terminal** and keep all three running.
-In each terminal restore this cluster's `KUBECONFIG`, `CLUSTER_CONTEXT` and
-`COURSE_SETUP_DIR`, then run `source "$COURSE_SETUP_DIR/laptop-environment.sh"`.
-For Nsight, replace the namespace and service placeholders with the values in
-the profiling installer's output. The examples use its default HTTP/TURN ports;
-retain the installed mappings if customized. See the
+Use the deployment configuration and target selected during setup. These commands
+check the installed services and print their complete connection instructions:
+
+```bash
+nebius-cxcli grafana show --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"
+nebius-cxcli soperator profiling show "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"
+```
+
+1. Copy each printed `kubectl port-forward` command into its own workstation
+   terminal and keep it running: one for Grafana and one for each Nsight viewer.
+   Keep the explicit cluster selection, loopback address and both HTTP/TURN port
+   mappings supplied for each Nsight viewer.
+2. In another terminal, run the printed password-retrieval commands. Grafana has
+   its own credentials; the two Nsight viewers share the profiling password.
+   Keep the displayed passwords private.
+3. Open the browser URLs printed by cxcli. Use the printed Grafana username and
+   the Nsight username chosen during installation (`admin` by default).
+
+The `show` commands print instructions; they do not start forwards or display
+passwords. They require access to the cluster and its credential Secrets. If a
+service is unavailable, resolve the reported setup problem before continuing.
+If a forward exits, rerun `show` and start its printed command again; forwarding
+ends when the selected Pod terminates. See the
 [kubectl port-forward reference](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_port-forward/).
-
-**Terminal 1 — Grafana:**
-
-```bash
-kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
-  -n "$COURSE_GRAFANA_NAMESPACE" port-forward --address 127.0.0.1 \
-  "service/$COURSE_GRAFANA_SERVICE" "3000:$COURSE_GRAFANA_PORT"
-```
-
-**Terminal 2 — Nsight Compute:**
-
-```bash
-kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
-  -n '<Compute viewer namespace>' port-forward --address 127.0.0.1 \
-  'service/<Compute viewer service>' 30081:30081 30479:30479
-```
-
-**Terminal 3 — Nsight Systems:**
-
-```bash
-kubectl --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
-  -n '<Systems viewer namespace>' port-forward --address 127.0.0.1 \
-  'service/<Systems viewer service>' 30080:30080 30478:30478
-```
-
-Both port mappings are required for each Nsight viewer. If a forward exits,
-restart that command before reconnecting.
-
-| Dashboard | Browser URL | What to inspect |
-| --- | --- | --- |
-| Grafana | `http://127.0.0.1:3000` | Lab measurements and sampled GPU telemetry |
-| Nsight Compute | `http://127.0.0.1:30081` | A selected kernel's counters and bottlenecks |
-| Nsight Systems | `http://127.0.0.1:30080` | CUDA activity, NVTX ranges and CPU/GPU dependencies |
 
 ### Browse Grafana
 
-Sign in with the Grafana credentials from your private Kubernetes secret viewer.
-During first-time setup, create the course folder and [import its dashboards](#import-course-dashboards).
+Sign in using the username and password obtained above. During first-time setup,
+create the course folder and [import its dashboards](#import-course-dashboards).
 For completed runs, open **Dashboards**, choose `course-<course-name>`, and open
 the lab's dashboard or **Environment readiness**.
 
@@ -488,7 +482,8 @@ Require identical hashes. `/data/nsight-reports` is the default producer root;
 use the actual submount selected by installation. The viewer exposes it at
 `/mnt/reports`. Finish report processing before opening its read-only copy.
 
-Sign in to each Nsight URL with its installer-configured viewer credentials.
+Sign in to each printed Nsight URL with the installation username and shared
+password obtained above.
 In Compute, open the copied `.ncu-rep` under `/mnt/reports/<viewer-directory>`
 and inspect the kernel and counters specified by the lab. In Systems, open the
 copied `.nsys-rep`, expand the process tree, CUDA streams and NVTX rows, and zoom
@@ -496,10 +491,3 @@ to the measured interval. Follow the lab's inspection steps; initialization-only
 activity does not establish that the experiment was captured.
 
 © 2026 Nebius B.V. Free educational material under [Apache License 2.0](../LICENSE).
-
-The build requires Python 3 and Git. Each practical course downloads one
-`reference/<slug>-lab-results.zip` containing dashboards and Small/Large results.
-The build checks the complete repository publication candidate against a
-104,857,600-byte per-file cap and a conservative 1,000,000,000-byte site cap
-before replacing outputs, and reports remaining capacity. See
-`docs/course-builder.md` for inventory and failure behavior.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import webbrowser
 from collections.abc import Iterator, Sequence
@@ -44,11 +45,12 @@ from .grafana_project import (
 )
 from .project_bundle_transaction import ProjectBundleTransaction
 from .runtime_config import to_plain_data
+from .terminal_styles import print_copy_paste_command
 
 app = typer.Typer(
-    short_help="Install Grafana and manage dashboards.",
+    short_help="Install Grafana, show access commands and manage dashboards.",
     help=(
-        "Install Grafana and observability, or import, export and validate Grafana dashboards.\n\n"
+        "Install Grafana and observability, show live access commands, or manage dashboards.\n\n"
         "Replace CLUSTER_TARGET with the target ID from config.yaml. Cluster imports save project "
         "state and install immediately; --attach additionally publishes reusable dashboards to "
         "the source catalog.\n\n"
@@ -56,7 +58,9 @@ app = typer.Typer(
         "SSO import prepares files and opens the browser; complete the import manually in Grafana."
     ),
     epilog=(
-        "Examples: Import one dashboard into the cluster: "
+        "Examples: Show live Grafana access commands: "
+        "nebius-cxcli grafana show --config ./config.yaml --target CLUSTER_TARGET | "
+        "Import one dashboard into the cluster: "
         "nebius-cxcli grafana import ./gpu.json --config ./config.yaml --target CLUSTER_TARGET  |  "
         "Import one dashboard and attach it to the source catalog: "
         "nebius-cxcli grafana import ./gpu.json --config ./config.yaml "
@@ -123,6 +127,40 @@ Recursive = Annotated[
 
 def emit(message: str) -> None:
     console.print(message, markup=False, highlight=False)
+
+
+@app.command(
+    "show",
+    short_help="Verify live Grafana and print browser access commands.",
+    epilog=("Examples: nebius-cxcli grafana show --config ./config.yaml --target CLUSTER_TARGET"),
+)
+def show_command(
+    config: Annotated[
+        Path, typer.Option("--config", dir_okay=False, help="Managed project config.yaml.")
+    ],
+    target: Annotated[str, typer.Option("--target", help="Exact configured cluster target.")],
+) -> None:
+    """Read the live target each time; never replay a saved deployment report.
+
+    Refresh local kubeconfig when enabled, preserving its current context. Print
+    port-forward and password-retrieval commands without running them. Kubernetes
+    resources remain unchanged. Requires access to the target cluster.
+    """
+    from .grafana_access import show_grafana_access
+
+    try:
+        access = show_grafana_access(config.expanduser().resolve(), target)
+        for line in access.terminal_lines(config.expanduser().resolve()):
+            if line.startswith("#"):
+                console.print(line, markup=False, highlight=False, soft_wrap=True)
+            else:
+                print_copy_paste_command(console, line)
+    except subprocess.SubprocessError:
+        emit("Error: Unable to verify live Grafana access; check cluster connectivity and retry.")
+        raise typer.Exit(1) from None
+    except (ValueError, RuntimeError, OSError) as exc:
+        emit(f"Error: {exc}")
+        raise typer.Exit(1) from None
 
 
 def interactive() -> bool:

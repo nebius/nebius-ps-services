@@ -1055,6 +1055,7 @@ class OrdinaryAppServices:
     apply_flux: Callable[..., Any]
     collect_grafana: Callable[..., Sequence[dict[str, Any]]]
     emit: Callable[[str], Any]
+    emit_command: Callable[[str], Any]
 
 
 def assert_accepted_deployment(
@@ -1272,7 +1273,11 @@ def apply_ordinary_apps(
                 from .nsight_runtime import collect_nsight_status
 
                 collect_nsight_status(
-                    config, extra_env=env, target_ref=target_ref, emit=services.emit
+                    config,
+                    extra_env=env,
+                    target_ref=target_ref,
+                    emit=services.emit,
+                    emit_command=services.emit_command,
                 )
                 services.emit(
                     f"Ordinary apps applied for target {target_ref}; infrastructure unchanged."

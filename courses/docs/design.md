@@ -2,7 +2,7 @@
 <!-- maintain-project-specs:design:start schema=maintain-project-specs/design-v2 -->
 # Project Design
 
-<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P0 version=6 -->
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-001: Standalone course catalog
 
 #### Requirements Covered
@@ -11,11 +11,13 @@
 
 #### Context Evidence
 
-Five independent course roots support general GPU foundations and three specializations.
+Seven independent course roots cover Soperator, five conceptual GPU subjects and advanced labs. The shared Lab Guide is generated from the root README outside the course-package registry.
 
 #### Design Details
 
-Use the canonical order Soperator, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs: Multi-GPUs Multi-Nodes communication optimization. Start the catalog hero and learning path with the text-only Slurm introduction. Show cluster essentials first, the two GPU foundations next, the three specializations next, and advanced communication last. Derive prerequisite labels from course identity so changing display position cannot change technical requirements. Align README lists, tables and trees, all-course registries and every generated course switcher. Use Performance Engineering Courses as the shared collection title and remove H100 collection branding while retaining technical hardware requirements. Keep runtime helpers within the six executable course packages and preserve lesson/lab identities and the existing specialization prerequisite graph.
+Current catalog-navigation revision: Present eight resources in this order: Soperator, Lab Guide, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Use a shared presentation registry separate from the seven executable/text course roots. The catalog cards and learning path use explicit identity-based groups; every course and the README-derived Lab Guide use one ordered menu with correct root-relative or course-relative destinations, a separate catalog backlink, and one current identity. The guide has its own title and no fabricated hours. The README leads with the published catalog and retains a local link. Preserve all teaching, lab sources, prerequisites and downloads. Tighten standalone and text-course navigation validation to exact order and known destinations, synchronize canonical validator copies, regenerate nine HTML pages, and verify static parity plus isolated desktop/mobile browser behavior. This local change uses the existing static Python builder; hand-edited HTML and adding the guide to the course-package registry were rejected because they break source ownership. No external publication or live execution is part of this revision.
+
+Use the eight-resource display order defined above, with seven actual course packages and a separate shared guide. Start the catalog hero and learning path with the text-only Slurm introduction. Show cluster essentials first, the two GPU foundations next, the three specializations next, and advanced communication last. Derive prerequisite labels from course identity so changing display position cannot change technical requirements. Align README lists, tables and trees, all-course registries and every generated course switcher. Use Performance Engineering Courses as the shared collection title and remove H100 collection branding while retaining technical hardware requirements. Keep runtime helpers within the six executable course packages and preserve lesson/lab identities and the existing specialization prerequisite graph.
 
 #### Selected Option
 
@@ -51,13 +53,17 @@ Atomic HTML generation; version control protects source changes.
 
 #### Done Definition
 
-Seven roots and correct prerequisite links are present.
+Seven course roots, eight ordered reader resources, correct prerequisites and shared course/guide menus are present.
 
 #### Implementation Evidence
+
+Catalog-navigation revision: Implemented the shared eight-resource registry, guide card, identity-based groups, README website entry, guide title and all course/guide menus. Updated strict ordered standalone/text validation and synchronized six standalone copies. Rebuilt all nine HTML pages. Course teaching, shared setup/run/browsing procedures and six archive contents remain byte-identical.
 
 The renderer registry, catalog entry link, learning path, numbered cards, all seven course switchers, standalone-validator registry, course/root READMEs and root landing page now use the Soperator-first route. README tables and destination trees include all seven courses. Prerequisite labels use course identity; technical prerequisites and lesson/lab identities are unchanged. All eight course/catalog HTML outputs were rebuilt; task-owned deltas were reviewed against pre-existing working files.
 
 #### Verification Evidence
+
+Catalog-navigation revision: 161 focused tests, all seven native validators, generated HTML/archive parity, helper parity, scoped lint and independent read-only code/security review pass. Twenty-seven isolated headless Chrome 153.0.8010.53 cases cover all nine pages at 1440, 390 and 320 pixels with keyboard operation, exact menu identity/order and 200% text reflow. Visual captures were reviewed. A 3,737-file baseline comparison confirms unchanged protected sources and six archive hashes; all seven course bodies are unchanged outside navigation. Generic skill-checker diagnostics match baseline and remain separate. See docs/catalog-navigation-validation.md for exact artifacts and evidence. This verifies the local navigation revision; external deployment and live workloads were not performed, so historical broader feature delivery status is not promoted.
 
 All seven standalone validators, HTML/helper parity and 69 focused catalog/text-course tests pass. Independent checks confirm exact README list/table and all seven switcher orders. Twenty-four owned isolated headless Chrome 153.0.8010.53 checks pass at 1440, 390 and 320 pixels, including entry/navigation, current-course identity, prerequisite labels and 200% text reflow; catalog and mobile navigation screenshots were visually reviewed. The initial harness read the URL before navigation settled; the final assertions wait for the destination. Ruff lint, repository Markdown checks, scoped whitespace and independent read-only review pass. Existing Ruff formatting differences and generic skill-checker profile/markup diagnostics match task-start files. Publication reviews record current HTML identities. No live execution or external publication was performed.
 
@@ -2770,7 +2776,7 @@ remain separate; no speedup, publication or target-runtime claim is made.
 
 <!-- /FEATURE: FEAT-021 -->
 
-<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=9 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=12 -->
 ### FEAT-022: Branch-published Nebius learning website
 
 #### Requirements Covered
@@ -2779,16 +2785,19 @@ remain separate; no speedup, publication or target-runtime claim is made.
 
 #### Context Evidence
 
-Five self-contained course pages and canonical course metadata exist. The repository is Apache-2.0 licensed and has no course-specific license. At task start, the website catalog, root HTML entry and Pages publishing configuration were absent.
+Seven self-contained course pages, the README-derived shared guide, the catalog and repository welcome page exist. The repository is Apache-2.0 licensed and has no course-specific license. This revision changes local reading navigation without altering Pages settings.
 
 #### Design Details
 
-Current approved results/build-template revision: Rename six combined archives to `reference/<slug>-lab-results.zip` without changing their bytes; update callers, links and markers and remove the former retired-results mechanism. Use a stdlib publication preflight over Git tracked and nonignored untracked regular files from the repository root, overlay planned bytes once, and reject incomplete inventory, symlinks/submodules or limits above 104857600 bytes per file and 1000000000 bytes total. Run it in build and --check before writes. The exporter checks the archive cap without changing its lock/journal lifecycle. Wrapper prerequisites include Git. No automatic splitting, deletion, upload or history rewriting. Preserve all seven course contents/styles and existing results layout. Test thresholds, unrelated-root files, repeatability, before-write failures and actual downloads.
+README/guide presentation revision: Label the relative index.html link Browse the courses catalog and the published catalog link Explore the courses, retaining both destinations. Remove the maintainer-guide link/separator, lab-kit/build commentary and the paragraph beginning The seven courses share one reading format from the README and its derived guide; retain the results explanation and end the source-sync sentence with a period. Remove the unused shared-guide maintainer-link mapping. Hosting details and build instructions remain in maintainer documentation. Place a standalone Read this guide online link to the published lab-guide.html immediately under How to set up the lab, followed by a statement that the README and browser edition share the same instructions. Keep all three instructional sections and commands. Consolidate build prerequisites and publication-budget details in docs/course-builder.md and make the existing README attribution the final paragraph. The shared-guide renderer omits only the exact setup-section browser link and final attribution; the same instructional Markdown is rendered unchanged and the standard HTML footer supplies one attribution, complete license and notices. Update focused navigation/source-parity tests and inspect the generated guide at desktop, 390px and 320px widths. Independent HTML authoring and a separate maintained guide source were rejected because they permit conflicting instructions.
 
+Current catalog-navigation revision: Present eight resources in this order: Soperator, Lab Guide, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Use a shared presentation registry separate from the seven executable/text course roots. The catalog cards and learning path use explicit identity-based groups; every course and the README-derived Lab Guide use one ordered menu with correct root-relative or course-relative destinations, a separate catalog backlink, and one current identity. The guide has its own title and no fabricated hours. The README leads with the published catalog and retains a local link. Preserve all teaching, lab sources, prerequisites and downloads. Tighten standalone and text-course navigation validation to exact order and known destinations, synchronize canonical validator copies, regenerate nine HTML pages, and verify static parity plus isolated desktop/mobile browser behavior. This local change uses the existing static Python builder; hand-edited HTML and adding the guide to the course-package registry were rejected because they break source ownership. No external publication or live execution is part of this revision.
+
+Current approved results/build-template revision: Rename six combined archives to `reference/<slug>-lab-results.zip` without changing their bytes; update callers, links and markers and remove the former retired-results mechanism. Use a stdlib publication preflight over Git tracked and nonignored untracked regular files from the repository root, overlay planned bytes once, and reject incomplete inventory, symlinks/submodules or limits above 104857600 bytes per file and 1000000000 bytes total. Run it in build and --check before writes. The exporter checks the archive cap without changing its lock/journal lifecycle. Wrapper prerequisites include Git. No automatic splitting, deletion, upload or history rewriting. Preserve all seven course contents/styles and existing results layout. Test thresholds, unrelated-root files, repeatability, before-write failures and actual downloads.
 
 Use the existing shared download renderer for all six practical courses: H2 Practical labs, H3 Download results, then two paragraphs with non-linked labels and line breaks before their links. Render Download all lab results: followed by Grafana dashboards, Small and Large results, preserving `reference/<slug>-lab-results.zip` and its download attribute. Render Setup the lab environment: followed by Lab setup guide linking to ../lab-guide.html without a download attribute. Preserve course-downloads and labs anchors, existing styling, complete code listings and other reading content. Remove the duplicate shared setup/run/online-guide paragraph and its introductory dashboard reminder; the new setup link is the single introduction route. Retain per-lab dashboard anchors and pointers, source-owned guide links, and all lab teaching. Validate the new exact setup route within the download group instead of requiring the removed setup/run fragment pair. Remove exactly the six generated kit ZIPs and kit assembly/checking; retain source completeness and executable-mode coverage in sync tests. Allow only the exact additional guide route. Resource archive identity/checksum rules and exporter locks/journals remain unchanged. Update focused tests, docs and publication reviews; verify content hashes, all seven native validators, build/helper parity, mobile/desktop navigation and actual downloads. Local checks do not establish deployment.
 
-Extend the local builder with a catalog renderer and embedded editorial stylesheet. Derive titles, hours, ordering and link destinations from canonical course metadata and the catalog registry; author concise summaries and outcomes alongside the renderer. Present a Soperator-first hero and learning path, then the two GPU foundation cards and three specialization cards. Add a catalog link and native HTML course switcher before each course's lesson contents. Keep the current course marked and link directly to its catalog siblings. FEAT-029 supplies the text-only introduction displayed first and FEAT-030 supplies the advanced laboratory course displayed seventh. Keep six direct sibling links per course, seven catalog cards, and the existing five-course GPU prerequisite graph with an explicit advanced-practice route. Each course metadata file carries a stable slug; standalone validators use that identity independently of the checkout folder name.
+Extend the local builder with a catalog renderer and embedded editorial stylesheet. Derive titles, hours, ordering and link destinations from canonical course metadata and the catalog registry; author concise summaries and outcomes alongside the renderer. Present a Soperator-first hero and learning path, then the two GPU foundation cards and three specialization cards. Add a catalog link and native HTML course switcher before each course's lesson contents. Keep the current course marked and link directly to its catalog siblings. FEAT-029 supplies the text-only introduction displayed first and FEAT-030 supplies the advanced laboratory course displayed eighth after inclusion of the shared guide. Keep six direct sibling-course links plus the shared guide per course, eight catalog cards, and the existing five-course GPU prerequisite graph with an explicit advanced-practice route. Each course metadata file carries a stable slug; standalone validators use that identity independently of the checkout folder name.
 
 The compact footer states: Copyright 2026 Nebius B.V.; provided free of charge for learning and education; licensed under Apache License 2.0. Preserve third-party licensing. Embed the unmodified repository license in a collapsed license section and link locally to it. Reading resources remain embedded. Downloads use exact course-owned external ZIP paths; navigation exceptions remain limited to declared course routes.
 
@@ -2864,6 +2873,12 @@ The authoring wrapper is complete when executable, documented and independently 
 
 #### Implementation Evidence
 
+Introduction cleanup: implemented the standalone Explore the courses link and Browse the courses catalog label with unchanged destinations. Removed the maintainer link, lab-kit/build comments and repeated reading-format paragraph from the canonical README and regenerated guide; removed the unused renderer link mapping and aligned existing tests. Prior evidence below describes completed revisions.
+
+README/guide presentation revision: implemented the portable Browse the catalog link, setup-section browser pointer and single-source explanation. Moved build details to the maintainer guide, made README attribution final, and omitted only the exact online pointer and closing attribution from the generated guide article. Regenerated the guide and updated source/parity regressions. Earlier evidence below describes completed revisions.
+
+Catalog-navigation revision: Implemented the shared eight-resource registry, guide card, identity-based groups, README website entry, guide title and all course/guide menus. Updated strict ordered standalone/text validation and synchronized six standalone copies. Rebuilt all nine HTML pages. Course teaching, shared setup/run/browsing procedures and six archive contents remain byte-identical.
+
 Implemented six byte-preserving results ZIP renames, canonical link/helper/exporter alignment, removal of obsolete retirement routes, complete Git publication preflight and exact-byte size caps. Both source and project-installed run-labs archive callers agree; locks and evidence journals are unchanged. Wrapper and documentation describe Git/Python prerequisites, results downloads and local validation. All teaching and styles remain intact. Earlier evidence below applies to preceding revisions.
 
 The single-results-download revision is implemented. All six practical pages use separate labels and links for combined results and shared setup, without the duplicate introductory setup/dashboard paragraphs. Kit assembly and the six generated kit ZIPs are removed; all original source members remain. The wrapper help/status and source sync tests cover the resulting HTML/ZIP workflow. Older implementation evidence below describes prior revisions.
@@ -2886,6 +2901,12 @@ Earlier feature-delivery evidence follows for provenance.
 Implemented the catalog renderer and embedded stylesheet, root welcome page and .nojekyll, course switchers, complete embedded Apache license and attribution, canonical metadata slugs, scoped navigation validation, publication regression tests and authoring documentation.
 
 #### Verification Evidence
+
+Introduction cleanup: locally verified by 127 focused catalog/shared-guide tests, HTML/archive freshness, scoped Ruff, configured Markdown lint and whitespace checks. Six isolated headless Chrome 154.0.8037.58 cases at 1440/390/320px pass exact-label/removal, navigation, keyboard, reflow and footer/license checks; final introduction captures were visually reviewed. Independent code/security review found no serious issue. Baseline comparison preserves all instructional sections/footer, other HTML, six archives and unrelated work. See docs/catalog-navigation-validation.md for current artifact identity and evidence; external deployment is not claimed.
+
+README/guide presentation revision: locally verified by 127 focused tests, all seven native validators, HTML/archive freshness, helper parity, scoped Ruff, configured Markdown lint and whitespace checks. Six isolated headless Chrome 154.0.8037.58 cases cover 1440/390/320px navigation, keyboard controls, 200% text reflow and a single complete license footer; visual captures were reviewed. Independent review found no serious issue. A 5,869-file hash comparison preserves unrelated work, other HTML and all archives; exact guide delta and README command preservation were checked. See docs/catalog-navigation-validation.md for current artifact and evidence identity. No external deployment or live execution is claimed; broader feature delivery remains implemented.
+
+Catalog-navigation revision: 161 focused tests, all seven native validators, generated HTML/archive parity, helper parity, scoped lint and independent read-only code/security review pass. Twenty-seven isolated headless Chrome 153.0.8010.53 cases cover all nine pages at 1440, 390 and 320 pixels with keyboard operation, exact menu identity/order and 200% text reflow. Visual captures were reviewed. A 3,737-file baseline comparison confirms unchanged protected sources and six archive hashes; all seven course bodies are unchanged outside navigation. Generic skill-checker diagnostics match baseline and remain separate. See docs/catalog-navigation-validation.md for exact artifacts and evidence. This verifies the local navigation revision; external deployment and live workloads were not performed, so historical broader feature delivery status is not promoted.
 
 Alignment follow-up preserves the existing contract: reject empty symlinked publication roots before inventory and validate archive member names lexically rather than against the source filesystem. Two negative controls fail before repair; 60 focused tests, full build/check, all seven native validators, helper parity and scoped lint pass afterward. All 15 generated output hashes remain identical. Final independent code/security review found no further blockers; earlier browser evidence remains bound to unchanged artifacts.
 
@@ -4668,7 +4689,7 @@ Fundamentals Lab 03 source verification added mandatory host-copy admission and 
 
 <!-- /FEATURE: FEAT-034 -->
 
-<!-- FEATURE: FEAT-035 reqs=REQ-002,REQ-015,REQ-016,REQ-017,REQ-018,REQ-020,REQ-022 status=ready delivery=implemented priority=P1 version=7 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-002,REQ-015,REQ-016,REQ-017,REQ-018,REQ-020,REQ-022 status=ready delivery=implemented priority=P1 version=10 -->
 ### FEAT-035: Shared environment and lab execution guide
 
 #### Requirements Covered
@@ -4687,9 +4708,13 @@ Before this change, the README combined learner operations and maintainer detail
 
 #### Design Details
 
+README/guide presentation revision: Label the relative index.html link Browse the courses catalog and the published catalog link Explore the courses, retaining both destinations. Remove the maintainer-guide link/separator, lab-kit/build commentary and the paragraph beginning The seven courses share one reading format from the README and its derived guide; retain the results explanation and end the source-sync sentence with a period. Remove the unused shared-guide maintainer-link mapping. Hosting details and build instructions remain in maintainer documentation. Place a standalone Read this guide online link to the published lab-guide.html immediately under How to set up the lab, followed by a statement that the README and browser edition share the same instructions. Keep all three instructional sections and commands. Consolidate build prerequisites and publication-budget details in docs/course-builder.md and make the existing README attribution the final paragraph. The shared-guide renderer omits only the exact setup-section browser link and final attribution; the same instructional Markdown is rendered unchanged and the standard HTML footer supplies one attribution, complete license and notices. Update focused navigation/source-parity tests and inspect the generated guide at desktop, 390px and 320px widths. Independent HTML authoring and a separate maintained guide source were rejected because they permit conflicting instructions.
+
+Current catalog-navigation revision: Present eight resources in this order: Soperator, Lab Guide, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Use a shared presentation registry separate from the seven executable/text course roots. The catalog cards and learning path use explicit identity-based groups; every course and the README-derived Lab Guide use one ordered menu with correct root-relative or course-relative destinations, a separate catalog backlink, and one current identity. The guide has its own title and no fabricated hours. The README leads with the published catalog and retains a local link. Preserve all teaching, lab sources, prerequisites and downloads. Tighten standalone and text-course navigation validation to exact order and known destinations, synchronize canonical validator copies, regenerate nine HTML pages, and verify static parity plus isolated desktop/mobile browser behavior. This local change uses the existing static Python builder; hand-edited HTML and adding the guide to the course-package registry were rejected because they break source ownership. No external publication or live execution is part of this revision.
+
 README.md is the sole authored shared guide with three H2 sections: How to set up the lab, How to run the labs, and Browsing Grafana and Nsight Profilers. Render lab-guide.html through the existing builder and freshness checks, link course/catalog pages to it, and synchronize both shared files plus the inline docs/grafana.png asset. Keep common Python/publishing setup in the shared guide. Move inference serving to its course README, CUDA builds to Lab 13, fabric tools to advanced Lab 01, MPI NCCL Tests to Lab 10, and vendor-specific qualifications to Labs 29-34. The advanced course README owns the joint vendor install because the existing installer requires all three stacks together. Move maintainer information to docs/maintaining-courses.md. Standalone kits remain executable packages; setup uses the shared guide and sync requires a Git clone.
 
-Runtime preparation begins with the unchanged explicit-target sync-labs.sh command; it copies source and opens SSH but does not install packages or copy private monitoring configuration. Browsing begins with three separate explicit-context, loopback-only forwards. Grafana uses discovered service values; Nsight uses installer-selected namespace/service and paired HTTP/TURN ports. Follow with URLs, login guidance, Grafana selections and selected native-report export/inspection. Keep root-to-lab and generated-page anchors valid. This is a documentation/rendering change, with no runtime-script, stack, AI subsystem or live-target change.
+Runtime preparation begins with the unchanged explicit-target sync-labs.sh command; it copies source and opens SSH but does not install packages or copy private monitoring configuration. Browsing uses the two cxcli show commands and their current verified access handoff, as specified by FEAT-038. Learners run each returned explicit-context, loopback-only forward in its own terminal, retaining paired Nsight HTTP/TURN ports, and use the returned password commands and URLs. Follow with login guidance, Grafana selections and selected native-report export/inspection. Keep root-to-lab and generated-page anchors valid. This is a documentation/rendering change, with no runtime-script, stack, AI subsystem or live-target change.
 
 Remove setup_guide metadata and the Lab 00 renderer/validator contract. Replace active setup referrals, preserving experiment numbers and explanations. Rename the synthetic readiness identity to environment_readiness across producer, recipe, publisher, inspector and dashboard together; retain distinct worker/GPU checks, without an alias or historical-result migration.
 
@@ -4737,6 +4762,12 @@ One concise shared guide replaces every numbered setup lab, all required setup/r
 
 #### Implementation Evidence
 
+Introduction cleanup: implemented the standalone Explore the courses link and Browse the courses catalog label with unchanged destinations. Removed the maintainer link, lab-kit/build comments and repeated reading-format paragraph from the canonical README and regenerated guide; removed the unused renderer link mapping and aligned existing tests. Prior evidence below describes completed revisions.
+
+README/guide presentation revision: implemented the portable Browse the catalog link, setup-section browser pointer and single-source explanation. Moved build details to the maintainer guide, made README attribution final, and omitted only the exact online pointer and closing attribution from the generated guide article. Regenerated the guide and updated source/parity regressions. Earlier evidence below describes completed revisions.
+
+Catalog-navigation revision: Implemented the shared eight-resource registry, guide card, identity-based groups, README website entry, guide title and all course/guide menus. Updated strict ordered standalone/text validation and synchronized six standalone copies. Rebuilt all nine HTML pages. Course teaching, shared setup/run/browsing procedures and six archive contents remain byte-identical.
+
 2026-09-23 concise-guide revision: the shared README now has setup, run and browsing sections. Runtime preparation starts with the unchanged sync/SSH script. Specialized commands moved to inference serving, CUDA Lab 13, fabric Lab 01, NCCL Tests Lab 10 and the advanced course joint vendor procedure; Dynamo model preparation lives in Lab 32 and is reused by Labs 33-34. Three explicit-target loopback forwarding commands precede Grafana and native-report browsing. Generated links resolve to actual course/lab fragments; the advanced page includes its course README so runtime setup is reachable. No sync/runtime behavior or cluster state changed.
 
 2026-09-23 update: the README and catalog use general Performance Engineering branding. The shared guide explains benchmark publication and sampled telemetry, embeds the existing docs/grafana.png unchanged, and uses the cxcli Grafana/Pushgateway install command followed by discovery. The builder embeds validated PNG bytes with alternative text and responsive sizing. Synchronization includes the PNG alongside the README and standalone HTML. Maintainer guidance, cxcli consumer documentation and the repository changelog agree.
@@ -4744,6 +4775,12 @@ One concise shared guide replaces every numbered setup lab, all required setup/r
 Implemented the two-section README and generated shared guide; removed all six setup documents and their metadata/rendering contract. Course/catalog links and synchronization include the shared guide. Environment readiness now uses one unnumbered identity across producers, recipes, dashboards and publication checks, with distinct-worker/GPU rejection retained. All 110 lab guides refer to shared setup and their assigned dashboards. Managed profiler discovery mounts complete package resources and activation read-only; selected-report export preserves private originals. Per-course runtimes include isolated inference mechanics/serving clients, CUDA builds and advanced fabric/vendor settings. Maintainer guidance moved to docs/maintaining-courses.md. Canonical helpers, generated pages, source skill references and changelog are aligned.
 
 #### Verification Evidence
+
+Introduction cleanup: locally verified by 127 focused catalog/shared-guide tests, HTML/archive freshness, scoped Ruff, configured Markdown lint and whitespace checks. Six isolated headless Chrome 154.0.8037.58 cases at 1440/390/320px pass exact-label/removal, navigation, keyboard, reflow and footer/license checks; final introduction captures were visually reviewed. Independent code/security review found no serious issue. Baseline comparison preserves all instructional sections/footer, other HTML, six archives and unrelated work. See docs/catalog-navigation-validation.md for current artifact identity and evidence; external deployment is not claimed.
+
+README/guide presentation revision: locally verified by 127 focused tests, all seven native validators, HTML/archive freshness, helper parity, scoped Ruff, configured Markdown lint and whitespace checks. Six isolated headless Chrome 154.0.8037.58 cases cover 1440/390/320px navigation, keyboard controls, 200% text reflow and a single complete license footer; visual captures were reviewed. Independent review found no serious issue. A 5,869-file hash comparison preserves unrelated work, other HTML and all archives; exact guide delta and README command preservation were checked. See docs/catalog-navigation-validation.md for current artifact and evidence identity. No external deployment or live execution is claimed; broader feature delivery remains implemented.
+
+Catalog-navigation revision: 161 focused tests, all seven native validators, generated HTML/archive parity, helper parity, scoped lint and independent read-only code/security review pass. Twenty-seven isolated headless Chrome 153.0.8010.53 cases cover all nine pages at 1440, 390 and 320 pixels with keyboard operation, exact menu identity/order and 200% text reflow. Visual captures were reviewed. A 3,737-file baseline comparison confirms unchanged protected sources and six archive hashes; all seven course bodies are unchanged outside navigation. Generic skill-checker diagnostics match baseline and remain separate. See docs/catalog-navigation-validation.md for exact artifacts and evidence. This verifies the local navigation revision; external deployment and live workloads were not performed, so historical broader feature delivery status is not promoted.
 
 Current documentation reconciliation, 2026-09-25: the course READMEs, guides, version records and publication reviews now distinguish completed prepared-H200 experiments from H100 installation candidates. Workload labels select presets independently of baseline/candidate controls and can have identical effective parameters. Training guidance describes the supplied three-update in-memory checkpoint exercise, packing without a model loss, two-worker prefetch capacities, CPU batch readiness as a proxy, a compiled expression separately from captured eager updates, and the actual capstone matrix-expression comparison. Optional extensions remain explicit. Inference Lab 34 is a chunked-scheduling comparison rather than a prefix-cache experiment. Training Lab 31 changes only its metadata reference to Advanced Labs 19 and 21; AST comparison confirms no computational change.
 
@@ -4763,7 +4800,7 @@ Troubleshooting follow-up on 2026-09-22 reproduced and repaired all three previo
 
 <!-- /FEATURE: FEAT-035 -->
 
-<!-- FEATURE: FEAT-036 reqs=REQ-017 status=ready delivery=verified priority=P1 version=2 -->
+<!-- FEATURE: FEAT-036 reqs=REQ-017 status=ready delivery=verified priority=P1 version=3 -->
 ### FEAT-036: Worked GPU performance tool examples
 
 #### Requirements Covered
@@ -4777,6 +4814,8 @@ The Fundamentals tools primer defines four tools but gives no per-tool visual ex
 #### Design Details
 
 Expand only the Fundamentals primer with four original accessible SVG diagrams beside worked explanations: Systems host/device timeline, Compute kernel-report interpretation, NVTX point/range annotations, and Grafana selected results versus telemetry. Use explicitly synthetic values and short labels readable on mobile. Preserve the existing measurement loop and all practical lab identities and behavior. Show PyTorch NVTX mark and nested range context managers on one device-resident operation; explain host submission, explicit waiting, timeline correlation, and bounded range filtering. Add a brief retrieval/transfer check with feedback. Conclude with a connected workflow: baseline, NVTX labels in a diagnostic run, Systems timeline, Compute inspection when a kernel matters, and Grafana context around repeated unprofiled results.
+
+Lay out the four worked tool figures horizontally within the existing responsive figure frame and remove their fixed 440px renderer cap. Systems and NVTX use left-to-right time axes; Compute places kernel counters beside their interpretation, and Grafana places selected results beside sampled telemetry without implying causation. Preserve synthetic values, submission/completion distinctions, safe inline SVGs and stable figure IDs. Rewrite directional prose, captions and SVG descriptions together. Keep the fifth measurement-loop figure unchanged. Verify integrated desktop and narrow layouts, text fit, source parity and the focused tool-teaching contract.
 
 Extend the shared renderer narrowly to embed declared course-local SVG images in the primer's How it works field. Reject unsafe paths, symlinks, active/external SVG content, duplicates and other placements. Keep generic Markdown image policy unchanged. Standalone validators check the declared diagram inventory, source bytes, location, and full prose/code parity. Synchronize generated validator copies and rebuild affected pages; runtime files are supplied by sync-labs.sh rather than lab-kit archives.
 
@@ -4819,11 +4858,19 @@ Four contextual visuals and the NVTX example are complete, readable, statically 
 
 #### Implementation Evidence
 
+The four tool SVGs now use landscape layouts with horizontal time or reading order, enlarged labels, scoped accessible descriptions and matching visible prose. The shared tool-figure renderer uses the available width without its former 440px cap. README and generated Fundamentals HTML are aligned. The fifth measurement loop and practical behavior are unchanged.
+
+Earlier implementation evidence:
+
 The concluding mental model now connects NVTX-labeled diagnostic phases to Systems timelines, optional Compute kernel inspection and Grafana context around repeated unprofiled results. Canonical prose and generated Fundamentals HTML are aligned; the prior worked-example implementation remains intact.
 
 Implemented in the Fundamentals primer, four original `reference/diagrams/tools-*.svg` assets, shared Markdown renderer and standalone course validator. Added passive/local SVG admission, contextual placement and exact SVG/code parity checks; synchronized all six validator copies and regenerated embedded course kits. Updated the course README, official references, changelog and publication review.
 
 #### Verification Evidence
+
+For the horizontal revision, 68 focused tests, the Fundamentals native validator, generated HTML/archive freshness and scoped lint pass. Six owned isolated headless Chrome 154.0.8037.58 cases pass at 1440px, 390px and 320px, covering figure geometry, text fit, overflow, keyboard navigation, local scrolling and root-text reflow. Desktop and 320px captures of every changed diagram were visually reviewed. Independent comparison preserves all 11 embedded source listings, the fifth measurement loop and rendered content outside the primer and its README introduction. Read-only review corrected an overly broad synchronization label; no other substantive issue remains. The generic checker retains five unchanged baseline diagnostics and is not a passing gate. PUBLICATION-REVIEW.md binds the final artifact hash, captures and earlier spacing failures. No new runtime or live-target evidence is claimed.
+
+Earlier verification evidence:
 
 For the connected mental-model clarification, read-only semantic review found no material issue. All seven validators, generated freshness/helper parity, configured Markdown and whitespace checks pass. The generic skill checker retains its five previous diagnostics. No new browser or GPU run was required for this prose-only clarification; earlier browser/runtime evidence below applies to the preceding artifact.
 
@@ -4911,6 +4958,74 @@ Consolidated into FEAT-002 version 15; see its shared-format delivery evidence.
 See FEAT-002 and each current PUBLICATION-REVIEW.md for source and browser evidence.
 
 <!-- /FEATURE: FEAT-037 -->
+
+<!-- FEATURE: FEAT-038 reqs=REQ-002,REQ-022 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-038: Concise course overviews and generated access instructions
+
+#### Requirements Covered
+
+- REQ-002: Consistent course presentation and preserved useful teaching.
+- REQ-022: One shared setup and lab execution guide.
+
+#### Context Evidence
+
+Five GPU overviews repeat hardware, submission, log and workload-profile guidance already present in the shared README. Advanced Labs also places its measurement conventions and completion rubric in the overview. The README generates the Lab Guide through the existing renderer. Current cxcli source and local CLI help expose Grafana and profiling show commands that print complete forwarding and password-retrieval commands without running them.
+
+#### Design Details
+
+Use three short paragraphs in every canonical COURSE.md preamble: purpose/outcomes, audience/prerequisites and practical scope/next step. Keep Soperator text-only, Advanced Labs labs-only, and brief course-specific safety and hardware limits. Merge shared operating guidance into existing README subsections under its unchanged setup, run and browsing H2 sections. Preserve Advanced readiness in its embedded README, complete its Final investigation rubric and add Interpreting measurements for units and percentile boundaries. Keep lab-specific acceptance in owning guides and qualification evidence in Versions and environment.
+
+Replace authored forwarding examples and hardcoded browser URLs with grafana show and soperator profiling show using the established configuration/target variables. Explain separate forward terminals, private password retrieval, printed Grafana username and installation-selected Nsight username. Retain complete HTTP/TURN mappings and selected-report copy/inspection. The initial install sequence and independent readiness remain intact. Canonical README and generated HTML remain one instructional source.
+
+#### Selected Option
+
+Reuse canonical Markdown, the shared static renderer and current cxcli access output. No stack, API, dependency or AI subsystem change is needed.
+
+#### Alternatives Considered
+
+Editing only Fundamentals would leave catalog inconsistency. Deleting operational text without assigning its unique content would lose guidance. Maintaining another set of kubectl commands would duplicate CLI ownership; manual HTML editing would break parity.
+
+#### Implementation Boundaries
+
+Course prose, dependent link/parity tests, generated pages, publication reviews and related documentation only. Preserve existing dirty work and runtime, lab, dashboard and evidence bytes. No cluster operation, dependency installation, publication or Git action.
+
+#### Test-First Success Criteria
+
+- TDD-001: All overview profiles retain three meaningful paragraphs and no shared operational runbook, with course-specific prerequisites and safety scope reviewed semantically.
+- TDD-002: Both documented show invocations match CLI help; guide parity, shell syntax and valid link destinations pass.
+- TDD-003: Unique moved material remains visible and lesson/lab identities, runtime sources and recorded results remain unchanged.
+
+#### Validation Plan
+
+Run scoped content, guide, navigation and profile tests, rebuild all pages, and run all native validators and helper freshness checks. Inspect all pages and the Lab Guide with isolated headless Playwright at desktop, 390px and 320px, including keyboard navigation and enlarged-text reflow. Compare protected files with the task-start baseline.
+
+#### Test Plan
+
+Use existing presentation, shared-guide, content-parity, text-course, advanced-course and catalog suites. Align preamble link assertions with the production link mapping. Keep generic checker diagnostics separate from repository-native gates.
+
+#### Evaluation Plan
+
+Read all seven overviews together. Verify that each introduces its own subject and that moved operations and unique interpretation remain easy to find. Source and browser evidence do not establish live-target access or lab qualification.
+
+#### Rollout And Rollback
+
+Regenerate through the existing atomic builder. If needed, restore only this task's source and generated deltas, preserving unrelated workspace changes. No deployment is involved.
+
+#### Done Definition
+
+All seven overviews follow the shared pattern, the Lab Guide uses cxcli-generated access instructions, useful content is preserved and focused source/browser verification is recorded.
+
+#### Implementation Evidence
+
+Six canonical course preambles now follow the three-paragraph pattern; Soperator already matched and remains unchanged. The shared README uses the current Grafana/profiling show commands, generated access instructions and established config variables. Advanced measurement conventions and completion evidence are retained in its embedded README; supporting hardware wording permits qualified advanced-cluster reuse. Tests use the production preamble link mapping and current install syntax. Generated pages, maintainer guidance, changelog and publication reviews are aligned.
+
+#### Verification Evidence
+
+261 focused tests, all seven native validators, HTML/archive and helper freshness, scoped Ruff/Markdown/shell syntax and whitespace checks pass. Independent task-only content/code/security review reports no blocking issue. All numbered lesson bodies and 3,479 protected implementation/reference/evidence files retain their task-start bytes. The generic checker retains identical baseline diagnostics across all seven pages and is not called passing.
+
+Twenty-seven Playwright Test cases pass in isolated owned headless Chrome 154.0.8037.58 at 1440, 390 and 320 pixels, covering overview structure, course scope, exact access commands, links, keyboard navigation, local scrollers and enlarged-text reflow. All seven narrow overview screenshots and selected desktop/guide/reflow views were visually reviewed; artifact hashes match the reviewed pages. The initial trace-enabled harness stall is retained separately from the final passing one-worker run; no product fix is attributed to that retry. Owned browser resources closed and the final runner exited normally. Both show --help surfaces were verified locally without live access. See docs/course-overview-validation.md and each publication review. No installed-runtime, live-target or public deployment qualification is claimed.
+
+<!-- /FEATURE: FEAT-038 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

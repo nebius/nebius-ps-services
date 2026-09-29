@@ -393,6 +393,39 @@ def _exercise_adapter(
             assert planned[-1] is DeploymentAction.NOOP
 
 
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_grafana_handoff_runs_after_acceptance_on_initial_resumed_and_unchanged_runs(
+    tmp_path, monkeypatch, interrupt
+):
+    from nebius_cxcli import grafana_access
+
+    calls = []
+
+    def handoff(config, source, destination, summary, targets, validations):
+        assert source.project_dir.exists()
+        assert source != destination
+        assert summary.cluster_identities
+        calls.append((tuple(targets), dict(summary.cluster_identities)))
+        return summary
+
+    monkeypatch.setattr(grafana_access, "complete_grafana_handoff", handoff)
+    # The fixture executes installation (optionally interrupted/resumed), then
+    # a new unchanged deployment. Failed attempts never reach the handoff.
+    _exercise_adapter(tmp_path, monkeypatch, soperator=True, preview=False, interrupt=interrupt)
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+
+
+def test_grafana_handoff_never_runs_for_deployment_preview(tmp_path, monkeypatch):
+    from nebius_cxcli import grafana_access
+
+    def unexpected(*args):
+        pytest.fail("Preview must not inspect access or persist kubeconfig")
+
+    monkeypatch.setattr(grafana_access, "complete_grafana_handoff", unexpected)
+    _exercise_adapter(tmp_path, monkeypatch, soperator=True, preview=True, interrupt=False)
+
+
 def test_narrowing_to_ordinary_target_cannot_mutate_unselected_soperator(tmp_path, monkeypatch):
     _exercise_adapter(
         tmp_path, monkeypatch, soperator=True, preview=False, interrupt=False, target_ref="ordinary"

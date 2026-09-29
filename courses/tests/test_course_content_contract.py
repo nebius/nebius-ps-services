@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from course_builder import markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
+from course_builder import content as cb_content, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
 import html as html_lib
 import re
 from pathlib import Path
@@ -158,7 +158,7 @@ def test_generated_html_exactly_matches_complete_canonical_sources(
     _title, preamble, _lessons = cb_metadata.parse_course(
         ROOT / course / "COURSE.md"
     )
-    assert cb_markdown.block(preamble) in actual
+    assert cb_markdown.block(preamble, cb_content.shared_guide_links()) in actual
     for field in REQUIRED_FIELDS:
         assert f"<h3>{field}</h3>" in actual
 

@@ -253,7 +253,7 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
     ordered = (
         'nebius-cxcli deploy "$CLUSTER_CONFIG"',
         'nebius-cxcli soperator profiling install "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --interactive',
-        "nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway",
+        'nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway',
         "tools/course_setup.py",
         "Start the Grafana connection",
         "New → New folder",

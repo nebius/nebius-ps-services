@@ -1,21 +1,20 @@
 # GPU Performance Optimization
 
-This course teaches a repeatable optimization workflow: establish a trustworthy baseline, classify the limiter, select the smallest useful evidence, change one factor, and remeasure end to end.
+GPU Performance Optimization teaches a repeatable way to improve a workload:
+establish equivalent work, measure a trustworthy baseline, identify the limiting
+resource, change one factor and measure again. Learn to connect PyTorch execution,
+GPU timelines and kernel evidence to an end-to-end optimization decision.
 
-Hardware routes:
+Complete GPU Fundamentals first, or be ready to explain GPU execution, memory
+and timing. This course owns general PyTorch performance; training checkpointing,
+inference attention and CUDA C++ implementation are developed in their
+specialized courses.
 
-The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
-
-Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
-
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
-
-Learn to improve GPU workloads with a causal loop: freeze equivalent
-work, measure correctly, classify the limiter, choose focused evidence, change
-one factor, and remeasure end to end.
-
-The course owns general PyTorch performance. Training checkpointing, inference
-attention, and CUDA C++ implementation belong to their specialized courses.
+Local experiments use one full H100. Distributed concepts connect to the
+separately qualified fabric experiments in
+[Advanced Labs](../advanced-gpu-communication/index.html).
+Use the [environment setup](../README.md#how-to-set-up-the-lab) in the shared Lab Guide
+to prepare for practice.
 
 ## 1. Controlled GPU optimization
 

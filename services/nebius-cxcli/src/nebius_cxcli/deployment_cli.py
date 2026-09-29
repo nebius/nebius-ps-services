@@ -410,6 +410,19 @@ def _deploy_validated_bundle(
                     cli.console.print(
                         "Deployment succeeded. Ordinary-app baseline was not refreshed because local source or generated files differ from the deployed snapshot."
                     )
+                from .grafana_access import complete_grafana_handoff
+
+                executor.summary = complete_grafana_handoff(
+                    executor.config,
+                    executor.paths,
+                    paths,
+                    executor.summary,
+                    executor.plan.selected_targets,
+                    cli._filter_validations_for_target_refs(
+                        cli._manifest_deploy_validations(executor.manifest),
+                        target_refs=set(executor.plan.selected_targets),
+                    ),
+                )
             return executor.summary
         except (Exception, KeyboardInterrupt) as exc:
             # Applications may have passed before final convergence or backend

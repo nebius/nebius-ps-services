@@ -491,8 +491,7 @@ def test_write_inventory_lists_each_mk8s_cluster(
     assert "- `cluster1` (`cluster1`)" in markdown
     assert (
         "  - CPU node groups: `cpu`: `2` node(s) at `cpu-d3/32vcpu-128gb`; "
-        "`burst`: autoscaling `1`..`4` node(s) at `cpu-d3/16vcpu-64gb`"
-        in markdown
+        "`burst`: autoscaling `1`..`4` node(s) at `cpu-d3/16vcpu-64gb`" in markdown
     )
     assert (
         "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/8gpu-128vcpu-1600gb`"
@@ -504,8 +503,7 @@ def test_write_inventory_lists_each_mk8s_cluster(
     assert "  - Kube context: `nebius-cluster1-mk8scluster-111-external`" in markdown
     assert "- `cluster2` (`cluster2`)" in markdown
     assert (
-        "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/1gpu-16vcpu-200gb`"
-        in markdown
+        "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/1gpu-16vcpu-200gb`" in markdown
     )
     assert "  - InfiniBand fabric: `none`" in markdown
     assert "  - Cluster ID: `mk8scluster-222`" in markdown
@@ -724,16 +722,9 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
     assert (
         "  - [Nebius VM Logs](http://203.0.113.10/d/cxcli-vm-logs?orgId=1) (`nebius-vm/vm-logs`)"
     ) in markdown
-    assert "- Credentials: user `admin`; password command:" in markdown
+    assert "Access instructions unavailable:" in markdown
+    assert "get secret" not in markdown
     assert "- Root URL note: `Timed out waiting for Grafana root_url`" in markdown
-    assert (
-        "- Credentials: user `admin`; password command:\n\n"
-        "```bash\n"
-        "printf '%s\\n' \"$(kubectl --context=nebius-cluster2-mk8scluster-123-external "
-        "-n observability get secret "
-        "nebius-cxcli-grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d)\"\n"
-        "```\n"
-    ) in markdown
     assert "- Prometheus datasource split:" in markdown
     assert (
         "  - `Nebius Services` reads `Metrics read (Prometheus, Nebius service metrics)`: "
@@ -858,11 +849,8 @@ def test_write_inventory_lists_pending_grafana_links_per_target(
         "- MK8s: cluster ID `mk8scluster-222`; "
         "kube context `nebius-cluster2-mk8scluster-222-external`"
     ) in markdown
-    assert markdown.count("- Credentials: user `admin`; password command:") == 2
-    assert (
-        "kubectl --context=nebius-cluster2-mk8scluster-222-external -n observability "
-        "get secret nebius-cxcli-grafana-admin"
-    ) in markdown
+    assert markdown.count("Access instructions unavailable:") == 2
+    assert "get secret" not in markdown
 
 
 def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
