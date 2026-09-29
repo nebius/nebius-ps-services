@@ -705,6 +705,9 @@ Field guide:
 - Root blocks:
   - `shared`: reusable shared values. Today the supported shape is `shared.admin_ssh.{user_name,public_key}`. `public_key` accepts either an inline `ssh-rsa`, `ssh-ed25519`, or ECDSA public key, or a readable local `.pub` file path such as `~/.ssh/my_ssh_key.pub`.
   - `compute.boot_disk_defaults`: shared cxcli policy for Compute-backed boot-disk recommendations. MK8s, VM, NFS, SSH jump host, and WireGuard VPN gateway components consume this single policy.
+    When size is omitted, recommendations use the selected disk type's allocation
+    unit, including 93 GiB multiples for non-replicated and IO M3 SSDs. An explicit
+    size remains authoritative.
   - `components`: source registry split into `infra` and `apps`.
 - `components.infra.<component-id>`:
   - `<component-id>` must use lowercase letters, digits, and hyphens.
@@ -926,6 +929,9 @@ WireGuard client configs:
 
 - All WireGuard modes accept `--component`, `--ssh-user`, and
   `--ssh-private-key`; project authentication is automatic.
+  `--component` selects an enabled instance ID first. A component type is accepted
+  only when it identifies one enabled instance; ambiguous types require an
+  explicit instance ID.
 - Client-generation-only flags are `--client-name`, `--dns`,
   `--persistent-keepalive`, `--output-dir`, and `--force`.
 - `--client-name` must be a wg-quick-safe interface name: lowercase letters,
@@ -956,6 +962,9 @@ SSH jump-host source CIDRs:
   command resolves sibling `generated/`, reads Terraform output for the
   jump-host public IP, SSHes to the VM, and runs the VM-local
   `nebius-ssh-jumphost` helper.
+- `--component` selects an enabled instance ID first. A shared `ssh-jumphost`
+  type is accepted only when one enabled instance matches; use an explicit
+  instance ID when multiple jump hosts are configured.
 - Before running a privileged VM-local helper, cxcli requires an OpenSSH
   known-hosts file containing an independently verified key for that jump
   host. The default is `<tenant-folder>/<project-folder>/generated/ssh_known_hosts`;
@@ -1033,6 +1042,10 @@ Bundled SecretStash to Kubernetes sync:
   ExternalSecrets use `refreshPolicy: Periodic` and default `refreshInterval: 15m`; set
   `deploy.targets[].secrets.mysterybox.refresh_interval` to another `s`, `m`, or `h`
   duration such as `30s`, `1m`, `15m`, or `1h`.
+- Before applying generated MysteryBox bindings, cxcli requires each expected
+  `ExternalSecret` to use exactly `apiVersion: external-secrets.io/v1` with its
+  expected name, namespace and complete secret mappings. Malformed or alternate
+  API versions cannot satisfy a required binding.
 - Those cxcli-managed ESO objects are generated output, not source-config content. `config.yaml` keeps only the target sync contract under `deploy.targets[].secrets.mysterybox.*`; normalization strips stale cxcli-managed MysteryBox ESO `extraObjects` from the external-secrets app row while preserving operator-authored chart objects.
 - cxcli renders `ClusterSecretStore.spec.provider.nebiusmysterybox.apiDomain` as `api.nebius.cloud:443` by default and intentionally does not render `caProvider` for this public endpoint. ESO uses the controller image's normal public CA trust bundle to validate Nebius-owned TLS for `api.nebius.cloud`; cert-manager and trust-manager are not part of this default public trust path. Use a custom CA only for an internal endpoint, TLS-inspecting proxy, self-signed endpoint, or custom domain that is not chained to a public CA.
 - The generated bundle never contains the Nebius service-account credential Secret. During `deploy`, `flux bootstrap`, and `flux apply`, cxcli treats the configured Kubernetes Subject Credentials Secret as the ESO auth source of truth. If that Secret is missing, invalid, or stale, cxcli ensures the dedicated Nebius service account `mysterybox-sa`, grants only `mysterybox.payload-viewer`, creates an authorized key through the Nebius API, and writes the private key only into the runtime Secret. ESO exchanges those credentials for Nebius IAM access tokens when it calls MysteryBox. The IAM-management step deliberately ignores Terraform runtime service-account env vars such as `NEBIUS_SA_ID` so target-scoped `flux apply` does not try to use the Terraform automation identity to manage IAM; local federation profiles can still be used through the Nebius CLI access-token fallback. The default Secret is `external-secrets/nebius-mysterybox-shared-creds` with key `credentials.json`.
@@ -1425,6 +1438,8 @@ Source requirements enforced by `validate-sources`:
     derived from the checked-out chart's `Chart.yaml`, so local-profile
     generated `config.yaml` rows show the active local chart version while
     still leaving `repo` blank for static local chart rendering.
+    Local chart directories are read directly even when `version` is populated;
+    that version must match `Chart.yaml` (an optional `v` prefix is accepted).
   - In a project `config.yaml`, an app chart row with `repo: ''` stays on the static
     local render path when the selected catalog source has local chart metadata. A
     non-empty `repo` selects a Helm source directly.
@@ -2423,6 +2438,12 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - `flux apply` uses that same local app-deploy path without running Terraform apply, so it is the apps-only command for day-2 chart deploys after infra already exists.
 - `terraform apply` is safe to rerun sequentially with the same `generated/infra`: it validates the existing generated infra bundle and then relies on Terraform state convergence. It is not safe to run concurrently against the same backend state; Terraform remote locking is the protection there.
 - `flux apply` is safe to rerun sequentially with the same rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`): it applies the existing rendered manifests, skips Flux controller installation when controllers are already present, and waits for the rendered Flux resources to become `Ready`.
+  Readiness and terminal `Stalled` failures must describe the resource's current
+  generation; stale conditions remain pending. OCI `HelmRepository` objects keep
+  their statusless readiness rule, which verifies the exact live object.
+  Frozen Soperator main-workload checks retain their stricter identity guard:
+  contradictory generation evidence causes a safety pause, and unavailable
+  frozen-source evidence keeps the workload pending.
 - `flux bootstrap` auto-downloads a managed Flux CLI binary from the official Flux GitHub release for the catalog-pinned `cli.flux.version` when `flux` is not already in `PATH`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide. Managed downloads verify the official release SHA256 manifest before installing cache entries.
 - `flux bootstrap` resolves the GitHub repo slug from `GITHUB_REPOSITORY` when present, otherwise it falls back to the local git `origin` remote.
 - `flux bootstrap` uses the same built-in MK8s handoff instead of hardcoding `mk8s_cluster_id` in CI workflow glue.
@@ -2715,8 +2736,11 @@ project, cache, receipts, or logs. Matching interrupted deployments use their
 saved local attempt and never resolve `latest` again within that attempt. Rerun `deploy` on
 the same rendered configuration with the same job policy to recover. A resolved
 exact-release handoff preserves the original snapshot and selector provenance;
-it verifies the admitted digest without resealing that content. If pending Soperator
-changes exist, select its target or deploy all targets; selecting only an ordinary
+it verifies the admitted digest without resealing that content. Official
+release tags are also pinned to their first verified commit and tree
+in the private release identity ledger. Pins are published atomically under the
+per-tag lock; interrupted writes remain retryable and a moved tag is rejected.
+If pending Soperator changes exist, select its target or deploy all targets; selecting only an ordinary
 target fails before execution. Deploy
 performs fresh discovery, validates prospective stages in scratch storage, and
 captures protected-state, job, partition, and login observations before mutation.
@@ -3693,6 +3717,17 @@ kubeconfig or its current context.
 The parent campaign creates its receipt before initializing source checks, whose
 native login contract uses the rendered Slurm cluster name. Initialization
 failures therefore retain the original cause and a resumable campaign record.
+Campaign receipts validate the same authority and checkpoint rules when loaded
+and before every write. Target and cluster identities must match the frozen
+intent, and the exact ordered segment ledger must retain a completed prefix
+followed by at most one running or failed segment and pending successors.
+Completion requires every segment complete and maintenance restored. Interrupted
+final-readiness revalidation may retain a completed receipt with running or
+stopped supervisor diagnostics; recovery repeats only that final proof.
+Inconsistent receipts stop recovery before execution, archival or replacement.
+Preserve the original receipt for investigation; do not edit completion flags,
+recompute digests, delete it to restart, or bypass validation. Receipt schema v6
+is unchanged, and no automatic migration or repair is performed.
 Campaign source, target and catch-up check receipts, and native check lifecycle
 receipts written by install or release reconciliation, are preserved across
 rendering and excluded from the generated-configuration fingerprint. Configuration changes
@@ -3862,7 +3897,8 @@ Answer Yes to enter comma-separated absolute directory paths, for example
 `/workspace,/opt/customer-data`. No or an empty list keeps all current
 protections. Additional folders must already exist on the jail filesystem as
 real directories without symlink traversal or overlap with other mounts.
-They use the same retained PVC mount pattern, directly referencing their existing
+Regular files are rejected before their storage bindings are admitted.
+Selected folders use the same retained PVC mount pattern, directly referencing their existing
 backing; no data is copied or moved. The normalized plan is saved in desired
 configuration, rendered and frozen for deployment; accepted evidence advances
 only after successful promotion. Dry-run does not save the selection, and
@@ -3901,7 +3937,9 @@ official population Job writes that slot once, and one subsequent inventory is
 sealed as the canonical materialization receipt with the target image, slot,
 PVC UID, Job/workload identities, manifest digest, and entry count. Rootfs
 inventory and cleanup Jobs use the official image's POSIX `/bin/sh` contract,
-and cxcli checks the authenticated Job object for both completion and failure so
+and fail when traversal, file reads, metadata inspection, encoding, or sorting
+fails; incomplete evidence cannot authorize population or cleanup.
+cxcli checks the authenticated Job object for both completion and failure so
 a terminal failure is reported without waiting for the completion timeout. A
 newly formatted rootfs is considered logically empty only when its authenticated
 inventory is empty or contains exactly one empty `/lost+found` directory; files,
@@ -4607,6 +4645,10 @@ On a brand-new local release branch, `--prep` now pushes with `git push --set-up
 `--publish` fails locally before tagging if the target changelog section is missing or empty.
 
 The publish step creates the annotated tag `nebius-cxcli-vX.Y.Z`. That tag triggers the repository workflow at `.github/workflows/nebius-cxcli-release.yml`, which reruns `make ci-quality verify-wheel-cli` against the tagged commit and its first parent, runs `validate-sources component_sources.yaml` against the real portable catalog, verifies that the wheel version matches the tag, verifies the wheel with `nebius_cxcli.release_catalog verify-wheel`, and publishes the GitHub Release from the tagged commit.
+
+The release workflow keeps complete main-branch history for ancestry checks
+and the tagged commit's first-parent validation baseline.
+
 The normal `.github/workflows/nebius-cxcli-ci.yml` workflow uses `validate-sources component_sources.yaml` with source profile `local` instead, so branch changes are validated against the checked-out Terraform modules and Helm charts rather than the remote `ref=main` portable sources. That branch CI workflow checks that the wheel bundles both `component_sources.yaml` and `component_cli_settings.yaml`; it does not require every bundled chart to be portable before release time.
 Those post-gate workflow checks use locked, non-syncing `uv run` commands after
 `make env`, so `nebius_cxcli.release_catalog` imports the reviewed editable
@@ -5397,6 +5439,10 @@ Canonical project authentication behavior:
   merely because local cache state is absent.
 
 `bootstrap-ci <config.yaml>` remains the full CI workflow bootstrap command and can still perform complete CI auth bootstrap/sync for that config. The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/config.yaml` and `generated/**` paths, using `*/*/config.yaml` and `*/*/generated/**` when the deployments root is the repository root. It validates the source configuration, renders and validates the complete bundle, then runs `deploy`. Re-running the command automatically reconciles the CLI-managed workflow file to the latest template, always reconciles local SMTP settings into the matching GitHub Environment, and uses `--github-repo` only as an explicit override when repo auto-detection is wrong or unavailable.
+
+GitHub secret and variable synchronization preserves an existing environment's
+branch/tag deployment restrictions. A missing environment is created only after
+a confirmed not-found response; other lookup errors stop synchronization.
 
 `deploy <config.yaml>` is intentionally separate from `bootstrap-ci <config.yaml>`. Local/customer-side deploy commands operate only on the committed generated bundle and runtime auth material; they do not create or update GitHub workflows, GitHub environments, or CI secrets automatically.
 

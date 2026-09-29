@@ -44,6 +44,10 @@ graph, and live revisions.
 
 #### Test Method
 
+Inject interrupted identity writes and file synchronization failures; prove
+retry can publish a complete single-link pin under the per-tag lock, while
+concurrent and changed identities cannot overwrite established history.
+
 Run latest and exact discovery, durable moved-tag and concurrent-ledger,
 hostile-archive, package-mismatch, structural-contract, downgrade, and frozen
 recovery tests.
@@ -243,6 +247,8 @@ operation to continue from its exact durable evidence.
 - AC-010: Local recovery writes remain atomic, bounded and owner-only; malformed command-owned checkpoints retain their originating command recovery contract. Backend lease renewal, takeover and conditional release are not part of generic deployment.
 
 - AC-011: Contained subprocess supervision remains active across cancellation and parent death independently of remote leases. Local ownership lasts until contained writers stop. Dedicated command checkpoints and their command-specific locks remain unchanged. Input larger than a pipe buffer must be delivered completely despite slow child startup, while stdout/stderr drain concurrently and cancellation, deadlines and quiescence remain enforced.
+
+- AC-012: Full-stack campaign receipt reads and writes validate the same schema-v6 invariants before execution or publication: top-level target and cluster identities equal the digest-verified intent; the ordered segment ledger equals the intent exactly; completed segments form a prefix followed by at most one running or failed frontier and pending successors. Pending or entering maintenance requires an active campaign with every segment pending; active maintenance requires an active campaign; restoring maintenance requires an active campaign with every segment complete; completion requires restored maintenance and every segment complete. Supervisor diagnostics do not change completion authority, including interrupted final-readiness revalidation of a completed campaign. Invalid evidence fails before callbacks, archival, replacement or new-campaign creation and is never migrated or repaired automatically.
 
 #### Negative Criteria
 
@@ -632,6 +638,10 @@ and user-facing terminology.
 
 #### Test Method
 
+Verify GitHub environment lookup preserves existing branch/tag protection
+during secret and variable synchronization, creates only on a confirmed
+missing environment, and does not create after failed lookup.
+
 Inject failure at every stage, fsync, commit, materialization, credential
 creation, delivery, and compensation boundary; test concurrent edits, unsafe
 links, secret redaction, and exact rerun convergence.
@@ -678,6 +688,10 @@ coverage reports, workflow matrices, and isolated wheel behavior.
 
 #### Test Method
 
+Run the release workflow history check against an isolated local Git remote
+for both historical and tip commits; retain tag ancestry and parent-baseline
+resolution after fetching main.
+
 Run architecture/import guards, command snapshots, unsafe-path, stale-lock,
 environment-drift, concurrency, and missing-tool fault-injection tests, then
 Ruff, mypy, branch coverage, the full offline suite, and wheel smoke on the
@@ -707,6 +721,7 @@ the selected VM before they invoke privileged remote helpers.
 - AC-002: The selected file must already exist and contain an independently verified key for the target host. Missing, unknown, or mismatched identities fail before any remote helper runs.
 - AC-003: SSH uses strict host-key checking and the selected cxcli trust file without falling back to the user's global known-hosts database.
 - AC-004: The cxcli-managed deployments-root `.gitignore` excludes each project `generated/ssh_known_hosts` file while preserving the rest of the generated deployment contract.
+- AC-005: Day-2 selection resolves exactly one enabled component instance before output lookup or SSH. An exact instance ID takes precedence; shared type selectors matching multiple instances fail with explicit-instance guidance.
 
 #### Negative Criteria
 
@@ -1028,6 +1043,8 @@ versioned registry before installation and every upgrade stage.
 
 - AC-009: Support both HTTP/HTTPS Helm repositories and OCI chart sources through the existing deployment, application and upgrade commands. HTTP charts require an exact chart version, matching chart identity and a fresh extracted-content comparison against the frozen render snapshot before deployment effects; unavailable or changed content blocks execution. OCI releases retain digest-bound execution. Native HTTP reconciliation continues to trust the versioned upstream repository, so its preflight content check must not be described as continuous digest pinning. Git chart execution remains unsupported without its own adapter.
 
+- AC-010: Kubernetes resource discovery compares complete CRD names. Generated MysteryBox binding admission requires the exact rendered `external-secrets.io/v1` API version, resource kind, name and namespace; malformed or alternate API versions cannot satisfy a required binding.
+
 #### Negative Criteria
 
 - NC-001: No executable policy language, arbitrary evidence-URL fetching, blanket bypass or legacy reader.
@@ -1038,6 +1055,17 @@ versioned registry before installation and every upgrade stage.
 Inspect parser, adapters, command wiring, exact-source evaluation and frozen recovery.
 
 #### Test Method
+
+Exercise exact and lookalike CRD names through status collection. Alter the
+API version in rendered MysteryBox objects and prove malformed, missing and
+alternate versions fail application admission while canonical renders pass.
+
+Preserve frozen main-workload safety pauses and source-readiness checks.
+
+Exercise stale Ready/Stalled observations followed by current-generation
+readiness, versioned local chart capture and mismatched versions, and missing
+boot-disk sizes for authored disk types across MK8s and VM inputs. Explicit
+sizes remain unchanged.
 
 Cover malformed data, distribution/patch boundaries, unknown/stale/conflicting
 evidence, mixed versions, source remediation, package contents and catalog drift.

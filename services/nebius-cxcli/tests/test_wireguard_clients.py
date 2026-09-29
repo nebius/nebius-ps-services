@@ -868,3 +868,28 @@ def test_wireguard_command_rejects_invalid_local_subnet_csv(
 
     assert result.exit_code == 1, result.output
     assert "--local-subnet currently supports IPv4 CIDRs only" in result.output
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_component_type_selector_rejects_ambiguous_instances(reverse):
+    rows = [
+        {"id": "wireguard-gw", "instance_id": name, "enabled": True, "inputs": {}}
+        for name in ("gateway-a", "gateway-b")
+    ]
+    if reverse:
+        rows.reverse()
+    with pytest.raises(RuntimeError, match="multiple"):
+        select_wireguard_component(
+            {"infra": {"components": rows}}, component_selector="wireguard-gw"
+        )
+
+
+def test_exact_instance_id_takes_precedence_over_shared_component_type():
+    rows = [
+        {"id": "wireguard-gw", "instance_id": name, "enabled": True, "inputs": {}}
+        for name in ("gateway-a", "wireguard-gw")
+    ]
+    selected = select_wireguard_component(
+        {"infra": {"components": rows}}, component_selector="wireguard-gw"
+    )
+    assert selected.instance_id == "wireguard-gw"

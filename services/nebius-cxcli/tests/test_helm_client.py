@@ -294,3 +294,38 @@ def test_render_chart_template_documents_parses_rendered_yaml(
     )
 
     assert documents == [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "demo"}}]
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "v1.0.0"])
+def test_capture_versioned_local_chart_never_pulls(tmp_path, monkeypatch, version):
+    from nebius_cxcli.compatibility_artifacts import materialize_frozen_chart, resolve_chart_input
+
+    chart = tmp_path / "chart"
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: demo\nversion: 1.0.0\n")
+    (chart / "values.yaml").write_text("{}\n")
+    (chart / "templates").mkdir()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("local chart was sent to helm pull")
+
+    monkeypatch.setattr("nebius_cxcli.helm_client._run_helm_pull", forbidden)
+    snapshot = resolve_chart_input(HelmChartReference(str(chart), "", version))
+    with materialize_frozen_chart(snapshot) as frozen:
+        assert (frozen / "Chart.yaml").read_bytes() == (chart / "Chart.yaml").read_bytes()
+
+
+def test_versioned_local_chart_rejects_mismatched_version(tmp_path, monkeypatch):
+    chart = tmp_path / "chart"
+    chart.mkdir()
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: demo\nversion: 1.0.0\n")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("local chart was sent to helm pull")
+
+    monkeypatch.setattr("nebius_cxcli.helm_client._run_helm_pull", forbidden)
+    with (
+        pytest.raises(RuntimeError, match="version"),
+        _materialize_chart_dir(HelmChartReference(str(chart), "", "2.0.0")),
+    ):
+        pytest.fail("mismatched chart version was accepted")

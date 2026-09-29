@@ -355,8 +355,14 @@ def _materialize_chart_dir(reference: HelmChartReference):
         cleanup_roots.append(cleanup_dir)
 
     local_candidate = Path(show_ref)
-    if not repo and not version and local_candidate.exists() and local_candidate.is_dir():
+    if not repo and local_candidate.is_dir():
         try:
+            if version:
+                metadata = yaml.safe_load((local_candidate / "Chart.yaml").read_text())
+                if not isinstance(metadata, dict) or str(metadata.get("version", "")).removeprefix(
+                    "v"
+                ) != version.removeprefix("v"):
+                    raise RuntimeError("Local chart version differs from the requested version")
             yield local_candidate
         finally:
             for root in reversed(cleanup_roots):

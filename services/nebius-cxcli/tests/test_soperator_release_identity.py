@@ -94,3 +94,117 @@ def test_release_identity_rejects_symlink_record(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsafe"), ledger.locked(_metadata()):
         pass
+
+
+@pytest.mark.parametrize("failure", ["write", "fsync"])
+def test_release_identity_failed_publication_can_retry(tmp_path, monkeypatch, failure):
+    import errno
+
+    from nebius_cxcli import soperator_release_identity as module
+
+    root = tmp_path / "identities"
+    ledger = SoperatorReleaseIdentityLedger(root)
+    identity = SoperatorReleaseIdentity.from_metadata(_metadata())
+    real_write, real_fsync = os.write, os.fsync
+    wrote_partial = False
+
+    def write(fd, data):
+        nonlocal wrote_partial
+        if not wrote_partial:
+            wrote_partial = True
+            return real_write(fd, data[:5])
+        raise OSError(errno.ENOSPC, "fixture full disk")
+
+    def fsync(fd):
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EIO, "fixture failed sync")
+        return real_fsync(fd)
+
+    with ledger.locked(_metadata()), monkeypatch.context() as patch:
+        patch.setattr(module.os, failure, write if failure == "write" else fsync)
+        with pytest.raises(OSError):
+            ledger.record(identity)
+    assert not ledger._path(identity).exists()
+    with ledger.locked(_metadata()):
+        path = ledger.record(identity)
+    ledger.verify_existing(identity)
+    assert path.exists()
+    assert path.stat().st_nlink == 1
+    assert not list(root.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("failure", ["rename", "directory_sync"])
+def test_release_identity_interrupted_publication_keeps_complete_pin_or_none(
+    tmp_path, monkeypatch, failure
+):
+    from nebius_cxcli import soperator_release_identity as module
+
+    ledger = SoperatorReleaseIdentityLedger(tmp_path / "identities")
+    identity = SoperatorReleaseIdentity.from_metadata(_metadata())
+    real_fsync = os.fsync
+
+    def rename(*args, **kwargs):
+        raise OSError("fixture interrupted rename")
+
+    def fsync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("fixture interrupted directory sync")
+        return real_fsync(fd)
+
+    with ledger.locked(_metadata()), monkeypatch.context() as patch:
+        if failure == "rename":
+            patch.setattr(module.os, "replace", rename)
+        else:
+            patch.setattr(module.os, "fsync", fsync)
+        with pytest.raises(OSError):
+            ledger.record(identity)
+    assert ledger._path(identity).exists() == (failure == "directory_sync")
+    ledger.verify_existing(identity)
+    with ledger.locked(_metadata()):
+        path = ledger.record(identity)
+    assert path.stat().st_nlink == 1
+    assert not list(ledger.root.glob("*.tmp"))
+
+
+def test_release_identity_publication_requires_exact_thread_owned_lock(tmp_path):
+    ledger = SoperatorReleaseIdentityLedger(tmp_path / "identities")
+    identity = SoperatorReleaseIdentity.from_metadata(_metadata())
+    with pytest.raises(RuntimeError, match="exact ledger lock"):
+        ledger.record(identity)
+    with ledger.locked(_metadata()):
+        with pytest.raises(RuntimeError, match="exact ledger lock"):
+            ledger.record(replace(identity, tag="4.1.8"))
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            foreign_write = executor.submit(ledger.record, identity)
+            with pytest.raises(RuntimeError, match="exact ledger lock"):
+                foreign_write.result()
+        ledger.record(identity)
+    with pytest.raises(RuntimeError, match="exact ledger lock"):
+        ledger.record(identity)
+
+
+def test_concurrent_different_release_identities_preserve_winner(tmp_path):
+    from threading import Barrier
+
+    root = tmp_path / "identities"
+    first = _metadata()
+    second = replace(first, commit="c" * 40, tree="d" * 40)
+    start = Barrier(2)
+
+    def publish(metadata):
+        start.wait(timeout=10)
+        try:
+            return _record(root, metadata), metadata
+        except RuntimeError as exc:
+            assert "moved tag" in str(exc)
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(publish, [first, second]))
+    winners = [result for result in results if result is not None]
+    assert len(winners) == 1
+    path, metadata = winners[0]
+    SoperatorReleaseIdentityLedger(root).verify_existing(
+        SoperatorReleaseIdentity.from_metadata(metadata)
+    )
+    assert path.stat().st_nlink == 1

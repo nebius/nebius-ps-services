@@ -12260,7 +12260,16 @@ def test_wait_for_rendered_flux_resources_waits_for_sources_before_releases(
         "_kubectl_get_target",
         lambda target, *, env, timeout_seconds=20: (
             calls.append((target.kind, target.namespace, target.name))
-            or ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+            or (
+                {
+                    "metadata": {"generation": 1},
+                    "status": {
+                        "observedGeneration": 1,
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                },
+                "",
+            )
         ),
     )
 
@@ -12310,7 +12319,9 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
         "_kubectl_get_target",
         lambda target, *, env, timeout_seconds=20: (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {
                             "type": "Ready",
@@ -12318,8 +12329,8 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
                             "reason": "InstallFailed",
                             "message": "chart pull failed",
                         }
-                    ]
-                }
+                    ],
+                },
             },
             "",
         ),
@@ -12384,7 +12395,9 @@ def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failur
             return ({}, "")
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {
                             "type": "Stalled",
@@ -12398,8 +12411,8 @@ def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failur
                             "reason": "InstallFailed",
                             "message": "startup api check failed",
                         },
-                    ]
-                }
+                    ],
+                },
             },
             "",
         )
@@ -12465,7 +12478,9 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
         if target.name == "failed":
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Stalled",
@@ -12479,15 +12494,17 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
                                 "reason": "InstallFailed",
                                 "message": "install failed",
                             },
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
         if call_counts["slow"] == 1:
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Ready",
@@ -12495,12 +12512,21 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
                                 "reason": "Progressing",
                                 "message": "still reconciling",
                             }
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
-        return ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+        return (
+            {
+                "metadata": {"generation": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+            "",
+        )
 
     monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
 
@@ -12595,7 +12621,9 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
         if calls["count"] == 1:
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Ready",
@@ -12603,16 +12631,18 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
                                 "reason": "Progressing",
                                 "message": "waiting for first reconciliation",
                             }
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]
-                }
+                    "observedGeneration": 1,
+                    "conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}],
+                },
             },
             "",
         )
@@ -12701,11 +12731,13 @@ def test_wait_for_rendered_flux_resources_accepts_statusless_oci_repository(
             )
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
-                    ]
-                }
+                    ],
+                },
             },
             "",
         )
@@ -12772,11 +12804,13 @@ def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
             stderr="",
             stdout=json.dumps(
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
-                        ]
-                    }
+                        ],
+                    },
                 }
             ),
         )

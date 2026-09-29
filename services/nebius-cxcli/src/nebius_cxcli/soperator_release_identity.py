@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import stat
+import threading
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -52,6 +54,7 @@ class SoperatorReleaseIdentityLedger:
         self.root = prepare_private_cache_root(
             (root or default_soperator_release_identity_root()).expanduser()
         )
+        self._lock_owner = threading.local()
 
     @staticmethod
     def _key(identity: SoperatorReleaseIdentity) -> str:
@@ -66,7 +69,12 @@ class SoperatorReleaseIdentityLedger:
         identity = SoperatorReleaseIdentity.from_metadata(metadata)
         with locked_cache_entry(self.root, self._key(identity)):
             self.verify_existing(identity)
-            yield identity
+            previous = getattr(self._lock_owner, "identity", None)
+            self._lock_owner.identity = (os.getpid(), identity)
+            try:
+                yield identity
+            finally:
+                self._lock_owner.identity = previous
 
     def verify_existing(self, identity: SoperatorReleaseIdentity) -> None:
         path = self._path(identity)
@@ -97,6 +105,8 @@ class SoperatorReleaseIdentityLedger:
     def record(self, identity: SoperatorReleaseIdentity) -> Path:
         """Publish the first fully verified observation without replacing prior history."""
 
+        if getattr(self._lock_owner, "identity", None) != (os.getpid(), identity):
+            raise RuntimeError("Release identity publication requires its exact ledger lock")
         self.verify_existing(identity)
         path = self._path(identity)
         try:
@@ -115,13 +125,16 @@ class SoperatorReleaseIdentityLedger:
             os.O_RDONLY | directory | nofollow | getattr(os, "O_CLOEXEC", 0),
         )
         descriptor = -1
+        temporary_name = f".{path.name}.{secrets.token_hex(12)}.tmp"
+        temporary_created = False
         try:
             descriptor = os.open(
-                path.name,
+                temporary_name,
                 flags | nofollow,
                 0o600,
                 dir_fd=parent_descriptor,
             )
+            temporary_created = True
             try:
                 opened = os.fstat(descriptor)
                 if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
@@ -139,10 +152,23 @@ class SoperatorReleaseIdentityLedger:
             finally:
                 os.close(descriptor)
                 descriptor = -1
+            # Every publisher holds the same per-tag lock. The final name is
+            # absent until complete single-link bytes are durable; no existing
+            # first-seen pin can be replaced by another authorized publisher.
+            os.replace(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            temporary_created = False
             os.fsync(parent_descriptor)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
+            if temporary_created:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_name, dir_fd=parent_descriptor)
             os.close(parent_descriptor)
         return path
 
