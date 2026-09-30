@@ -121,7 +121,7 @@ def test_every_detailed_visual_has_one_destination_and_reachable_lessons() -> No
                     assert f'id="{target}"' in lesson
                 else:
                     assert f'href="#{target}"' in lesson
-    assert len(diagrams) == 54
+    assert len(diagrams) == 55
     advanced = ROOT / "advanced-gpu-communication"
     moved = json.loads((advanced / "reference/visual-manifest.json").read_text())[
         "diagrams"

@@ -1,6 +1,154 @@
 # Publication review
 
-## Performance-tool diagram typography — local verification: 2026-09-29
+## Output-matrix coordinate annotations — local verification: 2026-09-30
+
+HTML SHA-256: `1f520e755985d77c79a1f0642e9c444996d223ad621322bfdd8c39a223c258bc`.
+
+The output panel labels x increasing across columns and y increasing down
+rows, with right/down arrows and aligned 0/1 indices. It explains row-first
+matrix indexing as `C[row, column] = C[y, x]`, shows
+`(x=1, y=0) → C[0,1] = 28`, and qualifies this as the example kernel's mapping.
+Canonical prose, accessible description, README, visual plan, requirements,
+design and changelog agree. Between-panel arrows retain their distinct
+conceptual meaning. Existing typography is retained in an expanded panel.
+
+Source/static: **pass** for 67 focused existing diagram/content tests, native
+course validation, generated HTML/archive freshness, scoped Markdown lint and
+whitespace checks. The first three panels, 32 other figures and 11 executable
+listings remain byte-identical. Independent read-only semantic/security review
+found no issue. The generic skill checker retains the same five baseline
+markup/navigation diagnostics and is **not a passing gate**.
+
+Browser layout/interaction: **pass** for three isolated headless Chrome
+154.0.8037.58 cases at 1440×1000, 390×1000 and 320×1000, covering text bounds,
+overlap, capped width, page overflow, keyboard navigation/local scrolling,
+200% root-text reflow and absence of external requests. Browser/visual:
+**pass** for three separate integrated page captures at 1440×1000, 390×1100
+and 320×1100. The axes and row-first mapping fit without collisions. Mobile
+labels remain compact; adjacent prose and the visible caption retain the full
+explanation. This is scoped review, not whole-course accessibility certification.
+
+Local evidence group `gpu-matrix-axes-0930` retains preservation and checker
+comparisons, layout/capture harnesses, browser identity records and integrated
+screenshots. Tracing was off and owned browser contexts/processes closed.
+No dependency installation, GPU runtime activation, live lab execution or
+external publication occurred; broader course gates remain unchanged.
+
+## Thread-coordinate wording clarification — local verification: 2026-09-30
+
+HTML SHA-256: `411495b587e82c8bd8fc2af10f33936ff5c27a6fb4f73d2793027131626745bd`.
+
+Clarified that threadIdx.x and threadIdx.y are zero-based block coordinates,
+that this kernel chooses their column/row mapping, and that CUDA linearizes
+x before y. The two-thread x dimension explains the multiplier in
+`threadIdx.x + 2 * threadIdx.y`; numbering does not prescribe execution order.
+This editorial clarification retains REQ-003/FEAT-003, the existing table,
+diagram, examples and executable behavior. The README and changelog already
+cover this teaching scope and need no additional contract change.
+
+Source/static: canonical rebuild, read-only freshness check, native course
+validator, scoped Markdown lint and whitespace checks pass. Focused semantic
+and security review found no changed calculation, unsafe markup or external
+resource. Browser/runtime checks were not repeated for this wording-only
+follow-up; earlier visual evidence applies to the unchanged diagram and the
+exact earlier HTML digest below. Generic checker limitations remain unchanged.
+
+## Matrix illustration refinement — local verification: 2026-09-30
+
+HTML SHA-256: `7dfd5e46e316ccc5ce1c759d8c10f204c2520e82dd4325a2b8659179aa3d788d`.
+
+The existing Lesson 1 example retains all four calculations and its complete
+thread/block/warp mapping. Equal 44-unit matrix cells and 28-unit numerals now
+make the two inputs consistent. A restrained 30-unit title, 24-unit section
+headings, 22-unit body labels and 20-unit annotations separate roles; the
+26-unit worked expression and 30-unit results emphasize the arithmetic.
+The 520-unit viewBox has a 600px display cap. Row 0 of A and column 1 of B
+are highlighted and explicitly labeled before their dot product produces 28.
+Prose defines rows × columns, clarifies each thread's full accumulation and
+avoids inferring emitted instruction counts from mathematical operations.
+NVIDIA's CUDA thread-indexing and floating-point references support the
+technical wording. Independent read-only semantic and passive-SVG review
+found no blocking issue.
+
+Source/static: **pass** for 99 focused existing tests, the native Fundamentals
+validator, generated HTML/archive freshness, scoped Markdown lint and
+whitespace checks. Independent arithmetic reproduces C=[[22,28],[49,64]] and
+x-fastest thread IDs. All 32 other figures and 11 embedded executable listings
+remain byte-identical. No renderer, shared CSS or lab behavior was changed by
+this refinement. The generic skill checker still returns the same five
+baseline markup/navigation diagnostics; it is **not a passing gate**.
+
+Browser layout/interaction: **pass** for three isolated headless Chrome
+154.0.8037.58 cases at 1440×1000, 390×1000 and 320×1000. Checks cover figure
+placement, text bounds/overlap, capped width, page overflow, keyboard contents,
+local code scrolling, doubled root-text reflow and absence of external requests.
+Browser/visual: **pass** for this revised figure and its surrounding caption.
+Separate integrated captures at 1440×2300, 390×1700 and 320×1700 were visually
+reviewed, alongside SVG renders at 600px and 270px. Mobile annotations remain
+compact; the visible caption and adjacent teaching retain the complete meaning.
+This is scoped evidence, not whole-course accessibility certification.
+
+Local evidence group `gpu-matrix-polish-0930` retains `preservation.json`,
+`generic-checker.json`, SVG renders, layout and capture harnesses, per-viewport
+identity records in `layout/` and page images in `capture/`. Tracing was off.
+The first sandboxed launch failed before inspection. An approved element-capture
+attempt stalled on element stability after layout assertions; it was interrupted
+and retained separately. The successful page captures used a fresh context and
+instant scrolling before capture, without the earlier zoom/scroll sequence.
+Owned test browser processes and contexts closed. No dependency installation,
+GPU runtime activation, live lab execution or external publication occurred;
+existing course-wide runtime and publication gates remain unchanged.
+
+## Historical: Matrix multiplication and warp mapping — local verification: 2026-09-30
+
+HTML SHA-256: `2232a022f9e9244b2b94b19b686202fee67c2e4196f27c15e7960152899d9ac6`.
+
+Lesson 1's Work hierarchy subsection now traces A (2×3) times B (3×2) to
+C=[[22,28],[49,64]], four output-owning threads, one 2×2-thread block and a
+partial 32-lane warp on one SM. The four active lanes and 28 unused lanes are
+explicit. The diagram's colors retain thread identity, and the calculation
+table shows every dot product. The text explains x-fastest thread numbering,
+warp instruction issue and the limits of one-output-per-thread mapping.
+
+Source/static: **pass**. All 149 focused content, placement, opening-parity
+and diagram tests, all seven native validators, generated HTML/archive
+freshness, canonical helper parity, scoped Ruff, Markdown lint and whitespace
+checks pass. New placement checks reject undeclared, wrong-home,
+title-mismatched and duplicate references. Prose parity checks retain text on
+both sides of a figure and literal image syntax inside code fences. The shared
+validator is synchronized into all six practical packages. Independent
+read-only source/security review found no serious issue in the changed scope.
+All other 11 numbered lessons, 32 existing figures and 11 embedded executable
+listings are byte-preserved. Arithmetic was checked independently.
+
+The bounded generic skill checker reports the same five baseline diagnostics
+for local navigation and existing markup on the task-start and revised pages;
+that checker is **not a passing gate**.
+
+Browser layout/interaction: **pass** for three isolated headless Chrome
+154.0.8037.58 cases at 1440×1000, 390×1000 and 320×1000. Assertions cover exact
+subsection placement, unique figure ownership, text bounds/overlap, stable
+geometry, document overflow, keyboard TOC and lesson navigation, local code
+scrolling, doubled root-text reflow and absence of external requests.
+
+Visual evidence: SVG asset review at 640px and 320px **passes** for grouping,
+labels, arithmetic, arrows and thread identity. Integrated-page screenshot
+review remains **pending**: Playwright element/page capture and a separate
+Chrome capture attempt stalled; the software-rendering retry also timed out.
+The layout-only cases were run separately and do not stand in for screenshots.
+Small-screen SVG labels are compact; the adjacent prose/table and visible
+caption supply the complete explanation. No full accessibility or publication
+readiness claim is made.
+
+Local evidence group `gpu-matmul-da_30bze` retains `preservation.json`,
+`generic-checker.json`, `matrix-asset.png`, `matrix-asset-320.png`, the browser
+harnesses, failed capture reports and `browser-layout.json` with per-viewport
+identity records under `browser-layout/`. Tracing was disabled. Owned test
+browser processes/contexts closed; interrupted attempts are retained separately.
+No dependency installation, GPU lab execution, runtime activation or external
+publication was performed; those existing course evidence lanes are unchanged.
+
+## Historical: Performance-tool diagram typography — local verification: 2026-09-29
 
 HTML SHA-256: `21b4fc6e588e13d9d5b759fe0d0a286219afb4207bb9857f62cddd503c4e732a`.
 

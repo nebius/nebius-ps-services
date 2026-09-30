@@ -718,6 +718,10 @@ def prose_paragraphs(markdown: str):
         line = lines[index]
         if line.strip().startswith("```"):
             in_code = not in_code
+        if not in_code and re.fullmatch(r"!\[[^\]]*\]\([^)]+\)", line.strip()):
+            # Figure content and ownership have separate exact-source checks.
+            index += 1
+            continue
         if (
             not in_code
             and line.strip().startswith("|")
@@ -752,10 +756,18 @@ def validate_rendered_openings(parser: Parser, lessons: list) -> None:
         if field not in fields or len(openings) != 1:
             fail(f"{title} opening narrative is missing or duplicated")
         plain = "\n\n".join(prose_paragraphs(fields[field]))
-        plain = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", plain)
-        plain = re.sub(r"(?m)^#{1,6} |^```[^\n]*\n?|^```$", "", plain)
-        plain = plain.replace("**", "").replace("`", "")
-        expected = " ".join(f"{field} {plain}".split())
+        visible = []
+        in_code = False
+        for line in plain.splitlines():
+            if line.strip().startswith("```"):
+                in_code = not in_code
+                continue
+            if not in_code:
+                line = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", line)
+                line = re.sub(r"^#{1,6} ", "", line)
+                line = line.replace("**", "").replace("`", "")
+            visible.append(line)
+        expected = " ".join(f"{field} {' '.join(visible)}".split())
         if " ".join(openings[0].split()) != expected:
             fail(f"{title} opening narrative differs from its own lesson HTML")
 

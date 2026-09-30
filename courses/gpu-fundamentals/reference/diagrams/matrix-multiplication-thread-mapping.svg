@@ -1,122 +1,131 @@
-<svg viewBox="0 0 640 1720" role="img" aria-labelledby="detail-matrix-multiplication-thread-mapping-title detail-matrix-multiplication-thread-mapping-desc">
+<svg viewBox="0 0 520 1800" style="max-width: 600px; margin-inline: auto" role="img" aria-labelledby="detail-matrix-multiplication-thread-mapping-title detail-matrix-multiplication-thread-mapping-desc">
 <title id="detail-matrix-multiplication-thread-mapping-title">Matrix multiplication: from four outputs to one scheduled warp</title>
-<desc id="detail-matrix-multiplication-thread-mapping-desc">Read downward: A (2 by 3) times B (3 by 2) produces C=[[22,28],[49,64]]. This simple kernel assigns T0 to C[0,0], T1 to C[0,1], T2 to C[1,0] and T3 to C[1,1]. One grid contains one 2-by-2-thread block; the same block resides on one SM. Its single warp has 32 lanes: lanes 0–3 contain T0–T3 and lanes 4–31 are unused. A warp scheduler issues ready instructions; each active thread accumulates three products and stores its output. Arrows show conceptual assignment and result flow, not clock cycles. One thread per output is a choice for this kernel, not a universal matrix mapping.</desc>
-<defs><marker id="detail-matrix-multiplication-thread-mapping-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" viewBox="0 0 10 10" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L10,5 L0,10 z" fill="#245880"/></marker></defs>
+<desc id="detail-matrix-multiplication-thread-mapping-desc">Read downward. Dimensions mean rows by columns: A (2 by 3) times B (3 by 2) gives C (2 by 2). The highlighted row 0 of A and column 1 of B give C[0,1] = 1×2 + 2×4 + 3×6 = 28. This example kernel assigns T0 to C[0,0], T1 to C[0,1], T2 to C[1,0] and T3 to C[1,1]. A one-block grid contains a 2-by-2-thread block, with x selecting columns and y selecting rows. That block resides on one SM. Its warp has 32 lane positions: T0–T3 use lanes 0–3; lanes 4–31 have no threads from this block. The scheduler issues ready instructions; each thread accumulates all three products and stores one result. C=[[22,28],[49,64]]. In the output panel, x increases to the right across columns and y increases downward across rows. Matrix indices name the row first and column second: C[row, column] = C[y, x] for this kernel. For example, (x=1, y=0) selects C[0,1] = 28. The kernel chooses this mapping; CUDA does not require it. Output-axis arrows show increasing coordinates; arrows between panels show conceptual assignment and result flow, not clock cycles. One output per thread is a kernel design choice; optimized kernels can use different mappings.</desc>
+<defs><marker id="detail-matrix-multiplication-thread-mapping-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" viewBox="0 0 8 8" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#577580"/></marker></defs>
 <g font-family="Arial, Helvetica, sans-serif" fill="#203640">
-<text x="28" y="42" font-size="34" font-weight="700" text-anchor="start">A × B = C</text>
-<text x="28" y="77" font-size="25" font-weight="400" text-anchor="start">Four outputs → four threads → one warp</text>
-<rect x="24" y="102" width="592" height="231" rx="12" fill="#f7fafc" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="44" y="137" font-size="27" font-weight="700" text-anchor="start">1  Start with the input matrices</text>
-<text x="142" y="179" font-size="24" font-weight="700" text-anchor="middle">A · 2 × 3</text>
-<text x="459" y="179" font-size="24" font-weight="700" text-anchor="middle">B · 3 × 2</text>
-<rect x="52" y="195" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="82" y="229" font-size="29" font-weight="400" text-anchor="middle">1</text>
-<rect x="112" y="195" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="142" y="229" font-size="29" font-weight="400" text-anchor="middle">2</text>
-<rect x="172" y="195" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="202" y="229" font-size="29" font-weight="400" text-anchor="middle">3</text>
-<rect x="52" y="246" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="82" y="280" font-size="29" font-weight="400" text-anchor="middle">4</text>
-<rect x="112" y="246" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="142" y="280" font-size="29" font-weight="400" text-anchor="middle">5</text>
-<rect x="172" y="246" width="60" height="51" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="202" y="280" font-size="29" font-weight="400" text-anchor="middle">6</text>
-<rect x="402" y="190" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="430.5" y="219" font-size="27" font-weight="400" text-anchor="middle">1</text>
-<rect x="459" y="190" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="487.5" y="219" font-size="27" font-weight="400" text-anchor="middle">2</text>
-<rect x="402" y="230" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="430.5" y="259" font-size="27" font-weight="400" text-anchor="middle">3</text>
-<rect x="459" y="230" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="487.5" y="259" font-size="27" font-weight="400" text-anchor="middle">4</text>
-<rect x="402" y="270" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="430.5" y="299" font-size="27" font-weight="400" text-anchor="middle">5</text>
-<rect x="459" y="270" width="57" height="40" rx="0" fill="#fff" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="487.5" y="299" font-size="27" font-weight="400" text-anchor="middle">6</text>
-<text x="315" y="248" font-size="38" font-weight="400" text-anchor="middle">×</text>
-<path d="M320 336 V379" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
-<text x="342" y="364" font-size="22" font-weight="400" text-anchor="start">assign outputs</text>
-<rect x="24" y="386" width="592" height="317" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="1.6"/>
-<text x="44" y="424" font-size="27" font-weight="700" text-anchor="start">2  Grid: one block</text>
-<rect x="44" y="446" width="552" height="237" rx="12" fill="#fff" stroke="#245880" stroke-width="1.6"/>
-<text x="64" y="481" font-size="26" font-weight="700" text-anchor="start">Block (0,0): 2 × 2 threads</text>
-<rect x="64" y="501" width="246" height="68" rx="9" fill="#e3f5ed" stroke="#17684d" stroke-width="1.6"/>
-<text x="187" y="530" font-size="25" font-weight="700" text-anchor="middle">T0 → C[0,0]</text>
-<text x="187" y="556" font-size="22" font-weight="400" text-anchor="middle">(x, y) = (0, 0)</text>
-<rect x="330" y="501" width="246" height="68" rx="9" fill="#e7f1fc" stroke="#205f97" stroke-width="1.6"/>
-<text x="453" y="530" font-size="25" font-weight="700" text-anchor="middle">T1 → C[0,1]</text>
-<text x="453" y="556" font-size="22" font-weight="400" text-anchor="middle">(x, y) = (1, 0)</text>
-<rect x="64" y="583" width="246" height="68" rx="9" fill="#f1ebfa" stroke="#72518f" stroke-width="1.6"/>
-<text x="187" y="612" font-size="25" font-weight="700" text-anchor="middle">T2 → C[1,0]</text>
-<text x="187" y="638" font-size="22" font-weight="400" text-anchor="middle">(x, y) = (0, 1)</text>
-<rect x="330" y="583" width="246" height="68" rx="9" fill="#fff1db" stroke="#8a570a" stroke-width="1.6"/>
-<text x="453" y="612" font-size="25" font-weight="700" text-anchor="middle">T3 → C[1,1]</text>
-<text x="453" y="638" font-size="22" font-weight="400" text-anchor="middle">(x, y) = (1, 1)</text>
-<path d="M320 707 V750" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
-<text x="342" y="735" font-size="22" font-weight="400" text-anchor="start">place whole block</text>
-<rect x="24" y="757" width="592" height="550" rx="12" fill="#f1f8f5" stroke="#206757" stroke-width="1.6"/>
-<text x="44" y="797" font-size="27" font-weight="700" text-anchor="start">3  One SM hosts the same block</text>
-<rect x="44" y="817" width="552" height="312" rx="12" fill="#fff" stroke="#206757" stroke-width="1.6"/>
-<text x="64" y="854" font-size="26" font-weight="700" text-anchor="start">Resident block · warp 0</text>
-<text x="64" y="886" font-size="24" font-weight="400" text-anchor="start">32 lanes: 4 active, 28 unused</text>
-<rect x="64" y="908" width="58" height="36" rx="6" fill="#e3f5ed" stroke="#17684d" stroke-width="1.3"/>
-<text x="93" y="934" font-size="23" font-weight="700" text-anchor="middle">T0</text>
-<rect x="128" y="908" width="58" height="36" rx="6" fill="#e7f1fc" stroke="#205f97" stroke-width="1.3"/>
-<text x="157" y="934" font-size="23" font-weight="700" text-anchor="middle">T1</text>
-<rect x="192" y="908" width="58" height="36" rx="6" fill="#f1ebfa" stroke="#72518f" stroke-width="1.3"/>
-<text x="221" y="934" font-size="23" font-weight="700" text-anchor="middle">T2</text>
-<rect x="256" y="908" width="58" height="36" rx="6" fill="#fff1db" stroke="#8a570a" stroke-width="1.3"/>
-<text x="285" y="934" font-size="23" font-weight="700" text-anchor="middle">T3</text>
-<rect x="320" y="908" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="384" y="908" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="448" y="908" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="512" y="908" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="64" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="128" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="192" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="256" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="320" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="384" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="448" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="512" y="953" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="64" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="128" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="192" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="256" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="320" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="384" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="448" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="512" y="998" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="64" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="128" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="192" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="256" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="320" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="384" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="448" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<rect x="512" y="1043" width="58" height="36" rx="6" fill="#edf1f4" stroke="#a6b7c0" stroke-width="1.3"/>
-<text x="64" y="1110" font-size="22" font-weight="400" text-anchor="start">T0–T3 occupy lanes 0–3; 4–31 are unused</text>
-<rect x="44" y="1150" width="552" height="134" rx="12" fill="#e3f1eb" stroke="#206757" stroke-width="1.6"/>
-<text x="64" y="1183" font-size="25" font-weight="700" text-anchor="start">Warp scheduler → execution units</text>
-<text x="64" y="1217" font-size="24" font-weight="400" text-anchor="start">Issue ready instructions for this warp</text>
-<text x="64" y="1254" font-size="24" font-weight="400" text-anchor="start">Each thread: load, multiply and add</text>
-<path d="M320 1310 V1350" fill="none" stroke="#245880" stroke-width="2.5" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
-<text x="342" y="1337" font-size="22" font-weight="400" text-anchor="start">store four results</text>
-<rect x="24" y="1358" width="592" height="284" rx="12" fill="#f7fafc" stroke="#b8c9d0" stroke-width="1.6"/>
-<text x="44" y="1397" font-size="27" font-weight="700" text-anchor="start">4  Output C · 2 × 2</text>
-<rect x="64" y="1418" width="246" height="91" rx="9" fill="#e3f5ed" stroke="#17684d" stroke-width="1.6"/>
-<text x="187" y="1446" font-size="23" font-weight="700" text-anchor="middle">T0 writes C[0,0]</text>
-<text x="187" y="1492" font-size="39" font-weight="700" text-anchor="middle">22</text>
-<rect x="330" y="1418" width="246" height="91" rx="9" fill="#e7f1fc" stroke="#205f97" stroke-width="1.6"/>
-<text x="453" y="1446" font-size="23" font-weight="700" text-anchor="middle">T1 writes C[0,1]</text>
-<text x="453" y="1492" font-size="39" font-weight="700" text-anchor="middle">28</text>
-<rect x="64" y="1519" width="246" height="91" rx="9" fill="#f1ebfa" stroke="#72518f" stroke-width="1.6"/>
-<text x="187" y="1547" font-size="23" font-weight="700" text-anchor="middle">T2 writes C[1,0]</text>
-<text x="187" y="1593" font-size="39" font-weight="700" text-anchor="middle">49</text>
-<rect x="330" y="1519" width="246" height="91" rx="9" fill="#fff1db" stroke="#8a570a" stroke-width="1.6"/>
-<text x="453" y="1547" font-size="23" font-weight="700" text-anchor="middle">T3 writes C[1,1]</text>
-<text x="453" y="1593" font-size="39" font-weight="700" text-anchor="middle">64</text>
-<text x="320" y="1681" font-size="24" font-weight="400" text-anchor="middle">Three products per thread · many instructions</text>
-<text x="320" y="1711" font-size="24" font-weight="700" text-anchor="middle">One output per thread is a kernel choice</text>
+<text x="24" y="38" font-size="30" font-weight="700" text-anchor="start" fill="#203640">Matrix multiplication on a GPU</text>
+<text x="24" y="72" font-size="22" font-weight="400" text-anchor="start" fill="#526974">One simple kernel · four output elements</text>
+<rect x="16" y="100" width="488" height="338" rx="12" fill="#f7fafc" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="36" y="136" font-size="24" font-weight="700" text-anchor="start" fill="#203640">1  Multiply a row by a column</text>
+<text x="36" y="166" font-size="20" font-weight="400" text-anchor="start" fill="#526974">Dimensions = rows × columns</text>
+<text x="142" y="201" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">A · 2 × 3</text>
+<text x="362" y="201" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">B · 3 × 2</text>
+<rect x="76" y="232" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="98" y="263" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">1</text>
+<rect x="120" y="232" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="142" y="263" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">2</text>
+<rect x="164" y="232" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="186" y="263" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">3</text>
+<rect x="76" y="276" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="98" y="307" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">4</text>
+<rect x="120" y="276" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="142" y="307" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">5</text>
+<rect x="164" y="276" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="186" y="307" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">6</text>
+<rect x="318" y="210" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="340" y="241" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">1</text>
+<rect x="362" y="210" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="384" y="241" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">2</text>
+<rect x="318" y="254" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="340" y="285" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">3</text>
+<rect x="362" y="254" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="384" y="285" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">4</text>
+<rect x="318" y="298" width="44" height="44" rx="0" fill="#fff" stroke="#c4d2d9" stroke-width="1.2"/>
+<text x="340" y="329" font-size="28" font-weight="400" text-anchor="middle" fill="#203640">5</text>
+<rect x="362" y="298" width="44" height="44" rx="0" fill="#e7f1fc" stroke="#7298b8" stroke-width="1.2"/>
+<text x="384" y="329" font-size="28" font-weight="600" text-anchor="middle" fill="#203640">6</text>
+<text x="260" y="287" font-size="32" font-weight="400" text-anchor="middle" fill="#203640">×</text>
+<text x="260" y="371" font-size="22" font-weight="600" text-anchor="middle" fill="#205f97">Row 0 of A · column 1 of B</text>
+<text x="260" y="409" font-size="26" font-weight="600" text-anchor="middle" fill="#203640">1 × 2 + 2 × 4 + 3 × 6 = 28</text>
+<path d="M260 446 V474" fill="none" stroke="#577580" stroke-width="2" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
+<rect x="16" y="486" width="488" height="308" rx="12" fill="#eef5fc" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="36" y="522" font-size="24" font-weight="700" text-anchor="start" fill="#203640">2  Assign one thread per output</text>
+<text x="36" y="554" font-size="22" font-weight="600" text-anchor="start" fill="#203640">Grid: one block</text>
+<rect x="36" y="570" width="448" height="200" rx="12" fill="#fff" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="54" y="602" font-size="22" font-weight="600" text-anchor="start" fill="#203640">Block (0,0) · 2 × 2 threads</text>
+<rect x="54" y="619" width="194" height="64" rx="8" fill="#e3f5ed" stroke="#17684d" stroke-width="1.2"/>
+<text x="151" y="646" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">T0 → C[0,0]</text>
+<text x="151" y="670" font-size="20" font-weight="400" text-anchor="middle" fill="#203640">(x, y) = (0, 0)</text>
+<rect x="272" y="619" width="194" height="64" rx="8" fill="#e7f1fc" stroke="#205f97" stroke-width="1.2"/>
+<text x="369" y="646" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">T1 → C[0,1]</text>
+<text x="369" y="670" font-size="20" font-weight="400" text-anchor="middle" fill="#203640">(x, y) = (1, 0)</text>
+<rect x="54" y="695" width="194" height="64" rx="8" fill="#f1ebfa" stroke="#72518f" stroke-width="1.2"/>
+<text x="151" y="722" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">T2 → C[1,0]</text>
+<text x="151" y="746" font-size="20" font-weight="400" text-anchor="middle" fill="#203640">(x, y) = (0, 1)</text>
+<rect x="272" y="695" width="194" height="64" rx="8" fill="#fff1db" stroke="#8a570a" stroke-width="1.2"/>
+<text x="369" y="722" font-size="22" font-weight="700" text-anchor="middle" fill="#203640">T3 → C[1,1]</text>
+<text x="369" y="746" font-size="20" font-weight="400" text-anchor="middle" fill="#203640">(x, y) = (1, 1)</text>
+<path d="M260 803 V831" fill="none" stroke="#577580" stroke-width="2" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
+<rect x="16" y="843" width="488" height="380" rx="12" fill="#f1f8f5" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="36" y="879" font-size="24" font-weight="700" text-anchor="start" fill="#203640">3  Run the block on one SM</text>
+<rect x="36" y="896" width="448" height="222" rx="12" fill="#fff" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="54" y="928" font-size="22" font-weight="600" text-anchor="start" fill="#203640">Resident block · warp 0</text>
+<rect x="56" y="949" width="44" height="28" rx="5" fill="#e3f5ed" stroke="#17684d" stroke-width="1.2"/>
+<text x="78" y="970" font-size="20" font-weight="700" text-anchor="middle" fill="#203640">T0</text>
+<rect x="108" y="949" width="44" height="28" rx="5" fill="#e7f1fc" stroke="#205f97" stroke-width="1.2"/>
+<text x="130" y="970" font-size="20" font-weight="700" text-anchor="middle" fill="#203640">T1</text>
+<rect x="160" y="949" width="44" height="28" rx="5" fill="#f1ebfa" stroke="#72518f" stroke-width="1.2"/>
+<text x="182" y="970" font-size="20" font-weight="700" text-anchor="middle" fill="#203640">T2</text>
+<rect x="212" y="949" width="44" height="28" rx="5" fill="#fff1db" stroke="#8a570a" stroke-width="1.2"/>
+<text x="234" y="970" font-size="20" font-weight="700" text-anchor="middle" fill="#203640">T3</text>
+<rect x="264" y="949" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="316" y="949" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="368" y="949" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="420" y="949" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="56" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="108" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="160" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="212" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="264" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="316" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="368" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="420" y="983" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="56" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="108" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="160" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="212" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="264" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="316" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="368" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="420" y="1017" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="56" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="108" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="160" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="212" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="264" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="316" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="368" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<rect x="420" y="1051" width="44" height="28" rx="5" fill="#f0f3f5" stroke="#c1cdd3" stroke-width="1.2"/>
+<text x="54" y="1100" font-size="22" font-weight="600" text-anchor="start" fill="#203640">32 lanes: 4 active, 28 unused</text>
+<text x="260" y="1155" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">Scheduler issues ready instructions</text>
+<text x="260" y="1187" font-size="22" font-weight="400" text-anchor="middle" fill="#203640">Load → multiply / accumulate → store</text>
+<path d="M260 1231 V1259" fill="none" stroke="#577580" stroke-width="2" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
+<rect x="16" y="1271" width="488" height="473" rx="12" fill="#f7fafc" stroke="#d5e1e5" stroke-width="1.2"/>
+<text x="36" y="1307" font-size="24" font-weight="700" text-anchor="start" fill="#203640">4  Each thread writes its output</text>
+<text x="306" y="1345" font-size="22" font-weight="600" text-anchor="middle" fill="#205f97">x increases across columns</text>
+<path d="M134 1364 H476" fill="none" stroke="#577580" stroke-width="2" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
+<text x="215" y="1400" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">0</text>
+<text x="391" y="1400" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">1</text>
+<path d="M88 1420 V1582" fill="none" stroke="#577580" stroke-width="2" marker-end="url(#detail-matrix-multiplication-thread-mapping-arrow)"/>
+<text x="54" y="1477" font-size="22" font-weight="600" text-anchor="middle" fill="#205f97" transform="rotate(-90 54 1477)">y increases down rows</text>
+<text x="114" y="1465" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">0</text>
+<text x="114" y="1553" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">1</text>
+<rect x="134" y="1420" width="162" height="74" rx="8" fill="#e3f5ed" stroke="#17684d" stroke-width="1.2"/>
+<text x="215" y="1447" font-size="20" font-weight="600" text-anchor="middle" fill="#203640">T0 → C[0,0]</text>
+<text x="215" y="1481" font-size="30" font-weight="700" text-anchor="middle" fill="#203640">22</text>
+<rect x="310" y="1420" width="162" height="74" rx="8" fill="#e7f1fc" stroke="#205f97" stroke-width="1.2"/>
+<text x="391" y="1447" font-size="20" font-weight="600" text-anchor="middle" fill="#203640">T1 → C[0,1]</text>
+<text x="391" y="1481" font-size="30" font-weight="700" text-anchor="middle" fill="#203640">28</text>
+<rect x="134" y="1508" width="162" height="74" rx="8" fill="#f1ebfa" stroke="#72518f" stroke-width="1.2"/>
+<text x="215" y="1535" font-size="20" font-weight="600" text-anchor="middle" fill="#203640">T2 → C[1,0]</text>
+<text x="215" y="1569" font-size="30" font-weight="700" text-anchor="middle" fill="#203640">49</text>
+<rect x="310" y="1508" width="162" height="74" rx="8" fill="#fff1db" stroke="#8a570a" stroke-width="1.2"/>
+<text x="391" y="1535" font-size="20" font-weight="600" text-anchor="middle" fill="#203640">T3 → C[1,1]</text>
+<text x="391" y="1569" font-size="30" font-weight="700" text-anchor="middle" fill="#203640">64</text>
+<text x="260" y="1630" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">Matrix indices: row first, column second</text>
+<text x="260" y="1664" font-size="24" font-weight="700" text-anchor="middle" fill="#203640">C[row, column] = C[y, x]</text>
+<text x="260" y="1698" font-size="22" font-weight="400" text-anchor="middle" fill="#203640">Example: (x=1, y=0) → C[0,1] = 28</text>
+<text x="260" y="1730" font-size="20" font-weight="400" text-anchor="middle" fill="#526974">This kernel chooses x → column, y → row</text>
+<text x="260" y="1777" font-size="22" font-weight="600" text-anchor="middle" fill="#203640">One output per thread is a kernel choice</text>
 </g>
 </svg>

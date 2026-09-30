@@ -12,11 +12,19 @@ It is a conceptual teaching map, not a die floorplan or fixed-SKU inventory.
 
 The detailed matrix multiplication figure has its primary home at the explicit
 Markdown image reference in Lesson 1's Work hierarchy subsection. Read it
-downward: input matrices, a one-block grid with four output assignments, a
+downward: input matrices with row 0 of A and column 1 of B highlighted for
+the worked dot product yielding 28, a one-block grid with four output assignments, a
 resident block's partial 32-lane warp on one SM, then output writes. Four
 active lanes and 28 unused lanes remain distinct. Color and thread labels
-preserve output ownership; arrows show conceptual work and result flow, not
-elapsed cycles. The numerical example does not imply optimized-kernel dispatch.
+preserve output ownership; arrows between panels show conceptual work and result
+flow, not elapsed cycles. The output panel's coordinate arrows show x increasing
+rightward across columns and y increasing downward across rows. Its row/column
+indices align with the four result cells; the explicit notation
+`C[row, column] = C[y, x]` and `(x=1, y=0) → C[0,1] = 28` explain this kernel's
+chosen mapping. Input matrices use identical cell and numeral sizes; titles,
+section headings, body labels and annotations use a restrained hierarchy within
+a bounded display width. The numerical example does not imply optimized-kernel
+dispatch or an emitted instruction count.
 
 | Title | First stage | Second stage | Third stage | Explanation | Lesson | After | Layout | Home |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

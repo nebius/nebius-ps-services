@@ -1,6 +1,13 @@
 """Figures belong to their explanations and fit the reading surface."""
 
-from course_builder import config as cb_config, content as cb_content, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
+from course_builder import (
+    config as cb_config,
+    content as cb_content,
+    markdown as cb_markdown,
+    metadata as cb_metadata,
+    pages as cb_pages,
+    visuals as cb_visuals,
+)
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -231,14 +238,18 @@ def test_authored_figure_consumed_once_at_exact_lesson_position() -> None:
     entry, marker, figure = lesson_figure_example()
     figures = {"How it works": [figure, "<figure>Other registered figure</figure>"]}
     lesson = {"title": "Example", "How it works": f"Before.\n\n{marker}\n\nAfter."}
-    rendered = cb_content.lesson_markup(lesson, 1, figures=figures, authored_figures=[entry])
+    rendered = cb_content.lesson_markup(
+        lesson, 1, figures=figures, authored_figures=[entry]
+    )
     assert rendered.index("Before.") < rendered.index(figure) < rendered.index("After.")
     assert rendered.index("After.") < rendered.index("Other registered figure")
     assert rendered.count(figure) == 1
     assert figures["How it works"][0] == figure  # Rendering does not mutate its input.
 
 
-@pytest.mark.parametrize("case", ["unknown", "wrong-home", "wrong-title", "duplicate", "wrong-field"])
+@pytest.mark.parametrize(
+    "case", ["unknown", "wrong-home", "wrong-title", "duplicate", "wrong-field"]
+)
 def test_authored_figure_rejects_invalid_placement(case: str) -> None:
     entry, marker, figure = lesson_figure_example()
     registry = [entry]
@@ -253,8 +264,10 @@ def test_authored_figure_rejects_invalid_placement(case: str) -> None:
     field = "Objective" if case == "wrong-field" else "How it works"
     with pytest.raises(ValueError, match="figure"):
         cb_content.lesson_markup(
-            {"title": "Example", field: marker}, 1,
-            figures={"How it works": [figure]}, authored_figures=registry,
+            {"title": "Example", field: marker},
+            1,
+            figures={"How it works": [figure]},
+            authored_figures=registry,
         )
 
 

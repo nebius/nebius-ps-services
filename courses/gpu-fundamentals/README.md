@@ -14,8 +14,12 @@ Start Lesson 1 with the whole H100 SXM 80 GB: SMs, L2 cache and HBM, then distin
 
 The Work hierarchy section follows a complete 2×3 by 3×2 matrix multiplication
 from four output elements to one 2×2-thread block, a partial 32-lane warp and
-execution on one SM. Its diagram explains when one thread can own one output
-and why optimized kernels can use different mappings.
+execution on one SM. Its diagram highlights a row–column dot product before
+following each thread to its output. Matching matrix cells and a consistent
+type scale separate values, headings and annotations. The explanation shows
+when one thread can own one output and why optimized kernels can use different
+mappings. The output panel labels x across columns and y down rows, and connects
+the coordinate pair `(x, y)` to row-first matrix indexing `C[y, x]` for this kernel.
 
 Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Its four landscape diagrams read from left to right: Systems and NVTX timelines, Compute counters leading to an investigation, and Grafana results beside sampled telemetry. A short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 

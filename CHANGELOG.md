@@ -6,6 +6,13 @@ project folder.
 
 ## [Unreleased]
 
+- Refine the GPU Fundamentals matrix multiplication illustration with equal
+  matrix cells, proportional type, a highlighted row–column dot product and
+  bounded display width. Clarify dimensions, per-thread accumulation and the
+  distinction between arithmetic expressions and emitted GPU instructions.
+  Label the output matrix with x across columns, y down rows, and the chosen
+  row-first mapping C[row, column] = C[y, x].
+
 - Add a GPU Fundamentals matrix multiplication example and diagram tracing
   four outputs through a 2×2-thread block, a partial 32-lane warp and execution
   on one SM. Support exact lesson-figure placement using registered Markdown

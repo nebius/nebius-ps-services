@@ -71,7 +71,7 @@ A **thread** is one execution of the kernel with its own index and working value
 
 For a worked example, follow **A × B = C**.
 
-Matrix multiplication forms each output by multiplying matching entries from a row of A and a column of B, then adding the products. This sum is a **dot product**. A has two rows and three columns; B has three rows and two columns. Their shared dimension is three, so each dot product has three terms and C has two rows and two columns. Indices start at zero: `C[0,1]` means row 0, column 1.
+Matrix dimensions are written as **rows × columns**. To multiply A by B, the number of columns in A must equal the number of rows in B. Each output combines one row of A with one column of B: multiply corresponding entries, then add the products. This sum is a **dot product**. Here A is 2 × 3 and B is 3 × 2. Their shared dimension is three, so every dot product has three terms; the two rows of A and two columns of B give a 2 × 2 result C. Indices start at zero: `C[0,1]` means row 0, column 1.
 
 ```text
        A (2 × 3)         B (3 × 2)          C (2 × 2)
@@ -80,9 +80,13 @@ Matrix multiplication forms each output by multiplying matching entries from a r
                        [ 5  6 ]
 ```
 
-A simple GPU kernel can assign **one thread to each output element**. Each thread reads its row of A and column of B, keeps a running sum in its working values, and writes one entry of C. Here the inputs are already in GPU memory and space for C is allocated. The kernel's indexing defines the assignment; the hardware does not infer it from the matrix equation.
+For example, `C[0,1]` combines row 0 of A, `[1, 2, 3]`, with column 1 of B, `[2, 4, 6]`: `1 × 2 + 2 × 4 + 3 × 6 = 28`. The diagram highlights that row and column in blue. Matrix multiplication combines a whole row and column for each output; multiplying entries at matching positions would be a different operation.
 
-Choose one grid containing **one block of 2 × 2 threads**. Within that block, `threadIdx.x` selects the output column and `threadIdx.y` selects the row. CUDA numbers threads with x varying fastest: the linear thread number is `x + 2y` for this block. T0 through T3 below are those four thread numbers.
+A simple GPU kernel can assign **one thread to each output element**. Each thread reads its row of A and column of B, accumulates all three products in its own running sum, and writes one entry of C. Here the inputs are already in GPU memory and space for C is allocated. The kernel's indexing defines the assignment; the hardware does not infer it from the matrix equation.
+
+Choose one grid containing **one block of 2 × 2 threads**. Each thread has two coordinates within the block, `threadIdx.x` and `threadIdx.y`, each either 0 or 1. In this example, the kernel uses the x coordinate as the output column and the y coordinate as the output row, so that thread computes `C[threadIdx.y, threadIdx.x]`.
+
+CUDA also assigns each thread a single number by counting across the x positions before moving to the next y position. Because this block has two threads along x, that number is `threadIdx.x + 2 * threadIdx.y`. The table labels these threads T0 through T3: T0 and T1 compute the first output row, and T2 and T3 compute the second. This numbering identifies threads; it does not specify their execution order.
 
 | GPU thread | (x, y) | Output and complete calculation |
 | --- | --- | --- |
@@ -91,9 +95,11 @@ Choose one grid containing **one block of 2 × 2 threads**. Within that block, `
 | T2 | (0, 1) | C[1,0] = 4 × 1 + 5 × 3 + 6 × 5 = **49** |
 | T3 | (1, 1) | C[1,1] = 4 × 2 + 5 × 4 + 6 × 6 = **64** |
 
-The GPU assigns the whole block to one SM. A **lane** is a position within a warp, numbered 0–31. This block occupies one partial warp: T0–T3 use lanes 0–3, while lanes 4–31 are unused. No extra 28 threads are launched. A warp scheduler in one of the SM's subpartitions selects ready warp instructions, such as loads, arithmetic and stores, and the four participating lanes execute them on their own values. Each thread computes all three terms of its dot product; four outputs do not mean four individual multiply instructions or completion in one clock cycle. These four threads are also not four SMs or four permanent assignments to CUDA cores.
+The GPU assigns the whole block to one SM. A **lane** is a position within a warp, numbered 0–31. This block occupies one partial warp: T0–T3 use lanes 0–3, while lanes 4–31 are unused. No extra 28 threads are launched. A warp scheduler in one of the SM's subpartitions selects ready warp instructions, such as loads, arithmetic and stores, and the participating lanes apply each instruction to their own values. Each thread computes all three terms of its dot product. A multiply and its addition may be fused into one instruction, so the arithmetic expression alone does not specify the emitted instruction count or execution time. Four outputs therefore do not imply completion in one clock cycle, four SMs, or four permanent assignments to CUDA cores.
 
-Follow the diagram downward. Arrows trace work assignment and then computation and output writes; enclosing boxes show which work belongs together. The four colors preserve the T0–T3 identities from output assignment through the active lanes to C. The SM contains the resident block and its warp; the grid describes the launch. This is a teaching schematic, not a measured schedule.
+Follow the diagram downward: first form a dot product, then map the four outputs to threads, group those threads into a warp on one SM, and store the results. Arrows between panels connect these conceptual views; they do not represent separate launch phases or clock cycles. Enclosing boxes show which work belongs together. Thread labels and four colors preserve the T0–T3 identities from assignment through the active lanes to C. The grid describes the launch; the SM hosts its resident block and warp. This is a teaching schematic, not a measured schedule.
+
+In the output panel, the axis arrows show **x increasing horizontally across columns** and **y increasing downward through rows**. Matrix indices name the **row first, column second**, so this kernel's position `(x, y)` corresponds to `C[y, x]`. For example, `(x=1, y=0)` selects the top-right element, `C[0,1] = 28`. This is the mapping chosen by this kernel; CUDA does not require x to represent columns or y to represent rows.
 
 ![Matrix multiplication: from four outputs to one scheduled warp](reference/diagrams/matrix-multiplication-thread-mapping.svg)
 

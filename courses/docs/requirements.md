@@ -133,7 +133,9 @@ Engineers need an H100-centered mental model connecting the software stack, exec
   dot products, x-fastest thread numbering, four active and 28 unused lanes,
   and distinguish this chosen one-output-per-thread mapping from optimized
   tiled or cooperative matrix kernels. Place one complete accessible SVG
-  beside the worked example inside that subsection.
+  beside the worked example inside that subsection. Its output panel labels x
+  increasing across columns, y increasing down rows, and row-first indexing
+  C[row, column] = C[y, x] for this chosen kernel mapping.
 
 #### Negative Criteria
 

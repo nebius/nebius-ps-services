@@ -33,13 +33,16 @@ def lesson_markup(
         def figure(path: str, caption: str) -> str:
             entry = next(
                 (
-                    item for item in (authored_figures or [])
+                    item
+                    for item in (authored_figures or [])
                     if item["path"] == path and item["after"] == field
                 ),
                 None,
             )
             if entry is None or caption != entry["title"]:
-                raise ValueError(f"{title}: figure must match its declared lesson home and title")
+                raise ValueError(
+                    f"{title}: figure must match its declared lesson home and title"
+                )
             markup = detailed_diagram_markup(entry)
             if markup not in remaining_figures:
                 raise ValueError(f"{title}: duplicate or misplaced lesson figure")

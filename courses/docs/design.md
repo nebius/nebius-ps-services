@@ -184,7 +184,7 @@ validator and diff checks passed. These checks cover documentation only.
 
 <!-- /FEATURE: FEAT-002 -->
 
-<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=4 -->
+<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=6 -->
 ### FEAT-003: General GPU curriculum boundary
 
 #### Requirements Covered
@@ -217,7 +217,34 @@ Preserve the existing deterministic
 renderer, course identity, lab logic and target contract. This addition is implemented. Its source checks and SVG asset review pass;
 full-page browser and H100 evidence remain separate and pending.
 
-The matrix-work mapping extension is ready; implementation is pending. Add a
+The output-panel coordinate annotation adds a right-pointing x axis across
+columns and a downward y axis across rows, with 0/1 labels aligned to the
+existing output cells. Label matrix indices as row first, column second and
+show C[row, column] = C[y, x], plus (x=1, y=0) mapping to C[0,1] = 28.
+State that this kernel chooses the mapping. Preserve the four thread/result
+identities and prior panels; expand the output panel without shrinking the
+established typography. Distinguish coordinate-axis arrows from the conceptual
+arrows between panels in the caption and adjacent prose. Update the canonical
+SVG, visible/accessible explanation, README and visual plan; rebuild HTML and
+check source parity, text fit and integrated desktop/mobile presentation.
+This coordinate annotation is implemented; scoped delivery evidence follows.
+
+The matrix illustration refinement retains this complete worked example and
+single inline figure. Use equal input-matrix cells and numeral sizes, a restrained
+title/section/body/annotation hierarchy and a bounded natural display width.
+Highlight one input row and one input column, with the corresponding expanded
+dot product, before assigning all four outputs. Keep x-fastest thread labels,
+32 lane positions and four active versus 28 unused lanes explicit. Clarify that
+dimensions are rows by columns, each thread accumulates all three products,
+and arrows represent conceptual relationships rather than measured execution.
+Keep optimized tiled/cooperative mappings distinct and make no emitted
+instruction-count claim. Edit canonical prose/SVG and matching reader/visual
+notes only; preserve shared styling, renderer logic and executable labs. Check
+arithmetic independently, regenerate and verify source parity, and inspect
+asset and integrated desktop/390px/320px layouts. This refinement is implemented; its scoped evidence appears below.
+
+The matrix-work mapping extension is implemented with source and layout checks;
+integrated screenshot review remains pending. The course includes a
 worked A × B = C example with A=[[1,2,3],[4,5,6]], B=[[1,2],[3,4],[5,6]] and
 C=[[22,28],[49,64]]. Use one grid containing one 2×2 block, with x selecting
 columns and y selecting rows; linear thread ID is x+2y. Show the block assigned
@@ -245,7 +272,10 @@ is unnecessary for this reversible teaching change. Validate exact placement
 and rejection cases, arithmetic, generated parity across shared consumers,
 native validators and desktop/390px/320px headless browser rendering. Update
 the course README, glossary, visual plan, publication review and root changelog.
-Roll back through the canonical sources and rebuild, preserving unrelated work.
+Roll back through the canonical sources and rebuild, preserving unrelated work. The canonical standalone
+validator ignores actual figure references when checking prose, retains fenced
+literals, and still verifies every registered figure separately; its six
+practical-course copies are synchronized through the existing owner script.
 
 #### Selected Option
 
@@ -285,6 +315,22 @@ Both courses have clear non-overlapping missions and the required lessons, labs,
 
 #### Implementation Evidence
 
+The output matrix now labels x increasing across columns and y increasing
+vertically down rows, with aligned 0/1 indices and right/down arrows. It states
+row-first indexing, C[row, column] = C[y, x], and the example
+(x=1, y=0) → C[0,1] = 28, qualified as this kernel's chosen mapping.
+The first three panels are byte-identical to the preceding revision.
+Canonical prose, accessible description, README, visual plan and changelog
+agree; generated HTML includes the updated figure.
+
+Matrix illustration refinement: canonical SVG now uses equal matrix cells and
+numerals, proportional typography, a bounded display width and an explicitly
+labeled row/column dot product. The prose clarifies dimensions, accumulation
+and the distinction between operations and emitted instructions. README,
+visual plan, official resources, publication review and changelog agree;
+the course HTML was rebuilt. Shared renderer/CSS and executable labs were
+preserved.
+
 Lesson 1 introduces an SM/L2/HBM SVG before the enlarged SM map. H100 SXM
 80 GB counts, GPC/TPC/SM/SMSP names, logical work grouping and a qualified
 launch/residency example use official NVIDIA references. The SVG was inspected
@@ -310,7 +356,48 @@ escalation capstone; training checkpointing and SDPA belong exclusively to their
 
 The individual-course alignment pass additionally preserves unknown MIG query values instead of classifying them as full-device evidence. General timing prose distinguishes host medians, event min/median/p90 summaries, elapsed marker intervals, and raw-sample extensions. Fusion examples use logical traffic and require profiler evidence for physical HBM claims. Onboarding names the required two-node preflight.
 
+The matrix extension adds one SVG and all four dot products beside its explicit
+Markdown image reference in Lesson 1. COURSE.md, visual manifest/plan, glossary,
+README and official references agree. The shared renderer consumes a declared
+primary-home figure once in place; the canonical prose validator separates
+figure content from narrative while preserving fenced literal syntax.
+
 #### Verification Evidence
+
+Output-axis annotation: 67 focused diagram/content tests, native course
+validation, generated HTML/archive freshness and scoped Markdown/whitespace
+checks pass. Three headless Chrome 154.0.8037.58 layout cases and three fresh
+integrated captures at 1440, 390 and 320px pass; the captures were visually
+reviewed. Text containment, overlap, page overflow, keyboard interaction and
+200% root-text reflow were checked. All other 32 figures and 11 executable
+listings remain byte-identical. Read-only semantic/security review found no
+issue. The generic checker retains the same five baseline diagnostics.
+PUBLICATION-REVIEW.md records the artifact digest and evidence. This is scoped
+source/browser verification; no GPU execution or external publication occurred.
+
+Matrix illustration refinement: 99 focused existing tests, native Fundamentals
+validation, generated HTML/archive parity and scoped Markdown/whitespace
+checks pass. Independent arithmetic and read-only semantic/security review
+found no issue; 32 other figures and 11 embedded listings remain byte-identical.
+Three isolated headless Chrome 154.0.8037.58 layout/interaction cases pass at
+1440, 390 and 320px, including 200% root-text reflow. Fresh page captures at
+all three widths and SVG assets were visually reviewed successfully. Earlier
+element-capture instability is retained separately. The generic checker has
+five unchanged baseline diagnostics. PUBLICATION-REVIEW.md records exact
+artifact identity and evidence. No GPU execution or external publication is
+claimed; the broader feature delivery remains implemented.
+
+Matrix extension verification: 149 focused tests and all seven course validators
+pass, along with HTML/archive freshness, helper parity, scoped Ruff/Markdown
+lint and whitespace checks. Three isolated headless Chrome 154.0.8037.58 layout
+and interaction cases pass at 1440, 390 and 320 pixels. SVG asset review at 640
+and 320 pixels passes; integrated-page screenshot review remains pending after
+capture timeouts, including a software-rendering retry. Preserve those attempts
+separately from the successful layout-only evidence. All other 11 lessons,
+32 existing figures and 11 embedded executable listings remain byte-identical.
+The generic checker retains five pre-existing markup/navigation diagnostics.
+The publication review names artifact identity and scoped evidence; no new
+installed runtime, GPU execution or external publication is claimed.
 
 Residency clarification: all five standalone validators, source-to-HTML parity,
 57 focused content/opening tests and configured Markdown lint pass. Reviewed

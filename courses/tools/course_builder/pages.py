@@ -523,7 +523,8 @@ def render_course(course_name: str) -> str:
                 if index in guide["lessons"]
             ],
             authored_figures=[
-                entry for entry in detailed
+                entry
+                for entry in detailed
                 if entry["home"] == "lesson" and entry["lessons"][0] == index
             ],
         )
