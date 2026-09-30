@@ -12,16 +12,16 @@ Load this reference when infrastructure and production operations are in scope.
 ## Automation Baseline
 
 - Set `.DEFAULT_GOAL := all` in `Makefile`.
-- Add `Makefile` targets for `all`, `fmt`, `lint`, `test`, `test-unit`, `test-integration`, `coverage`, `build`, `check`.
+- Add `Makefile` targets for `all`, `fmt`, `lint`, `test`, `test-fast`, `test-full`, selected layer targets, `coverage`, `smoke-wheel`, `build`, `check`.
 - When shipping containers, publish immutable build tags (`sha-*` and release+sha tags).
 - For Helm-delivered services, keep chart `version` independent from app SemVer.
 - Add `.pre-commit-config.yaml` with at least Ruff and whitespace/end-of-file hooks.
 - Add CI pipeline for:
   - Lint
-  - Fast unit tests for pull requests
-  - Build artifact for pull requests
-  - Integration tests for release/manual runs
-  - Coverage for release/manual runs
+  - Fast unit/integration/offline-contract tests for pull requests
+  - Installed-wheel smoke for pull requests
+  - Full non-external coverage for default-branch/release/manual runs
+  - Separate explicit manual environment lane for configured external tests
   - Security scanning
 - Keep pipelines deterministic. Pin third-party actions to reviewed immutable
   references and pin the uv version used to validate `uv.lock`.

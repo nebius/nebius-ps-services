@@ -634,6 +634,7 @@ def test_success_and_rerun_print_one_shared_password_command(
     from rich.text import Text
 
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     console = Console(force_terminal=terminal, color_system="auto", width=300)
     monkeypatch.setattr(cli, "console", console)
     local, _, _, jobs, _, _ = installed_project

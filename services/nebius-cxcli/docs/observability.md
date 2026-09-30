@@ -85,6 +85,12 @@ Gateway readiness checks. It does not create or rotate credentials.
 Username and password must reference distinct Secret keys; an aliased binding
 fails before any Secret read.
 
+For private Grafana in a custom catalog, retain a ClusterIP Service, disable its
+route, and set the catalog's automatic Gateway component ID to an empty string.
+Status and dashboard validation use a temporary loopback port-forward pinned to
+the selected Kubernetes context and clean it up on success and failure. A pending
+public Gateway is not classified as private.
+
 ## Interactive setup
 
 The wizard explains each storage choice: **Local** stores telemetry in the selected
@@ -274,6 +280,11 @@ samples. Soperator additionally verifies fresh metrics and logs against the
 current workload Pod identity. These checks do not manufacture workload traces.
 
 ## Authentication and dashboards
+
+A custom source catalog can declare a Prometheus datasource with `auth: none`
+and an internal read endpoint. That datasource receives no cloud authorization
+header or read-token Secret. This catalog setting is separate from the routing
+fields below.
 
 Nebius reader and writer credentials use separate runtime Kubernetes Secrets.
 Local routes need neither credential. Managed Nebius credentials are never

@@ -3491,6 +3491,10 @@ surfaces against the canonical contract. This evidence is local source and
 installed-package validation; no live deployment was performed. Broader
 architecture delivery retains its existing unassessed state.
 
+The Nsight installation output test declares `TERM=xterm-256color` for its
+simulated color-capable terminal. This isolates the fixture from an invoking
+`TERM=dumb` shell while retaining Rich's production detection and color opt-outs.
+
 Decompose incrementally in dependency order: move leaf normalization helpers
 first, then the Soperator supervisor and command adapter, project persistence,
 IAM command adapters, deploy orchestration, and remaining command families.

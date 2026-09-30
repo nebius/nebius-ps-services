@@ -13,9 +13,11 @@ repair the skill do not authorize publication. Selection may be implicit, but
 the user must still authorize the actual commit-and-push action.
 
 The shared hook records only a current root-turn receipt. The root agent
-classifies the action and binds the exact receipt during transaction preparation.
-Existing claims survive unrelated user messages. A new action can create a new
-transaction after the old one is consumed; replay cannot. Receipt checks prove
+classifies the action and binds the exact receipt with private `begin`, including
+a clean start. The task survives unrelated messages and permits safe no-commit
+retries with fresh candidate review. One actual commit consumes its local
+allowance; a failed push may retry that verified head. Private `finish` closes
+completed, cancelled and zero-commit tasks; replay cannot reopen them. Receipt checks prove
 provenance, while semantic classification remains the root agent's duty.
 
 ## What It Does
@@ -97,3 +99,5 @@ Final status report
 
 - `SKILL.md`: Runtime workflow, guardrails, commands, and output contract.
 - `agents/openai.yaml`: UI metadata and default prompt.
+
+See [the shared private lifecycle](../commit/references/task-lifecycle.md).

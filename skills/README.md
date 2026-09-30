@@ -103,9 +103,9 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `commit` | Implicit allowed | Create one claim-bound local commit for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
-| `commit-push` | Implicit allowed | Commit all current feature-branch changes from the repo root and push the branch to `origin` without opening a pull request. |
-| `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated stage/commit/push repairs under one scoped task; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
+| `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
+| `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
+| `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated repairs across frozen targets with recorded synchronization and explicit task closure; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
@@ -114,6 +114,11 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
 
 ### Project Engineering
+
+Python testing guidance now separates behavior layers from execution permissions.
+`python-project` provides fast hermetic lanes and installed-wheel smoke;
+`optimize-pytest` preserves test identities, guards and temporary artifacts while
+measuring performance.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |

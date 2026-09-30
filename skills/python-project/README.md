@@ -21,7 +21,13 @@ target or claiming root cross-cutting artifacts.
   IaC automation, security tooling, and AI/ML workflows.
 - Requires each generated systemd unit to name a matching generated,
   importable service module instead of assuming a fixed package path.
-- Adds templates, tests, Makefile targets, and CI scaffolding when requested.
+- Teaches behavior-first unit/integration and optional contract/E2E tests,
+  regression placement, boundary mocks, isolated fixtures and meaningful coverage.
+- Separates test layers from speed and network permission; uses pytest-socket
+  for accidental socket protection with explicit enforcement limits.
+- Runs fast hermetic tests on PRs and validates the installed wheel separately;
+  external tests require opt-in and a selected non-production target preflight.
+- Makes xdist conditional on measured benefit. See [testing](references/testing.md).
 - Routes public React/Vite frontend source to `frontend-project` and Docker or
   Compose files to `container`.
 
@@ -65,3 +71,11 @@ Choose project profile
 - `assets/`: project templates.
 - `references/`: profile-specific guidance.
 - `agents/openai.yaml`: UI metadata.
+
+## Source Validation
+
+Install the declared `scripts/requirements-test.txt` into a disposable environment,
+then run both `scripts/test_python_project_contract.py` and
+`scripts/test_testing_templates.py`. The latter renders disposable projects and
+tests actual pytest behavior and installed-wheel negative controls. Runtime
+triggering and comparative model quality remain separate evidence.

@@ -24,13 +24,16 @@ for that branch; commit-push always rejects default-branch publication.
 
 The hook records nonauthorizing root-turn metadata for the current checkout.
 The root agent interprets user intent and passes the receipt digest and typed
-action to preparation. The helper then binds a one-use authorization under the
-repository lock. Receipt validity proves origin and freshness, not meaning;
+action to private `begin` before any branch or HEAD movement. The helper binds
+an immutable task grant under the repository lock. Each `prepare` then binds
+an independently reviewed exact-tree attempt. Receipt validity proves origin and freshness, not meaning;
 semantic judgment belongs to the root agent. Neither implicit skill selection
 nor a receipt grants Git authority. Never ask users to repeat a magic phrase.
 Unrelated turns update a separate receipt without overwriting active claims.
-A fresh action after a consumed transaction gets a new receipt; replaying the
-same receipt cannot create another authorization.
+Keep the original receipt digest throughout the task. A failed attempt that
+created no commit may be corrected and re-prepared without another user prompt.
+The task allows one actual standalone commit; replay cannot create a second.
+`finish` closes completed, cancelled and zero-commit tasks.
 
 Capture failures report a fixed nonblocking reason: `PROMPT_UNAVAILABLE`,
 `NATIVE_IDENTITY_UNAVAILABLE`, `REPOSITORY_UNAVAILABLE`,
@@ -54,7 +57,8 @@ need not repeat a standalone commit phrase. Existing Worktree and Task
 Implementer delegation stays exact. An authorized unmanaged `create-pr` task
 uses its own private continuation grant for successive independently reviewed
 commits and safe failed-hook retries. The PR skill owns pushes and checks;
-ordinary direct commit and commit-push requests remain one-shot. See
+ordinary direct commit and commit-push tasks allow one actual commit plus safe
+no-commit retries. See
 [PR continuation](../create-pr/references/commit-continuation.md).
 
 ## What It Does
@@ -67,8 +71,8 @@ ordinary direct commit and commit-push requests remain one-shot. See
 - Uses a provided commit message or generates a concise imperative one.
 - Creates a local commit with normal hooks enabled.
 - Reports the final branch status and whether anything remains dirty.
-- Uses a hidden one-shot authorization and claim so the helper can execute
-  exactly this whole-repository commit without allowing raw Git mutation.
+- Uses a hidden task grant and one-shot attempt claims so corrected candidates
+  can be retried while the one-commit limit and exact review remain enforced.
 - Shares that local transaction owner with a semantic commit-and-push request;
   the publication skill still owns and bounds the later remote effect.
 
@@ -106,7 +110,7 @@ Final status report
   mutation; only the transaction-owned temporary preview may override
   `GIT_INDEX_FILE`.
 - Project lifecycle status is advisory and never gates direct execution.
-  Explicit current-turn authorization plus the transaction's Git, branch,
+  The original task authorization plus the transaction's Git, branch,
   Worktree, secret, and workflow-conflict checks remain authoritative.
 - The skill never pushes, opens PRs, repairs branches, or writes Agentic SDLC
   run state.
@@ -122,8 +126,15 @@ Final status report
   becomes `REVIEW_REQUIRED`. The private review transition can complete only
   the currently checked-out, clean, exact direct child after its actual commit
   and tree have been reviewed. Failed hooks that create no commit become stale
-  for a fresh explicit retry. Recovery never resets, amends, or unstages user
-  work.
+  and may retry under the same task after unchanged history and a newly reviewed
+  candidate are proved. Recovery never resets, amends, or unstages user work.
+- Immutable per-attempt authorizations prevent another PR branch from replacing
+  an earlier branch's evidence. The repository lock is inherited by Git
+  children, so a helper crash cannot leave a surviving writer unfenced.
+- Cancellation retires proven unused claims. Actual or uncertain effects remain
+  recorded; exact result review is metadata-only and does not reopen the task.
+- Root schemas change together without converting legacy authority. Delegated
+  Task Implementer and Worktree schemas retain their existing contracts.
 - Worktree ownership and direct commits share one common-repository lock within
   the selected agent installation. A
   direct claim refuses an active Worktree preparation or reservation for the
@@ -154,3 +165,5 @@ Final status report
 - `scripts/commit_transaction.py`: Temporary-index preview, one-shot claim,
   locked staging, normal-hook commit, exact recovery verification, and private
   acknowledgement of a reviewed hook-modified direct child.
+
+See [private task lifecycle](references/task-lifecycle.md) for the shared protocol.

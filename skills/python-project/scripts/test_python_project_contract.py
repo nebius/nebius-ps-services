@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 import tomllib
 import unittest
+
+import yaml
 from pathlib import Path
 
 
@@ -57,42 +58,27 @@ class PythonProjectContractTests(unittest.TestCase):
         self.assertNotIn(".venv", clean)
         self.assertNotRegex(clean, r"rm\s+-rf\s+\$\(")
 
-    def test_ci_pins_uv_and_uses_the_lock_in_every_job(self) -> None:
+    def test_ci_pins_actions_and_delegates_to_native_targets(self) -> None:
         workflow = read("assets/github-actions-ci.yml.template")
-
-        actions = re.findall(r"(?m)^\s*(?:- )?uses: ([^\s]+)", workflow)
-        self.assertEqual(len(actions), 18)
-        for action in actions:
-            with self.subTest(action=action):
-                self.assertRegex(action, r"^[^@]+@[0-9a-f]{40}$")
-        self.assertRegex(workflow, r"astral-sh/setup-uv@[0-9a-f]{40} # v\d+\.\d+\.\d+")
-        self.assertRegex(workflow, r'(?m)^\s+version: "\d+\.\d+\.\d+"$')
-        self.assertIn("permissions:\n  contents: read", workflow)
-        self.assertEqual(workflow.count("persist-credentials: false"), 6)
-        self.assertNotRegex(workflow, r"(?m)^.*\bpip(?:3)?\s+install\b")
-        self.assertNotIn("--upgrade", workflow)
-
-        for job in (
-            "lint",
-            "unit-tests",
-            "build",
-            "integration-tests",
-            "coverage",
-            "packaging",
-        ):
-            with self.subTest(job=job):
-                section = re.search(
-                    rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [a-z][a-z-]*:\n|\Z)",
-                    workflow,
-                )
-                self.assertIsNotNone(section)
-                body = section.group(1)
-                self.assertLess(
-                    body.index("uv lock --check"), body.index("uv sync --locked")
-                )
-                self.assertLess(
-                    body.index("uv sync --locked"), body.index("uv run --locked")
-                )
+        document = yaml.safe_load(workflow)
+        self.assertEqual(document["permissions"], {"contents": "read"})
+        self.assertNotIn("pull_request_target", workflow)
+        self.assertNotIn("--run-external", workflow)
+        targets = set()
+        for job in document["jobs"].values():
+            self.assertGreater(job["timeout-minutes"], 0)
+            for step in job["steps"]:
+                if "uses" in step:
+                    self.assertRegex(step["uses"], r"^[^@]+@[0-9a-f]{40}$")
+                    if step["uses"].startswith("actions/checkout@"):
+                        self.assertFalse(step["with"]["persist-credentials"])
+                        self.assertEqual(step["with"]["fetch-depth"], 0)
+                if "run" in step:
+                    targets.add(step["run"])
+        self.assertEqual(targets, {"make check", "make smoke-wheel", "make coverage"})
+        self.assertEqual(
+            document["jobs"]["full"]["if"], "github.event_name != 'pull_request'"
+        )
 
     def test_layout_and_assets_treat_lockfile_as_generated(self) -> None:
         layout = read("references/base-layout.md")

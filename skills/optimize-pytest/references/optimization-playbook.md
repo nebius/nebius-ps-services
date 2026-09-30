@@ -101,7 +101,9 @@ A practical unit lane should normally avoid:
 - shared queues, accounts, ports, schemas, or files
 
 Preserve valuable cross-boundary tests, but classify them honestly as
-component, integration, contract, end-to-end, or slow tests.
+integration, contract or end-to-end tests. Treat slow and external access as
+separate properties; preserve existing component categories unless migration is
+requested.
 
 For unit tests, fake stable architectural boundaries:
 
@@ -236,7 +238,7 @@ Useful lanes can include:
 
 - targeted changed module or exact node ID
 - fast unit lane
-- component/integration/contract lane
+- integration/offline-contract lane (existing component categories may remain)
 - slow/end-to-end lane
 - complete correctness and coverage lane
 - scheduled external, randomized-order, compatibility, or performance lane

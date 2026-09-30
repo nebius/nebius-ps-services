@@ -1,0 +1,103 @@
+"""Build and validate the installed artifact outside the source checkout."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import tomllib
+from email.parser import Parser
+from zipfile import ZipFile
+
+PACKAGE = "{{package_name}}"
+# Populate with exact package-relative files required by the selected profile.
+# For systemd, include each generated unit/timer; do not leave the list empty.
+RESOURCES: tuple[str, ...] = ()
+
+VERIFY = """
+import importlib, importlib.metadata, importlib.resources, json, pathlib, sys
+package, name, version, resources = json.loads(sys.argv[1])
+module = importlib.import_module(package)
+locations = list(getattr(module, '__path__', ()))
+if getattr(module, '__file__', None):
+    locations.append(module.__file__)
+assert locations, 'package has no import origin'
+assert all(pathlib.Path(p).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve())
+           for p in locations), 'import escaped the artifact environment'
+assert importlib.metadata.version(name) == version, 'distribution version mismatch'
+for resource in resources:
+    assert importlib.resources.files(package).joinpath(resource).is_file(), resource
+"""
+
+
+def run(args: list[str], *, cwd: Path, env: dict[str, str]) -> None:
+    subprocess.run(args, cwd=cwd, env=env, check=True, timeout=180)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.parse_args()
+    project = Path(__file__).resolve().parents[1]
+    metadata = tomllib.loads((project / "pyproject.toml").read_text())
+    env = os.environ.copy()
+    # Keep index credentials in their intended environment; discard import/venv leakage.
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+        env.pop(key, None)
+    with tempfile.TemporaryDirectory(prefix="wheel-smoke-") as directory:
+        temporary = Path(directory).resolve()
+        dist = temporary / "dist"
+        # Default build creates an sdist, then a wheel in fresh extracted staging.
+        run(
+            [sys.executable, "-m", "build", "--outdir", str(dist)], cwd=project, env=env
+        )
+        wheels = list(dist.glob("*.whl"))
+        if len(wheels) != 1:
+            raise RuntimeError("Expected exactly one freshly built wheel")
+        with ZipFile(wheels[0]) as archive:
+            entries = [
+                name
+                for name in archive.namelist()
+                if name.endswith(".dist-info/METADATA")
+            ]
+            if len(entries) != 1:
+                raise RuntimeError("Expected one wheel METADATA file")
+            wheel_metadata = Parser().parsestr(archive.read(entries[0]).decode())
+        environment = temporary / "environment"
+        env["UV_PROJECT_ENVIRONMENT"] = str(environment)
+        run(
+            ["uv", "sync", "--locked", "--no-install-project", "--no-default-groups"],
+            cwd=project,
+            env=env,
+        )
+        binaries = environment / ("Scripts" if os.name == "nt" else "bin")
+        python = binaries / ("python.exe" if os.name == "nt" else "python")
+        run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--no-deps",
+                "--no-index",
+                str(wheels[0]),
+            ],
+            cwd=temporary,
+            env=env,
+        )
+        payload = json.dumps(
+            [PACKAGE, metadata["project"]["name"], wheel_metadata["Version"], RESOURCES]
+        )
+        run([str(python), "-I", "-c", VERIFY, payload], cwd=temporary, env=env)
+        for script in metadata["project"].get("scripts", {}):
+            command = binaries / (script + ".exe" if os.name == "nt" else script)
+            run([str(command), "--help"], cwd=temporary, env=env)
+        print("Installed-wheel smoke passed")
+
+
+if __name__ == "__main__":
+    main()

@@ -70,6 +70,7 @@ class CommitTransactionTest(unittest.TestCase):
         git(self.root, "commit", "-qm", "baseline")
         git(self.root, "switch", "-qc", "feature/test")
         self.request_assertions = {}
+        self.task_contexts = {}
         self.turn_counter = 0
         self.previous_home = os.environ.get("CODEX_HOME")
         os.environ["CODEX_HOME"] = str(self.codex_home)
@@ -132,8 +133,74 @@ class CommitTransactionTest(unittest.TestCase):
         )
         return json.loads(completed.stdout)
 
+    def configure_origin(self):
+        git(self.root, "remote", "add", "origin", "https://example.com/team/repo.git")
+        git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(
+            self.root,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        )
+
+    def begin(self, action="commit", session="session-1", **options):
+        args = [
+            "begin",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            session,
+            "--requested-action",
+            action,
+            "--intent-sha256",
+            self.request_assertions[session][-1],
+        ]
+        for name, value in options.items():
+            flag = "--" + name.replace("_", "-")
+            if value is True:
+                args.append(flag)
+            elif isinstance(value, list):
+                for item in value:
+                    args.extend((flag, item))
+            else:
+                args.extend((flag, value))
+        result = self.run_helper(*args)
+        self.task_contexts[session] = result
+        return result
+
+    def finish(self, action="create-pr", outcome="completed"):
+        return self.run_helper(
+            "finish",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            action,
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            "--outcome",
+            outcome,
+        )
+
+    def sync_base(self):
+        args = (
+            "sync",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "create-pr",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+        )
+        result = self.run_helper(*args)
+        return self.run_helper(*args, "--reviewed-tree", result["tree"])
+
     def prepare(self) -> dict[str, object]:
         authorization = self.authorize()
+        self.begin()
         claim = transaction.expected_claim_path(self.root)
         return self.run_helper(
             "prepare",
@@ -149,17 +216,39 @@ class CommitTransactionTest(unittest.TestCase):
 
     def pr_prepare(self, *, fresh=False, expected=0):
         if fresh:
-            git(self.root, "remote", "add", "origin", "https://example.com/team/repo.git")
+            git(
+                self.root,
+                "remote",
+                "add",
+                "origin",
+                "https://example.com/team/repo.git",
+            )
             git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
-            git(self.root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+            git(
+                self.root,
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            )
             self.authorize("$create-pr; repair checks and commit/push until complete")
-        authorization = transaction.expected_authorization_path(self.root, "session-1")
+            self.begin("create-pr", pr_base="main")
+        context = self.task_contexts["session-1"]
+        authorization = context["authorization"]
         return self.run_helper(
-            "prepare", "--repo-root", str(self.root), "--session-id", "session-1",
-            "--authorization", str(authorization),
-            "--claim", str(transaction.expected_claim_path(self.root)),
-            "--requested-action", "create-pr", "--pr-base", "main",
-            "--intent-sha256", self.request_assertions["session-1"][-1], expected=expected,
+            "prepare",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--authorization",
+            str(authorization),
+            "--claim",
+            context["claims"].get(git(self.root, "symbolic-ref", "HEAD"), next(iter(context["claims"].values()))),
+            "--requested-action",
+            "create-pr",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            expected=expected,
         )
 
     def pr_execute(self, prepared, *, expected=0):
@@ -170,6 +259,615 @@ class CommitTransactionTest(unittest.TestCase):
             expected=expected,
         )
 
+    def task_args(self, verb, action="create-pr"):
+        return (
+            verb,
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            action,
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+        )
+
+    def test_pr_clean_start_fast_forward_first_repair_and_zero_commit_finish(self):
+        self.configure_origin()
+        self.authorize("create a PR")
+        self.begin("create-pr", pr_base="main")
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        next_head = git(
+            self.root, "commit-tree", tree, "-p", "HEAD", "-m", "base advance"
+        )
+        git(self.root, "update-ref", "refs/remotes/origin/main", next_head)
+        self.sync_base()
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), next_head)
+        (self.root / "repair.txt").write_text("repair\n")
+        self.pr_execute(self.pr_prepare())
+        self.finish()
+        self.authorize("another clean PR task")
+        self.begin("create-pr", pr_base="main")
+        self.assertEqual(self.finish()["status"], "completed")
+
+    def test_pr_multiple_targets_return_to_earlier_branch(self):
+        self.configure_origin()
+        git(self.root, "branch", "feature/second")
+        self.authorize("PRs for both branches")
+        self.begin(
+            "create-pr", pr_base="main", target=["feature/test", "feature/second"]
+        )
+        for index, branch in enumerate(
+            ("feature/test", "feature/second", "feature/test")
+        ):
+            git(self.root, "switch", branch)
+            (self.root / f"repair-{index}.txt").write_text("repair\n")
+            self.pr_execute(self.pr_prepare())
+        self.assertEqual(self.finish()["status"], "completed")
+
+    def test_cancel_unused_claim_allows_new_task_even_after_origin_drift(self):
+        self.seed_multi_project_diff()
+        first = self.pr_prepare(fresh=True)
+        git(
+            self.root, "remote", "set-url", "origin", "https://example.com/new/repo.git"
+        )
+        self.assertEqual(self.finish(outcome="cancelled")["status"], "cancelled")
+        self.pr_execute(first, expected=2)
+        self.authorize("new PR task")
+        self.begin("create-pr", pr_base="main")
+        self.pr_execute(self.pr_prepare())
+
+    def test_pending_sync_before_git_is_retried_from_exact_checkpoint(self):
+        self.configure_origin()
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        next_head = git(self.root, "commit-tree", tree, "-p", "HEAD", "-m", "base")
+        git(self.root, "update-ref", "refs/remotes/origin/main", next_head)
+        args = transaction._parser().parse_args(self.task_args("sync"))
+        original = transaction._run_git
+
+        def crash(root, arguments, **kwargs):
+            if arguments[0] == "merge":
+                raise RuntimeError("interrupted before Git")
+            return original(root, arguments, **kwargs)
+
+        with mock.patch.object(transaction, "_run_git", side_effect=crash):
+            with self.assertRaises(RuntimeError):
+                transaction.sync(args)
+        self.sync_base()
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), next_head)
+
+    def test_root_prepare_preserves_unclaimed_delegated_authorization(self):
+        self.seed_multi_project_diff()
+        authorization = self.authorize()
+        self.begin()
+        delegated = {
+            "schema": transaction.AUTH_SCHEMA,
+            "owner": "task-implementer",
+            "state": "AUTHORIZED",
+        }
+        transaction._atomic_json(authorization, delegated)
+        before = authorization.read_bytes()
+        denied = self.run_helper(
+            "prepare",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--authorization",
+            str(authorization),
+            "--claim",
+            str(transaction.expected_claim_path(self.root)),
+            expected=2,
+        )
+        self.assertIn("delegated", denied["reason"])
+        self.assertEqual(authorization.read_bytes(), before)
+
+    def test_default_start_named_remote_targets_and_declared_dependency(self):
+        self.configure_origin()
+        original = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "switch", "-c", "main")
+        git(self.root, "update-ref", "refs/remotes/origin/remote-topic", original)
+        self.authorize("PRs for a new branch and a remote branch")
+        self.begin(
+            "create-pr",
+            pr_base="main",
+            target=["feature/new", "remote-topic"],
+            dependency=["remote-topic:feature/new"],
+        )
+        git(self.root, "switch", "-c", "feature/new", original)
+        (self.root / "new.txt").write_text("new\n")
+        self.pr_execute(self.pr_prepare())
+        git(
+            self.root,
+            "switch",
+            "-c",
+            "remote-topic",
+            "refs/remotes/origin/remote-topic",
+        )
+        result = self.run_helper(*self.task_args("sync"), "--dependency", "feature/new")
+        self.run_helper(
+            *self.task_args("sync"),
+            "--dependency",
+            "feature/new",
+            "--reviewed-tree",
+            result["tree"],
+        )
+        self.assertEqual(self.finish()["status"], "completed")
+
+    def test_standalone_commit_push_retries_but_cannot_create_second_commit(self):
+        self.configure_origin()
+        self.seed_multi_project_diff()
+        self.authorize("commit and push")
+        self.begin("commit-push")
+        self.request_assertions["session-1"] = (
+            "--requested-action",
+            "commit-push",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+        )
+
+        def prepare_push(expected=0):
+            return self.run_helper(
+                "prepare",
+                "--repo-root",
+                str(self.root),
+                "--session-id",
+                "session-1",
+                "--authorization",
+                str(transaction.expected_authorization_path(self.root, "session-1")),
+                "--claim",
+                str(transaction.expected_claim_path(self.root)),
+                expected=expected,
+            )
+
+        first = prepare_push()
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        self.pr_execute(first, expected=2)
+        hook.unlink()
+        self.pr_execute(prepare_push())
+        (self.root / "second.txt").write_text("second\n")
+        self.assertEqual(prepare_push(expected=2)["code"], "task_consumed")
+
+    def test_cancel_actual_commit_can_be_reviewed_without_reopening_task(self):
+        self.seed_multi_project_diff()
+        prepared = self.pr_prepare(fresh=True)
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nprintf 'hook\\n' > hook.txt\ngit add hook.txt\n")
+        hook.chmod(0o755)
+        self.pr_execute(prepared, expected=2)
+        self.finish(outcome="cancelled")
+        head, tree = (
+            git(self.root, "rev-parse", "HEAD"),
+            git(self.root, "rev-parse", "HEAD^{tree}"),
+        )
+        result = self.run_helper(
+            "review",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--claim",
+            prepared["claim"],
+            "--token",
+            prepared["token"],
+            "--reviewed-commit",
+            head,
+            "--reviewed-tree",
+            tree,
+        )
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "task_closed")
+        hook.unlink()
+        self.authorize("new PR")
+        self.begin("create-pr", pr_base="main")
+        (self.root / "next.txt").write_text("next\n")
+        self.pr_execute(self.pr_prepare())
+
+    def test_base_cannot_rewind_to_sibling_of_accepted_advance(self):
+        self.configure_origin()
+        base, tree = (
+            git(self.root, "rev-parse", "HEAD"),
+            git(self.root, "rev-parse", "HEAD^{tree}"),
+        )
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        for index in range(2):
+            head = git(
+                self.root, "commit-tree", tree, "-p", base, "-m", f"base {index}"
+            )
+            git(self.root, "update-ref", "refs/remotes/origin/main", head)
+            if index == 0:
+                self.sync_base()
+            else:
+                result = self.run_helper(*self.task_args("sync"), expected=2)
+                self.assertEqual(result["code"], "scope_changed")
+
+    def test_order_validation_removes_exact_scratch_and_preserves_targets(self):
+        self.configure_origin()
+        git(self.root, "branch", "feature/second")
+        self.authorize("create two PRs")
+        self.begin(
+            "create-pr",
+            pr_base="main",
+            target=["feature/test", "feature/second"],
+            validation_branch="tmp/pr-check",
+        )
+        for branch, filename in (
+            ("feature/test", "first.txt"),
+            ("feature/second", "second.txt"),
+        ):
+            git(self.root, "switch", branch)
+            (self.root / filename).write_text("data\n")
+            self.pr_execute(self.pr_prepare())
+        heads = {
+            branch: git(self.root, "rev-parse", branch)
+            for branch in ("feature/test", "feature/second")
+        }
+        args = (
+            *self.task_args("validate-order"),
+            "--branch",
+            "feature/test",
+            "--branch",
+            "feature/second",
+        )
+        result = self.run_helper(*args)
+        self.assertEqual(result["status"], "validated")
+        self.assertEqual(self.run_helper(*args), result)
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/second")
+        self.assertNotIn("tmp/pr-check", git(self.root, "branch", "--list"))
+        for branch, head in heads.items():
+            self.assertEqual(git(self.root, "rev-parse", branch), head)
+        self.finish()
+
+    def test_order_conflict_cleans_scratch_and_restores_checkout(self):
+        self.configure_origin()
+        git(self.root, "branch", "feature/second")
+        self.authorize("create two PRs")
+        self.begin(
+            "create-pr",
+            pr_base="main",
+            target=["feature/test", "feature/second"],
+            validation_branch="tmp/pr-check",
+        )
+        for branch in ("feature/test", "feature/second"):
+            git(self.root, "switch", branch)
+            (self.root / "project-a/tracked.txt").write_text(branch + "\n")
+            self.pr_execute(self.pr_prepare())
+        result = self.run_helper(
+            *self.task_args("validate-order"),
+            "--branch",
+            "feature/test",
+            "--branch",
+            "feature/second",
+        )
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        self.assertNotIn("tmp/pr-check", git(self.root, "branch", "--list"))
+
+    def test_git_child_keeps_repository_lock_after_helper_death(self):
+        self.seed_multi_project_diff()
+        prepared = self.prepare()
+        ready, release, acquired = (
+            self.base / name for name in ("ready", "release", "acquired")
+        )
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text(
+            f"#!/bin/sh\ntouch '{ready}'\nwhile [ ! -f '{release}' ]; do sleep 0.1; done\n"
+        )
+        hook.chmod(0o755)
+        command = [
+            sys.executable,
+            str(HELPER),
+            "execute",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--claim",
+            prepared["claim"],
+            "--token",
+            prepared["token"],
+            "--reviewed-tree",
+            prepared["candidate_tree"],
+            "--message",
+            "child survives",
+        ]
+        worker = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        contender = None
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(ready.exists())
+            worker.kill()
+            worker.wait(timeout=5)
+            code = (
+                "import importlib.util, pathlib; "
+                "s=importlib.util.spec_from_file_location('transaction', "
+                + repr(str(HELPER))
+                + "); "
+                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "root=pathlib.Path(" + repr(str(self.root)) + "); "
+                "lock=m._repository_lock(m._common_dir(root)); lock.__enter__(); "
+                "pathlib.Path("
+                + repr(str(acquired))
+                + ").touch(); lock.__exit__(None,None,None)"
+            )
+            contender = subprocess.Popen(
+                [sys.executable, "-c", code],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            time.sleep(0.25)
+            self.assertFalse(acquired.exists())
+            release.touch()
+            contender.communicate(timeout=10)
+            self.assertEqual(contender.returncode, 0)
+            self.assertTrue(acquired.exists())
+            worker.communicate(timeout=10)
+            result = self.run_helper(
+                "execute",
+                "--repo-root",
+                str(self.root),
+                "--session-id",
+                "session-1",
+                "--claim",
+                prepared["claim"],
+                "--token",
+                prepared["token"],
+                "--reviewed-tree",
+                prepared["candidate_tree"],
+                "--message",
+                "no duplicate",
+            )
+            self.assertEqual(result["status"], "committed")
+            self.assertEqual(git(self.root, "rev-list", "--count", "HEAD"), "2")
+        finally:
+            release.touch()
+            if worker.poll() is None:
+                worker.kill()
+            worker.communicate(timeout=10)
+            if contender is not None:
+                if contender.poll() is None:
+                    contender.kill()
+                contender.communicate(timeout=10)
+
+    def scratch_task(self, *, conflict=False):
+        self.configure_origin()
+        git(self.root, "branch", "feature/second")
+        self.authorize("create two PRs")
+        self.begin(
+            "create-pr",
+            pr_base="main",
+            target=["feature/test", "feature/second"],
+            validation_branch="tmp/pr-check",
+        )
+        for index, branch in enumerate(("feature/test", "feature/second")):
+            git(self.root, "switch", branch)
+            filename = "project-a/tracked.txt" if conflict else f"new-{index}.txt"
+            (self.root / filename).write_text(branch + "\n")
+            self.pr_execute(self.pr_prepare())
+        return transaction._parser().parse_args(
+            (
+                *self.task_args("validate-order"),
+                "--branch",
+                "feature/test",
+                "--branch",
+                "feature/second",
+            )
+        )
+
+    def test_scratch_conflict_resume_preserves_intervening_user_work(self):
+        args = self.scratch_task(conflict=True)
+        original = transaction._atomic_json
+
+        def crash(path, value):
+            original(path, value)
+            if value.get("phase") == "cleanup" and value.get("outcome") == "conflict":
+                raise RuntimeError("interrupted cleanup")
+
+        with mock.patch.object(transaction, "_atomic_json", side_effect=crash):
+            with self.assertRaisesRegex(RuntimeError, "interrupted cleanup"):
+                transaction.validate_order(args)
+        conflict = self.root / "project-a/tracked.txt"
+        conflict.write_text("USER WORK\n")
+        before = git(self.root, "rev-parse", "HEAD")
+        with self.assertRaisesRegex(
+            transaction.TransactionError, "preserve intervening work"
+        ):
+            transaction.validate_order(args)
+        self.assertEqual(conflict.read_text(), "USER WORK\n")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+        self.assertTrue((self.root / ".git/MERGE_HEAD").exists())
+
+    def test_scratch_completion_detects_recreated_ref_and_malformed_journal(self):
+        args = self.scratch_task()
+        transaction.validate_order(args)
+        git(self.root, "update-ref", "refs/heads/tmp/pr-check", "HEAD")
+        with self.assertRaisesRegex(transaction.TransactionError, "recreated"):
+            transaction.validate_order(args)
+        git(
+            self.root,
+            "update-ref",
+            "-d",
+            "refs/heads/tmp/pr-check",
+            git(self.root, "rev-parse", "HEAD"),
+        )
+        path = transaction._task_path(
+            self.root, "session-1", self.request_assertions["session-1"][-1]
+        )
+        record = path.with_name(path.stem + ".validation.json")
+        value = json.loads(record.read_text())
+        value["index"] = "broken"
+        transaction._atomic_json(record, value)
+        with self.assertRaisesRegex(transaction.TransactionError, "shape is invalid"):
+            transaction.validate_order(args)
+        self.assertNotIn("tmp/pr-check", git(self.root, "branch", "--list"))
+
+    def test_legacy_root_claim_and_task_scope_expansion_cannot_authorize_effects(self):
+        self.seed_multi_project_diff()
+        prepared = self.prepare()
+        claim_path = Path(prepared["claim"])
+        claim = json.loads(claim_path.read_text())
+        claim["schema"] = transaction.CLAIM_SCHEMA
+        transaction._atomic_json(claim_path, claim)
+        self.pr_execute(prepared, expected=2)
+        self.assertEqual(git(self.root, "rev-list", "--count", "HEAD"), "1")
+        with self.assertRaises(transaction.TransactionError):
+            transaction.begin(
+                transaction._parser().parse_args(
+                    (*self.task_args("begin", "commit"), "--target", "other")
+                )
+            )
+        grant_path = transaction._task_path(
+            self.root, "session-1", self.request_assertions["session-1"][-1]
+        )
+        grant = json.loads(grant_path.read_text())
+        grant["dependencies"] = {"refs/heads/feature/test": 123}
+        with self.assertRaisesRegex(transaction.TransactionError, "dependency shape"):
+            transaction._validate_grant_scope(grant, self.root)
+
+    def test_sync_conflict_requires_review_of_exact_resolution(self):
+        self.configure_origin()
+        base = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "switch", "-c", "base-update")
+        (self.root / "project-a/tracked.txt").write_text("base change\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "base change")
+        upstream = git(self.root, "rev-parse", "HEAD")
+        git(self.root, "switch", "feature/test")
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        (self.root / "project-a/tracked.txt").write_text("feature change\n")
+        self.pr_execute(self.pr_prepare())
+        git(self.root, "update-ref", "refs/remotes/origin/main", upstream, base)
+        failed = self.run_helper(*self.task_args("sync"), expected=2)
+        self.assertEqual(failed["code"], "review_required")
+        (self.root / "project-a/tracked.txt").write_text("base and feature\n")
+        real_index = transaction._index_path(self.root).read_bytes()
+        preview = self.run_helper(*self.task_args("sync"), "--continue")
+        self.assertEqual(preview["status"], "candidate-review-required")
+        self.assertEqual(transaction._index_path(self.root).read_bytes(), real_index)
+        candidate = preview["candidate_tree"]
+        result = self.run_helper(
+            *self.task_args("sync"), "--continue", "--reviewed-tree", candidate
+        )
+        self.assertEqual(result["status"], "synchronized")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD^2"), upstream)
+        self.finish()
+
+    def test_sync_respects_new_worktree_reservation_while_pending(self):
+        self.configure_origin()
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        args = transaction._parser().parse_args(self.task_args("sync"))
+        transaction.sync(args)
+        reviewed = git(self.root, "rev-parse", "HEAD^{tree}")
+        args.reviewed_tree = reviewed
+        with mock.patch.object(
+            transaction, "_active_worktree_claims", return_value=["owned"]
+        ):
+            with self.assertRaisesRegex(transaction.TransactionError, "Worktree owns"):
+                transaction.sync(args)
+        state = self.root.parent / f"{self.root.name}-worktrees" / ".worktree-skill"
+        state.mkdir(parents=True)
+        (state / "broken.json").write_text('{"schema": 4}\n')
+        with self.assertRaises(transaction.TransactionError):
+            transaction.sync(args)
+
+    def test_sync_preserves_ignored_local_files(self):
+        self.configure_origin()
+        (self.root / ".git/info/exclude").write_text("local.tmp\n")
+        git(self.root, "switch", "-c", "base-update")
+        (self.root / "local.tmp").write_text("upstream\n")
+        git(self.root, "add", "-f", "local.tmp")
+        git(self.root, "commit", "-qm", "track formerly ignored path")
+        git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(self.root, "switch", "feature/test")
+        (self.root / "local.tmp").write_text("VALUABLE LOCAL DATA\n")
+        before = git(self.root, "rev-parse", "HEAD")
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        self.run_helper(*self.task_args("sync"), expected=2)
+        self.assertEqual((self.root / "local.tmp").read_text(), "VALUABLE LOCAL DATA\n")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), before)
+
+    def test_scratch_preserves_ignored_local_files(self):
+        self.configure_origin()
+        (self.root / ".git/info/exclude").write_text("local.tmp\n")
+        git(self.root, "branch", "feature/second")
+        self.authorize("create two PRs")
+        self.begin(
+            "create-pr",
+            pr_base="main",
+            target=["feature/test", "feature/second"],
+            validation_branch="tmp/pr-check",
+        )
+        git(self.root, "switch", "feature/second")
+        (self.root / "local.tmp").write_text("branch data\n")
+        git(self.root, "add", "-f", "local.tmp")
+        self.pr_execute(self.pr_prepare())
+        git(self.root, "switch", "feature/test")
+        (self.root / "local.tmp").write_text("VALUABLE LOCAL DATA\n")
+        self.run_helper(
+            *self.task_args("validate-order"),
+            "--branch",
+            "feature/test",
+            "--branch",
+            "feature/second",
+            expected=2,
+        )
+        self.assertEqual((self.root / "local.tmp").read_text(), "VALUABLE LOCAL DATA\n")
+
+    def test_failed_attempt_can_be_retired_before_recorded_sync(self):
+        self.configure_origin()
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        (self.root / "project-a/tracked.txt").write_text("candidate\n")
+        prepared = self.pr_prepare()
+        hook = self.root / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        self.pr_execute(prepared, expected=2)
+        hook.unlink()
+        git(self.root, "restore", "--source=HEAD", "--staged", "--worktree", ".")
+        base = git(self.root, "commit-tree", git(self.root, "rev-parse", "HEAD^{tree}"), "-p", "HEAD", "-m", "base advance")
+        git(self.root, "update-ref", "refs/remotes/origin/main", base)
+        self.sync_base()
+        (self.root / "project-a/tracked.txt").write_text("new candidate\n")
+        self.pr_execute(self.pr_prepare())
+
+    def test_sync_in_manual_linked_worktree_respects_primary_reservation(self):
+        self.configure_origin()
+        primary = self.root
+        head = git(primary, "rev-parse", "HEAD")
+        git(primary, "switch", "-c", "primary-branch")
+        linked = self.base / "manual-linked"
+        git(primary, "worktree", "add", str(linked), "feature/test")
+        state = primary.parent / f"{primary.name}-worktrees" / ".worktree-skill" / "integration-preparations"
+        state.mkdir(parents=True)
+        (state / "project-managed.json").write_text(json.dumps({
+            "schema": 1, "kind": "integration-commit-preparation", "name": "project-managed",
+            "branch": "feature/managed", "worktree": str(self.base / "managed"),
+            "source_branch": "feature/test", "source_ref": "refs/heads/feature/test",
+            "source_head": head, "child_head": head, "commit_order": ["source"],
+            "commits": [], "token": "a" * 32}) + "\n")
+        advance = git(primary, "commit-tree", git(primary, "rev-parse", "HEAD^{tree}"), "-p", head, "-m", "base advance")
+        git(primary, "update-ref", "refs/remotes/origin/main", advance)
+        self.root = linked
+        self.authorize("create PR")
+        self.begin("create-pr", pr_base="main")
+        denied = self.run_helper(*self.task_args("sync"), expected=2)
+        self.assertIn("Worktree owns", denied["reason"])
+        self.assertEqual(git(linked, "rev-parse", "HEAD"), head)
+        self.assertFalse((linked / ".git/MERGE_HEAD").exists())
+
     def test_pr_two_commits_and_close_without_new_user_turn(self):
         self.seed_multi_project_diff()
         first = self.pr_prepare(fresh=True)
@@ -177,15 +875,10 @@ class CommitTransactionTest(unittest.TestCase):
         self.assertEqual(self.pr_execute(first), result)
         (self.root / "repair.txt").write_text("second repair\n")
         second = self.pr_prepare()
-        final = self.pr_execute(second)
+        self.pr_execute(second)
         self.assertEqual(git(self.root, "rev-parse", "HEAD^"), result["commit"])
         self.assertEqual(git(self.root, "status", "--porcelain"), "")
-        self.run_helper(
-            "review", "--repo-root", str(self.root), "--session-id", "session-1",
-            "--claim", second["claim"], "--token", second["token"],
-            "--reviewed-commit", final["commit"], "--reviewed-tree", final["tree"],
-            "--complete-pr",
-        )
+        self.finish()
         (self.root / "repair.txt").write_text("third repair\n")
         self.assertIn("closed", self.pr_prepare(expected=2)["reason"])
 
@@ -225,9 +918,17 @@ class CommitTransactionTest(unittest.TestCase):
         first = self.pr_prepare(fresh=True)
         self.pr_execute(first)
         tree = git(self.root, "rev-parse", "refs/remotes/origin/main^{tree}")
-        base = git(self.root, "commit-tree", tree, "-p", "refs/remotes/origin/main", "-m", "Base update")
+        base = git(
+            self.root,
+            "commit-tree",
+            tree,
+            "-p",
+            "refs/remotes/origin/main",
+            "-m",
+            "Base update",
+        )
         git(self.root, "update-ref", "refs/remotes/origin/main", base)
-        git(self.root, "merge", "--no-edit", "refs/remotes/origin/main")
+        self.sync_base()
         (self.root / "repair.txt").write_text("repair after merge\n")
         self.pr_execute(self.pr_prepare())
 
@@ -259,17 +960,30 @@ class CommitTransactionTest(unittest.TestCase):
         self.pr_execute(first)
         (self.root / "repair.txt").write_text("repair\n")
         auth = transaction.expected_authorization_path(self.root, "session-1")
-        args = transaction._parser().parse_args([
-            "prepare", "--repo-root", str(self.root), "--session-id", "session-1",
-            "--authorization", str(auth), "--claim", first["claim"],
-            "--requested-action", "create-pr", "--pr-base", "main",
-            "--intent-sha256", self.request_assertions["session-1"][-1],
-        ])
+        args = transaction._parser().parse_args(
+            [
+                "prepare",
+                "--repo-root",
+                str(self.root),
+                "--session-id",
+                "session-1",
+                "--authorization",
+                str(auth),
+                "--claim",
+                first["claim"],
+                "--requested-action",
+                "create-pr",
+                "--intent-sha256",
+                self.request_assertions["session-1"][-1],
+            ]
+        )
         atomic = transaction._atomic_json
+
         def crash(path, value):
             atomic(path, value)
             if path == auth and value["state"] == "AUTHORIZED":
                 raise RuntimeError("simulated crash")
+
         with mock.patch.object(transaction, "_atomic_json", side_effect=crash):
             with self.assertRaisesRegex(RuntimeError, "simulated crash"):
                 transaction.prepare(args)
@@ -288,19 +1002,21 @@ class CommitTransactionTest(unittest.TestCase):
     def test_pr_completion_preserves_fresh_ordinary_commit(self):
         self.seed_multi_project_diff()
         first = self.pr_prepare(fresh=True)
-        result = self.pr_execute(first)
-        self.run_helper(
-            "review", "--repo-root", str(self.root), "--session-id", "session-1",
-            "--claim", first["claim"], "--token", first["token"],
-            "--reviewed-commit", result["commit"], "--reviewed-tree", result["tree"],
-            "--complete-pr",
-        )
+        self.pr_execute(first)
+        self.finish()
         (self.root / "local.txt").write_text("ordinary commit\n")
         prepared = self.prepare()
         self.pr_execute(prepared)
 
     def test_pr_scope_and_predecessor_drift_fail_before_staging(self):
-        for mutation in ("session", "branch", "base", "default", "claim-owner", "rewritten-base"):
+        for mutation in (
+            "session",
+            "branch",
+            "base",
+            "default",
+            "claim-owner",
+            "rewritten-base",
+        ):
             with self.subTest(mutation=mutation):
                 # Each case starts from its own fully owned first commit.
                 if mutation != "session":
@@ -312,29 +1028,61 @@ class CommitTransactionTest(unittest.TestCase):
                 (self.root / "repair.txt").write_text("repair\n")
                 before = git(self.root, "write-tree")
                 if mutation == "session":
-                    auth = transaction.expected_authorization_path(self.root, "other-session")
-                    self.run_helper("prepare", "--repo-root", str(self.root),
-                        "--session-id", "other-session", "--authorization", str(auth),
-                        "--claim", first["claim"], "--requested-action", "create-pr",
-                        "--pr-base", "main", "--intent-sha256", self.request_assertions["session-1"][-1], expected=2)
+                    auth = transaction.expected_authorization_path(
+                        self.root, "other-session"
+                    )
+                    self.run_helper(
+                        "prepare",
+                        "--repo-root",
+                        str(self.root),
+                        "--session-id",
+                        "other-session",
+                        "--authorization",
+                        str(auth),
+                        "--claim",
+                        first["claim"],
+                        "--requested-action",
+                        "create-pr",
+                        "--intent-sha256",
+                        self.request_assertions["session-1"][-1],
+                        expected=2,
+                    )
                 else:
                     if mutation == "branch":
                         git(self.root, "switch", "-qc", "feature/other")
                     elif mutation == "base":
-                        grant = json.loads(Path(first["claim"]).read_text())["owner_evidence_path"]
+                        grant = json.loads(Path(first["claim"]).read_text())[
+                            "owner_evidence_path"
+                        ]
                         value = json.loads(Path(grant).read_text())
                         value["base_ref"] = "refs/remotes/origin/other"
                         Path(grant).write_text(json.dumps(value))
                     elif mutation == "default":
-                        git(self.root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/other")
+                        git(
+                            self.root,
+                            "symbolic-ref",
+                            "refs/remotes/origin/HEAD",
+                            "refs/remotes/origin/other",
+                        )
                     elif mutation == "claim-owner":
                         value = json.loads(Path(first["claim"]).read_text())
-                        value.update(authorization_owner="direct", owner_evidence_path=None, owner_evidence_sha256=None)
+                        value.update(
+                            authorization_owner="direct",
+                            owner_evidence_path=None,
+                            owner_evidence_sha256=None,
+                        )
                         Path(first["claim"]).write_text(json.dumps(value))
                     else:
                         tree = git(self.root, "rev-parse", "HEAD^{tree}")
-                        replacement = git(self.root, "commit-tree", tree, "-m", "unrelated root")
-                        git(self.root, "update-ref", "refs/remotes/origin/main", replacement)
+                        replacement = git(
+                            self.root, "commit-tree", tree, "-m", "unrelated root"
+                        )
+                        git(
+                            self.root,
+                            "update-ref",
+                            "refs/remotes/origin/main",
+                            replacement,
+                        )
                     self.pr_prepare(expected=2)
                 self.assertEqual(git(self.root, "write-tree"), before)
 
@@ -454,93 +1202,22 @@ class CommitTransactionTest(unittest.TestCase):
         self.assertFalse(transaction.expected_claim_path(self.root).exists())
         self.assertEqual(git(self.root, "status", "--porcelain"), "")
 
-    def test_direct_prepare_requires_matching_assertion_and_rejects_receipt_replay(self) -> None:
+    def test_direct_begin_requires_matching_assertion_and_rejects_receipt_replay(self):
         self.seed_multi_project_diff()
-        authorization = self.authorize("commit and push using $commit-push")
-        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
-                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)))
-        before = git(self.root, "write-tree")
-        self.run_helper(*args, expected=2, classify=False)
-        self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", "f" * 64, expected=2)
-        self.assertFalse(authorization.exists())
-        self.assertEqual(git(self.root, "write-tree"), before)
-        digest = self.request_assertions["session-1"][-1]
-        explicit = (*args, "--requested-action", "commit-push", "--intent-sha256", digest)
-        self.assertEqual(self.run_helper(*explicit)["status"], "prepared")
-        blocked = self.run_helper(*explicit, expected=2)
-        self.assertIn("already consumed", blocked["reason"])
-
-    def test_receipt_identity_and_default_branch_publication_are_enforced(self) -> None:
-        self.seed_multi_project_diff()
-        authorization = self.authorize("please commit and push")
-        receipt_path = authorization.with_name("intent.json")
-        receipt = json.loads(receipt_path.read_text())
-        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
-                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)),
-                "--requested-action", "commit-push")
-        before = git(self.root, "write-tree")
-        for field in ("session_sha256", "repo_root", "base_head", "schema"):
-            with self.subTest(field=field):
-                changed = {**receipt, field: "f" * 64}
-                receipt_path.write_bytes(transaction._stable_json(changed))
-                self.run_helper(*args, "--intent-sha256", transaction._digest_bytes(transaction._stable_json(changed)), expected=2)
-                self.assertFalse(authorization.exists())
-        receipt_path.write_bytes(transaction._stable_json(receipt))
-        digest = transaction._digest_bytes(transaction._stable_json(receipt))
-        blocked = self.run_helper(*args, "--intent-sha256", digest, "--allow-default-branch", expected=2)
-        self.assertIn("never authorizes default-branch", blocked["reason"])
-        receipt_path.chmod(0o644)
-        self.run_helper(*args, "--intent-sha256", digest, expected=2)
-        self.assertFalse(authorization.exists())
-        self.assertEqual(git(self.root, "write-tree"), before)
-
-    def test_new_semantic_turn_after_consumption_and_unrelated_turn_preserves_claim(self) -> None:
-        self.seed_multi_project_diff()
-        prepared = self.prepare()
-        authorization = transaction.expected_authorization_path(self.root, "session-1")
-        consumed = authorization.read_bytes()
-        self.authorize("What changed?")  # Receipt only; no helper action requested.
-        self.assertEqual(authorization.read_bytes(), consumed)
-        result = self.run_helper(
-            "execute", "--repo-root", str(self.root), "--session-id", "session-1",
-            "--claim", str(prepared["claim"]), "--token", str(prepared["token"]),
-            "--reviewed-tree", str(prepared["candidate_tree"]), "--message", "First change",
-        )
-        self.assertEqual(result["status"], "committed")
-        (self.root / "next.txt").write_text("next change\n")
-        self.authorize("please commit and push")
-        args = ("prepare", "--repo-root", str(self.root), "--session-id", "session-1",
-                "--authorization", str(authorization), "--claim", str(transaction.expected_claim_path(self.root)))
-        old_digest = self.request_assertions["session-1"][-1]
-        self.authorize("Could you commit everything and push this branch?")
-        self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", old_digest, expected=2)
-        fresh = self.run_helper(*args, "--requested-action", "commit-push", "--intent-sha256", self.request_assertions["session-1"][-1])
-        self.assertEqual(fresh["status"], "prepared")
-
-    def test_default_branch_requires_explicit_prompt_binding(self) -> None:
-        self.seed_multi_project_diff()
-        git(
-            self.root,
-            "symbolic-ref",
-            "refs/remotes/origin/HEAD",
-            "refs/remotes/origin/feature/test",
-        )
-        authorization = self.authorize("$commit Ordinary message")
-        claim = transaction.expected_claim_path(self.root)
-        blocked = self.run_helper(
-            "prepare",
+        self.authorize()
+        args = (
+            "begin",
             "--repo-root",
             str(self.root),
             "--session-id",
             "session-1",
-            "--authorization",
-            str(authorization),
-            "--claim",
-            str(claim),
-            expected=2,
+            "--requested-action",
+            "commit",
         )
-        self.assertIn("default branch", str(blocked["reason"]))
-        self.authorize("$commit on feature/test Commit this default branch")
+        before = git(self.root, "write-tree")
+        self.run_helper(*args, "--intent-sha256", "f" * 64, expected=2)
+        self.assertEqual(git(self.root, "write-tree"), before)
+        self.begin()
         prepared = self.run_helper(
             "prepare",
             "--repo-root",
@@ -548,9 +1225,147 @@ class CommitTransactionTest(unittest.TestCase):
             "--session-id",
             "session-1",
             "--authorization",
+            str(transaction.expected_authorization_path(self.root, "session-1")),
+            "--claim",
+            str(transaction.expected_claim_path(self.root)),
+        )
+        self.pr_execute(prepared)
+        self.finish("commit")
+        self.run_helper(
+            *args,
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            expected=2,
+        )
+
+    def test_receipt_identity_and_default_branch_publication_are_enforced(self):
+        self.seed_multi_project_diff()
+        authorization = self.authorize("please commit and push")
+        receipt_path = authorization.with_name("intent.json")
+        receipt = json.loads(receipt_path.read_text())
+        args = (
+            "begin",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "commit-push",
+        )
+        before = git(self.root, "write-tree")
+        for field in ("session_sha256", "repo_root", "base_head", "schema"):
+            with self.subTest(field=field):
+                changed = {**receipt, field: "f" * 64}
+                receipt_path.write_bytes(transaction._stable_json(changed))
+                self.run_helper(
+                    *args,
+                    "--intent-sha256",
+                    transaction._digest_bytes(transaction._stable_json(changed)),
+                    expected=2,
+                )
+                self.assertFalse(authorization.exists())
+        receipt_path.write_bytes(transaction._stable_json(receipt))
+        digest = transaction._digest_bytes(transaction._stable_json(receipt))
+        blocked = self.run_helper(
+            *args, "--intent-sha256", digest, "--allow-default-branch", expected=2
+        )
+        self.assertIn("forbid default-branch", blocked["reason"])
+        receipt_path.chmod(0o644)
+        self.run_helper(*args, "--intent-sha256", digest, expected=2)
+        self.assertEqual(git(self.root, "write-tree"), before)
+
+    def test_new_semantic_turn_after_consumption_and_unrelated_turn_preserves_claim(
+        self,
+    ) -> None:
+        self.configure_origin()
+        self.seed_multi_project_diff()
+        prepared = self.prepare()
+        authorization = transaction.expected_authorization_path(self.root, "session-1")
+        consumed = authorization.read_bytes()
+        self.authorize("What changed?")  # Receipt only; no helper action requested.
+        self.assertEqual(authorization.read_bytes(), consumed)
+        result = self.run_helper(
+            "execute",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--claim",
+            str(prepared["claim"]),
+            "--token",
+            str(prepared["token"]),
+            "--reviewed-tree",
+            str(prepared["candidate_tree"]),
+            "--message",
+            "First change",
+        )
+        self.assertEqual(result["status"], "committed")
+        (self.root / "next.txt").write_text("next change\n")
+        self.authorize("please commit and push")
+        args = (
+            "prepare",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--authorization",
             str(authorization),
             "--claim",
-            str(claim),
+            str(transaction.expected_claim_path(self.root)),
+        )
+        old_digest = self.request_assertions["session-1"][-1]
+        self.authorize("Could you commit everything and push this branch?")
+        self.run_helper(
+            *args,
+            "--requested-action",
+            "commit-push",
+            "--intent-sha256",
+            old_digest,
+            expected=2,
+        )
+        self.begin("commit-push")
+        fresh = self.run_helper(
+            *args,
+            "--requested-action",
+            "commit-push",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+        )
+        self.assertEqual(fresh["status"], "prepared")
+
+    def test_default_branch_requires_explicit_prompt_binding(self):
+        self.seed_multi_project_diff()
+        git(
+            self.root,
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/feature/test",
+        )
+        self.authorize()
+        args = (
+            "begin",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "commit",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+        )
+        blocked = self.run_helper(*args, expected=2)
+        self.assertIn("default branch", blocked["reason"])
+        self.run_helper(*args, "--allow-default-branch")
+        prepared = self.run_helper(
+            "prepare",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--authorization",
+            str(transaction.expected_authorization_path(self.root, "session-1")),
+            "--claim",
+            str(transaction.expected_claim_path(self.root)),
             "--allow-default-branch",
         )
         self.assertEqual(prepared["status"], "prepared")
@@ -569,6 +1384,7 @@ class CommitTransactionTest(unittest.TestCase):
     ) -> None:
         self.seed_multi_project_diff()
         authorization = self.authorize()
+        self.begin()
         claim = transaction.expected_claim_path(self.root)
         real_index = git(self.root, "write-tree")
         alternate_index = self.base / "alternate-index"
@@ -576,7 +1392,8 @@ class CommitTransactionTest(unittest.TestCase):
         os.environ["GIT_INDEX_FILE"] = str(alternate_index)
         try:
             receipt = authorization.with_name("intent.json").read_bytes()
-            self.assert_capture_unavailable(intent.evaluate(
+            self.assert_capture_unavailable(
+                intent.evaluate(
                     {
                         "hook_event_name": "UserPromptSubmit",
                         "cwd": str(self.root),
@@ -585,8 +1402,12 @@ class CommitTransactionTest(unittest.TestCase):
                         "agent_type": "root",
                         "prompt": "run $commit",
                     }
-                ), "REPOSITORY_UNAVAILABLE")
-            self.assertEqual(authorization.with_name("intent.json").read_bytes(), receipt)
+                ),
+                "REPOSITORY_UNAVAILABLE",
+            )
+            self.assertEqual(
+                authorization.with_name("intent.json").read_bytes(), receipt
+            )
             blocked = self.run_helper(
                 "prepare",
                 "--repo-root",
@@ -699,10 +1520,9 @@ class CommitTransactionTest(unittest.TestCase):
             expected=2,
         )
         self.assertEqual(blocked["status"], "blocked")
-        self.assertIn("stale", str(blocked["reason"]))
+        self.assertEqual(blocked["code"], "candidate_changed")
         self.assertEqual(git(self.root, "write-tree"), real_index)
 
-        self.authorize("$commit Reprepare changed candidate")
         refreshed = self.run_helper(
             "prepare",
             "--repo-root",
@@ -745,9 +1565,8 @@ class CommitTransactionTest(unittest.TestCase):
         self.seed_multi_project_diff()
         prepared = self.prepare()
         real_index = git(self.root, "write-tree")
-        authorization_path = transaction.expected_authorization_path(
-            self.root, "session-1"
-        )
+        claim = json.loads(Path(prepared["claim"]).read_text())
+        authorization_path = transaction._attempt_authorization_path(claim)
         authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
         authorization["prompt_sha256"] = "f" * 64
         authorization_path.write_text(
@@ -862,6 +1681,7 @@ class CommitTransactionTest(unittest.TestCase):
             session_id="session-2",
             turn_id="turn-2",
         )
+        self.begin(session="session-2")
         rebound = self.run_helper(
             "prepare",
             "--repo-root",
@@ -894,7 +1714,7 @@ class CommitTransactionTest(unittest.TestCase):
         )
         self.assertEqual(completed["status"], "committed")
 
-    def test_failed_commit_hook_stales_for_fresh_explicit_retry(self) -> None:
+    def test_failed_commit_hook_retries_under_original_task(self) -> None:
         self.seed_multi_project_diff()
         hook = self.root / ".git" / "hooks" / "pre-commit"
         hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -916,9 +1736,24 @@ class CommitTransactionTest(unittest.TestCase):
             "Hook rejects commit",
             expected=2,
         )
-        self.assertIn("request a fresh commit", str(blocked["reason"]))
+        self.assertEqual(blocked["code"], "no_commit_failure")
         claim = json.loads(Path(str(prepared["claim"])).read_text(encoding="utf-8"))
         self.assertEqual(claim["state"], "STALE")
+
+        (self.root / ".git/hooks/pre-commit").unlink()
+        retry = self.run_helper(
+            "prepare",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--authorization",
+            str(transaction.expected_authorization_path(self.root, "session-1")),
+            "--claim",
+            prepared["claim"],
+        )
+        self.assertNotEqual(prepared["token"], retry["token"])
+        self.pr_execute(retry)
 
     def test_exact_staged_kill_window_recovers_without_duplicate_commit(self) -> None:
         self.seed_multi_project_diff()
@@ -931,6 +1766,7 @@ class CommitTransactionTest(unittest.TestCase):
             session_id="session-2",
             turn_id="turn-2",
         )
+        self.begin(session="session-2")
         rebound = self.run_helper(
             "prepare",
             "--repo-root",
@@ -1000,6 +1836,7 @@ class CommitTransactionTest(unittest.TestCase):
             session_id="session-2",
             turn_id="turn-2",
         )
+        self.begin(session="session-2")
         recovered = self.run_helper(
             "prepare",
             "--repo-root",
@@ -1200,11 +2037,13 @@ class CommitTransactionTest(unittest.TestCase):
         authorization = transaction.expected_authorization_path(child, "session-1")
         receipt = json.loads(authorization.with_name("intent.json").read_text())
         self.request_assertions["session-1"] = (
-            "--requested-action", "commit", "--intent-sha256",
+            "--requested-action",
+            "commit",
+            "--intent-sha256",
             transaction._digest_bytes(transaction._stable_json(receipt)),
         )
         claim = transaction.expected_claim_path(child)
-        blocked = self.run_helper(
+        self.run_helper(
             "prepare",
             "--repo-root",
             str(child),
@@ -1216,7 +2055,19 @@ class CommitTransactionTest(unittest.TestCase):
             str(claim),
             expected=2,
         )
-        self.assertIn("delegated integration flow", str(blocked["reason"]))
+        denied = self.run_helper(
+            "begin",
+            "--repo-root",
+            str(child),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "commit",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            expected=2,
+        )
+        self.assertIn("Worktree", denied["reason"])
 
     def test_corrupt_worktree_manifest_blocks_direct_prepare(self) -> None:
         self.seed_multi_project_diff()
@@ -1225,7 +2076,7 @@ class CommitTransactionTest(unittest.TestCase):
         state.mkdir(parents=True)
         (state / "project-corrupt.json").write_text('{"schema": 4}\n', encoding="utf-8")
         authorization = self.authorize()
-        blocked = self.run_helper(
+        self.run_helper(
             "prepare",
             "--repo-root",
             str(self.root),
@@ -1237,7 +2088,19 @@ class CommitTransactionTest(unittest.TestCase):
             str(transaction.expected_claim_path(self.root)),
             expected=2,
         )
-        self.assertIn("Worktree ownership manifest", str(blocked["reason"]))
+        denied = self.run_helper(
+            "begin",
+            "--repo-root",
+            str(self.root),
+            "--session-id",
+            "session-1",
+            "--requested-action",
+            "commit",
+            "--intent-sha256",
+            self.request_assertions["session-1"][-1],
+            expected=2,
+        )
+        self.assertIn("Worktree", denied["reason"])
         self.assertEqual(git(self.root, "write-tree"), real_index)
 
     def test_worktree_and_direct_execute_share_repository_lock(self) -> None:

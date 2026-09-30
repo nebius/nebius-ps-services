@@ -944,9 +944,9 @@ Agentic SDLC, or transaction-owned safety.
 - AC-001: The root agent interprets explicit user intent semantically, including
   natural-language action requests and skill mentions anywhere in a request.
   Neither a leading token nor a repeated magic phrase is required. The hook
-  records only nonauthorizing current-turn metadata. Direct preparation requires
+  records only nonauthorizing current-turn metadata. Root task begin requires
   the agent's action assertion bound to that exact receipt before creating a
-  single-use authorization. Skill selection alone grants no authority. Local
+  scoped task grant; each commit attempt receives a single-use authorization. Skill selection alone grants no authority. Local
   commit retains repository-root `git add -A`, normal hooks, and no push;
   commit-push owns its separate bounded publication workflow.
 - AC-001a: Eligible root capture failures emit fixed, nonblocking diagnostics
@@ -969,7 +969,7 @@ Agentic SDLC, or transaction-owned safety.
   checkout state.
 - AC-004: Changes under repository root files and any number of sibling project
   folders may commit together without project-lifecycle attestations. The
-  current-turn authorization plus transaction-owned Git, branch, Worktree,
+  original task authorization plus transaction-owned Git, branch, Worktree,
   secret, and workflow-conflict checks remain authoritative.
 - AC-005: Task Implementer worker commits and Worktree integration commits use
   their exact delegated claims, and interrupted exact-child adoption revalidates
@@ -999,19 +999,33 @@ Agentic SDLC, or transaction-owned safety.
   commit completed but claim persistence did not; a hook-modified committed
   tree remains review-required until that clean exact direct child is
   explicitly reviewed, while merge commits, new dirt, failed hooks without a
-  commit, ref movement, or identity drift become stale without reset, amend,
-  unstage, or duplicate commit.
+  commit, ref movement, or identity drift invalidate the attempt without reset, amend,
+  unstage, or duplicate commit. Only proven no-commit failures at the unchanged
+  authorized base may retry under the same task.
 
-- AC-007: An explicitly authorized unmanaged `create-pr` task may prepare,
-  stage, commit and push successive validated branch-owned repairs until its
-  GitHub checks finish, without another user turn for each commit. Its private
-  continuation grant binds the native session, repository, feature ref,
-  effective fetch/push origin, base lineage and original root receipt. Every
-  commit retains a fresh exact-tree claim and normal hooks. Completed claims
-  or unchanged-base failed attempts may advance; uncertain commits require
-  explicit review. Only correctly oriented base merges may intervene.
-  Ordinary commit and commit-push requests remain single-use. Closing the PR
-  task prevents receipt replay; active SDLC stays publication-only.
+- AC-007: One root-task grant binds the original receipt, requested action,
+  native session, repository/worktree and selected targets before Git history
+  changes. `commit` and `commit-push` permit one actual local commit, including
+  safe corrected no-commit retries; `create-pr` permits successive reviewed
+  branch-owned repairs until completion. An unrelated turn does not revoke
+  an active task. Every attempt retains a fresh exact-tree claim and normal hooks.
+- AC-008: Clean/no-op tasks can begin and finish without a commit. Completion
+  and cancellation permanently close task authority. Cancellation retires proven
+  unused claims while permitting metadata-only review of actual commits. Unknown effects and
+  hook-modified commits require reconciliation or review, never a duplicate
+  commit. A surviving Git child retains mutation serialization after helper loss.
+- AC-009: PR grants freeze current, planned-default, remote-only or named target
+  refs and heads, base lineage, origin identity and declared dependency edges.
+  Helper-owned sync records exact no-op, fast-forward or oriented two-parent
+  transitions before effects; conflict continuation verifies the retained merge
+  state and reviewed tree. Temporary merge-order validation refs are never
+  publication targets. Cleanup preserves intervening and ignored local files;
+  only exact recorded scratch state may be removed. Unselected refs and
+  unexplained history remain denied.
+- AC-010: Root task/attempt schemas are independent from existing delegated
+  schemas. Old root authority is not converted or replayed. Errors distinguish
+  candidate drift, no-commit failure, unknown effects, review, scope/history
+  drift and closure. Source, installed and native evidence remain separate.
 
 #### Negative Criteria
 
@@ -1032,7 +1046,7 @@ Agentic SDLC, or transaction-owned safety.
   Root-turn receipts alone never authorize effects, and subagent, Stop, system,
   or compaction events never create root receipts. Replaying a consumed ordinary commit receipt
   cannot mint another authorization; a scoped active PR grant is the only
-  repeated-commit path; unrelated turns preserve active claims.
+  multiple-successful-commit path; unrelated turns preserve active claims.
 
 #### Validation Method
 
@@ -2112,8 +2126,10 @@ lifecycle classification or weakening publication safety.
   hidden project effects.
 - AC-004: A dirty `commit-push` workflow obtains its local commit through the
   existing claim-bound whole-repository commit transaction. A semantically
-  explicit user action binds the current root-turn receipt to that transaction
-  without admitting raw `git add` or `git commit`.
+  explicit user action binds one task grant before preparation. Corrected
+  no-commit attempts may retry under that grant; a successful local commit
+  consumes its one-commit allowance while publication may still retry. This
+  never admits raw `git add` or `git commit`.
 - AC-005: Force, delete, mirror, all, tags, wildcard, arbitrary-remote,
   arbitrary-refspec, URL-targeted, dynamic, composed, hook-bearing, or otherwise
   ambiguous fetch and push commands remain denied by the publication workflow
@@ -3130,6 +3146,58 @@ non-mutating planning, explicit execution and document-owner handoffs. Verify
 host Plan Mode and read order with actual host context and traces when available.
 
 <!-- /REQUIREMENT: REQ-038 -->
+
+<!-- REQUIREMENT: REQ-039 status=active priority=P1 type=feature -->
+### REQ-039: Generate meaningful Python tests and preserve safe optimization evidence
+
+#### User Story
+
+Python project authors need behavior-focused tests with explicit layer and
+execution boundaries, and maintainers need suite optimization that preserves
+correctness and does not silently broaden execution or overwrite artifacts.
+
+#### Acceptance Criteria
+
+- AC-001: Python scaffolds distinguish unit, integration, optional contract and
+  E2E tests; regression and smoke remain cross-cutting purposes. Guidance covers
+  observable behavior, meaningful regression proof, boundary mocks, temporary
+  files, parametrization, fixture isolation, flakiness and branch coverage.
+- AC-002: Fast local and PR lanes include eligible integration and offline
+  contracts. Live tests require explicit opt-in and configured target preflight;
+  test layers never imply network authorization. Required pytest-socket guards
+  common Python sockets, with documented lifecycle and native/process limits.
+- AC-003: New scaffolds use validated pytest 9, importlib imports and strict
+  xfail behavior; xdist is conditional. Build validation installs an exact wheel
+  in a clean environment and proves imports, configured CLI and package resources.
+- AC-004: Optimizer commands retain bounded selections, effective safety
+  options, temporary coverage/report artifacts and test-identity equivalence.
+- AC-005: Executable fixture regressions, a Python 3.11-3.13 validation matrix,
+  skill eval definitions and separate static/runtime/quality evidence accompany
+  the source changes.
+
+#### Negative Criteria
+
+- NC-001: Do not treat integration as unrestricted network access, retries as a
+  flake fix, less coverage as a speedup, or smoke as proof of a complete workflow.
+- NC-002: Do not migrate existing projects, widen Python support, replace an
+  existing package manager, mutate installed skills or run live infrastructure.
+
+#### Validation Method
+
+Run source contract checks, disposable rendered-template tests, lint, workflow
+validation and skill structure/installation checks against captured working bytes.
+
+#### Test Method
+
+Exercise selection, socket policy, marker conflicts, XPASS/imports, wheel
+negative controls, cache selection, inherited options and artifact preservation.
+
+#### Evaluation Method
+
+Compare realistic generated-output cases with the prior source when isolated
+native runners are available; report unavailable runtime or quality lanes.
+
+<!-- /REQUIREMENT: REQ-039 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

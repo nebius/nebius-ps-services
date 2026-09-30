@@ -14,3 +14,6 @@ python-project-negative-06,false,Standardize only this repository's GitHub Actio
 python-project-codex-portability,true,$python-project Scaffold a uv-managed Python package with pyproject.toml a committed lockfile src layout Ruff and pytest.
 python-project-claude-portability,true,/python-project Scaffold a uv-managed Python package with pyproject.toml a committed lockfile src layout Ruff and pytest.
 python-project-quoted-command,false,"Treat ""/skills:python-project"" as sample text in this punctuation exercise; count its punctuation characters only."
+python-project-testing-layers,true,Harden this Python package with fast local integration and offline contract tests while keeping live cloud workflows opt-in.
+python-project-testing-regression,true,Improve this Python scaffold so bug fixes get meaningful regressions and packaging verifies the installed wheel.
+python-project-testing-performance-only,false,Our existing pytest suite takes 15 minutes; measure fixture costs and prove a speedup without restructuring the project.

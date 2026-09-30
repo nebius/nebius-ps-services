@@ -39,11 +39,12 @@ and GitHub steps.
 ## Commit Continuation
 
 One explicit PR task covers successive validated stage/commit/push repairs.
-The shared `commit` helper binds a private grant to the selected repository,
+The shared `commit` helper begins a private task before any branch movement,
+including clean starts, and binds its grant to the selected repository,
 feature branch, native session, origin and base. Each attempt still requires
 whole-repository candidate review and normal hooks. The grant permits corrected
 no-commit retries and closes when the PR task finishes. It does not change
-ordinary one-commit requests or active SDLC publication-only mode.
+the one-actual-commit limit for standalone tasks or active SDLC publication-only mode.
 See [commit continuation](references/commit-continuation.md) for the private
 protocol and recovery boundaries.
 
@@ -109,9 +110,9 @@ Report PR number, URL, and blockers
   narrow PR commits to selected paths.
 - Run format and whitespace checks before tests when those checks may change
   files, wait for tests to finish, then stage and commit.
-- Use `git fetch origin` plus `git merge --no-edit origin/<base>` before PR
-  creation so the branch has the latest base updates without rewriting
-  history.
+- Refresh base refs, then use the shared helper's private `sync` before PR
+  creation. Review/check the actual result and acknowledge its exact tree.
+  The helper owns the normal merge without rewriting history.
 - Use explicit push refspecs such as `git push origin HEAD:<branch>`; do not
   use a plain ambiguous `git push`.
 - Do not rebase or force-push inside this skill.
@@ -129,3 +130,10 @@ Report PR number, URL, and blockers
 - `agents/openai.yaml`: UI metadata and default prompt.
 - `references/command-reference.md`: exact Git and GitHub CLI command cookbook
   loaded when executing or validating PR operations.
+
+Private task intake freezes all selected local, remote-only or planned feature
+refs and dependencies. Recorded sync handles no-op, fast-forward and normal
+merges; multi-branch order checks use one declared scratch ref with exact cleanup.
+Safe no-commit retries preserve the original task authorization and require a
+fresh candidate review. Explicit finish covers completed, cancelled and
+zero-commit tasks. Human GitHub review remains separate from passing checks.

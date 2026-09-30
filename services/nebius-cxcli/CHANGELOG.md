@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Simplify the README opening and put its complete table of contents immediately
+  after the introduction. Group application updates, recovery and profiling with
+  their workflows, remove course-specific setup prose, and link detailed Grafana
+  and Nsight guidance from their existing guides.
+
+- Make the Nsight installation highlighting test declare its simulated terminal
+  capabilities so it also passes when invoked from a non-color terminal.
+
 - Match generated MysteryBox bindings against the exact rendered ESO API version,
   rejecting malformed and alternate versions before application effects. Express
   Soperator CRD discovery as explicit exact-name comparisons to avoid CodeQL URL

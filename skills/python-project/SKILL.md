@@ -88,16 +88,19 @@ post-integration step for separate authorization.
   files for installed artifacts.
 - `ruff` for linting/formatting checks.
 - `pytest` for tests.
-- Split test layout:
-  - `tests/unit/` for fast local development tests.
-  - `tests/integration/` for isolated release/CI validation.
-  - `tests/conftest.py` for shared fixtures and network guards.
+- Purpose-based test layout:
+  - `tests/unit/` for focused behavior with isolated external boundaries.
+  - `tests/integration/` for real component collaboration and controlled dependencies.
+  - Optional `tests/contract/` for interface compatibility and `tests/e2e/` for workflows.
+  - `tests/conftest.py` for small shared fixtures and selection/network guardrails.
+  - Regression belongs in the lowest reproducing layer; smoke is a critical subset.
 - `Typer` + `Rich` for CLI UX.
 - `Pydantic` for config/schema validation.
 - `Makefile` with `.DEFAULT_GOAL := all` and aggregate `all` target (for example `all: check build`).
 - CI pattern:
-  - Pull requests: `lint`, fast unit tests, `build`.
-  - Release/manual runs: `lint`, `unit`, `integration`, `coverage`, `packaging`.
+  - Pull requests: lint, fast unit/integration/offline-contract tests, installed-wheel smoke.
+  - Default-branch/release/manual runs: full non-external tests and branch coverage.
+  - External tests: separate explicit manual environment lane with target preflight.
 - Optional packaged systemd assets in `src/<package>/systemd/`.
 
 ## Workflow
@@ -153,7 +156,7 @@ In standalone scope, always include:
 - `src/<package>/__main__.py`
 - `tests/conftest.py`
 - `tests/unit/`
-- `tests/integration/`
+- `tests/integration/` when meaningful real collaboration exists; omit empty layers.
 
 Add these when selected:
 
@@ -176,7 +179,7 @@ Add these when selected:
   - Makefile and CI must check lock freshness, sync with `--locked`, and run
     project commands with `uv run --locked`; do not retain a parallel pip
     install path.
-  - CI should keep PR validation fast and move integration/coverage to release or manual runs.
+  - CI uses the same Makefile selections; tags never authorize external tests.
 - `ai-ml`: `src/<package>/ml/` split for train/eval/infer pipelines.
 
 In coordinated-candidate scope, limit this list to paths explicitly assigned
@@ -212,9 +215,14 @@ URLs, customer data, raw logs, or one-off local state.
 - Avoid shelling out when a Python API exists; if shell is required, set explicit timeouts and sanitize args.
 - Keep networking code timeout-safe and retry-safe.
 - Unit tests must not access the network, real cloud APIs, or external infrastructure.
-- Integration tests must be explicitly marked and isolated from the fast unit lane.
-- Prefer patching external clients with `unittest.mock.patch` in unit tests.
-- Keep fixtures small and deterministic; avoid large datasets in default scaffolds.
+- Test observable behavior at the lowest meaningful layer; add a reproducing
+  regression for behavior-changing bug fixes and explain missing failing-first proof.
+- Mock external boundaries, not internal call graphs; prefer `tmp_path` for file IO.
+- Keep fixtures small, explicit and function-scoped unless isolation is proven.
+- Require pytest-socket; layer markers never grant networking. External tests
+  require opt-in and target preflight. Read `references/testing.md` for limits.
+- Treat flakes as defects; do not default to reruns. Keep branch coverage without
+  arbitrary thresholds and add xdist only for measured benefit.
 - Route public standalone React/TypeScript/Vite source to `frontend-project`
   and container artifacts to `container`.
 
@@ -250,10 +258,10 @@ For containerized/Helm-delivered apps, keep version layers related but independe
 - `assets/systemd.service.template`: hardened service unit baseline requiring
   `{{service_module}}` to match a generated importable source module.
 - `assets/Makefile.template`: local developer workflow and fast test targets.
-- `assets/tests-conftest.py.template`: pytest fixture baseline with unit-test network blocking.
+- `assets/tests-conftest.py.template`: test-layer selection and explicit network policy using pytest-socket.
 - `assets/test-cli.py.template`: sample unit tests for a Typer CLI.
-- `assets/test-integration-cli.py.template`: sample integration smoke test layout.
-- `assets/github-actions-ci.yml.template`: CI with fast PR checks and fuller release/manual validation.
+- `assets/smoke-wheel.py.template`: isolated installed-artifact smoke helper.
+- `assets/github-actions-ci.yml.template`: CI with fast hermetic checks, artifact smoke and full non-external coverage.
 
 Use detailed references only when needed:
 

@@ -1,0 +1,31 @@
+{
+  "skill_name": "optimize-pytest",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review only: our pytest config adds coverage and xdist, the failure cache is empty, and repository .coverage belongs to another investigation. Propose a safe fixture-cost baseline.",
+      "expected_output": "A bounded report-only measurement plan retaining guards and artifacts.",
+      "files": [],
+      "assertions": [
+        "Inspects effective config and environment options before labeling runs serial or coverage-free",
+        "Preserves required network/import/selection settings while separating instrumentation",
+        "Keeps explicit targets and --last-failed-no-failures=none without claiming an empty run passed tests",
+        "Relocates raw coverage data and reports outside the repository",
+        "Does not install dependencies or change the project in report-only mode"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Optimize slow Python tests: a shared mutable database fixture dominates runtime, offline API contracts are marked integration, and a developer proposes global -n auto plus reruns.",
+      "expected_output": "Evidence-gated recommendations preserving test meaning and isolation.",
+      "files": [],
+      "assertions": [
+        "Separates test purpose from slow/external properties without relabeling real integration as unit",
+        "Requires reset/isolation proof before widening fixture scope or sharing across workers",
+        "Rejects reruns as a default flake repair and benchmarks bounded worker counts before auto",
+        "Preserves selected test identities, assertions and outcomes in like-for-like comparisons",
+        "Retains the authoritative full correctness/coverage gate"
+      ]
+    }
+  ]
+}

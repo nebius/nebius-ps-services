@@ -42,6 +42,7 @@ Installation shows a spinner, a description and elapsed time for preparation,
 cluster/storage checks, login Secret I/O, package prerequisites and resolution,
 installation in the shared jail, and verification. Credential input runs without
 an active spinner; viewer deployment uses its existing progress display.
+Kubeconfig notices print above the spinner, leaving one clean completion row.
 Redirecting output produces bounded `START`/`OK`/`FAILED` phase lines instead
 of terminal animations. A running spinner indicates a wait, not a percentage
 complete or proof that a remote Job is healthy.

@@ -26,10 +26,8 @@ checks, or PR creation.
   - run focused local tests and wait for completion
 - Complete local-work staging:
   - `git status --short`
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
+  - private `prepare`, complete candidate review, then `execute`
+  - the helper owns `git add -A`, staged checks and normal-hook commit
 
 ## Conflict And Base Merge
 
@@ -40,7 +38,7 @@ checks, or PR creation.
 - Base branch merge before PR creation:
   - `git fetch origin`
   - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
+  - private `sync`, review/check its actual tree, then `sync --reviewed-tree <tree>`
   - rerun focused validation after the merge
   - new remote branch: `git push -u origin HEAD:<branch>`
   - existing remote branch: `git push origin HEAD:<branch>`
@@ -53,13 +51,11 @@ checks, or PR creation.
   - `git diff --check`
   - run existing formatter/lint commands for touched files when available
   - run focused local tests and wait for completion
-  - `git add -A`
-  - `git diff --cached --check`
-  - `git diff --cached --stat`
-  - `git commit -m "<concise message>"`
+  - private `prepare`, complete candidate review, then `execute`
+  - the helper owns `git add -A`, staged checks and normal-hook commit
   - `git fetch origin`
   - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
+  - private `sync`, review/check its actual tree, then `sync --reviewed-tree <tree>`
   - rerun focused validation after merge
   - new remote branch: `git push -u origin HEAD:<branch>`
   - existing remote branch: `git push origin HEAD:<branch>`
@@ -67,15 +63,11 @@ checks, or PR creation.
 
 ## Ordered Merge Simulation
 
-- Ordered merge simulation:
-  - `git switch --detach origin/<base>`
-  - `git switch -c tmp/pr-order-check-<short-id>`
-  - `git merge --no-edit <first-branch-or-origin/first-branch>`
-  - `git merge --no-edit <next-branch-or-origin/next-branch>`
-  - if a simulation merge conflicts: `git merge --abort`
-  - record the exact simulation tip with `git rev-parse HEAD`
-  - `git switch <original-branch>`
-  - `git update-ref -d refs/heads/tmp/pr-order-check-<short-id> <observed-simulation-tip>`
+Use the canonical installed transaction helper's private `validate-order` with
+its existing task key and ordered `--branch` arguments. Intake must already
+have frozen `--validation-branch`. It records source SHAs, performs normal-hook
+merges on that ref and restores/removes only its exact recorded state. Do not
+run ad hoc switches, merge aborts or scratch-ref deletion around the helper.
 
 ## Pull Request
 

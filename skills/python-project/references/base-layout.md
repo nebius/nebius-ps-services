@@ -31,11 +31,13 @@ Use this baseline for every scaffold unless the user requests a different struct
 │   ├── conftest.py
 │   ├── unit/
 │   │   ├── test_cli.py
-│   │   └── test_smoke.py
-│   └── integration/
-│       └── test_cli_smoke.py
+│   │   └── test_config.py
+│   ├── integration/         # only meaningful real collaboration
+│   ├── contract/            # optional, offline interfaces
+│   └── e2e/                 # optional, complete workflows
 ├── scripts/
-│   └── dev.sh
+│   ├── dev.sh
+│   └── smoke-wheel.py       # packaging/automation profile
 └── infra/
     └── terraform/
 ```
@@ -75,43 +77,14 @@ Include at least:
 
 Never ignore source folders broadly.
 
-## Recommended Commands
+## Commands And Testing
 
-```bash
-uv self version
-uv lock --check
-uv sync --locked
-uv run --locked ruff check src tests
-uv run --locked pytest -m "not integration" tests/unit
-uv run --locked pytest -m integration tests/integration
-uv run --locked python -m build --wheel
-```
+Use `references/testing.md` and the Makefile asset as the single testing authority.
+Run `uv lock --check`, `uv sync --locked`, then `make check` for fast validation,
+`make coverage` for full non-external coverage and `make smoke-wheel` to prove the
+installed artifact. `make build` retains distributable output.
 
-## Makefile Targets
-
-At minimum:
-
-- `.DEFAULT_GOAL := all`
-- `all`: aggregate target, typically `check + build`
-- `lock-check`: `uv lock --check`
-- `sync`: `uv sync --locked`
-- `fmt`: `uv run --locked ruff format`
-- `lint`: `uv run --locked ruff check`
-- `test`: alias to fast unit tests
-- `test-unit`: `uv run --locked pytest -m "not integration" tests/unit`
-- `test-integration`: `uv run --locked pytest -m integration tests/integration`
-- `coverage`: `uv run --locked pytest --cov=<package_name> tests/unit`
-- `build`: `uv run --locked python -m build --wheel`
-- `check`: `lint + test-unit`
-
-## Testing Baseline
-
-- Default to split test lanes:
-  - `tests/unit/` for fast local development.
-  - `tests/integration/` for isolated smoke/integration checks.
-- Add an autouse fixture in `tests/conftest.py` that blocks network access for unit tests.
-- Keep unit tests focused on pure logic, validation, rendering, and CLI parsing.
-- Patch external APIs, cloud clients, and subprocess boundaries in unit tests.
-- Add one CLI smoke test for each user-facing command group when CLI is in scope.
-- Add one config/schema validation test with realistic sample input when typed config exists.
-- Fail fast in CI for lint and unit tests before packaging.
+Keep `.DEFAULT_GOAL := all` and `all: check smoke-wheel`. Optional layer and smoke
+targets exist only with meaningful tests; no blanket no-tests-collected exception.
+Classify by behavior rather than filesystem use or execution speed. Unit CLI
+parsing examples stay in unit tests; real workflows receive separate E2E proof.

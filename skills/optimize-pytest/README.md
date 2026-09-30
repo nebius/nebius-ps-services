@@ -28,3 +28,17 @@ changes as evidence-gated escalations.
 - Use `code-review` for generic implementation review.
 - Use `github-workflows` for substantive GitHub Actions changes after the test
   performance requirements are defined.
+
+## Evidence And Source Checks
+
+Keep architecture layers separate from speed and external-access properties.
+Preserve exact selected test identities, not just equal counts. Diagnostic
+commands reconstruct inspected effective arguments without dropping guards, keep
+failed-test reruns bounded, and place coverage data and reports in task storage.
+
+Install `../python-project/scripts/requirements-test.txt` in a disposable
+validation environment, then run `scripts/test_measurement_examples.py`. Its
+examples require pytest, pytest-cov, pytest-socket, pytest-xdist and pytest-testmon.
+It executes the documented command
+examples against local fixtures; it never benchmarks a real project or enables
+live infrastructure. `evals/evals.json` defines independent output-quality cases.
