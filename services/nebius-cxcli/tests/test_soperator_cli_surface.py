@@ -5313,7 +5313,15 @@ def test_documented_soperator_commands_use_only_registered_options() -> None:
     contract = _soperator_cli_contract()
     documents = "\n".join(
         (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8")
-        for path in ("README.md", "docs/requirements.md", "docs/design.md")
+        for path in (
+            "README.md",
+            "docs/requirements.md",
+            "docs/design.md",
+            "docs/soperator.md",
+            "docs/mk8s.md",
+            "docs/project-workflows.md",
+            "docs/nsight-profiling.md",
+        )
     )
     code_blocks = re.findall(r"```(?:bash|text)\n(.*?)```", documents, re.DOTALL)
 

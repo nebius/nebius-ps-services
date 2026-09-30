@@ -48,12 +48,12 @@ def test_soperator_docs_keep_exactly_two_accessible_svg_sources_of_truth() -> No
         )
 
 
-def test_soperator_svg_assets_are_referenced_by_readme_and_design() -> None:
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+def test_soperator_svg_assets_are_referenced_by_guide_and_design() -> None:
+    guide = (DOCS_ROOT / "soperator.md").read_text(encoding="utf-8")
     design = (DOCS_ROOT / "design.md").read_text(encoding="utf-8")
 
     for name in EXPECTED_ASSETS:
-        assert f"docs/{name}" in readme
+        assert f"]({name})" in guide
         assert f"]({name})" in design
 
 
@@ -68,6 +68,9 @@ def test_soperator_svg_semantics_match_current_upgrade_and_rootfs_contracts() ->
         "retry forever",
         "type + content",
         "parent receipt chooses one branch",
+        "equal release is observation-only",
+        "rerun the same approved upgrade",
+        "protected mounts outside both slots",
     )
     assert all(contract not in workflow for contract in retired_contracts)
     assert all(contract not in jail for contract in retired_contracts)
@@ -86,6 +89,9 @@ def test_soperator_svg_semantics_match_current_upgrade_and_rootfs_contracts() ->
         "zero-hop OS/GPU: node-templates:&lt;endpoint&gt;",
         "→ runtime-readiness:&lt;endpoint&gt;",
         "final-readiness",
+        "nebius-cxcli deploy CONFIG_YAML",
+        "original generation and execution options",
+        "same release: assess admitted changes",
         "soperator status --verify-observability",
     ):
         assert required in workflow
@@ -98,5 +104,7 @@ def test_soperator_svg_semantics_match_current_upgrade_and_rootfs_contracts() ->
         "physical SFS (canonical)",
         "VM-NFS (optional)",
         "exact unconsumed inactive slot",
+        "Optional paths retain their physical rootfs generation",
+        "allocates fresh backing",
     ):
         assert required in jail

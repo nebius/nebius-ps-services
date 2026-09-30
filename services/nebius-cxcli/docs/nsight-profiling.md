@@ -240,7 +240,7 @@ already occupied, stop its existing forward before retrying.
 
 ## Generic MK8s Apps
 
-Run `nebius-cxcli component add ./config.yaml`, select either or both **Profiling**
+Run `nebius-cxcli component add --config ./config.yaml`, select either or both **Profiling**
 Apps, and follow the viewer wizard. Supply an existing reports PVC, optional
 relative subdirectory, namespace, Secret name/keys and resource settings.
 The selected report subdirectory must already exist and be readable.

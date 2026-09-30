@@ -64,6 +64,62 @@ def _contract_path() -> Path:
     return Path(__file__).parent / "fixtures" / "cli_contract.json"
 
 
+def test_readme_index_lists_every_public_leaf_once() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    index = readme.split("<!-- command-index:start -->", maxsplit=1)[1].split(
+        "<!-- command-index:end -->", maxsplit=1
+    )[0]
+    documented = re.findall(r"^\| `([^`]+)` \|", index, re.MULTILINE)
+    leaves = {
+        path
+        for path, command in _public_commands(get_command(cli.app))
+        if not isinstance(command, click.Group)
+    }
+    assert set(documented) == leaves
+    assert len(documented) == len(set(documented)), "Duplicate command-index entries"
+
+
+def test_operator_guide_examples_parse_without_product_callbacks(monkeypatch) -> None:
+    project = Path(__file__).resolve().parents[1]
+    documents = [
+        project / "README.md",
+        *sorted(
+            path
+            for path in (project / "docs").glob("*.md")
+            if path.name not in {"design.md", "requirements.md", "development.md"}
+        ),
+    ]
+    root = get_command(cli.app)
+
+    def disable_callbacks(command: click.Command) -> None:
+        monkeypatch.setattr(command, "callback", lambda **_params: None)
+        for parameter in command.params:
+            monkeypatch.setattr(parameter, "callback", None)
+        if isinstance(command, click.Group):
+            for child in command.commands.values():
+                disable_callbacks(child)
+
+    disable_callbacks(root)
+    examples = 0
+    for path in documents:
+        contents = path.read_text(encoding="utf-8")
+        for block in re.findall(r"```(?:bash|sh|shell)\n(.*?)```", contents, re.DOTALL):
+            for line in block.replace("\\\n", " ").splitlines():
+                line = line.strip()
+                if not line.startswith("nebius-cxcli "):
+                    continue
+                # Parse shell words only: never expand variables or run substitutions.
+                # These examples use string/path placeholders, not typed enum defaults.
+                argv = shlex.split(line, comments=True)[1:]
+                if argv == ["--version"]:
+                    # The separate version test retains and exercises its eager callback.
+                    continue
+                result = ClickRunner().invoke(root, argv)
+                assert result.exit_code == 0, (path.name, line, result.output)
+                examples += 1
+    assert examples > 0
+
+
 def test_complete_cli_tree_matches_canonical_contract() -> None:
     contract = load_cli_contract(_contract_path())
 

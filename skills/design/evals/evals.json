@@ -156,6 +156,40 @@
         "Identifies maintain-project-specs as the canonical publication owner and does not directly edit the supplied project design document or requirements.",
         "Makes no code, test or configuration changes and does not misread the request to save a design as implementation authority."
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use $design to plan a new small Python standard-library CLI called count-items and its README for engineers counting entries in local JSON arrays. No implementation or documentation exists yet. The proposed CLI takes the input file as a positional argument and prints the count; there are no services, credentials or environment variables. Keep the stack fixed. Return an adaptable README outline and one proposed quick-start example with input and expected output. Do not implement or write files.",
+      "expected_output": "A concise proposed README plan that explains purpose, prerequisites and the first successful local workflow without inventing existing implementation or unnecessary sections.",
+      "files": [],
+      "assertions": [
+        "Explains the purpose and audience, gives a concrete proposed quick-start input and command with an observable count, and identifies necessary runtime/setup prerequisites before that command.",
+        "Clearly labels the commands and behavior as proposed because no implementation exists; does not claim inspected code or completed command validation.",
+        "Adapts the outline to this small local tool: does not add empty configuration, deployment or architecture sections, and avoids repeating the introduction in an unnecessary Overview.",
+        "Does not invent support channels, a license, existing policy files or working documentation links; any proposed deeper-document destinations are identified as future work.",
+        "Leaves the workspace unchanged and produces a plan rather than implementing the CLI or writing a README."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Use $design to plan total_count in service.list_items in evals/fixtures/catalog and the corresponding README restructure for new users. total_count must equal the number of identifiers while preserving items, next_cursor and consumer.export_ids. Keep the existing standard-library stack. Include the first successful usage example, proposed section order and destinations for deeper documentation. Distinguish current behavior from the future feature, preserve useful existing setup/test information and do not implement or write files.",
+      "expected_output": "A code-grounded feature and README plan with useful navigation, a safe first-success example, deeper-document ownership and explicit current-versus-proposed behavior.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Uses the implemented items/next_cursor envelope as current truth, reports conflicting design prose, and labels total_count as proposed rather than already available.",
+        "Places purpose and any necessary notice before navigation and quick start before deep architecture; includes only useful sections and avoids duplicating the introduction.",
+        "Specifies the working directory, Python prerequisite and a copyable first-success example consistent with the inspected functions, or clearly labels a future example and its required implementation; provides observable expected output.",
+        "Preserves the existing unittest command and consumer contract, uses relative links to actual documentation destinations, and routes correction of stale canonical design to maintain-project-specs rather than copying stale claims into the README.",
+        "Keeps the full architecture, API/configuration reference and runbook detail with their owners; does not invent unneeded configuration, support channels, license terms or policy files.",
+        "Makes no implementation or documentation writes and distinguishes checks actually performed from proposed validation."
+      ]
     }
   ]
 }

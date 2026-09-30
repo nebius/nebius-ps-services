@@ -9,7 +9,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PROJECT_ROOT / "tests/fixtures/docs/restored_document_contract.json"
-DOC_PATHS = (PROJECT_ROOT / "README.md", PROJECT_ROOT / "docs/design.md")
+DOC_PATHS = (PROJECT_ROOT / "README.md", *sorted((PROJECT_ROOT / "docs").glob("*.md")))
 
 
 def _manifest() -> dict[str, object]:
@@ -71,7 +71,7 @@ def test_every_required_heading_has_a_current_destination(source_document: str) 
         assert destination_heading in current_headings
 
 
-def test_required_archived_body_contracts_are_restored() -> None:
+def test_required_operational_contracts_have_documented_destinations() -> None:
     manifest = _manifest()
     for source_document, contracts in manifest["required_body_contracts"].items():
         active = _normalized((PROJECT_ROOT / source_document).read_text(encoding="utf-8"))

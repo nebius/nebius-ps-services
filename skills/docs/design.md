@@ -6676,8 +6676,8 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=1 -->
-### FEAT-037: Code-first design grounding and optional implementation continuation
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-037: Code-grounded design and conditional README planning
 
 #### Requirements Covered
 
@@ -6685,10 +6685,11 @@ fresh native behavior is still outside the verified scope.
 
 #### Context Evidence
 
-The design skill already inspects brownfield context and produces a seven-phase
-plan, but defines greenfield as no code, prohibits all implementation and permits
-requested design-document writes. Its process cases do not cover code precedence.
-The canonical publisher belongs to maintain-project-specs.
+The existing source skill grounds seven-phase plans in code, allows explicitly
+requested implementation when the host permits it, and retains canonical
+publication with maintain-project-specs. Its 457-line core delegates detail to
+a workflow reference. Before this extension, 32 trigger cases and nine quality
+cases cover those boundaries but omit conditional README design guidance.
 
 #### Design Details
 
@@ -6707,16 +6708,31 @@ matching implementation skills, subject to host mode, permissions and existing
 safety boundaries. Design supplies canonical decisions and delivery evidence to
 the spec owner but never publishes project documents itself.
 
+Use references/readme-design.md as the sole detailed README guidance owner.
+Load it for new-project design, material user-workflow changes or explicit README
+design. Keep only conditional routing, README impact and reference registration
+in the core; the workflow handoff records the first-success path, useful
+sections, deeper-document destinations and validation. Preserve the current
+frontmatter, host metadata, help behavior and implementation authority.
+The reference supplies one adaptable outline, early TOC guidance, concise
+formatting, prerequisites and minimum configuration before commands, relative
+links, accessible images and evidence-based current-versus-planned claims.
+Detailed architecture, reference material, runbooks and policy remain separate.
+
 #### Selected Option
 
 Add focused core directives and conditional detail in the existing workflow
 reference, preserving current specialist routes, help and source-owned metadata.
+Add one conditional README reference rather than another skill or a generator.
 
 #### Alternatives Considered
 
 Docs-first authority would reproduce stale designs. An immutable-code rule would
 prevent intended changes. Automatic implementation would violate the planning
 default. A new writer or mode flag would duplicate existing ownership or authority.
+Putting the full README template into the core would load irrelevant detail;
+broad README frontmatter would capture routine edits. Mandatory template sections
+would create repetition and empty headings. Reject all three approaches.
 
 #### Implementation Boundaries
 
@@ -6731,6 +6747,10 @@ configuration unchanged; preserve unrelated working changes.
 - TDD-002: Source fixtures exercise document drift, caller contracts, prototype
   refactoring and execution boundaries with observable output assertions.
 - TDD-003: Existing implementation-only and specialist-routing negatives remain.
+- TDD-004: Two README quality cases cover new-project and changed-usage plans;
+  four trigger additions distinguish design work from wording/link maintenance.
+- TDD-005: Native traces verify conditional reference reads and help short-circuiting;
+  output assertions do not substitute for successful read evidence.
 
 #### Validation Plan
 
@@ -6748,7 +6768,9 @@ npx discovery, copy parity and repeat-install checks for both supported hosts.
 Compare fresh trigger and quality runs with captured working bytes when isolated
 native authentication is available. Keep unavailable evidence explicit. Actual
 host Plan Mode and read-order assertions require native context and trace review,
-not user-prompt simulations or static wording checks.
+not user-prompt simulations or static wording checks. Compare README cases
+against the private pre-edit working-byte baseline; missing isolated authentication
+remains UNAVAILABLE. Do not copy existing account credentials into test homes.
 
 #### Rollout And Rollback
 
@@ -6764,6 +6786,16 @@ remain distinct from source or installation evidence.
 
 #### Implementation Evidence
 
+Version 2 README extension is implemented in the source skill. The new focused
+reference owns reader journey, an adaptable template, early TOC, prerequisites,
+first success, formatting, documentation boundaries and quality checks. Core
+Required Reads, Phase 7 and References route conditionally; the workflow handoff
+records README impact. The skill README, catalog and changelog describe it.
+The current catalog has 36 trigger cases (21 positive, 15 negative) and 11
+quality cases, including two new README cases and conditional-read process checks.
+
+The following describes the previous version's implementation.
+
 The source design skill, workflow reference, metadata, local README, catalog and
 changelog now express selected-project grounding, code precedence with conflict
 notification, proposal redesign, confirmed unused-greenfield refactoring and
@@ -6774,6 +6806,31 @@ No shared validators, installers, real host configuration or installed skill
 copies were modified by this task.
 
 #### Verification Evidence
+
+Version 2 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
+passed with required evals, strict frontmatter and no warnings. Eval definitions,
+all fixture paths and payload containment validated. Markdown rendering and the
+12 template TOC labels/anchors passed; focused lint and diff checks passed. The
+changelog's duplicate heading reproduces in the prior source under the narrower
+skills config; its existing repository Markdown config passes without changes.
+
+A working-byte comparison confirms unchanged frontmatter, host metadata, Help,
+public usage, execution/document ownership, guardrails, learning loop, all old
+trigger/quality cases and fixture bytes. The core grew from 457 to 468 lines;
+the conditional reference has 235 lines. Current official GitHub README, style,
+code-block, content-design and README-example guidance informed the reference.
+
+Disposable skills CLI 1.5.26 checks passed discovery, complete copied-resource
+parity, repeat installation and isolation for Codex and Claude. Independent
+read-only code-review and advisory apply-security found no blocking findings.
+These checks cover source, definition and installation behavior only.
+
+Version 2 RUNTIME and QUALITY are UNAVAILABLE: isolated runner authentication
+is absent. No account credentials were copied or altered. Native conditional-read
+and host-help traces are NOT_RUN; no output-quality comparison is claimed.
+REQ-038 remains active and FEAT-037 delivery implemented, not verified.
+
+Prior version evidence (not rerun for this README extension):
 
 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks passed
 with strict frontmatter and canonical trigger coverage. Evaluation JSON and all

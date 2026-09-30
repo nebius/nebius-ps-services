@@ -44,7 +44,8 @@ Static validation does not prove runtime activation.
 - `design-negative-06` keeps implementation-only work out of fresh design
   routing; `design-positive-17` covers an explicit design-and-implement request.
 - Negative rows must route to brainstorming, checklist review, stack selection,
-  Agentic SDLC, implementation, scaffolding, troubleshooting, or PR workflows.
+  Agentic SDLC, implementation, scaffolding, troubleshooting, PR workflows or
+  routine documentation maintenance.
 
 ## Manual Runtime Check
 
@@ -61,8 +62,10 @@ routing readiness from metadata and static validation only.
 
 `evals.json` holds fixture-backed cases for code/document drift, neighboring
 project scope, missing docs, unused prototype refactoring, unknown usage,
-existing-user obligations, explicit compatibility, implementation continuation
-and document-owner handoff. The prototype deliberately demonstrates a lossy
+existing-user obligations, explicit compatibility, implementation continuation,
+document-owner handoff, and README design for new and existing projects. The
+new-project README case uses explicit hypothetical requirements without source
+fixtures; its commands must remain labeled as proposed. The prototype demonstrates a lossy
 delimiter boundary; it is evaluation input, not a recommended implementation.
 
 Run candidate and captured previous-version arms in disposable workspaces using
@@ -93,6 +96,17 @@ Exercise these additional process cases in actual host sessions:
 5. Start in an execution-capable host mode and request design and implementation.
    Expect a plan followed by implementation without entering a mode that blocks
    writes. Verify this in the native trace, not only the final response.
+6. Request design of a new project, a material change to how a project is used,
+   or explicit README creation/restructuring. Expect a successful read of
+   `references/readme-design.md` before proposing README structure or examples.
+   Exercise material setup/configuration change without explicitly mentioning
+   README so the design still assesses its documentation impact.
+7. Request a private internal refactor with no change to purpose, setup, usage,
+   configuration, architecture documentation, compatibility or operations.
+   Expect a bounded no-README-change rationale and no README-reference read.
+8. Repeat help checks with the README reference installed. Expect no workflow
+   reference reads after the selected skill loads. For wording-only or link/TOC
+   maintenance without explicit design invocation, expect no design activation.
 
 Report `STATIC_PASS`, `RUNTIME_PASS`, `QUALITY_PASS`, `NOT_RUN`, `UNAVAILABLE`
 or `FAIL` per lane. Host-mode and trace checks remain `NOT_RUN` or `UNAVAILABLE`
