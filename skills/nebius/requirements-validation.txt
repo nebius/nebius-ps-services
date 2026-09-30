@@ -19,7 +19,7 @@ portalocker==4.3.0
 propcache==0.5.2
 protobuf==7.36.1
 pycparser==3.0
-PyJWT==2.13.0
+PyJWT==2.14.0
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 ruff==0.16.6
