@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Isolate Rich's cached ANSI styles in truecolor command-output tests so earlier
+  standard-color consoles cannot alter their exact RGB assertions in CI.
+
 - Simplify the README opening and put its complete table of contents immediately
   after the introduction. Group application updates, recovery and profiling with
   their workflows, remove course-specific setup prose, and link detailed Grafana

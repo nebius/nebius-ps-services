@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from rich.style import Style
 from rich.text import Text
 from typer.testing import CliRunner
 
@@ -137,6 +138,20 @@ def _bundled_tool_versions() -> tuple[str, str]:
     assert isinstance(settings, dict)
     cli_settings = settings["cli"]
     return cli_settings["flux"]["version"], cli_settings["terraform"]["version"]
+
+
+@pytest.fixture
+def truecolor_console(monkeypatch: pytest.MonkeyPatch) -> Iterator[cli.Console]:
+    # Rich caches ANSI codes on parsed styles; earlier consoles may use fewer colors.
+    Style.parse.cache_clear()
+    Style._add.cache_clear()
+    console = cli.Console(
+        force_terminal=True, color_system="truecolor", no_color=False, width=220, record=True
+    )
+    monkeypatch.setattr(cli, "console", console)
+    yield console
+    Style.parse.cache_clear()
+    Style._add.cache_clear()
 
 
 def _assert_copy_paste_command_styled(rendered: str, command: str) -> None:
@@ -7626,15 +7641,10 @@ def test_deploy_command_prints_wireguard_generation_command(
 def test_deploy_footer_styles_copy_paste_commands_not_labels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
     monkeypatch.setattr(
         cli,
         "wireguard_access_command_hints",
@@ -12930,15 +12940,9 @@ def test_print_deployment_status_message_disables_rich_auto_highlighter(
 
 
 def test_print_copy_paste_command_styles_command_and_escapes_markup(
-    monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
 
     cli.print_copy_paste_command(
         cli.console, "nebius-cxcli render /tmp/[red]project[/red]/config.yaml"
@@ -12955,15 +12959,9 @@ def test_print_copy_paste_command_styles_command_and_escapes_markup(
 
 def test_print_create_next_steps_styles_all_copy_paste_commands(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
     config_path = tmp_path / "config.yaml"
 
     cli._print_create_next_steps(config_path)
@@ -13041,10 +13039,8 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
     assert "Dry run only: no changes." in rendered
 
 
-def test_upgrade_compatibility_followups_share_command_highlighting(monkeypatch):
-    monkeypatch.delenv("NO_COLOR", raising=False)
-    console = cli.Console(force_terminal=True, color_system="truecolor", record=True)
-    monkeypatch.setattr(cli, "console", console)
+def test_upgrade_compatibility_followups_share_command_highlighting(truecolor_console: cli.Console):
+    console = truecolor_console
     command = "kubectl --context verified get nodes"
     cli._print_upgrade_plan_lines(("    follow-up:", command, "      Check node readiness."))
     rendered = console.export_text(styles=True)
