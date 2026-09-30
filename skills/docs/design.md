@@ -7142,7 +7142,7 @@ after retaining this sanitized evidence summary.
 
 <!-- /FEATURE: FEAT-039 -->
 
-<!-- FEATURE: FEAT-040 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-040 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-040: Lightweight update-branch workflow
 
 #### Requirements Covered
@@ -7151,7 +7151,9 @@ after retaining this sanitized evidence summary.
 
 #### Context Evidence
 
-The catalog has no update-branch skill. Existing commit transactions accept
+The existing instruction-only skill rejects any sibling worktree container,
+additional worktree or worktreeSkill metadata, even without a current-branch link.
+This blocks ordinary primary checkouts. Existing commit transactions accept
 commit, commit-push and create-pr; synchronization belongs to create-pr grants.
 Worktree publication guards do not expose branch-update eligibility. Reuse Git
 merge directly while honoring installed guards; never invent owner authority.
@@ -7160,8 +7162,19 @@ merge directly while honoring installed guards; never invent owner authority.
 
 Explicit-only instruction skill with bare invocation and -h/--help. Resolve the
 Git root, branch and HEAD; require clean status with explicit untracked/submodule
-visibility. Reject unfinished Git operations, default/detached branches, linked
-worktrees and Worktree/coordinator footprints, including stale namespace state.
+visibility. Reject unfinished Git operations and default/detached branches.
+Resolve the exact full current branch ref with git symbolic-ref --quiet HEAD.
+Parse git worktree list --porcelain -z as NUL-delimited records; exclude the first
+primary record and block only linked records with an exact branch-ref match,
+including locked/prunable registrations and invocation within a linked checkout.
+Report the matching branch/path; failed identity or registration inspection stops.
+
+Unrelated/detached worktrees, sibling containers or symlinks, ancestry and
+worktreeSkill metadata alone do not establish an association, including stale
+current-branch metadata. Preserve active restrictions applicable to the current
+branch/checkout and explicit repository-wide Git-write locks; do not infer active
+ownership from metadata or another branch alone. Never parse private owner schemas,
+repair registrations or call publication guards under a false action.
 Assume one Git writer and recheck eligibility immediately before mutation.
 For dirty-checkout blocks, tell the user to review, stage and commit their work,
 verify the checkout is clean, then rerun update-branch. This is recovery advice,
@@ -7192,7 +7205,10 @@ subsystem or stack selection is needed.
 
 Bare fetch/merge lacks target, local-work and completion checks. Fast-forward-only
 cannot handle divergent feature history. Rebase rewrites commits. A worktree
-eligibility API adds scope and is deferred in favor of ordinary checkouts only.
+eligibility API adds scope and is deferred in favor of native Git registration.
+Keeping only the folder check removed still rejects unrelated worktrees; trusting
+metadata alone retains stale-marker false positives. Git registration is the
+selected authority, with independent active workflow guards preserved.
 
 #### Implementation Boundaries
 
@@ -7205,6 +7221,9 @@ Preserve unrelated working changes, including the concurrent merge-pr work.
 - TDD-001: Local fixtures preserve branch/ancestry for no-op, fast-forward and merge.
 - TDD-002: Dirty/ignored files and hook/config failures never produce false success.
 - TDD-003: Conflicts require semantic review; unresolved or ambiguous work stays pending.
+- TDD-004: Unrelated containers/worktrees and stale metadata pass association checks;
+  exact current-branch linked records, failed inspection or a new matching
+  registration before merge stop with specific evidence.
 
 #### Validation Plan
 
@@ -7217,18 +7236,23 @@ Apply nested code-review, apply-security and final changed-scope align.
 Cover renamed default, failed fetch, stale tracking refs, dirty tracked/untracked
 and submodule state, ignored collisions, repeated rerere conflicts, hook rejection,
 merge-option bypass, detached/default branches and coordination boundaries.
+Add disposable registration checks for container directories/dangling symlinks,
+unrelated/detached worktrees, stale current-branch metadata, locked/prunable
+matching records, linked invocation, exact-ref boundaries and unusual path names.
+Offline cases cover inspection failures, registration races and applicable
+active reservations versus unrelated workflow activity.
 
 #### Evaluation Plan
 
 Use at least three positive and three near-miss trigger cases and focused quality
-assertions. Compare with an isolated baseline containing the original two-command
-approach when a clean authenticated runner exists; never copy account credentials.
+assertions. Compare the worktree change with captured pre-change working bytes
+when a clean authenticated runner exists; never copy account credentials.
 Unavailable runtime or quality lanes remain explicit.
 
 #### Rollout And Rollback
 
-Source-only addition. Verify disposable installation; actual invocation and personal
-installation are separate tasks. Remove only this addition if rollback is needed;
+Source-only update. Verify disposable installation; actual invocation and personal
+installation are separate tasks. Restore only this change if rollback is needed;
 never reset existing work. Remove exact private baseline/eval storage at completion.
 
 #### Done Definition
@@ -7238,64 +7262,47 @@ checks pass, review findings are resolved and missing native evidence is explici
 
 #### Implementation Evidence
 
-Implemented the 149-line instruction-only update-branch skill, explicit-only
-Codex/Claude metadata, concise README, nine trigger cases and fourteen offline
-behavioral scenarios. Registered both native plugin catalogs and updated the
-catalog README and Unreleased changelog. No execution helper, custom state,
-runtime dependency, owner API, hook change or personal installation was added.
-Existing merge-pr files and pre-existing shared README/changelog edits remain
-byte-identical outside this task's additions.
+The 155-line instruction-only skill now matches the exact full current branch
+ref against Git linked-worktree registrations, excluding only the primary record.
+It preserves matching locked/prunable registrations and applicable active guards,
+while allowing unrelated/detached worktrees, containers, ancestry and metadata
+alone. Identity/registry failures and actual associations have distinct reports;
+association checks repeat before merging. Dirty-checkout recovery guidance remains.
+
+Both READMEs, Unreleased notes and existing eligibility fixtures are aligned.
+Eleven trigger cases and seventeen output-quality cases include nineteen new
+worktree scenarios across three contained fixtures. No runtime helper, dependency,
+public flag, metadata policy, owner API or hook change was introduced.
 
 #### Verification Evidence
 
-STATIC_PASS: target repository Codex/Claude profiles and portable core fields;
-both native plugin catalogs; canonical evaluation loader and contained payload;
-changed Markdown and whitespace checks. Native disable-model-invocation remains
-a recognized extension: the generic scaffold quick checker rejects this field,
-while the repository's host-aware validators accept it. Do not remove the native
-control to satisfy the narrower checker.
+STATIC_PASS: repository Codex/Claude and portable core validators, canonical
+trigger/output case loading and contained payload checks, scoped Markdown and
+whitespace checks. Standard fields pass; disable-model-invocation remains a
+recognized native extension rather than strict standard-only frontmatter.
 
-Nine disposable local Git checks passed: no-op/repeat, live renamed default and
-fast-forward, divergent merge ancestry, conflict/continue, ignored-file collision,
-hidden untracked/submodule changes, fetch failure with a stale ref, hook rejection
-with a configuration-bypass negative control, and reused rerere resolution without
-auto-staging. These verify Git primitives, not autonomous agent behavior.
+Twelve disposable Git checks passed: primary exclusion, ordinary container,
+dangling container symlink, unrelated branch, detached checkout, stale
+current-branch metadata, child source-ref metadata, lookalike refs with unusual
+paths, a new matching registration on recheck, linked-checkout invocation,
+locked registration and prunable registration with a missing directory.
+These prove Git record semantics, not autonomous execution of the instruction.
+Offline definitions additionally cover failed identity/registry inspection,
+malformed records, current-branch reservations and explicit repository-wide locks.
 
 Pinned skills CLI 1.5.26 discovery, copy parity, repeat installation and isolation
-passed for Codex and Claude in disposable locations. Nested code-review approved
-with no blockers; apply-security found no concrete findings. Final changed-scope
-align checked runtime instructions, help, metadata, fixtures, catalog wiring,
-documentation and the canonical pair. Full changelog lint retains one MD024
-Changed-heading duplicate reproduced from the initial working-byte baseline;
-all other scoped Markdown checks pass, including changelog with only that
-pre-existing rule disabled for the check.
+passed for Codex and Claude in disposable locations. Read-only code-review and
+apply-security found no blockers. Final changed-scope align covered instructions,
+metadata/help preservation, docs, fixtures and the canonical pair. Changelog lint
+retains one MD024 duplicate reproduced from the captured pre-change baseline;
+all other scoped Markdown rules pass. No shared tooling or catalog wiring changed.
 
-QUALITY: UNAVAILABLE on both fresh native probes because isolated authentication
-was unavailable; no credentials were copied. The original two-command baseline
-was prepared but comparative quality could not run. Fresh trigger RUNTIME was
-NOT_RUN after those authentication failures. No live remote merge or personal-home
-installation occurred. REQ-041 remains active and delivery implemented rather than
-verified; source/install evidence does not establish native behavior.
-
-Temporary working-byte, baseline and evaluation storage is owner-only and removed
-by this task at completion after retaining this sanitized evidence summary.
-
-Dirty-checkout message follow-up: runtime instructions, both READMEs, Unreleased
-notes, the existing trigger case and dirty-file output assertions now direct the
-user to review, stage and commit local work, ensure a clean checkout, then rerun.
-Dirty submodule work is resolved first; the skill does not stage or commit the
-existing work automatically.
-
-STATIC_PASS for this follow-up: repository Codex/Claude and portable core
-validation, nine trigger and fourteen quality definitions with contained fixtures,
-scoped Markdown and whitespace checks. The pre-existing changelog MD024 duplicate
-was reproduced against the captured working-byte baseline; the remaining rules
-pass. Disposable pinned npx discovery, copy parity, repeat installation and
-isolation passed for both hosts. Read-only code-review and apply-security found
-no blockers. Runtime triggering is NOT_RUN because invocation policy is unchanged;
-comparative output quality is UNAVAILABLE without isolated native authentication.
-The working-byte baseline is removed after comparison. Personal installation and
-real branch updates are outside this change.
+RUNTIME: NOT_RUN; invocation policy is unchanged. QUALITY: UNAVAILABLE because
+isolated native authentication is absent; account credentials were not copied.
+The current working-byte baseline was captured before edits, then removed with
+the owner-only disposable Git fixture tree after validation. No personal-home
+installation or real branch update occurred. REQ-041 remains active and delivery
+implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 

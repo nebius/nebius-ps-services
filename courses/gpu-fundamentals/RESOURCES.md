@@ -42,3 +42,6 @@
 38. [PyTorch NVTX point markers](https://docs.pytorch.org/docs/2.14/generated/torch.cuda.nvtx.mark.html)
 39. [PyTorch NVTX range context manager](https://docs.pytorch.org/docs/2.14/generated/torch.cuda.nvtx.range.html)
 40. [Grafana: dashboard panels and time ranges](https://grafana.com/docs/grafana/latest/visualizations/dashboards/use-dashboards/)
+
+41. [CUDA thread indexing and x-fastest linear thread order](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-cuda-kernels.html)
+42. [CUTLASS matrix multiplication: block, warp and thread tiles](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html)

@@ -3,10 +3,7 @@
     "detached HEAD",
     "unborn HEAD",
     "current branch equals live origin default",
-    "two registered worktrees",
-    "primary checkout with branch worktreeSkill metadata",
-    "dangling sibling project-worktrees symlink",
-    "active coordinator workflow",
+    "active coordinator restriction on the current branch or checkout",
     "unrelated pre-existing merge"
   ]
 }

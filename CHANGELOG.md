@@ -6,6 +6,11 @@ project folder.
 
 ## [Unreleased]
 
+- Add a GPU Fundamentals matrix multiplication example and diagram tracing
+  four outputs through a 2×2-thread block, a partial 32-lane warp and execution
+  on one SM. Support exact lesson-figure placement using registered Markdown
+  references, with checks for ownership, titles and duplicate placement.
+
 - Rework the first four GPU Fundamentals performance-tool diagrams into
   landscape layouts that use the available page width, with left-to-right
   timelines and matching explanations, captions and accessible descriptions.

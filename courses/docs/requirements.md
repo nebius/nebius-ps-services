@@ -127,6 +127,14 @@ Engineers need an H100-centered mental model connecting the software stack, exec
   SM placement, reserved registers/shared memory and a waiting-versus-executing
   warp example; distinguish residency from simultaneous instruction execution.
 
+- AC-005: The Work hierarchy subsection traces a concrete 2×3 by 3×2 matrix
+  multiplication to four output elements, a 2×2-thread block in a one-block
+  grid, one partial 32-lane warp and instruction issue on one SM. Show all four
+  dot products, x-fastest thread numbering, four active and 28 unused lanes,
+  and distinguish this chosen one-output-per-thread mapping from optimized
+  tiled or cooperative matrix kernels. Place one complete accessible SVG
+  beside the worked example inside that subsection.
+
 #### Negative Criteria
 
 - NC-001: MIG, MPS, time-slicing, health, or topology lessons do not mutate cluster configuration.

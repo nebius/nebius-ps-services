@@ -169,7 +169,7 @@
         "evals/fixtures/ineligible-checkouts.json"
       ],
       "assertions": [
-        "Rejects all scenarios, including stale/dangling ownership evidence and additional manual worktrees.",
+        "Rejects detached/unborn/default HEAD, the applicable active coordinator restriction and the pre-existing merge; does not infer ownership from a folder or metadata alone.",
         "Does not change branch, delete coordination records, remove locks or adopt somebody else\u2019s merge.",
         "Uses only the supplied offline observations without executing repository or network mutations."
       ]
@@ -184,6 +184,51 @@
       "assertions": [
         "Does not report a successful update based on exit zero.",
         "Identifies changed branch and missing target ancestry; does not reset or force repair.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-unrelated",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-unrelated.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Pass all association checks and proceed to default discovery.",
+      "files": [
+        "evals/fixtures/worktree-unrelated.json"
+      ],
+      "assertions": [
+        "Passes worktree eligibility for every scenario, including current-branch stale metadata, and proceeds only to default discovery without claiming the branch update completed.",
+        "Excludes only the first primary record and compares full branch refs exactly; unrelated or detached records and lookalike branch names do not match.",
+        "Treats NUL-delimited registered paths intact, including spaces and newlines; never infers association from folder names, shared commits or source-branch metadata.",
+        "Does not remove a directory or symlink, prune records, repair metadata or parse private owner state.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-associated",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-associated.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Block every matching linked registration with its branch and path.",
+      "files": [
+        "evals/fixtures/worktree-associated.json"
+      ],
+      "assertions": [
+        "Blocks every scenario before fetch or merge and identifies the exact current branch and registered linked path.",
+        "Blocks locked and prunable matching registrations even if the registered directory is missing.",
+        "Excludes only the first primary record, not the current checkout; invocation inside a linked checkout is blocked.",
+        "Preserves unusual path characters and leaves directories, registrations and locks untouched.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-inspection",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-inspection.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Distinguish inspection failures, new associations and applicable active guards; allow the unrelated reservation.",
+      "files": [
+        "evals/fixtures/worktree-inspection.json"
+      ],
+      "assertions": [
+        "Reports failed branch or registry inspection separately from a proven worktree association, without guessing ownership.",
+        "Repeats association checks before merge and blocks a newly matching registration without merging or repairing records.",
+        "Honors the current-branch reservation and explicit repository-wide Git-write lock; unrelated branch reservations alone do not block.",
+        "Never uses folder or metadata presence as a substitute for an authoritative active restriction, and never calls a publication guard under a false action.",
         "Uses only the supplied offline observations without executing repository or network mutations."
       ]
     }

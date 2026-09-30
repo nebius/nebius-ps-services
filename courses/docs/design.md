@@ -184,7 +184,7 @@ validator and diff checks passed. These checks cover documentation only.
 
 <!-- /FEATURE: FEAT-002 -->
 
-<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=3 -->
+<!-- FEATURE: FEAT-003 reqs=REQ-003,REQ-004 status=ready delivery=implemented priority=P0 version=4 -->
 ### FEAT-003: General GPU curriculum boundary
 
 #### Requirements Covered
@@ -216,6 +216,36 @@ the resident-thread count to retained work, not instructions executed per cycle.
 Preserve the existing deterministic
 renderer, course identity, lab logic and target contract. This addition is implemented. Its source checks and SVG asset review pass;
 full-page browser and H100 evidence remain separate and pending.
+
+The matrix-work mapping extension is ready; implementation is pending. Add a
+worked A × B = C example with A=[[1,2,3],[4,5,6]], B=[[1,2],[3,4],[5,6]] and
+C=[[22,28],[49,64]]. Use one grid containing one 2×2 block, with x selecting
+columns and y selecting rows; linear thread ID is x+2y. Show the block assigned
+to one SM and its single warp with four active lanes and 28 unused lanes.
+The scheduler issues ready warp instructions over time; the drawing is neither
+a four-lane warp nor a cycle-accurate schedule or Tensor Core dispatch claim.
+Define dot product, lane and tile locally; explain larger grids and non-1:1
+mappings without changing executable labs.
+
+Keep canonical Markdown, SVG and manifest sources and the shared deterministic
+builder. Reuse its existing Markdown figure callback to place a registered
+lesson figure exactly where the author writes its image reference. Consume
+that figure once from its declared primary lesson/field; reject unknown,
+wrong-owner, duplicate or title-mismatched references. Unreferenced registered
+figures retain their declared end-of-field placement. This is an authoring
+choice, not a legacy alias. The current renderer appends all lesson figures
+at field end, so exact subsection placement requires this bounded extension.
+
+The baseline has hierarchy explanations without a concrete matrix mapping;
+a table alone is simpler but cannot show grouping and scheduling together.
+Select one combined SVG plus a prose calculation table over multiple figures.
+No stack or AI subsystem decision is needed. Apply local correctness,
+accessibility, preservation and passive-SVG checks; a full architecture review
+is unnecessary for this reversible teaching change. Validate exact placement
+and rejection cases, arithmetic, generated parity across shared consumers,
+native validators and desktop/390px/320px headless browser rendering. Update
+the course README, glossary, visual plan, publication review and root changelog.
+Roll back through the canonical sources and rebuild, preserving unrelated work.
 
 #### Selected Option
 

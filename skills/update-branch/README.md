@@ -15,7 +15,15 @@ There are no positional arguments or additional public flags.
 
 The skill requires a clean ordinary primary checkout and existing `origin`
 access. It stops on local edits, detached/default branches, unfinished Git
-operations, linked worktrees or workflow ownership records, even stale records.
+operations or a linked-worktree registration for the current branch. Git's
+primary record is excluded; matching locked or prunable registrations still
+block, as does running inside a linked checkout. The blocker names the branch
+and registered path; failed inspection is reported separately.
+Unrelated/detached worktrees, sibling container directories or symlinks, ancestry
+and `worktreeSkill` metadata alone do not block, including stale current-branch
+metadata. Active workflow restrictions on the current branch/checkout and explicit
+repository-wide Git-write locks remain binding. The skill never repairs or
+deletes ownership records, and rechecks the association before merging.
 It discovers the live default branch instead of assuming `main`, fetches only
 that branch and merges the fetched commit. It does not synchronize the feature
 branch's own upstream, switch branches, rebase, stash or push.
@@ -41,8 +49,8 @@ From the skills catalog, run the structure validator for repository Codex and
 Claude profiles with `--require-evals update-branch`, plus portable core and
 plugin-catalog checks. Disposable Git fixtures exercise the command semantics;
 trigger and quality definitions are separate from actual native behavior evidence.
-Compare quality with the original `git fetch origin; git merge origin/main`
-approach in a disposable baseline when an authenticated clean runner is available.
+Compare worktree eligibility output with captured pre-change working bytes
+in a disposable baseline when an authenticated clean runner is available.
 Never copy account credentials into evaluation homes or test on a real branch.
 
 ## Official references
@@ -51,3 +59,4 @@ Never copy account credentials into evaluation homes or test on a real branch.
 - [Git merge](https://git-scm.com/docs/git-merge): fast-forward, conflicts and safeguards.
 - [Git ls-remote](https://git-scm.com/docs/git-ls-remote): live symbolic default discovery.
 - [Git status](https://git-scm.com/docs/git-status): explicit untracked/submodule checks.
+- [Git worktree](https://git-scm.com/docs/git-worktree): primary-first NUL records and branch associations.

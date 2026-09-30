@@ -10,6 +10,14 @@ separates physical HBM/L2/SM/L1/shared/register resources from logical
 grid/block/warp/thread work, including the four subpartitions inside one SM.
 It is a conceptual teaching map, not a die floorplan or fixed-SKU inventory.
 
+The detailed matrix multiplication figure has its primary home at the explicit
+Markdown image reference in Lesson 1's Work hierarchy subsection. Read it
+downward: input matrices, a one-block grid with four output assignments, a
+resident block's partial 32-lane warp on one SM, then output writes. Four
+active lanes and 28 unused lanes remain distinct. Color and thread labels
+preserve output ownership; arrows show conceptual work and result flow, not
+elapsed cycles. The numerical example does not imply optimized-kernel dispatch.
+
 | Title | First stage | Second stage | Third stage | Explanation | Lesson | After | Layout | Home |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Software compatibility stack | Packaged kernel or PTX | CUDA driver loads code | GPU executes kernel | Read downward: a framework or library supplies device code, the CUDA driver loads or translates a compatible version, and the GPU executes it. The toolkit compiler prepares code earlier; installing it is not a substitute for a compatible driver. | 2 | How it works | flow | lesson |

@@ -59,13 +59,19 @@ Resolve operation paths through `git rev-parse --git-path`; stop for existing
 merge, rebase/am, cherry-pick, revert, sequencer or bisect state. Do not remove
 locks or repair somebody else's operation. Reject detached or unborn HEAD.
 
-Require an ordinary primary checkout: inspect `git worktree list --porcelain -z`;
-reject linked checkouts or any additional registered worktree. Reject any
-`branch.*.worktreeSkill*` metadata or sibling `<primary-name>-worktrees` entry,
-including stale entries and dangling symlinks. Reject active coordinator work
-or other ownership evidence supplied by project instructions/runtime guards;
-uncertain ownership stops the update. Do not parse private owner schemas, call
-publication guards under a false action, or remove records to pass this check.
+Read the full current ref with `git symbolic-ref --quiet HEAD` and registrations
+with `git worktree list --porcelain -z`. Stop if identity or records cannot be
+determined reliably. Exclude Git's first (primary) record; block only linked
+records whose `branch` exactly equals the current ref, including locked/prunable
+records and invocation inside that linked checkout. Report the branch and path;
+report inspection failures separately. Recheck this association before merging.
+Unrelated/detached worktrees, sibling directories/symlinks and `worktreeSkill`
+metadata alone (even on the current branch) do not block. Do not infer a link from
+ancestry, shared commits or another worktree's source-branch reference.
+Honor active workflow restrictions applicable to the current branch/checkout and
+explicit repository-wide Git-write locks. Do not infer active ownership from
+metadata or folder presence alone, parse private owner schemas, call publication
+guards under a false action, or repair/delete records to pass this check.
 
 Inspect effective `branch.<current>.mergeOptions` and custom merge strategies.
 Stop for conflicting or unrecognized options: hook/signature bypass, squash,

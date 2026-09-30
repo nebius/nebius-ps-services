@@ -522,6 +522,10 @@ def render_course(course_name: str) -> str:
                 for guide in authored_labs + external_labs
                 if index in guide["lessons"]
             ],
+            authored_figures=[
+                entry for entry in detailed
+                if entry["home"] == "lesson" and entry["lessons"][0] == index
+            ],
         )
         for index, item in lesson_sequence
     )

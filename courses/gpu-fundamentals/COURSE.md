@@ -69,6 +69,36 @@ Each SMSP has a warp scheduler, registers and execution units. A scheduler choos
 
 A **thread** is one execution of the kernel with its own index and working values. A **block** contains threads that can cooperate, and a **grid** contains all blocks in one kernel launch. Within each block, hardware groups consecutive threads into **warps of 32**. Thus the programming hierarchy is grid → blocks → threads; including execution grouping gives grid → blocks → warps → threads. A thread does not contain warps. A partial final warp has unused lanes, and a warp never combines threads from different blocks.
 
+For a worked example, follow **A × B = C**.
+
+Matrix multiplication forms each output by multiplying matching entries from a row of A and a column of B, then adding the products. This sum is a **dot product**. A has two rows and three columns; B has three rows and two columns. Their shared dimension is three, so each dot product has three terms and C has two rows and two columns. Indices start at zero: `C[0,1]` means row 0, column 1.
+
+```text
+       A (2 × 3)         B (3 × 2)          C (2 × 2)
+     [ 1  2  3 ]       [ 1  2 ]          [ 22  28 ]
+     [ 4  5  6 ]   ×   [ 3  4 ]    =     [ 49  64 ]
+                       [ 5  6 ]
+```
+
+A simple GPU kernel can assign **one thread to each output element**. Each thread reads its row of A and column of B, keeps a running sum in its working values, and writes one entry of C. Here the inputs are already in GPU memory and space for C is allocated. The kernel's indexing defines the assignment; the hardware does not infer it from the matrix equation.
+
+Choose one grid containing **one block of 2 × 2 threads**. Within that block, `threadIdx.x` selects the output column and `threadIdx.y` selects the row. CUDA numbers threads with x varying fastest: the linear thread number is `x + 2y` for this block. T0 through T3 below are those four thread numbers.
+
+| GPU thread | (x, y) | Output and complete calculation |
+| --- | --- | --- |
+| T0 | (0, 0) | C[0,0] = 1 × 1 + 2 × 3 + 3 × 5 = **22** |
+| T1 | (1, 0) | C[0,1] = 1 × 2 + 2 × 4 + 3 × 6 = **28** |
+| T2 | (0, 1) | C[1,0] = 4 × 1 + 5 × 3 + 6 × 5 = **49** |
+| T3 | (1, 1) | C[1,1] = 4 × 2 + 5 × 4 + 6 × 6 = **64** |
+
+The GPU assigns the whole block to one SM. A **lane** is a position within a warp, numbered 0–31. This block occupies one partial warp: T0–T3 use lanes 0–3, while lanes 4–31 are unused. No extra 28 threads are launched. A warp scheduler in one of the SM's subpartitions selects ready warp instructions, such as loads, arithmetic and stores, and the four participating lanes execute them on their own values. Each thread computes all three terms of its dot product; four outputs do not mean four individual multiply instructions or completion in one clock cycle. These four threads are also not four SMs or four permanent assignments to CUDA cores.
+
+Follow the diagram downward. Arrows trace work assignment and then computation and output writes; enclosing boxes show which work belongs together. The four colors preserve the T0–T3 identities from output assignment through the active lanes to C. The SM contains the resident block and its warp; the grid describes the launch. This is a teaching schematic, not a measured schedule.
+
+![Matrix multiplication: from four outputs to one scheduled warp](reference/diagrams/matrix-multiplication-thread-mapping.svg)
+
+The one-to-one mapping is a **kernel design choice**, not a universal matrix rule. For a larger C, a simple version uses many blocks, each covering a rectangular output region, and checks edge indices before accessing memory. Optimized kernels often work on **tiles**, smaller rectangular pieces of a matrix: a thread may accumulate several outputs, and cooperating threads may contribute to an output. Tensor Core kernels use specialized matrix instructions with cooperative mappings. A PyTorch matrix multiplication therefore does not promise one thread per output. This four-thread launch makes the mapping easy to see, but leaves most warp lanes unused and is far too small to demonstrate GPU speed.
+
 | Logical work or residency limit | H100, compute capability 9.0 |
 | --- | --- |
 | Grid | One per kernel launch; block count is chosen for the workload |

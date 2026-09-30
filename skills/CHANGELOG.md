@@ -11,6 +11,9 @@ All notable changes to the reusable Agent Skills are tracked here.
   clear-conflict resolution, ancestry checks and no branch switching or push.
 - Explain how to recover from a dirty-checkout block: review, stage, and commit
   local work, then rerun `update-branch` once the working directory is clean.
+- Scope worktree blocking to Git linked-worktree registrations for the current
+  branch. Allow unrelated worktrees, container folders and stale metadata alone;
+  preserve matching locked/prunable registrations and active workflow guards.
 
 ### Python testing guidance and optimization
 

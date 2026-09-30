@@ -111,7 +111,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
-| `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch, preserving commits without switching or pushing; ordinary checkouts only. |
+| `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
 
 ### Project Engineering
@@ -1404,6 +1404,9 @@ checkout, preserves commits and hooks, resolves clear conflicts with focused
 checks, and verifies the final branch and ancestry. It never switches, rebases,
 stashes or pushes. If local changes block the update, review, stage, and commit
 your work, then rerun the skill once the checkout is clean.
+Worktree eligibility uses exact current-branch registrations: unrelated worktrees,
+container folders and metadata alone do not block. Applicable active workflow
+restrictions remain binding.
 See the [skill README](update-branch/README.md) for boundaries
 and `$update-branch --help` for side-effect-free usage.
 

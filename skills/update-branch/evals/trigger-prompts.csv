@@ -8,3 +8,5 @@ rebase,false,Rebase my branch onto origin/main and force-push it.
 merge-pr,false,Use $merge-pr to merge the approved GitHub pull request.
 explain-only,false,Explain git fetch origin followed by git merge origin/main; do not execute it.
 commit-push,false,Commit my uncommitted work and push my feature branch.
+unrelated-worktrees,true,Use $update-branch on my clean feature branch; other branches have worktrees in the sibling container.
+worktree-cleanup,false,Remove a stale linked-worktree registration and its leftover folder; do not update my branch.

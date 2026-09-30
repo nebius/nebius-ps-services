@@ -3294,8 +3294,9 @@ remote default branch into their current local feature branch without switching.
   merge its frozen commit; preserve current branch identity and existing commits.
 - AC-002: Require a clean ordinary primary checkout, including untracked files
   and submodule changes; stop for default/detached HEAD, pending Git operations,
-  linked worktrees or workflow ownership evidence. For local changes, tell the
-  user to review, stage and commit their work, verify a clean checkout, then
+  current-branch linked registrations or applicable active workflow restrictions.
+  For local changes, tell the user to review, stage and commit their work,
+  verify a clean checkout, then
   rerun the skill; do not stage or commit their work automatically.
 - AC-003: Allow no-op, fast-forward and true merge. Resolve clear conflicts with
   focused verification; ask about ambiguous intent and preserve pending state.
@@ -3306,6 +3307,12 @@ remote default branch into their current local feature branch without switching.
   uses Git checks; project tests are focused on conflict-resolution edits.
 - AC-006: Include side-effect-free help, native invocation policy, trigger and
   behavioral evaluations, and catalog/distribution registration.
+- AC-007: Determine worktree association from exact full branch refs in Git
+  linked-worktree registrations, excluding the primary record. Matching locked
+  or prunable records block; unrelated or detached worktrees, container paths,
+  ancestry and worktreeSkill metadata alone do not, including stale metadata on
+  the current branch. Report matching branch/path or failed inspection, and
+  recheck before merging without repairing or deleting ownership state.
 
 #### Negative Criteria
 
@@ -3326,8 +3333,8 @@ remote failures, configuration overrides and hooks; no real repository update.
 
 #### Evaluation Method
 
-Canonical trigger CSV and output assertions compare with the original two-command
-approach where an authenticated isolated runner is available. Report static,
+Canonical trigger CSV and output assertions compare with captured pre-change
+working bytes where an authenticated isolated runner is available. Report static,
 installation, native triggering and quality evidence separately.
 
 <!-- /REQUIREMENT: REQ-041 -->

@@ -7,7 +7,7 @@ import posixpath
 import re
 from .markdown import block, inline, slug
 from .metadata import executable_sources, valid_lesson_fields
-from .visuals import tool_figure
+from .visuals import detailed_diagram_markup, tool_figure
 from .downloads import dashboard_pointer, lab_results_pointer
 from .config import FIELD_CLASSES, LAB_SECTIONS, SHARED_GUIDE_SECTIONS
 
@@ -19,6 +19,7 @@ def lesson_markup(
     related: list[tuple[str, str]] | None = None,
     figures: dict[str, list[str]] | None = None,
     practice_labs: list[dict] | None = None,
+    authored_figures: list[dict] | None = None,
 ) -> str:
     title = lesson["title"]
     parts = [
@@ -27,6 +28,24 @@ def lesson_markup(
     ]
     for field in FIELD_CLASSES:
         content = lesson.get(field)
+        remaining_figures = list((figures or {}).get(field, []))
+
+        def figure(path: str, caption: str) -> str:
+            entry = next(
+                (
+                    item for item in (authored_figures or [])
+                    if item["path"] == path and item["after"] == field
+                ),
+                None,
+            )
+            if entry is None or caption != entry["title"]:
+                raise ValueError(f"{title}: figure must match its declared lesson home and title")
+            markup = detailed_diagram_markup(entry)
+            if markup not in remaining_figures:
+                raise ValueError(f"{title}: duplicate or misplaced lesson figure")
+            remaining_figures.remove(markup)
+            return markup
+
         if field == "Practice" and practice_labs is not None:
             assigned = {
                 f"- [{guide['title']}]({guide.get('reference', 'reference/labs/' + guide['source'].stem + '.md')})": guide
@@ -51,12 +70,12 @@ def lesson_markup(
                 + "</ul>"
             )
         elif content:
-            body = block(content, links, heading_offset=1)
+            body = block(content, links, heading_offset=1, figure=figure)
         else:
             continue
         class_name = FIELD_CLASSES[field]
         parts.append(f'<div class="{class_name}"><h3>{html.escape(field)}</h3>{body}')
-        parts.extend((figures or {}).get(field, []))
+        parts.extend(remaining_figures)
         if field == "How it works" and related:
             parts.append(
                 '<aside class="lesson-visuals"><strong>Related diagram</strong><ul>'

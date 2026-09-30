@@ -1,6 +1,6 @@
 """Figures belong to their explanations and fit the reading surface."""
 
-from course_builder import config as cb_config, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
+from course_builder import config as cb_config, content as cb_content, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages, visuals as cb_visuals
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -210,3 +210,58 @@ def test_overview_placement_cannot_target_missing_lesson(monkeypatch) -> None:
     monkeypatch.setattr(cb_pages, "parse_visuals", lambda path: [invalid])
     with pytest.raises(ValueError, match="missing lesson"):
         cb_pages.render_course("gpu-fundamentals")
+
+
+def lesson_figure_example():
+    entry = {
+        "path": "reference/diagrams/example.svg",
+        "title": "Example",
+        "lessons": [1],
+        "after": "How it works",
+        "home": "lesson",
+        "id": "detail-example",
+        "svg": "<svg></svg>",
+        "description": "A registered example",
+    }
+    marker = "![Example](reference/diagrams/example.svg)"
+    return entry, marker, cb_visuals.detailed_diagram_markup(entry)
+
+
+def test_authored_figure_consumed_once_at_exact_lesson_position() -> None:
+    entry, marker, figure = lesson_figure_example()
+    figures = {"How it works": [figure, "<figure>Other registered figure</figure>"]}
+    lesson = {"title": "Example", "How it works": f"Before.\n\n{marker}\n\nAfter."}
+    rendered = cb_content.lesson_markup(lesson, 1, figures=figures, authored_figures=[entry])
+    assert rendered.index("Before.") < rendered.index(figure) < rendered.index("After.")
+    assert rendered.index("After.") < rendered.index("Other registered figure")
+    assert rendered.count(figure) == 1
+    assert figures["How it works"][0] == figure  # Rendering does not mutate its input.
+
+
+@pytest.mark.parametrize("case", ["unknown", "wrong-home", "wrong-title", "duplicate", "wrong-field"])
+def test_authored_figure_rejects_invalid_placement(case: str) -> None:
+    entry, marker, figure = lesson_figure_example()
+    registry = [entry]
+    if case == "unknown":
+        marker = marker.replace("example.svg", "missing.svg")
+    elif case == "wrong-home":
+        registry = []
+    elif case == "wrong-title":
+        marker = marker.replace("[Example]", "[Other title]")
+    elif case == "duplicate":
+        marker += "\n\n" + marker
+    field = "Objective" if case == "wrong-field" else "How it works"
+    with pytest.raises(ValueError, match="figure"):
+        cb_content.lesson_markup(
+            {"title": "Example", field: marker}, 1,
+            figures={"How it works": [figure]}, authored_figures=registry,
+        )
+
+
+def test_matrix_example_figure_is_inside_work_hierarchy() -> None:
+    document = (ROOT / "gpu-fundamentals/index.html").read_text()
+    start = document.index('id="work-hierarchy-grid-blocks-warps-threads"')
+    figure = document.index('id="detail-matrix-multiplication-thread-mapping"')
+    limits = document.index("Logical work or residency limit", start)
+    end = document.index('id="execution-and-dependencies"', start)
+    assert start < figure < limits < end

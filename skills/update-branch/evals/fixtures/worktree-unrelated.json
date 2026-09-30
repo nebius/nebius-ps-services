@@ -1,0 +1,60 @@
+{
+  "scope": "Only worktree eligibility is under evaluation. All other eligibility checks pass unless a scenario overrides them. Passing means proceed to default discovery, not a completed update. These are independent offline scenarios; do not execute commands.",
+  "current_branch_ref": "refs/heads/feature/demo",
+  "current_checkout": "/workspace/repo",
+  "symbolic_ref_exit": 0,
+  "worktree_list_exit": 0,
+  "scenarios": [
+    {
+      "scenario": "ordinary sibling container directory",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000",
+      "sibling_container": {
+        "kind": "directory",
+        "path": "/workspace/repo-worktrees"
+      }
+    },
+    {
+      "scenario": "dangling sibling container symlink",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000",
+      "sibling_container": {
+        "kind": "dangling_symlink",
+        "path": "/workspace/repo-worktrees"
+      }
+    },
+    {
+      "scenario": "unrelated branch at the same commit",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/other\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/other\u0000\u0000"
+    },
+    {
+      "scenario": "unrelated detached worktree at the same commit",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/detached\u0000HEAD 1111111111111111111111111111111111111111\u0000detached\u0000\u0000"
+    },
+    {
+      "scenario": "stale metadata for the current branch without registration",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000",
+      "branch_config": {
+        "branch.feature/demo.worktreeSkillPath": "/workspace/repo-worktrees/missing",
+        "branch.feature/demo.worktreeSkillBase": "1111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "scenario": "lookalike branch and unusual path",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/space and\nnewline\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo-extra\u0000\u0000"
+    },
+    {
+      "scenario": "another lane derived from the current branch",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/other\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/other\u0000\u0000",
+      "branch_config": {
+        "branch.feature/other.worktreeSkillTaskLaneSourceRef": "refs/heads/feature/demo",
+        "branch.feature/other.worktreeSkillBase": "1111111111111111111111111111111111111111"
+      }
+    }
+  ]
+}
