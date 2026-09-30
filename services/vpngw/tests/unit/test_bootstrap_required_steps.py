@@ -115,3 +115,30 @@ logger() { :; }
         "allow in on xfrm1",
         "allow out on xfrm1",
     ]
+
+
+def test_generated_ssh_bootstrap_survives_missing_runtime_directory(tmp_path: Path) -> None:
+    config = yaml.safe_load(
+        VMManager(project_id="test", region="eu-west1")._build_cloud_init(ssh_key="test")
+    )
+    command = next(item for item in config["runcmd"] if "/usr/sbin/sshd -t" in str(item))
+    runtime_dir = tmp_path / "sshd"
+    scripts = {
+        "sshd": (
+            f"[ -d {shlex.quote(str(runtime_dir))} ] || "
+            "{ echo 'Missing privilege separation directory: /run/sshd' >&2; exit 255; }\n"
+        ),
+        "systemctl": "exit 0\n",
+        "ss": "echo 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:*'\n",
+    }
+    for name, body in scripts.items():
+        path = tmp_path / f"fake-{name}"
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o700)
+    shell = command[-1].replace("/run/sshd", shlex.quote(str(runtime_dir)))
+    shell = shell.replace("/usr/sbin/sshd", shlex.quote(str(tmp_path / "fake-sshd")))
+    shell = shell.replace("systemctl ", shlex.quote(str(tmp_path / "fake-systemctl")) + " ")
+    shell = shell.replace("ss -H", shlex.quote(str(tmp_path / "fake-ss")) + " -H")
+    result = subprocess.run([*command[:-1], shell], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert runtime_dir.stat().st_mode & 0o777 == 0o755
