@@ -8,6 +8,14 @@ Desktop kernels lack that support; use a disposable Ubuntu VM or Linux runner
 for the complete lane. Missing XFRM support fails fixture setup, rather than
 skipping route-retirement coverage.
 
+Run `python3 tests/systemd/run.py --ssh-bootstrap-only` to test SSH bootstrap on
+kernels without XFRM support. This selection executes the generated cloud-init
+SSH command with real OpenSSH and systemd from an absent `/run/sshd`. It checks
+socket and service activation, root-owned `0755` directory permissions, an SSH
+banner on port 22, and failure before activation or continuation on invalid
+configuration. The default invocation includes these cases and the full network
+lane. The focused selection does not validate ESP4 reboot or cloud-init as a whole.
+
 This development fixture requires root and privileged mode to run the actual
 service manager and configure its own networking. Run it only in Docker Desktop's
 Linux VM or on a disposable Linux runner. It has private PID, network, and cgroup
