@@ -7,6 +7,7 @@ Privileged mode is restricted to this disposable systemd/networkd test fixture.
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import time
 import uuid
@@ -18,12 +19,33 @@ def run(*args: str, **kwargs) -> subprocess.CompletedProcess:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ssh-bootstrap-only", action="store_true")
+    args = parser.parse_args()
     project = Path(__file__).resolve().parents[2]
+    tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
+    if not args.ssh_bootstrap_only:
+        tests.extend(
+            [
+                "/workspace/tests/integration/test_ordinary_systemd_jobs.py",
+                "/workspace/tests/integration/test_ordinary_transport.py",
+            ]
+        )
     name = "vpngw-systemd-test-" + uuid.uuid4().hex[:12]
     image = name + ":fixture"
     created = False
     try:
-        run("docker", "build", "-q", "-t", image, str(project / "tests/systemd"), timeout=600)
+        run(
+            "docker",
+            "build",
+            "-q",
+            "-t",
+            image,
+            "-f",
+            str(project / "tests/systemd/Dockerfile"),
+            str(project),
+            timeout=600,
+        )
         run(
             "docker",
             "run",
@@ -71,7 +93,7 @@ def main() -> None:
             "-e",
             "PYTHONPATH=/workspace/src",
             name,
-            "python3",
+            "/opt/vpngw-test/bin/python3",
             "-B",
             "-m",
             "pytest",
@@ -79,8 +101,7 @@ def main() -> None:
             "-x",
             "-p",
             "no:cacheprovider",
-            "/workspace/tests/integration/test_ordinary_systemd_jobs.py",
-            "/workspace/tests/integration/test_ordinary_transport.py",
+            *tests,
             timeout=300,
         )
     finally:
