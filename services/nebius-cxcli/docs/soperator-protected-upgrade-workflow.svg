@@ -43,7 +43,7 @@
   <text class="head" x="206" y="406" text-anchor="middle">Re-prove frozen release</text>
   <text class="body" x="206" y="430" text-anchor="middle">sealed snapshot matches receipt</text>
   <text class="body" x="206" y="450" text-anchor="middle">no second latest lookup on resume</text>
-  <text class="body" x="206" y="470" text-anchor="middle">equal release is observation-only</text>
+  <text class="body" x="206" y="470" text-anchor="middle">same release: assess admitted changes</text>
   <path class="flow" d="M354 444H387"/>
   <rect class="step" x="397" y="378" width="276" height="132" rx="13"/>
   <text class="head" x="535" y="406" text-anchor="middle">Render and validate locally</text>
@@ -65,7 +65,7 @@
   <text class="body" x="1193" y="470" text-anchor="middle">capped backoff; ambiguity safety-pause</text>
   <text class="body" x="1193" y="490" text-anchor="middle">typed main failure is terminal</text>
   <text class="note" x="700" y="530" text-anchor="middle">Login reachability remains advisory and never gates the release child.</text>
-  <text class="note" x="700" y="546" text-anchor="middle">After interruption, rerun the same approved upgrade; the parent receipt resumes the first incomplete segment.</text>
+  <text class="note" x="700" y="546" text-anchor="middle">Recovery: nebius-cxcli deploy CONFIG_YAML with the original generation and execution options.</text>
 
   <rect class="lane" x="34" y="572" width="1332" height="232" rx="18"/>
   <text class="lanehead" x="62" y="604">3 · ADVANCE FROZEN INFRASTRUCTURE SEGMENTS, PROVE FINAL READINESS, RESTORE EXACTLY</text>

@@ -3097,6 +3097,8 @@ Fresh native-session behavior remains a separate evaluation claim.
 Users need new designs to fit the selected project's existing implementation,
 with visible documentation conflicts and a planning default that does not
 silently implement changes or take over canonical specification ownership.
+Project README plans must orient readers, expose the first successful workflow,
+and connect to deeper documentation without becoming a catch-all manual.
 
 #### Acceptance Criteria
 
@@ -3119,6 +3121,17 @@ silently implement changes or take over canonical specification ownership.
   design returns decisions and evidence without directly publishing project
   requirements or design documents. Preserve existing specialist and SDLC routes.
 
+- AC-007: Load focused README guidance when a design creates a project,
+  materially changes how it is used, or explicitly includes README design.
+  Keep the existing trigger description and invocation policy unchanged.
+- AC-008: README plans use an adaptable reader-first outline, an early visible
+  TOC for substantial documents, explicit prerequisites and minimum setup,
+  copyable examples, an observable first result, and links to deeper owners.
+  Include only useful sections and verify headings, links and project facts.
+- AC-009: Describe current implementation accurately and label proposed
+  greenfield or future-feature content as planned. Keep detailed architecture,
+  complete references, runbooks and policies with their documentation owners.
+
 #### Negative Criteria
 
 - NC-001: Do not substitute a sibling project's design, infer greenfield from
@@ -3127,6 +3140,10 @@ silently implement changes or take over canonical specification ownership.
   as correct, or prohibit an explicitly requested change to the baseline.
 - NC-003: A request for design alone, a plan handoff, or quoted implementation
   text must not authorize code writes or override actual host Plan Mode.
+
+- NC-004: Wording-only and link/TOC-only README maintenance must not become
+  new implicit design triggers. A README template must not require empty
+  sections, invented commands or unsupported support/license claims.
 
 #### Validation Method
 
@@ -3144,6 +3161,8 @@ Exercise project selection, code/document drift, proposal redesign, missing
 specs, greenfield refactoring, existing or unknown usage, compatibility opt-in,
 non-mutating planning, explicit execution and document-owner handoffs. Verify
 host Plan Mode and read order with actual host context and traces when available.
+Include new-project and changed-usage README plans, routine-edit near misses,
+and conditional reference reads; compare quality with the prior working version.
 
 <!-- /REQUIREMENT: REQ-038 -->
 

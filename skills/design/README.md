@@ -24,6 +24,11 @@ Actual host Plan Mode remains binding. `maintain-project-specs` alone owns
 canonical requirements/design publication; `design` supplies decisions and
 evidence and never writes project design documents directly.
 
+For new projects, material usage changes or explicit README design, it loads
+focused guidance for reader orientation, an early TOC, the first successful
+workflow and links to deeper documentation. The outline adapts to the project;
+routine README wording or link/TOC maintenance does not require `design`.
+
 Greenfield can include existing prototype code, but no users or dependent
 consumers must be confirmed before using the refactor exception. A demonstrated
 anti-pattern may be replaced through a prerequisite refactor with one canonical
@@ -36,6 +41,7 @@ making it immutable or declaring a defect correct.
 ```text
 $design Design this feature against the project's design documents and code.
 $design Design this feature and implement it.
+$design Plan this project's README structure and quick start from its code.
 $design --help
 $design -h
 ```
@@ -50,6 +56,8 @@ that scaffold and the scaffold workflow does not call back into design.
 
 ## Files
 
+- `references/readme-design.md`: conditional README structure, information
+  hierarchy, TOC, examples, formatting, documentation boundaries and checks.
 - `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
@@ -112,6 +120,11 @@ that scaffold and the scaffold workflow does not call back into design.
   owners. This boundary remains outside Agentic SDLC.
 
 ## Validation Evidence
+
+README quality cases cover a small new project and an existing project's changed
+usage, including prerequisites, first success, selective sections and accurate
+current-versus-proposed behavior. Process cases require native traces for
+conditional reference reads and the help short circuit.
 
 Structure and fixture checks are static evidence. Fresh trigger and comparative
 quality runs require native authenticated runners; do not copy real host

@@ -6,6 +6,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Reorganize the README into a complete command-category index with selected
+  installed-CLI examples and five focused operator/contributor guides. Remove
+  historical experiment narratives and duplicate internals; correct recovery,
+  storage-protection, observability, catalog, and command-effect guidance. Update
+  both Soperator diagrams and check documentation examples, public command
+  coverage, guide links, and catalog examples against the current implementation.
+
 - Isolate Rich's cached ANSI styles in truecolor command-output tests so earlier
   standard-color consoles cannot alter their exact RGB assertions in CI.
 

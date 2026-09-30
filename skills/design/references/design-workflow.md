@@ -353,6 +353,8 @@ Tests And Validation:
 
 Docs And Changelog:
 - ...
+- README impact or no-change rationale; when applicable, use readme-design.md
+  for useful sections, first-success path, deeper-document links and validation
 - maintain-project-specs decisions/corrections (no direct doc writes): ...
 
 Rollout And Rollback:

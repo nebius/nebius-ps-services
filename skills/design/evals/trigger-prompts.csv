@@ -31,3 +31,7 @@ design-positive-15,true,"Design this feature against this project’s design and
 design-positive-16,true,Design the replacement for this unused prototype’s proven anti-pattern; nobody uses it and no other systems depend on it. Plan the refactor without legacy wrappers.
 design-positive-17,true,Use $design to design and implement a new response metadata field in this existing application.
 design-negative-12,false,Use maintain-project-specs to reconcile the already agreed requirements and design records; no new design decisions are needed.
+design-readme-positive-01,true,"Design a new local reporting CLI and plan its project README so a new engineer can understand it and reach the first successful result."
+design-readme-positive-02,true,"Design the switch from positional connection settings to a configuration file, including the setup and common-usage documentation affected by the change."
+design-readme-negative-01,false,Fix the grammar and shorten two paragraphs in the README without changing its structure or project behavior.
+design-readme-negative-02,false,Repair the README's broken relative links and update its TOC to match existing headings; no design changes are needed.

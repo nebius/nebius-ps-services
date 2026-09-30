@@ -674,6 +674,8 @@ state, and external adapters separated and guarded by repository quality gates.
 
 - AC-008: Commands explicitly presented for copying and running use one shared terminal style: bold dark text on a light-gray background covering only command text. Apply the style to workflow handoffs, access and recovery commands, and public help examples. Keep labels, commentary and help separators outside command highlighting; preserve complete command text, quoting, runtime soft wrapping, normal redirected plain output and existing color-disable behavior. Saved command/report artifacts remain free of terminal styling.
 
+- AC-009: The README is a concise operator entry point organized by command category. Its command index lists every public leaf from the canonical CLI tree, with selected executable examples using the installed `nebius-cxcli` entry point. Detailed configuration, project workflows, MK8s, Soperator and contributor guidance have linked owners under `docs/`; development-only `uv run` examples remain in contributor documentation. Operator examples, prerequisites, effects, recovery instructions and diagrams match current source and help. Historical experiments and unqualified performance claims do not form README guidance. Documentation checks cover command-index completeness, parser-only examples, links and operational safety boundaries across the README and guides.
+
 #### Negative Criteria
 
 - NC-001: Do not perform a big-bang rewrite or retain an alternate legacy command path.

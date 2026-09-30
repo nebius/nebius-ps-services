@@ -3442,7 +3442,7 @@ Other feature evidence predating this change remains unassessed.
 
 <!-- /FEATURE: FEAT-025 -->
 
-<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=9 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=10 -->
 ### FEAT-026: Layered CLI services and ratcheted repository gates
 
 #### Requirements Covered
@@ -3458,6 +3458,44 @@ Python 3.12 test job but no enforced branch coverage, formatting, package-wide
 static-type ratchet, or every-supported-minor offline matrix.
 
 #### Design Details
+
+Revision 10 defines the operator documentation structure. The README owns
+installation, one quick start, core path/target concepts, and a complete public
+command index grouped by user task. Keep selected examples and consequential
+warnings next to commands; detailed material belongs to configuration-reference,
+project-workflows, mk8s, soperator and development guides under `docs/`. Reuse the
+existing observability, Grafana, Nsight and compatibility guides. Installed-CLI
+examples use `nebius-cxcli`; `uv run` remains a contributor environment concern.
+
+Correct documentation against source without changing command behavior. Recovery
+uses the original rendered generation and execution controls through `deploy`;
+hardware migration, deletion protection, command side effects, local-first
+observability and catalog validation remain explicit. Correct both Soperator SVGs
+and visually inspect their rendered output. Remove dated experiment narratives,
+unsupported performance claims, and repeated implementation history from README
+rather than relocating that history into new operator guides.
+
+Selected option: concise README plus focused guides, retaining every public leaf
+in the README index. A single expanded manual was rejected for navigation and
+maintenance cost; a short README omitting less common commands was rejected for
+incomplete discoverability. Existing CLI types, flags, behavior, schemas and
+runtime dependencies remain unchanged. No stack or AI subsystem change applies.
+
+The documentation slice is implemented. The README indexes all 43 public leaf
+commands in eight categories, with five linked guides and corrected upgrade and
+storage diagrams. Command-index completeness derives from the registered CLI
+tree. Operator-guide and help examples parse with product and parameter callbacks
+disabled; the version callback is tested separately. Updated documentation
+contracts preserve operational safety assertions and validate navigation across
+the README and guides. The paired catalog example loads through the source loader.
+
+Changed-scope validation passed: 478 focused offline tests covering CLI contracts,
+command behavior, documentation alignment/navigation and SVG semantics; Markdown
+lint; Ruff lint and formatting for changed Python sections; and diff hygiene.
+Both rendered SVGs were visually inspected. Review corrected target selectors,
+job-policy defaults, recovery options, routing ownership and catalog behavior.
+These checks establish source/documentation alignment, not installed-wheel, full
+CI or live-infrastructure validation. Broader FEAT-026 delivery remains unassessed.
 
 Revision 9 adds one shared copy/run command presentation owner in
 `terminal_styles.py`: bold foreground `#202020` on background `#e5e7eb`, applied

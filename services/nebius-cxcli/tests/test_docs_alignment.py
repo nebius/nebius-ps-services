@@ -45,7 +45,7 @@ def test_specs_expose_only_the_current_canonical_contracts() -> None:
 
 
 def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
-    readme = _squash(_read("README.md"))
+    readme = _squash(_read("docs/soperator.md"))
     requirements = _squash(_read("docs/requirements.md"))
     design = _squash(_read("docs/design.md"))
     changelog = _squash(_read("CHANGELOG.md"))
@@ -59,7 +59,7 @@ def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
 
 
 def test_developer_workflow_uses_one_locked_uv_authority() -> None:
-    readme = _read("README.md")
+    readme = _read("docs/development.md")
     requirements = _read("docs/requirements.md")
     design = _read("docs/design.md")
 
@@ -163,7 +163,7 @@ def test_docs_keep_terraform_out_of_in_cluster_installation() -> None:
 
 
 def test_docs_record_dynamic_release_and_delivery_contract() -> None:
-    readme = _squash(_read("README.md"))
+    operator_docs = _squash(_read("README.md") + " " + _read("docs/soperator.md"))
     design = _squash(_read("docs/design.md"))
     changelog = _squash(_read("CHANGELOG.md"))
 
@@ -173,7 +173,7 @@ def test_docs_record_dynamic_release_and_delivery_contract() -> None:
         "No OCI mirror, proxy, fallback registry",
         "soperator status --verify-observability",
     ):
-        assert phrase in _squash(readme + " " + changelog)
+        assert phrase in _squash(operator_docs + " " + changelog)
     for phrase in (
         "exact infrastructure",
         "official-upstream release plan",
@@ -214,6 +214,8 @@ def test_docs_define_full_stack_upgrade_and_permanent_node_group_migration() -> 
         " ".join(
             (
                 _read("README.md"),
+                _read("docs/soperator.md"),
+                _read("docs/mk8s.md"),
                 _read("docs/requirements.md"),
                 _read("docs/design.md"),
             )
@@ -221,8 +223,8 @@ def test_docs_define_full_stack_upgrade_and_permanent_node_group_migration() -> 
     )
 
     for phrase in (
-        "highest reachable provider-supported endpoint",
-        "sequential minor",
+        "highest reachable supported Kubernetes endpoint",
+        "sequential Kubernetes minor hops",
         "Jail CUDA",
         "operation-owned Slurm maintenance",
         "migrate node-group",
@@ -239,3 +241,36 @@ def test_examples_do_not_call_removed_soperator_job_commands() -> None:
 
     assert "soperator jobs" not in example
     assert "squeue --iterate=5" in example
+
+
+def test_documented_catalog_pair_loads_with_matching_component_identities(tmp_path) -> None:
+    from nebius_cxcli.component_sources import SourceProfile, load_component_sources
+
+    document = _read("docs/configuration-reference.md")
+    example = document.split("## Catalog example", maxsplit=1)[1].split("\n## ", maxsplit=1)[0]
+    blocks = re.findall(r"```yaml\n(.*?)```", example, re.DOTALL)
+    assert len(blocks) == 2
+    sources_path = tmp_path / "component_sources.yaml"
+    sources_path.write_text(blocks[0], encoding="utf-8")
+    (tmp_path / "component_cli_settings.yaml").write_text(blocks[1], encoding="utf-8")
+
+    sources = load_component_sources(explicit=sources_path, source_profile=SourceProfile.PORTABLE)
+    assert [chart.name for chart in sources.helm_charts] == ["grafana"]
+    assert sources.helm_charts[0].chart_name == "grafana"
+
+
+def test_operator_readme_keeps_development_and_experiment_history_out() -> None:
+    readme = _read("README.md")
+    assert "uv run" not in readme
+    assert "Validation evidence boundary" not in readme
+    assert "up to 20%" not in readme
+    assert not re.search(r"\b20\d{2}-\d{2}-\d{2}\b", readme)
+
+
+def test_operator_guides_distinguish_upgrade_and_deploy_job_defaults() -> None:
+    readme = _squash(_read("README.md"))
+    guide = _squash(_read("docs/soperator.md"))
+    assert "Unattended `deploy` defaults to `wait-then-cancel` after `1h`" in readme
+    assert "`requeue-hold-all`" in guide
+    assert "Cancellation is never implicit" in guide
+    assert "unattended deployment defaults to `wait-then-cancel`" in guide

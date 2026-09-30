@@ -18,6 +18,11 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ### Changed
 
+- Add conditional README design guidance to `design`: an adaptable reader-first
+  outline, early TOC, verified quick-start path, concise formatting and links to
+  deeper documentation. Preserve existing triggers and planning authority;
+  add README quality cases and routine-edit routing boundaries.
+
 - Separate root Git task authorization from individual commit attempts. Safe
   no-commit retries reuse the original commit, commit-push or PR task; standalone
   tasks still allow one actual commit. Begin before branch movement, including

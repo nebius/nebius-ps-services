@@ -152,6 +152,12 @@ Read `references/design-workflow.md` for medium or deep designs, greenfield
 applications, multiple unfamiliar technologies, unclear architecture choices,
 or any design that will become a committed document.
 
+When designing a new project, materially changing how a project is used, or
+explicitly designing creation or restructuring of its `README.md`, read
+`references/readme-design.md`. Use it for the reader journey, information
+hierarchy, quick-start path and boundaries with deeper documentation. Routine
+README wording or link/TOC maintenance alone does not require this workflow.
+
 When the application stack or a technology choice for any application layer is
 undecided or under review, use `app-stack` and follow its required reads. Do not
 copy its selection framework into this skill.
@@ -349,7 +355,9 @@ The plan handoff must include:
 - vertical slice order and any prerequisite foundation steps
 - expected files or modules to inspect or modify
 - tests and validation commands to add or run
-- documentation and changelog updates when in scope
+- documentation and changelog updates when in scope, including README impact
+  from changes to purpose, setup, configuration, usage, architecture,
+  compatibility or operational behavior
 - rollout, rollback, and risk checks
 - when repository scaffolding is required, an optional scaffold handoff with
   repository shape, logical capabilities, materialization units, runtime
@@ -454,4 +462,7 @@ short answer is explicitly requested:
   brownfield and greenfield paths, `research`, `app-stack`,
   `ai-agent-design`, and `ai-stack` handoff guidance, `system-design-rules`
   decision review guidance, and `/plan` handoff template.
+- Read `references/readme-design.md` for the conditional README design scope
+  in Required Reads: structure, TOC, examples, formatting, documentation
+  boundaries and quality checks.
 - Use `evals/trigger-prompts.csv` when reviewing or tuning trigger readiness.
