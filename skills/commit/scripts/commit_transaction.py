@@ -120,8 +120,6 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
             _sys.modules[cache_name] = loader
         return loader.load_support(group, anchor=(kind, root), source_only=source_only)
     raise ImportError("Shared skill runtime unavailable; install the complete current skill support")
-
-
 # END shared runtime bootstrap
 _load_skill_support("runtime", __file__, "commit/scripts/commit_transaction.py")
 
