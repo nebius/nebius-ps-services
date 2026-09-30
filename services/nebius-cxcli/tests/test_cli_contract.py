@@ -5,7 +5,11 @@ import shlex
 from pathlib import Path
 
 import click
+import pytest
+import typer.rich_utils
 from click.testing import CliRunner as ClickRunner
+from rich.console import Console
+from rich.text import Text
 from typer.main import get_command
 from typer.testing import CliRunner
 
@@ -34,7 +38,8 @@ def test_every_displayed_example_parses_without_running_product_callbacks(monkey
     for path, command in commands:
         sections = (command.help or "", command.epilog or "")
         for section in sections:
-            prefix = f"{cli._HELP_EXAMPLE_SEPARATOR_MARKUP} nebius-cxcli "
+            prefix = "| nebius-cxcli "
+            section = Text.from_markup(section).plain
             # Labels may share a paragraph with the next command (Grafana).
             for block in section.split(prefix)[1:]:
                 example = block.split("\n\n", maxsplit=1)[0].strip()
@@ -50,10 +55,9 @@ def test_every_public_leaf_has_parameter_descriptions_and_examples() -> None:
         for parameter in command.params:
             assert parameter.help, (path, parameter.name)
         if not isinstance(command, click.Group):
-            assert (
-                command.epilog
-                and f"{cli._HELP_EXAMPLE_SEPARATOR_MARKUP} nebius-cxcli " in command.epilog
-            ), path
+            assert command.epilog and "| nebius-cxcli " in Text.from_markup(command.epilog).plain, (
+                path
+            )
 
 
 def _contract_path() -> Path:
@@ -89,6 +93,27 @@ def test_every_public_help_surface_renders() -> None:
             ]
             for clause in clauses:
                 assert clause in rendered, (path, clause)
+
+
+@pytest.mark.parametrize("width", [80, 160])
+@pytest.mark.parametrize("no_color", [False, True])
+def test_help_command_background_at_supported_widths(monkeypatch, width, no_color):
+    from io import StringIO
+
+    stream = StringIO()
+    console = Console(
+        file=stream, force_terminal=True, no_color=no_color, color_system="truecolor", width=width
+    )
+    monkeypatch.setattr(typer.rich_utils, "_get_rich_console", lambda **kwargs: console)
+    result = CliRunner().invoke(cli.app, ["grafana", "show", "--help"])
+    assert result.exit_code == 0, result.output
+    text = Text.from_ansi(stream.getvalue())
+    command = "nebius-cxcli grafana show --config ./config.yaml --target CLUSTER_TARGET"
+    start = text.plain.index(command)
+    for offset in range(start, start + len(command)):
+        style = text.get_style_at_offset(console, offset)
+        assert (style.bgcolor is not None) == (not no_color)
+    assert text.get_style_at_offset(console, start - 2).bgcolor is None
 
 
 def test_hidden_commands_do_not_render_in_root_help() -> None:

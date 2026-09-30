@@ -45,6 +45,7 @@ from .infra_render import RenderedModuleSource, rendered_soperator_observability
 from .object_storage_transport import object_storage_scope
 from .soperator_receipt_io import read_owner_only_json
 from .soperator_registration import soperator_registration_app_row
+from .terminal_styles import print_copy_paste_command
 from .terraform_backend import backend_settings_from_config
 
 
@@ -571,7 +572,8 @@ def execute_destroy(
                             + (request["operation_id"] or "acceptance requires recovery"),
                             markup=False,
                         )
-                    cli.console.print("Resume: " + shlex.join(resume), markup=False)
+                    cli.console.print("Resume:")
+                    print_copy_paste_command(cli.console, shlex.join(resume))
             raise
         progress.success()
         with progress.paused():

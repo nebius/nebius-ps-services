@@ -1,21 +1,20 @@
 # GPU Fundamentals
 
-This course builds the hardware and system model needed to explain GPU behavior before changing code. Every conclusion must connect workload shape, H100 resources, and measured evidence.
+GPU Fundamentals builds the hardware and system model needed to explain GPU
+behavior before changing code. Learn how CPUs and GPUs cooperate, how an H100
+executes and stores work, and how timing, memory access, precision and communication
+shape measured performance.
 
-Hardware :
+Start here if you can read a small Python program; no CUDA or model-training
+experience is assumed. The worked examples introduce the PyTorch operations used
+in practice and prepare you for GPU Performance Optimization and the specialized
+training, inference and kernel courses.
 
-The cluster uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
-
-Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use a separate two-worker 8-GPUs H100 cluster for it after these conceptual foundations.
-
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
-
-Learn to explain H100 execution, memory, precision, scheduling,
-topology, sharing, and health evidence before attempting optimization.
-
-The course uses Python and PyTorch, one full non-MIG H100 for local effects,
-and a separate two-eight-H100 cluster for advanced collective mechanics. Operational labs are
-read-only and do not reconfigure the GPU or cluster.
+Local exercises use one full H100, and operational exercises are read-only.
+Distributed concepts lead to practical work in
+[Advanced Labs](../advanced-gpu-communication/index.html).
+Use the [environment setup](../README.md#how-to-set-up-the-lab) in the shared Lab Guide
+before running experiments.
 
 ## 1. CPU–GPU cooperation
 

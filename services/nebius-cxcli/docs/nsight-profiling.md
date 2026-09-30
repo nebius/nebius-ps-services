@@ -4,6 +4,10 @@ The Soperator integration installs both profiling CLIs in the shared Slurm jail
 and runs two independent browser viewers. Login and worker nodes see the same
 tools and persistent reports. Your Mac needs `kubectl` and a browser.
 
+Printed access, password-retrieval and recovery commands use the CLI's shared
+light-gray highlight in color-enabled terminals. Copy only the command text;
+labels remain separate, and redirected output stays plain.
+
 ```mermaid
 flowchart LR
   A[Shared jail: nsys and ncu] --> B[GPU workload on Slurm worker]
@@ -38,6 +42,7 @@ Installation shows a spinner, a description and elapsed time for preparation,
 cluster/storage checks, login Secret I/O, package prerequisites and resolution,
 installation in the shared jail, and verification. Credential input runs without
 an active spinner; viewer deployment uses its existing progress display.
+Kubeconfig notices print above the spinner, leaving one clean completion row.
 Redirecting output produces bounded `START`/`OK`/`FAILED` phase lines instead
 of terminal animations. A running spinner indicates a wait, not a percentage
 complete or proof that a remote Job is healthy.
@@ -97,6 +102,35 @@ setup instead of printing a command that relies on a temporary kubeconfig.
 Use `--secret-name NAME` for another Secret or `--reports-path /data/team/reports`
 for another directory inside an accepted persistent submount. `TARGET` is the
 project's explicit deployment target identifier.
+
+### Show access commands later
+
+```bash
+nebius-cxcli soperator profiling show ./config.yaml --target TARGET
+```
+
+This command verifies the live viewers on your recorded accepted Soperator target
+and prints exactly three highlighted commands: a Systems HTTP/TURN port-forward,
+a Compute HTTP/TURN port-forward, and a shared-password retrieval command. Keep
+each forward running in its own terminal, then open the displayed browser URLs.
+Run the password command separately when you need to display the password.
+
+Names, ports and Secret references come from the deployed viewers, so pending
+local viewer changes do not replace the live instructions. Both viewers must be
+ready and use the same password Secret key. Missing, conflicting or unverifiable
+resources produce an error without a partial set of commands. Each forward binds
+only to `127.0.0.1` and keeps the live TURN port number for browser streaming.
+
+`show` needs working cluster authentication and Kubernetes Secret-read permissions.
+It checks Secret metadata and nonempty key names without retrieving password
+values. It never starts forwarding, runs the password command, reinstalls tools,
+or changes cluster resources. As with `grafana show`, it may refresh the verified
+target entry in local kubeconfig while preserving the current context. It honors
+`CI` and `NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG`; when persistence is disabled, a
+verified existing durable context is required. An access check does not qualify
+browser streaming or report contents.
+
+### Installation prerequisites
 
 The jail must use Ubuntu 22.04 or 24.04 on amd64 or arm64, with Python 3, apt,
 dpkg and the Ubuntu archive signing keyring. The installer downloads

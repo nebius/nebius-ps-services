@@ -20,6 +20,8 @@ class TextPage(HTMLParser):
         self.errors: list[str] = []
         self.stack: list[str] = []
         self.in_navigation = False
+        self.menu_depth = 0
+        self.menu_order: list[tuple[str, str | None]] = []
         self.feed(document)
         self.close()
         if self.stack:
@@ -33,12 +35,21 @@ class TextPage(HTMLParser):
             self.stack.append(tag)
         if tag == "nav":
             self.in_navigation = True
+        if tag == "div":
+            if self.menu_depth:
+                self.menu_depth += 1
+            elif self.in_navigation and "catalog-navigation" in (values.get("class") or "").split():
+                self.menu_depth = 1
         if "id" in values:
             self.ids.append(values["id"])
         if values.get("aria-current") == "page":
             self.current.append(values.get("data-course"))
+            if self.menu_depth:
+                self.menu_order.append(("current", values.get("data-course")))
         if tag == "a":
-            self.links.append((values.get("href", ""), self.in_navigation))
+            self.links.append((values.get("href", ""), bool(self.menu_depth)))
+            if self.menu_depth:
+                self.menu_order.append(("link", values.get("href")))
         if (
             tag
             in {"script", "iframe", "object", "embed", "img", "svg", "video", "audio"}
@@ -49,17 +60,20 @@ class TextPage(HTMLParser):
             self.errors.append(f"unsupported active or non-text resource: {tag}")
 
     def handle_endtag(self, tag):
+        if tag == "div" and self.menu_depth:
+            self.menu_depth -= 1
         if not self.stack or self.stack.pop() != tag:
             self.errors.append(f"unbalanced HTML structure: {tag}")
         if tag == "nav":
             self.in_navigation = False
+            self.menu_depth = 0
 
 
 def validate_document(document: str) -> None:
     page = TextPage(document)
     if page.errors or len(page.ids) != len(set(page.ids)):
         raise ValueError(f"invalid text page resources or duplicate IDs: {page.errors}")
-    expected = {"../index.html"} | {
+    expected = {"../index.html", "../lab-guide.html"} | {
         f"../{name}/index.html" for name in cb_config.COURSES if name != "soperator"
     }
     found = []
@@ -101,13 +115,19 @@ def validate_document(document: str) -> None:
                 or parsed.password
             ):
                 raise ValueError(f"unrecognized reference or navigation: {target}")
+    expected_order = [("link", "../index.html")] + [
+        ("current", name) if name == "soperator" else
+        ("link", "../" + cb_config.catalog_destination(name))
+        for name in cb_config.CATALOG_ENTRIES
+    ]
     if (
         set(found) != expected
         or len(found) != len(expected)
         or page.current != ["soperator"]
+        or page.menu_order != expected_order
     ):
         raise ValueError(
-            "text course navigation must include catalog, five siblings and current identity"
+            "text course navigation must include catalog and eight ordered resources with one current identity"
         )
 
 

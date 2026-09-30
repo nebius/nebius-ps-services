@@ -1,7 +1,11 @@
 # Grafana dashboards
 
-`nebius-cxcli grafana` has three commands: `import`, `export`, and `validate`.
-They use the stable `dashboard.grafana.app/v1` API, qualified with Grafana 13.2.2.
+This guide covers `grafana import`, `grafana export`, and `grafana validate`.
+For `grafana install` and `grafana show`, see
+[Grafana installation and telemetry routing](observability.md).
+
+Dashboard operations use the stable `dashboard.grafana.app/v1` API, qualified
+with Grafana 13.2.2.
 Older servers without that API fail with a capability error.
 
 ## Install local dashboards in your configured cluster

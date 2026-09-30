@@ -1,18 +1,94 @@
+"""Test selection and accidental-network guardrails; not an egress sandbox."""
+
 from __future__ import annotations
 
-import socket
+from pathlib import Path
 
 import pytest
+import pytest_socket
+
+LAYERS = {"unit", "integration", "contract", "e2e"}
+TEST_ROOT = Path(__file__).parent.resolve()
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-external",
+        action="store_true",
+        default=False,
+        help="Permit selected external tests after the external_target preflight.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if not config.pluginmanager.hasplugin("socket"):
+        raise pytest.UsageError("pytest-socket must be loaded")
+    if not config.getoption("disable_socket"):
+        raise pytest.UsageError("--disable-socket is required")
+    if config.getoption("force_enable_socket") or config.getoption("allow_hosts"):
+        raise pytest.UsageError(
+            "Use local_network or gated external tests, not global network overrides"
+        )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    # Run before pytest's -m deselection so directory-derived markers select correctly.
+    for item in items:
+        relative = item.path.resolve().relative_to(TEST_ROOT)
+        layer = relative.parts[0]
+        if layer not in LAYERS:
+            raise pytest.UsageError(f"Place tests in a test layer: {item.nodeid}")
+        declared = {mark.name for mark in item.iter_markers()} & LAYERS
+        if declared - {layer}:
+            raise pytest.UsageError(f"Conflicting test layer: {item.nodeid}")
+        if not declared:
+            item.add_marker(getattr(pytest.mark, layer))
+        if any(
+            item.get_closest_marker(name) for name in ("enable_socket", "allow_hosts")
+        ):
+            raise pytest.UsageError(
+                "Use project network markers, not pytest-socket escape markers"
+            )
+        if "socket_enabled" in getattr(item, "fixturenames", ()):
+            raise pytest.UsageError("socket_enabled bypasses project network policy")
+        local = item.get_closest_marker("local_network") is not None
+        external = item.get_closest_marker("external") is not None
+        if (layer == "unit" and (local or external)) or (local and external):
+            raise pytest.UsageError(f"Invalid network permission for {item.nodeid}")
+        if local:
+            item.add_marker(pytest.mark.allow_hosts(["127.0.0.1", "::1"]))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    if item.get_closest_marker("external") and not item.config.getoption(
+        "run_external"
+    ):
+        raise pytest.UsageError("Selected external test requires --run-external")
+
+
+@pytest.fixture
+def external_target() -> str:
+    """Override beside external tests with a side-effect-free target preflight."""
+    pytest.fail(
+        "Define external_target to validate an explicitly configured non-production target"
+    )
 
 
 @pytest.fixture(autouse=True)
-def block_unit_test_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
-    """Prevent accidental network access in fast unit tests."""
-    if request.node.get_closest_marker("integration"):
+def external_network(request: pytest.FixtureRequest):
+    """External client fixtures must depend on this function-scoped fixture."""
+    if not request.node.get_closest_marker("external"):
+        yield
         return
-
-    def _blocked(*args, **kwargs):
-        raise AssertionError("Network access is disabled in unit tests.")
-
-    monkeypatch.setattr(socket, "create_connection", _blocked)
-    monkeypatch.setattr(socket, "getaddrinfo", _blocked)
+    target = request.getfixturevalue("external_target")
+    if not isinstance(target, str) or not target.strip():
+        pytest.fail(
+            "external_target must validate and return the selected target identity"
+        )
+    pytest_socket.enable_socket()
+    try:
+        yield
+    finally:
+        pytest_socket.disable_socket()

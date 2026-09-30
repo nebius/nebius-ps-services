@@ -110,7 +110,7 @@ def _github_request(
         raise RuntimeError(f"GitHub API {method} {path} failed ({exc.code}): {body}") from exc
 
 
-def _secret_exists(*, path: str, token: str) -> bool:
+def _github_resource_exists(*, path: str, token: str) -> bool:
     request = Request(url=f"https://api.github.com{path}", method="GET")
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("Authorization", f"Bearer {token}")
@@ -129,7 +129,7 @@ def _secret_exists(*, path: str, token: str) -> bool:
 def repo_secret_exists(*, repo_slug: str, token: str, secret_name: str) -> bool:
     encoded = quote(secret_name, safe="")
     path = f"/repos/{repo_slug}/actions/secrets/{encoded}"
-    return _secret_exists(path=path, token=token)
+    return _github_resource_exists(path=path, token=token)
 
 
 def repo_secrets_presence(*, repo_slug: str, token: str, names: list[str]) -> dict[str, bool]:
@@ -141,11 +141,14 @@ def repo_secrets_presence(*, repo_slug: str, token: str, names: list[str]) -> di
 
 def ensure_github_environment(*, repo_slug: str, token: str, environment_name: str) -> None:
     encoded_environment = quote(environment_name, safe="")
+    path = f"/repos/{repo_slug}/environments/{encoded_environment}"
+    if _github_resource_exists(path=path, token=token):
+        return
     _github_request(
         method="PUT",
-        path=f"/repos/{repo_slug}/environments/{encoded_environment}",
+        path=path,
         token=token,
-        payload={"deployment_branch_policy": None},
+        payload={},
     )
 
 
@@ -159,7 +162,7 @@ def environment_secret_exists(
     encoded_environment = quote(environment_name, safe="")
     encoded_secret = quote(secret_name, safe="")
     path = f"/repos/{repo_slug}/environments/{encoded_environment}/secrets/{encoded_secret}"
-    return _secret_exists(path=path, token=token)
+    return _github_resource_exists(path=path, token=token)
 
 
 def environment_secrets_presence(
@@ -190,7 +193,7 @@ def environment_variable_exists(
     encoded_environment = quote(environment_name, safe="")
     encoded_name = quote(variable_name, safe="")
     path = f"/repos/{repo_slug}/environments/{encoded_environment}/variables/{encoded_name}"
-    return _secret_exists(path=path, token=token)
+    return _github_resource_exists(path=path, token=token)
 
 
 def environment_variables_presence(

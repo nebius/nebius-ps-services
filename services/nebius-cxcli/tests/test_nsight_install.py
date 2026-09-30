@@ -626,9 +626,17 @@ def test_default_wizard_input_failure_precedes_publication_and_jobs(
     assert jobs == verified == applied == []
 
 
+@pytest.mark.parametrize("terminal", [False, True])
 def test_success_and_rerun_print_one_shared_password_command(
-    installed_project, monkeypatch, capsys
+    installed_project, monkeypatch, capsys, terminal
 ):
+    from rich.console import Console
+    from rich.text import Text
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    console = Console(force_terminal=terminal, color_system="auto", width=300)
+    monkeypatch.setattr(cli, "console", console)
     local, _, _, jobs, _, _ = installed_project
     command = (
         "kubectl --context verified get secret custom-login -o 'jsonpath={.data.password}'"
@@ -646,10 +654,22 @@ def test_success_and_rerun_print_one_shared_password_command(
             secret_name="custom-login",
             reports_path="/data/nsight-reports",
         )
-        output = capsys.readouterr().out
+        text = Text.from_ansi(capsys.readouterr().out)
+        output = text.plain
         assert output.count("To display your Nsight browser password, run:") == 1
         assert output.count(command) == 1
         assert "forward-nsys" in output and "forward-ncu" in output
+        for printed in (
+            command,
+            "forward-nsys",
+            "forward-ncu",
+            "source /etc/profile.d/99-nsight.sh",
+        ):
+            start = output.index(printed)
+            assert all(
+                (text.get_style_at_offset(console, i).bgcolor is not None) == terminal
+                for i in range(start, start + len(printed))
+            )
     assert len(jobs) == 3
 
 

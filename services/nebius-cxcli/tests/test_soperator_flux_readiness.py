@@ -279,8 +279,10 @@ def _main_source_payload() -> dict[str, Any]:
         "metadata": {
             "name": "soperator-upstream-umbrella",
             "namespace": "flux-system",
+            "generation": 1,
         },
         "status": {
+            "observedGeneration": 1,
             "conditions": _condition(),
             "artifact": {"digest": "sha256:" + "1" * 64},
         },
@@ -521,6 +523,58 @@ def test_stale_main_stall_enters_typed_safety_pause(
             poll_interval_seconds=0.01,
             main_workload_identity=_frozen_main_identity(),
         )
+
+
+@pytest.mark.parametrize("condition_generation", [3, 4])
+def test_main_stall_requires_current_condition_after_frozen_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, condition_generation: int
+) -> None:
+    _write_main_workload_flux_graph(tmp_path)
+    workload = _main_workload_payload()
+    workload["status"]["conditions"][0]["observedGeneration"] = condition_generation
+    monkeypatch.setattr(
+        flux_ops,
+        "_kubectl_get_target",
+        lambda target, **_kwargs: (
+            _main_source_payload() if target.is_source else workload,
+            "",
+        ),
+    )
+    monkeypatch.setattr(flux_ops, "_kubectl_json", lambda *_args, **_kwargs: _main_source_payload())
+    targets = flux_ops._flux_wait_targets(tmp_path, main_workload_identity=_frozen_main_identity())
+    statuses, ready, _block = flux_ops._flux_status_block(targets, env={}, started_at=0)
+    main = next(status for status in statuses if status.target.is_soperator_main)
+    assert not ready
+    assert not main.is_ready
+    assert main.is_terminal_failure == (condition_generation == 4)
+    assert (main.main_workload_identity is not None) == (condition_generation == 4)
+
+
+def test_main_ready_with_stale_stall_waits_when_frozen_source_disappears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_main_workload_flux_graph(tmp_path)
+    workload = _main_workload_payload()
+    workload["status"]["conditions"] = [
+        {"type": "Stalled", "status": "True", "observedGeneration": 3},
+        {"type": "Ready", "status": "True", "observedGeneration": 4},
+    ]
+    monkeypatch.setattr(
+        flux_ops,
+        "_kubectl_get_target",
+        lambda target, **_kwargs: (
+            _main_source_payload() if target.is_source else workload,
+            "",
+        ),
+    )
+    monkeypatch.setattr(flux_ops, "_kubectl_json", lambda *_args, **_kwargs: None)
+    targets = flux_ops._flux_wait_targets(tmp_path, main_workload_identity=_frozen_main_identity())
+    statuses, ready, _block = flux_ops._flux_status_block(targets, env={}, started_at=0)
+    main = next(status for status in statuses if status.target.is_soperator_main)
+    assert not ready
+    assert not main.is_ready
+    assert not main.is_terminal_failure
+    assert main.main_workload_identity is None
 
 
 def test_recreated_main_stall_cannot_stop_upgrade(

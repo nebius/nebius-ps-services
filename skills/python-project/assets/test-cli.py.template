@@ -19,3 +19,10 @@ def test_health_json_output() -> None:
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"status": "ok", "service": "{{project_slug}}"}
+
+
+def test_cli_help() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "health" in result.stdout

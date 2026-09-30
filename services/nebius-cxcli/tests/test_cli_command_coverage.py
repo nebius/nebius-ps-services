@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
@@ -23,6 +23,8 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from rich.style import Style
+from rich.text import Text
 from typer.testing import CliRunner
 
 import nebius_cxcli.cli as cli
@@ -61,7 +63,6 @@ pytestmark = pytest.mark.usefixtures("offline_shared_lease")
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-_COPY_PASTE_COMMAND_STYLE_RE = re.compile(r"\x1b\[(?:1;38;2;0;215;255|1;96)m(?P<text>.*?)\x1b\[0m")
 _RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
@@ -139,18 +140,37 @@ def _bundled_tool_versions() -> tuple[str, str]:
     return cli_settings["flux"]["version"], cli_settings["terraform"]["version"]
 
 
+@pytest.fixture
+def truecolor_console(monkeypatch: pytest.MonkeyPatch) -> Iterator[cli.Console]:
+    # Rich caches ANSI codes on parsed styles; earlier consoles may use fewer colors.
+    Style.parse.cache_clear()
+    Style._add.cache_clear()
+    console = cli.Console(
+        force_terminal=True, color_system="truecolor", no_color=False, width=220, record=True
+    )
+    monkeypatch.setattr(cli, "console", console)
+    yield console
+    Style.parse.cache_clear()
+    Style._add.cache_clear()
+
+
 def _assert_copy_paste_command_styled(rendered: str, command: str) -> None:
-    styled_texts = {
-        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
-    }
-    assert command in styled_texts
+    text = Text.from_ansi(rendered)
+    start = text.plain.index(command)
+    for offset in range(start, start + len(command)):
+        style = text.get_style_at_offset(cli.console, offset)
+        assert style.bold and style.bgcolor is not None
+        assert style.bgcolor.get_truecolor() == (229, 231, 235)
+        assert style.color is not None and style.color.get_truecolor() == (32, 32, 32)
 
 
-def _assert_not_copy_paste_command_styled(rendered: str, text: str) -> None:
-    styled_texts = {
-        match.group("text") for match in _COPY_PASTE_COMMAND_STYLE_RE.finditer(rendered)
-    }
-    assert text not in styled_texts
+def _assert_not_copy_paste_command_styled(rendered: str, value: str) -> None:
+    text = Text.from_ansi(rendered)
+    start = text.plain.index(value)
+    assert all(
+        text.get_style_at_offset(cli.console, offset).bgcolor is None
+        for offset in range(start, start + len(value))
+    )
 
 
 def _confirmation_sources() -> dict[str, str]:
@@ -7621,15 +7641,10 @@ def test_deploy_command_prints_wireguard_generation_command(
 def test_deploy_footer_styles_copy_paste_commands_not_labels(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
     monkeypatch.setattr(
         cli,
         "wireguard_access_command_hints",
@@ -8684,16 +8699,8 @@ def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     assert f"nebius-cxcli quota-request {fake_paths.config_path}" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in output
-    assert (
-        cli.copy_paste_command_markup(f"nebius-cxcli quota-request {fake_paths.config_path}")
-        in rendered_messages
-    )
-    assert (
-        cli.copy_paste_command_markup(
-            f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}"
-        )
-        in rendered_messages
-    )
+    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in rendered_messages
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in rendered_messages
 
 
 def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_capacity() -> None:
@@ -12263,7 +12270,16 @@ def test_wait_for_rendered_flux_resources_waits_for_sources_before_releases(
         "_kubectl_get_target",
         lambda target, *, env, timeout_seconds=20: (
             calls.append((target.kind, target.namespace, target.name))
-            or ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+            or (
+                {
+                    "metadata": {"generation": 1},
+                    "status": {
+                        "observedGeneration": 1,
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                    },
+                },
+                "",
+            )
         ),
     )
 
@@ -12313,7 +12329,9 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
         "_kubectl_get_target",
         lambda target, *, env, timeout_seconds=20: (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {
                             "type": "Ready",
@@ -12321,8 +12339,8 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
                             "reason": "InstallFailed",
                             "message": "chart pull failed",
                         }
-                    ]
-                }
+                    ],
+                },
             },
             "",
         ),
@@ -12387,7 +12405,9 @@ def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failur
             return ({}, "")
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {
                             "type": "Stalled",
@@ -12401,8 +12421,8 @@ def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failur
                             "reason": "InstallFailed",
                             "message": "startup api check failed",
                         },
-                    ]
-                }
+                    ],
+                },
             },
             "",
         )
@@ -12468,7 +12488,9 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
         if target.name == "failed":
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Stalled",
@@ -12482,15 +12504,17 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
                                 "reason": "InstallFailed",
                                 "message": "install failed",
                             },
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
         if call_counts["slow"] == 1:
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Ready",
@@ -12498,12 +12522,21 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
                                 "reason": "Progressing",
                                 "message": "still reconciling",
                             }
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
-        return ({"status": {"conditions": [{"type": "Ready", "status": "True"}]}}, "")
+        return (
+            {
+                "metadata": {"generation": 1},
+                "status": {
+                    "observedGeneration": 1,
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                },
+            },
+            "",
+        )
 
     monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
 
@@ -12598,7 +12631,9 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
         if calls["count"] == 1:
             return (
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {
                                 "type": "Ready",
@@ -12606,16 +12641,18 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
                                 "reason": "Progressing",
                                 "message": "waiting for first reconciliation",
                             }
-                        ]
-                    }
+                        ],
+                    },
                 },
                 "",
             )
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
-                    "conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]
-                }
+                    "observedGeneration": 1,
+                    "conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}],
+                },
             },
             "",
         )
@@ -12704,11 +12741,13 @@ def test_wait_for_rendered_flux_resources_accepts_statusless_oci_repository(
             )
         return (
             {
+                "metadata": {"generation": 1},
                 "status": {
+                    "observedGeneration": 1,
                     "conditions": [
                         {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
-                    ]
-                }
+                    ],
+                },
             },
             "",
         )
@@ -12775,11 +12814,13 @@ def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
             stderr="",
             stdout=json.dumps(
                 {
+                    "metadata": {"generation": 1},
                     "status": {
+                        "observedGeneration": 1,
                         "conditions": [
                             {"type": "Ready", "status": "True", "reason": "InstallSucceeded"}
-                        ]
-                    }
+                        ],
+                    },
                 }
             ),
         )
@@ -12899,17 +12940,13 @@ def test_print_deployment_status_message_disables_rich_auto_highlighter(
 
 
 def test_print_copy_paste_command_styles_command_and_escapes_markup(
-    monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
 
-    cli._print_copy_paste_command("nebius-cxcli render /tmp/[red]project[/red]/config.yaml")
+    cli.print_copy_paste_command(
+        cli.console, "nebius-cxcli render /tmp/[red]project[/red]/config.yaml"
+    )
 
     rendered = rich_console.export_text(styles=True)
     plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
@@ -12922,15 +12959,9 @@ def test_print_copy_paste_command_styles_command_and_escapes_markup(
 
 def test_print_create_next_steps_styles_all_copy_paste_commands(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    truecolor_console: cli.Console,
 ) -> None:
-    rich_console = cli.Console(
-        force_terminal=True,
-        color_system="truecolor",
-        width=220,
-        record=True,
-    )
-    monkeypatch.setattr(cli, "console", rich_console)
+    rich_console = truecolor_console
     config_path = tmp_path / "config.yaml"
 
     cli._print_create_next_steps(config_path)
@@ -13006,6 +13037,15 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
         "infra:mk8s@cluster1 --to-os ubuntu24.04 --strategy zero-surge --dry-run"
     ) in rendered
     assert "Dry run only: no changes." in rendered
+
+
+def test_upgrade_compatibility_followups_share_command_highlighting(truecolor_console: cli.Console):
+    console = truecolor_console
+    command = "kubectl --context verified get nodes"
+    cli._print_upgrade_plan_lines(("    follow-up:", command, "      Check node readiness."))
+    rendered = console.export_text(styles=True)
+    _assert_copy_paste_command_styled(rendered, command)
+    _assert_not_copy_paste_command_styled(rendered, "follow-up:")
 
 
 def test_deploy_validation_warning_cache_dedupes_nested_upgrade_warnings(
@@ -16757,10 +16797,7 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
     assert "Commit and push the rendered generated/flux path" in messages[2]
     assert "skip this step when local direct apply is the intended workflow" in messages[2]
     assert "Optional command to enable GitOps sync:" in messages[3]
-    assert (
-        cli.copy_paste_command_markup(f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}")
-        == messages[4]
-    )
+    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
     messages.clear()
@@ -16874,7 +16911,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "nebius-cxcli upgrade --help" in top_help
     assert "live nebius quota/capacity assessment" in quota_check_help
     assert "quota allowances to confirm the shortage" in quota_request_help
-    assert "import, export and validate grafana dashboards" in grafana_help
+    assert "show live access commands, or manage dashboards" in grafana_help
     for name in ("import", "export", "validate"):
         assert name in grafana_help
     assert "--export-dashboard" not in grafana_help
@@ -17082,7 +17119,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
-    assert "grafana Install Grafana and manage dashboards" in output
+    assert "grafana Install Grafana, show access commands" in output
     assert "validate Use CONFIG_YAML" in output
     assert "validate-dashboards" not in output
     assert "source config" in output

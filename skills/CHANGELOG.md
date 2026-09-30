@@ -4,12 +4,29 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Python testing guidance and optimization
+
+- Strengthened `python-project` with behavior-first unit/integration and optional
+  contract/E2E guidance, lowest-layer regressions, fixture and mocking rules,
+  pytest 9/importlib/strict xfail, explicit pytest-socket permissions and opt-in
+  external tests. Fast hermetic integration/contracts run on PRs; xdist is optional.
+- Added isolated installed-wheel smoke with entrypoint/resource checks and
+  executable rendered-template regressions across Python 3.11-3.13.
+- Repaired `optimize-pytest` examples to bound last-failed selection, isolate
+  coverage artifacts, preserve effective safety options and compare test identities.
+  Testmon feedback intersects affected tests with the same safety exclusions.
+
 ### Changed
 
-- Let authorized unmanaged PR workflows call the shared commit transaction for
-  successive reviewed repairs without renewed commit prompts. Scope private
-  continuation to one session, branch, origin and base; retain exact-tree
-  claims, normal hooks, managed/SDLC boundaries and explicit completion.
+- Separate root Git task authorization from individual commit attempts. Safe
+  no-commit retries reuse the original commit, commit-push or PR task; standalone
+  tasks still allow one actual commit. Begin before branch movement, including
+  clean starts, and finish completed, cancelled or zero-commit tasks explicitly.
+- Freeze PR target sets and dependency order, record forward base/dependency
+  synchronization, and validate merge order on an exactly cleaned temporary ref.
+  Preserve per-attempt review, normal hooks, Worktree/SDLC ownership, inherited
+  Git-writer locking, secret checks and required human approval. Root schemas
+  change together without converting old authority; delegated schemas stay intact.
 
 ### Fixed
 

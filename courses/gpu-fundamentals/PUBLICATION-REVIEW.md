@@ -1,6 +1,121 @@
 # Publication review
 
-## Results naming and build budgets — current local verification
+## Performance-tool diagram typography — local verification: 2026-09-29
+
+HTML SHA-256: `21b4fc6e588e13d9d5b759fe0d0a286219afb4207bb9857f62cddd503c4e732a`.
+
+The first four performance-tool figures now use proportional typography:
+32-unit titles, 20-unit subtitles, 18–22-unit labels and notes, 28-unit counter
+values and 44-unit benchmark durations. Grafana axis ticks use 16 units.
+Quieter borders, lighter panels, header dividers and takeaway bands clarify
+the visual grouping. Every text string, accessible description, original
+shape position and connector is preserved. The generated page is byte-identical
+outside these four figures, including the fifth measurement-loop figure and
+all embedded executable listings. This is a presentation-only revision.
+
+Source/static: the native Fundamentals validator, generated-page/archive
+freshness, 83 focused tool-teaching and diagram tests, and whitespace checks
+pass. Read-only review found no semantic or passive-SVG issues. The generic
+skill checker returns the same five existing markup/navigation diagnostics
+on the task-start and revised pages; it is not a passing gate.
+
+Browser/visual: three Playwright Test cases pass in owned isolated headless
+Chrome 154.0.8037.58 at 1440×1000, 390×1000 and 320×1000. Assertions cover the
+rendered type hierarchy, label containment and overlap, page overflow, local
+code scrolling, and doubled root-text reflow. No external requests occurred.
+All four figures were visually inspected at desktop and 320px. Small-screen
+annotations remain compact; full visible captions preserve the explanation.
+This is scoped presentation evidence, not a complete accessibility audit.
+
+Local evidence group `tools-type-19mwksa4` retains the source/page snapshots,
+Playwright harness, `preservation.json`, `generic-checker.json`, and screenshots
+with per-viewport identity records in `browser-approved/`. The initial
+sandboxed browser launch failed before page inspection; the approved isolated
+run passed, with browser resources closed normally. Tracing was disabled.
+No dependency installation, GPU lab execution or external publication occurred.
+
+## Historical: Horizontal performance-tool diagrams — local verification: 2026-09-29
+
+Current HTML SHA-256: `6fc90c5295726288dbcb3e75f517c98807e4ac9dca805757f15be28759bbab3d`.
+
+The first four figures in Using GPU performance tools use landscape layouts.
+Systems and NVTX read left to right; Compute puts counters beside an
+investigation, and Grafana places selected results beside sampled telemetry.
+The renderer removes the fixed 440px cap for these authored tool figures.
+Canonical prose, captions, accessible SVG descriptions and the README agree.
+The fifth measurement-loop figure and all 11 embedded executable listings are
+byte-identical to the task-start page. The remaining rendered content is
+unchanged outside the primer and its README introduction.
+
+Source/static: the Fundamentals validator, generated HTML/archive freshness,
+68 focused tool-teaching/contextual-visual/diagram tests, scoped Ruff,
+Markdown and whitespace checks pass. Independent read-only code/security
+review found one overly broad synchronization label, corrected to
+“NVTX labels; synchronize() waits”; no other substantive finding remains.
+The generic course checker retains the same five task-start diagnostics for
+local navigation and existing markup; it is not reported as passing.
+
+Browser/visual: six Playwright Test cases pass in owned isolated headless
+Chrome 154.0.8037.58 at 1440×1000, 390×1000 and 320×1000. Checks cover all four
+landscape figures, expanded desktop width, label containment and pairwise
+text overlap, document overflow, keyboard-operated course navigation, local
+code scrolling and doubled root-text reflow. No external request was observed.
+All four figures were visually reviewed at desktop and 320px; the narrow
+labels are compact and the full visible captions retain their meaning.
+Initial checks caught tight Systems label spacing; those attempts remain
+separate from the final passing captures. Owned browser resources closed
+normally. Tracing was disabled; this is scoped presentation evidence rather
+than an exhaustive accessibility audit.
+
+Local evidence group `horizontal-tools-r3i9zvsa` retains `task.diff`,
+`preservation.json`, `generic-checker.json`, `browser-final.json`,
+`browser-navigation.json`, the Playwright harnesses, and per-viewport
+`identity.json` and figure PNGs under `browser-final/`. Earlier failed checks
+remain under `browser-results/` and `browser-revised/`.
+No dependency installation, new GPU/runtime qualification or external
+publication was performed. Existing lab evidence retains its original scope.
+
+## Historical: Course overview cleanup — local verification: 2026-09-29
+
+Current HTML SHA-256: `fb595dc695ab8aa689570ee317d036fce3ee39938b86add727ed2ec21331a479`.
+
+The overview follows the shared purpose, prerequisites and practical-scope
+pattern. Shared operations now belong to the Lab Guide; distinct course limits remain explicit.
+Advanced measurement and completion guidance remains in its embedded course
+guide. The Lab Guide now uses cxcli-generated access and password commands.
+
+Source/static: 261 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent review pass. All numbered lesson
+bodies and 3,479 protected source/reference/evidence files are unchanged.
+Browser/visual: 27 isolated headless Chrome 154.0.8037.58 cases pass at
+1440px, 390px and 320px, including keyboard access and enlarged-text reflow.
+Overview and connection screenshots were reviewed. Generic skill-checker
+findings match baseline and are not reported as a pass.
+
+See the [overview validation record](../docs/course-overview-validation.md) for
+artifact hashes, screenshots, the retained initial harness stall and successful
+retry, cleanup and limitations. No new installed-runtime, live-target or public
+deployment qualification is claimed.
+
+## Historical: Catalog navigation — local verification: 2026-09-28
+
+Current HTML SHA-256: `6eeb681af089a63a90cee97b01e2c0cdd2b61fc7ad5ed5012b5930e03d265180`.
+
+The shared resource menu now includes Lab Guide second after Soperator and keeps
+one current-page marker. This course's HTML is byte-identical outside that menu;
+its teaching, lab sources, diagrams and existing evidence remain unchanged.
+
+Source/static: 161 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent read-only review pass.
+Browser/visual: all 27 page/viewport cases pass in isolated headless Chrome
+153.0.8010.53 at desktop, 390px and 320px, with keyboard navigation and reflow.
+The generic checker retains baseline diagnostics and is not reported as passing.
+
+See the [catalog validation record](../docs/catalog-navigation-validation.md)
+for artifact identities, preservation, screenshots and limitations. No external
+publication, dependency installation or new live lab execution occurred.
+
+## Historical: Results naming and build budgets — current local verification
 
 Current HTML SHA-256: `e91f064387ebb7547674555df578c00a77e7105116588b63bbadde1d38f0e2ea`. All seven pages are byte-identical to the
 preceding revision except the approved download names and results wording.

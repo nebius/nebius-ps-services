@@ -4698,6 +4698,15 @@ def _format_flux_target_summary(
         )
     ready = _ready_condition(payload)
     stalled = _stalled_condition(payload)
+    generation = payload.get("metadata", {}).get("generation")
+    observed_generation = payload.get("status", {}).get("observedGeneration")
+    if type(generation) is not int or generation <= 0 or observed_generation != generation:
+        ready = stalled = None
+    else:
+        if ready is not None and ready.get("observedGeneration", generation) != generation:
+            ready = None
+        if stalled is not None and stalled.get("observedGeneration", generation) != generation:
+            stalled = None
     if stalled is not None and _condition_status_true(stalled):
         reason = (
             str(stalled.get("reason", "")).strip()
@@ -4795,17 +4804,19 @@ def _flux_status_block(
     for target in targets:
         payload, detail = _kubectl_get_target(target, env=env)
         status = _format_flux_target_summary(target, payload, detail)
+        # Frozen main-workload authority must still inspect a raw stall even
+        # when generic generation filtering keeps that observation pending.
         if (
-            status.is_terminal_failure
-            and target.is_soperator_main
+            target.is_soperator_main
             and target.expected_main_identity is not None
+            and payload is not None
+            and _condition_status_true(_stalled_condition(payload))
         ):
-            if payload is None:
-                raise AssertionError("terminal Flux status must have a live payload")
             identity = _exact_soperator_main_workload_identity(target, payload, env=env)
             if identity is None:
                 status = replace(
                     status,
+                    is_ready=False,
                     is_terminal_failure=False,
                     failure_reason="",
                     failure_message="",
@@ -4814,7 +4825,7 @@ def _flux_status_block(
                         "[yellow]waiting[/yellow]; frozen source identity is not Ready"
                     ),
                 )
-            else:
+            elif status.is_terminal_failure:
                 status = replace(status, main_workload_identity=identity)
         elif status.is_terminal_failure and target.is_soperator_graph_member:
             status = replace(

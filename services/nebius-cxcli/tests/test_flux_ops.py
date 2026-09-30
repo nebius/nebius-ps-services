@@ -560,3 +560,80 @@ def test_wait_for_flux_resource_apis_checks_resource_types_without_target_namesp
     assert calls
     assert all("-A" in cmd for cmd in calls)
     assert all("-n" not in cmd for cmd in calls)
+
+
+@pytest.mark.parametrize("condition", ["Ready", "Stalled"])
+@pytest.mark.parametrize("stale_field", ["status", "condition", "both", "missing"])
+def test_flux_wait_requires_current_generation(monkeypatch, condition, stale_field):
+    target = flux_ops.FluxWaitTarget(
+        resource_type="helmrelease",
+        name="app",
+        namespace="apps",
+        kind="HelmRelease",
+        is_source=False,
+    )
+    stale = {
+        "metadata": {"generation": 2},
+        "status": {
+            "observedGeneration": 1 if stale_field in {"status", "both"} else 2,
+            "conditions": [
+                {
+                    "type": condition,
+                    "status": "True",
+                    "observedGeneration": 1 if stale_field in {"condition", "both"} else 2,
+                }
+            ],
+        },
+    }
+    if stale_field == "missing":
+        stale["status"].pop("observedGeneration")
+        stale["status"]["conditions"][0].pop("observedGeneration")
+    current = {
+        "metadata": {"generation": 2},
+        "status": {
+            "observedGeneration": 2,
+            "conditions": [{"type": "Ready", "status": "True", "observedGeneration": 2}],
+        },
+    }
+    responses = iter([(stale, ""), (current, "")])
+    reads = []
+    sleeps = []
+
+    def read(*args, **kwargs):
+        reads.append(True)
+        return next(responses)
+
+    monkeypatch.setattr(flux_ops, "_require_binary", lambda _: None)
+    monkeypatch.setattr(flux_ops, "_flux_wait_targets", lambda *a, **kw: [target])
+    monkeypatch.setattr(flux_ops, "_kubectl_get_target", read)
+    monkeypatch.setattr(flux_ops.time, "sleep", sleeps.append)
+    flux_ops.wait_for_rendered_flux_resources(SimpleNamespace(flux_dir=None), timeout_seconds=10)
+    assert len(reads) == 2
+    assert len(sleeps) == 1
+
+
+@pytest.mark.parametrize("condition_generation", [None, 2])
+@pytest.mark.parametrize("condition", ["Ready", "Stalled"])
+def test_flux_current_generation_conditions_keep_ready_and_terminal_behavior(
+    condition_generation, condition
+):
+    target = flux_ops.FluxWaitTarget(
+        resource_type="helmrelease",
+        name="app",
+        namespace="apps",
+        kind="HelmRelease",
+        is_source=False,
+    )
+    current_condition = {"type": condition, "status": "True", "reason": "Fixture"}
+    if condition_generation is not None:
+        current_condition["observedGeneration"] = condition_generation
+    status = flux_ops._format_flux_target_summary(
+        target,
+        {
+            "metadata": {"generation": 2},
+            "status": {"observedGeneration": 2, "conditions": [current_condition]},
+        },
+        "",
+    )
+    assert status.is_ready == (condition == "Ready")
+    assert status.is_terminal_failure == (condition == "Stalled")

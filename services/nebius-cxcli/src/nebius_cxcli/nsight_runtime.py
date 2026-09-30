@@ -171,8 +171,15 @@ def persistent_context(
     return None
 
 
-def access_command(row: Mapping[str, Any], *, kubeconfig: Path, context: str) -> str:
-    service = row["values"]["service"]
+def access_command(
+    *,
+    kubeconfig: Path,
+    context: str,
+    namespace: str,
+    service_name: str,
+    http_port: int,
+    turn_port: int,
+) -> str:
     return shlex.join(
         [
             "kubectl",
@@ -181,21 +188,27 @@ def access_command(row: Mapping[str, Any], *, kubeconfig: Path, context: str) ->
             "--context",
             context,
             "--namespace",
-            str(row["namespace"]),
+            namespace,
             "port-forward",
             "--address",
             "127.0.0.1",
-            f"service/{row['release_name']}-service",
-            f"{service['httpPort']}:{service['httpPort']}",
-            f"{service['turnPort']}:{service['turnPort']}",
+            f"service/{service_name}",
+            f"{http_port}:{http_port}",
+            f"{turn_port}:{turn_port}",
         ]
     )
 
 
-def password_command(row: Mapping[str, Any], *, kubeconfig: Path, context: str) -> str:
-    ref = row["values"]["webPassword"]
+def password_command(
+    *,
+    kubeconfig: Path,
+    context: str,
+    namespace: str,
+    secret_name: str,
+    secret_key: str,
+) -> str:
     # Secret keys permit dots; escape those for JSONPath field selection.
-    key = ref["secretKey"].replace(".", "\\.")
+    key = secret_key.replace(".", "\\.")
     return (
         shlex.join(
             [
@@ -205,10 +218,10 @@ def password_command(row: Mapping[str, Any], *, kubeconfig: Path, context: str) 
                 "--context",
                 context,
                 "--namespace",
-                str(row["namespace"]),
+                namespace,
                 "get",
                 "secret",
-                ref["secretName"],
+                secret_name,
                 "-o",
                 f"jsonpath={{.data.{key}}}",
             ]
@@ -258,6 +271,7 @@ def collect_nsight_status(
     extra_env,
     target_ref: str = "",
     emit=None,
+    emit_command=None,
     runner=None,
     kubeconfig_candidates: tuple[Path, ...] | None = None,
 ) -> tuple[dict[str, Any], ...]:
@@ -352,10 +366,19 @@ def collect_nsight_status(
         }
         if durable:
             item["port_forward_command"] = access_command(
-                row, kubeconfig=durable, context=kube.context
+                kubeconfig=durable,
+                context=kube.context,
+                namespace=namespace,
+                service_name=f"{release}-service",
+                http_port=expected["httpPort"],
+                turn_port=expected["turnPort"],
             )
             item["password_command"] = password_command(
-                row, kubeconfig=durable, context=kube.context
+                kubeconfig=durable,
+                context=kube.context,
+                namespace=namespace,
+                secret_name=row["values"]["webPassword"]["secretName"],
+                secret_key=row["values"]["webPassword"]["secretKey"],
             )
         statuses.append(item)
         if emit:
@@ -363,7 +386,8 @@ def collect_nsight_status(
                 f"Nsight {item['tool']}: installed; reports at {REPORTS_MOUNT}; browser login Secret {namespace}/{item['secret_name']}"
             )
             if durable:
-                emit(item["port_forward_command"])
+                if emit_command:
+                    emit_command(item["port_forward_command"])
                 emit(f"Open {item['url']} (keep this terminal running).")
             else:
                 emit(

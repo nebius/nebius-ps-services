@@ -45,13 +45,16 @@ requests to fix this skill never authorize publication. Do not ask for another
 skill invocation when the user has already clearly requested the action.
 
 The shared commit hook records only a nonauthorizing root-turn receipt. In the
-local commit phase, pass the exact hook-provided `--intent-sha256` plus
-`--requested-action commit-push` to canonical preparation. The helper binds one
-single-use authorization; never rewrite consumed state or run raw Git mutation.
+task intake, pass the exact hook-provided `--intent-sha256` plus
+`--requested-action commit-push` to canonical private `begin`, even when clean.
+Keep that original task key for prepare/finish. The grant permits one actual
+commit and safe retries of attempts proven to have created no commit; never
+rewrite private state or run raw Git mutation. Read
+`../commit/references/task-lifecycle.md` for the private interface.
 These private helper arguments are not public skill flags. Missing receipt
 context means the installation needs diagnosis, not that the user must use a
-magic phrase. Continue using an already prepared claim through its supported
-execute/review path instead of preparing it again.
+magic phrase. Use supported prepare/execute/review recovery paths. A retry
+requires a newly reviewed candidate and token, not a repeated user invocation.
 
 ## Use This Skill For
 
@@ -110,6 +113,9 @@ execute/review path instead of preparing it again.
    - Stop if the current branch is the default branch.
    - Stop if a merge, rebase, cherry-pick, revert, or bisect is in progress.
    - Stop if unresolved conflicts exist.
+   - Begin the root task before committing or publishing. An actual commit
+     consumes only the local commit allowance; a failed push may still retry
+     publication of that exact verified head under the original task.
 4. Refresh the current branch's remote tracking context.
    - Check whether `origin/<branch>` exists with the exact `--branches` query,
      then fetch the current branch ref into `refs/remotes/origin/<branch>` when
@@ -146,10 +152,11 @@ execute/review path instead of preparing it again.
    - Review the returned temporary-index candidate tree with read-only Git
      tree and diff commands. The helper alone runs repository-root `git add -A`
      with no pathspec and `git diff --cached --check` before committing.
-   - Stop on whitespace errors, conflict markers, unresolved conflicts,
-     semantic failures, generated-artifact uncertainty, or an unsafe or
-     incoherent candidate. Do not mutate a failed candidate inside this
-     publication workflow.
+   - Correct only simple mechanical whitespace problems in scope, then prepare
+     and review a new candidate under the same task. Stop on conflict markers,
+     unresolved conflicts, semantic failures, generated-artifact uncertainty or
+     unsafe content. A failed hook with no commit can retry after an authorized
+     correction and exact base-history verification.
    - If the candidate tree equals `HEAD^{tree}`, report that there is nothing
      to commit.
    - Use the user's exact commit message if provided. Otherwise generate a
@@ -167,6 +174,9 @@ execute/review path instead of preparing it again.
      `git push origin HEAD:<branch>`.
 8. Verify and report.
    - Run `git status --short --branch`.
+   - After publication is verified, close the task with private `finish
+     completed`; close a zero-effect no-op too. Use `finish cancelled` when
+     abandoning the task, retaining unresolved effect evidence.
    - Report the branch name, commit hash if a new commit was created, push
      target, final ahead/behind state, and whether the worktree is clean.
 

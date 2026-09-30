@@ -612,6 +612,7 @@ def _materialize_mk8s_node_group_boot_disk_defaults(
             project_id=project_id,
             field_scope=field_scope,
             provider_lookup=provider_lookup,
+            disk_type_override=_as_text(boot_disk.get("type")) or None,
         )
         if recommendation is None:
             continue
@@ -787,6 +788,7 @@ def materialize_compute_boot_disk_defaults(
                 project_id=project_id,
                 field_scope=field_scope,
                 provider_lookup=provider_lookup,
+                disk_type_override=_as_text(_field_value(component_id, inputs, type_field)) or None,
             )
             if recommendation is None:
                 continue

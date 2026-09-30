@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -57,7 +58,7 @@ def test_deploy_rejects_obsolete_rendered_soperator_values_before_auth(
 
 
 def test_create_writes_config_and_never_renders_or_executes(monkeypatch, tmp_path):
-    config = tmp_path / "tenant" / "project" / "config.yaml"
+    config = tmp_path / "tenant space" / "project" / "config.yaml"
     calls = []
 
     @contextmanager
@@ -105,6 +106,16 @@ def test_create_writes_config_and_never_renders_or_executes(monkeypatch, tmp_pat
     assert calls[0]["soperator_release"].release == "1.22.3"
     assert calls[0]["validate_config"] is True
     assert "nebius-cxcli deploy" in result.output
+    commands = [line for line in result.output.splitlines() if line.startswith("nebius-cxcli ")]
+    assert [shlex.split(command) for command in commands] == [
+        ["nebius-cxcli", action, str(path)]
+        for action, path in (
+            ("validate", config),
+            ("render", config),
+            ("validate-generated", config.parent / "generated"),
+            ("deploy", config),
+        )
+    ]
 
 
 def test_install_is_removed_and_create_has_only_authoring_options():

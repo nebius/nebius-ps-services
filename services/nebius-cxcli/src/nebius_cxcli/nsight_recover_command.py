@@ -11,6 +11,7 @@ from .nsight_mount_repair import repair_stage
 from .nsight_profiling import profiling_settings
 from .nsight_recovery import STAGES, expected_manifest, recover_stage
 from .soperator_operation_lock import SoperatorOperationLease, SoperatorOperationLocalLock
+from .terminal_styles import print_copy_paste_command
 
 
 def recover_profiling(config_path, *, target_ref, stage, job_uid, dry_run=False, repair=""):
@@ -250,7 +251,8 @@ def _recover_install(
         dry_run=dry_run,
         repair=repair,
     )
-    cli.console.print(
+    print_copy_paste_command(
+        cli.console,
         shlex.join(
             [
                 "nebius-cxcli",
@@ -266,6 +268,4 @@ def _recover_install(
                 settings["reports_path"],
             ]
         ),
-        markup=False,
-        soft_wrap=True,
     )

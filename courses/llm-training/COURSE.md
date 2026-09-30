@@ -1,23 +1,19 @@
 # LLM Training
 
-This course teaches how an LLM training step works, how its state consumes memory and communication, and how to optimize it without changing the learning objective or hiding correctness regressions.
+LLM Training explains how a large language model learns and how a training step
+uses compute, memory and communication. Learn to preserve the learning objective
+while improving correctness, recoverability, precision, data flow and throughput.
 
-Hardware routes:
+Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
+execution, timing and profiling skills. The course develops training mechanics
+through worked examples and controlled experiments; inference serving has its
+own course.
 
-The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
-
-Distributed practical work belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). Use its separate two-worker sixteen-H100 cluster after these conceptual foundations.
-
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
-
-Learn to preserve the learning objective while improving training
-correctness, recoverability, memory, precision, data flow, communication, and
-throughput through single-GPU experiments and distributed-training concepts.
-
-Local practice uses one H100. Distributed practical work belongs to the
-advanced communication course on two eight-H100 workers. Its bounded
-mechanics and synthetic workloads do not establish production convergence
-or large-model scaling.
+Local GPU practice uses one full H100; distributed-training experiments belong to
+[Advanced Labs](../advanced-gpu-communication/index.html).
+These bounded, often synthetic workloads do not establish production convergence
+or large-model scaling. Prepare with the shared Lab Guide's
+[environment setup](../README.md#how-to-set-up-the-lab).
 
 ## 1. Model learning and training objectives
 

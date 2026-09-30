@@ -126,7 +126,7 @@ across both workers. This validates supported install recovery and the managed
 upgrade; it does not establish a fresh clean-install rerun with the final source,
 1,000-node behavior, or a comparative maintenance-time improvement.
 
-<!-- FEATURE: FEAT-013 reqs=REQ-013 status=ready delivery=verified priority=P0 version=20 -->
+<!-- FEATURE: FEAT-013 reqs=REQ-013 status=ready delivery=verified priority=P0 version=21 -->
 ### FEAT-013: Dynamic official release authority
 
 #### Requirements Covered
@@ -140,6 +140,12 @@ which coupled cxcli publication to Soperator publication and could not make
 `latest` authoritative at execution time.
 
 #### Design Details
+
+Release identity publication requires this ledger instance to hold the
+existing per-tag lock for the exact identity in the publishing thread. Write
+and fsync a private temporary file, then atomically rename it under that lock
+and fsync the directory. No partial final pin is visible; established pins
+remain immutable. Interrupted temporary files grant no authority.
 
 Resolve `latest` from the official latest-release API and exact stable semantic
 versions from official release tags. Dereference the tag to commit and tree,
@@ -345,6 +351,12 @@ No runtime target-version lock or second `latest` lookup remains.
 
 #### Implementation Evidence
 
+Version 21: `soperator_release_identity.py` requires the publishing thread and
+process to hold the exact identity lock. It writes an owner-only temporary
+record, fsyncs complete bytes, renames under the per-tag lock, and fsyncs the
+directory. Existing pins remain authoritative; only the current writer's
+unfinished temporary file is cleaned up.
+
 Version 20 repairs `flux_ops._normalize_soperator_outer_post_renderers` so
 Grafana's values-only routing patches do not consume or fail the graph identity
 check. Both stable desired-state observation and staged release execution use
@@ -387,6 +399,14 @@ adapter roles and source/package verification remain enforced. README and the
 Unreleased changelog describe compatible additions and remaining boundaries.
 
 #### Verification Evidence
+
+Version 21: regression tests first reproduced partial final records after
+write or file-fsync failures. The repaired ledger passes interrupted write,
+file-sync, rename and directory-sync cases, identical retry, single-link
+ownership, wrong-thread/identity lock rejection, concurrent identical
+observations and conflicting first observations. Resolver consumer tests pass.
+This is local source and filesystem verification, not live release deployment
+proof.
 
 Version 20: a local replay of the failing Soperator 4.1.11 render reproduced
 the collector-events identity exception before repair and validates all 21
@@ -588,7 +608,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-014 -->
 
-<!-- FEATURE: FEAT-015 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=52 -->
+<!-- FEATURE: FEAT-015 reqs=REQ-015 status=ready delivery=unassessed priority=P0 version=53 -->
 ### FEAT-015: Canonical Soperator CLI lifecycle
 
 Command alignment binds fresh upgrade planning to the initially read source
@@ -1233,6 +1253,12 @@ status remain read-only views over registered targets and operation evidence.
 
 #### Implementation Evidence
 
+Upgrade campaign planning emits one node-template/readiness pair when a lagging
+node group catches up to an unchanged control-plane version while its OS or
+driver preset changes. The catch-up stage already applies those frozen targets;
+no duplicate stage identity is allocated. Existing receipts containing the former
+duplicate sequence fail the exact segment-order comparison on resume.
+
 Upstream Soperator configuration and required integration prompts now default
 to no without disabling their app rows. The shared field runner applies this
 default only in dedicated installation; infrastructure and generic-app defaults
@@ -1269,6 +1295,10 @@ Registration v3, verified live provenance, dedicated destroy, recovery-rich
 status, and removal of discover preview selectors are implemented by FEAT-024.
 
 #### Verification Evidence
+
+An executing campaign regression reproduced duplicate provider-stage calls
+before the repair and now proves one call per frozen segment. Template-only,
+catch-up-only and multi-hop paths retain their existing behavior.
 
 The command alignment audit covers create, discover, onboard, upgrade and
 status. Regression tests invoke the public upgrade callback and real planner
@@ -1474,7 +1504,7 @@ or successful end-to-end deployment after manual infrastructure deletion.
 
 <!-- /FEATURE: FEAT-016 -->
 
-<!-- FEATURE: FEAT-017 reqs=REQ-017 status=ready delivery=implemented priority=P0 version=19 -->
+<!-- FEATURE: FEAT-017 reqs=REQ-017 status=ready delivery=implemented priority=P0 version=20 -->
 ### FEAT-017: Immutable operation, lease, and recovery model
 
 Current shared deployment admission follows FEAT-048; descriptions below of
@@ -1516,6 +1546,22 @@ local attempts and kernel process ownership, with no shared S3 lifecycle records
 Supervisors inherit the execution lock descriptor and retain it until contained
 writers stop. Artifact publication uses a separate short lock. Serialize complete
 workflows across workstations and repositories through CI/operator scheduling.
+
+The full-stack campaign keeps receipt schema v6 and uses one private semantic
+validator after deserialization and before atomic publication. It binds the
+receipt target, cluster ID and Kubernetes UID to its digest-verified intent and
+requires the exact ordered intent segment ledger. During active maintenance,
+completed segments form a prefix, followed by at most one running or failed
+segment and then pending successors; an entirely pending or completed ledger
+is valid. Pending and entering maintenance require all segments pending.
+Restoring maintenance requires all segments complete. Only restored maintenance
+with all segments complete permits campaign completion; every other combination
+fails closed. Supervisor state remains diagnostic: final-readiness revalidation
+can be running, retrying or stopped while a completed campaign retains its
+last-known-good authority. Errors contain no raw receipt values. Malformed
+receipts cannot reach executor or restoration callbacks, archival or replacement.
+The writer validates before touching the destination. No schema migration,
+automatic receipt repair, compatibility path or new command is introduced.
 
 #### Selected Option
 
@@ -1563,6 +1609,15 @@ lease.
 
 #### Implementation Evidence
 
+Version 20 implements the canonical full-stack campaign receipt validator in
+`soperator_full_stack_upgrade.py`, shared by deserialization and publication.
+Existing schema, intent/evidence digests, config-generation chain and supervisor
+field checks remain mandatory. Identity, exact ledger, ordered progress and
+maintenance/completion invariants now fail before callback execution, archival
+or destination writes. Supervisor diagnostics retain completed-campaign final
+revalidation. README and changelog document failure handling without migration
+or automatic receipt repair.
+
 Version 19 implements the shared v2 lease and command-scoped observation in
 `deployment_lease.py`, `deployment_lease_status.py`, `deployment_cli.py` and
 `operation_cli.py`. `lease_clock.py` owns policy and elapsed clocks.
@@ -1577,6 +1632,22 @@ Operation schemas, anchor records, transition receipts, and fault-injection
 tests provide implementation evidence.
 
 #### Verification Evidence
+
+Version 20 receipt regressions reproduced 88 pre-fix failures. After repair,
+245 focused cases and the expanded 44-module selection of 1,181 upgrade,
+rootfs/protected-storage, recovery, status, CLI and documentation tests pass.
+Coverage includes all campaign/maintenance combinations across five ledger
+shapes, every completed prefix, identity and ledger tampering, untouched
+rejected publications, and rejection before callbacks or new-campaign archival.
+Every normal runner publication boundary survives injected interruption and
+resumes without repeating completed segments; failed segments and interrupted
+final revalidation retain their original recovery behavior. Malformed fixtures
+inject raw JSON so they exercise the read guard independently of the stronger
+writer. A coherent foreign receipt remains rejected by the restoration owner's
+frozen-authority comparison. Scoped Ruff, formatting and campaign-module mypy
+pass, and independent read-only review found no new blocker. These checks prove
+local source behavior only; live managed/onboarded upgrades, large-rootfs image
+execution and interrupted-live replay were not run for this change.
 
 The subsequent alignment review reproduced a completion-boundary gap: streaming
 Terraform accepted a zero leader exit even when its supervisor could not confirm
@@ -2172,7 +2243,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-022 -->
 
-<!-- FEATURE: FEAT-023 reqs=REQ-023 status=ready delivery=unassessed priority=P0 version=51 -->
+<!-- FEATURE: FEAT-023 reqs=REQ-023 status=ready delivery=unassessed priority=P0 version=52 -->
 ### FEAT-023: Same-MK8s protected data-plane handoff
 
 #### Requirements Covered
@@ -2760,6 +2831,15 @@ loss or a retained source-release owner.
 
 #### Implementation Evidence
 
+Rootfs shell jobs check traversal, file reads, symlink reads, metadata, encoding
+and sorting independently before accepting inventory or permitting cleanup.
+The POSIX implementation buffers content-free inventory before sorting, avoiding
+writable scratch storage while preserving canonical digest bytes, including
+symlink trailing newlines. Required directory and non-symlink probes execute
+separately so regular files cannot pass additional-folder admission. Changed
+Job commands retain exact workload identity checks; interrupted operations need
+their matching executable or an independently reviewed recovery procedure.
+
 Storage preparation and slot switching now share canonical storage-intent
 normalization without emitting intermediate volume sources. Upgrade passes
 that intent directly to the adapter; no generated-alias stripping path remains.
@@ -2780,6 +2860,14 @@ evidence.
 Disposable managed and onboarded trials remain a separate live-validation gate.
 
 #### Verification Evidence
+
+Generated-shell regressions reproduced masked tool failures and regular-file
+admission before repair. They now prove nonzero failure status, no cleanup after
+failed inventory, canonical empty/nonempty evidence, symlink digest preservation,
+and admission of real directories only. The scoped upgrade/recovery/storage/CLI
+and documentation suite passed 859 tests. ShellCheck passed the generated POSIX
+scripts. Official-image execution, large-inventory memory use, and live
+managed/onboarded upgrade trials remain unverified.
 
 Offline regressions compile managed and external adoption intent before and
 after consecutive slot switches, checking retained mounts, rollback authority,
@@ -3096,7 +3184,7 @@ permissions, ownership, saved-plan identity and mutation-fence guards are unchan
 
 <!-- /FEATURE: FEAT-024 -->
 
-<!-- FEATURE: FEAT-025 reqs=REQ-025 status=ready delivery=unassessed priority=P0 version=9 -->
+<!-- FEATURE: FEAT-025 reqs=REQ-025 status=ready delivery=unassessed priority=P0 version=10 -->
 ### FEAT-025: Recoverable project generations and credential compensation
 
 #### Requirements Covered
@@ -3112,6 +3200,12 @@ secret material is delivered. Both workflows need durable ownership and crash
 classification rather than sequential best-effort cleanup.
 
 #### Design Details
+
+GitHub environment synchronization reads the selected environment first.
+Existing environments retain their deployment branch/tag policies and other
+protection settings. Only a confirmed 404 permits creation, using an empty
+settings payload; authentication, authorization and transport errors stop
+synchronization.
 
 Project files that must advance together use one `ProjectBundleTransaction`.
 The writer holds the project lock, validates regular owner-controlled targets,
@@ -3275,6 +3369,11 @@ preserves the executable `mysterybox` contract.
 
 #### Implementation Evidence
 
+Version 10: `github_secrets.py` checks whether the selected environment exists
+before synchronization. Existing environments receive no settings update; only
+a confirmed 404 allows creation with an empty payload. All secret and variable
+presence helpers share the same resource lookup.
+
 `src/nebius_cxcli/sdk_auth.py` classifies plain timeout exceptions and renders
 a replacement warning record, clearing provider text and traceback caches.
 The root CLI callback owns filter lifetime through its Click context. Existing
@@ -3307,6 +3406,12 @@ terminal-state integrity, compensation, and retry convergence.
 
 #### Verification Evidence
 
+Version 10: mocked API regressions first reproduced branch/tag policy reset
+through ensure, secret sync and variable sync. Both existing policy forms
+remain unchanged after repair; creation, encoded environment/variable names,
+variable presence and non-404 errors are covered. No live GitHub environment
+was changed or used as verification.
+
 Token-refresh regressions reproduce the original empty-message classification
 failure and exercise the installed SDK bearer through timeout-then-success and
 persistent timeout. CLI tests cover success, terminal failure, interruption,
@@ -3337,7 +3442,7 @@ Other feature evidence predating this change remains unassessed.
 
 <!-- /FEATURE: FEAT-025 -->
 
-<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=8 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=9 -->
 ### FEAT-026: Layered CLI services and ratcheted repository gates
 
 #### Requirements Covered
@@ -3353,6 +3458,48 @@ Python 3.12 test job but no enforced branch coverage, formatting, package-wide
 static-type ratchet, or every-supported-minor offline matrix.
 
 #### Design Details
+
+Revision 9 adds one shared copy/run command presentation owner in
+`terminal_styles.py`: bold foreground `#202020` on background `#e5e7eb`, applied
+only to command text. The printer accepts the existing caller Console, renders
+literal text without syntax highlighting and retains runtime soft wrapping.
+Help uses the same style after existing example/comment normalization; separators
+retain their own color. Rich owns terminal capability detection and color opt-out.
+Normal redirected output stays plain. No new theme settings or dependencies are
+introduced, and raw command builders plus saved reports remain unchanged.
+
+Replace the CLI-local printer with this owner and route create/render/deploy,
+component and quota hints, Grafana access, Flux/SSH/WireGuard handoffs, upgrade
+follow-ups and Nsight access/recovery output through it. Split inline action
+labels from complete commands. Do not infer executable commands from arbitrary
+logs, exception prose, JSON or progress records. Preserve all command arguments,
+quoting, target checks, password handling and lifecycle behavior.
+
+Use the existing recursive help formatter rather than a second help renderer.
+Style normalized command bodies once, escape literal markup, and keep explanatory
+labels/comments outside the style. Example parser checks extract plain commands
+before tokenization; canonical CLI metadata is regenerated and reviewed. Validate
+terminal colors, opt-outs, long runtime commands and help at 80/160 columns, then
+focused workflow/output tests and installed-wheel CLI verification. Text-only
+highlighting is selected over cyan-only text or full-width panels to improve
+contrast without adding copied decoration. Revision 9 presentation is implemented:
+focused terminal/help, workflow, access, recovery and report tests pass, including
+explicit command-channel wiring for ordinary-app deployment. Ruff and formatting
+pass for all changed Python files, and the existing mypy and CLI architecture
+ratchets pass. A fresh isolated wheel verifies all 52 public and one hidden CLI
+surfaces against the canonical contract. This evidence is local source and
+installed-package validation; no live deployment was performed. Broader
+architecture delivery retains its existing unassessed state.
+
+The Nsight installation output test declares `TERM=xterm-256color` for its
+simulated color-capable terminal. This isolates the fixture from an invoking
+`TERM=dumb` shell while retaining Rich's production detection and color opt-outs.
+
+Exact-RGB command-output tests use a function-scoped truecolor console and clear
+Rich's parsed and combined style caches before and after each fixture. Rich caches ANSI codes
+on shared style objects, so a prior standard-color console must not define the
+simulated truecolor fixture's palette. The fixture explicitly enables color;
+separate tests continue to verify production no-color and redirected output.
 
 Decompose incrementally in dependency order: move leaf normalization helpers
 first, then the Soperator supervisor and command adapter, project persistence,
@@ -3569,7 +3716,7 @@ baselines. The remaining supported Python versions were not exercised locally.
 
 <!-- /FEATURE: FEAT-026 -->
 
-<!-- FEATURE: FEAT-027 reqs=REQ-027 status=ready delivery=unassessed priority=P1 version=2 -->
+<!-- FEATURE: FEAT-027 reqs=REQ-027 status=ready delivery=unassessed priority=P1 version=3 -->
 ### FEAT-027: Project-local fail-closed SSH host trust
 
 #### Requirements Covered
@@ -3584,6 +3731,11 @@ Before FEAT-027, the SSH jump-host and WireGuard helpers passed
 machine-global OpenSSH state.
 
 #### Design Details
+
+Resolve exact instance IDs before shared component-type selectors. A selector
+must identify exactly one enabled SSH jump-host or WireGuard instance before
+Terraform output lookup or remote execution; ambiguous shared types report the
+available instance choices.
 
 One shared SSH trust-policy module resolves `--ssh-known-hosts-file` or defaults
 to `ProjectPaths.generated_dir / "ssh_known_hosts"`. It requires a regular,
@@ -3657,6 +3809,10 @@ and focused plus full offline tests pass.
 
 #### Implementation Evidence
 
+Version 3: the SSH jump-host and WireGuard selectors resolve exact enabled
+instance IDs before matching shared component types, and reject multiple
+matches with explicit instance choices before any remote action.
+
 Both public callbacks resolve the shared project-local default or explicit
 override and carry it in their service request. Every SSH argv builder consumes
 the strict shared policy before invoking a remote helper; WireGuard generation
@@ -3670,11 +3826,17 @@ validation.
 
 #### Verification Evidence
 
+Version 3: both gateway test modules reproduce ambiguous type selection and
+exact-instance shadowing before the fix. Regression cases pass for either
+component order, ambiguous shared types, exact IDs that equal a component
+type, and existing remote-operation behavior. This verifies selector repairs
+only; no live gateway was contacted.
+
 No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-027 -->
 
-<!-- FEATURE: FEAT-028 reqs=REQ-026 status=ready delivery=verified priority=P1 version=3 -->
+<!-- FEATURE: FEAT-028 reqs=REQ-026 status=ready delivery=verified priority=P1 version=4 -->
 ### FEAT-028: Locked uv contributor and CI workflow
 
 #### Requirements Covered
@@ -3691,6 +3853,10 @@ release workflows call that Make path and also invoke the venv interpreter
 directly.
 
 #### Design Details
+
+Release verification fetches main without introducing a shallow boundary,
+retaining complete history for tag ancestry and the tagged commit parent used
+by quality ratchets.
 
 Use uv as the single contributor dependency authority while retaining Make as
 the stable task facade. Development and build tools move from the
@@ -3781,6 +3947,11 @@ verification remains artifact-exact, and focused plus aggregate gates pass.
 
 #### Implementation Evidence
 
+Version 4: `.github/workflows/nebius-cxcli-release.yml` retains full main
+history by removing the depth-one fetch from the ancestry gate. The existing
+full-history checkout and first-parent quality baseline remain the canonical
+path.
+
 `pyproject.toml` and `uv.lock` now own one default development group, the uv
 version policy, and the constrained PEP 517 backend. `Makefile` owns validated
 environment selection, selected-Python lock checks, per-environment serialized
@@ -3791,6 +3962,12 @@ runtime remediation text, and developer design text describe that single path;
 the former pip environment helpers and legacy Make aliases are removed.
 
 #### Verification Evidence
+
+Version 4: `tests/test_github_workflows.py` executes the actual ancestry shell
+step against disposable local Git remotes with both historical and tip release
+commits. The old fetch reproduced rejected historical ancestry and an
+unresolved tip parent; both cases pass after repair. GitHub-hosted publication
+itself was not run.
 
 Focused environment/workflow/documentation tests pass with 27 cases, including
 missing uv, stale lock, whitespace and unsafe paths, foreign active
@@ -6054,7 +6231,7 @@ Flux kustomization. This proves rendering, not deployment or GPU availability.
 
 <!-- /FEATURE: FEAT-035 -->
 
-<!-- FEATURE: FEAT-036 reqs=REQ-033 status=ready delivery=implemented priority=P0 version=6 -->
+<!-- FEATURE: FEAT-036 reqs=REQ-033 status=ready delivery=implemented priority=P0 version=8 -->
 ### FEAT-036: Shared compatibility admission and immutable rendering
 
 #### Requirements Covered
@@ -6066,6 +6243,34 @@ Flux kustomization. This proves rendering, not deployment or GPU availability.
 Existing compatibility proposal, catalogs, generation capture and provider adapters.
 
 #### Design Details
+
+Compare Kubernetes identities as complete identifiers. Soperator status retains
+exact CRD-name matching for Flux HelmReleases and Kruise StatefulSets, expressed
+as equality rather than domain-like literal membership so static analysis does
+not confuse a set lookup with URL substring validation. MysteryBox binding
+admission matches the renderer's complete `external-secrets.io/v1` API version
+alongside kind, name and namespace. A prefix, empty version, additional path,
+foreign group or alternate version cannot establish a generated binding.
+Keep the repair within the existing discovery and generated-artifact admission
+owners; no URL parsing, suppression, CRD-version fallback or live mutation is
+required. Test exact and misleading names through status collection and mutate
+rendered ExternalSecrets through application admission before deployment effects.
+This identity-check revision is implemented and locally verified. Broader
+feature delivery and live deployment evidence retain their existing scope.
+
+Frozen Soperator main-workload stalls still pass through the exact identity
+guard when generic generation filtering leaves them pending. Stale resource-
+generation authority retains its typed safety pause. Current resource
+authority with an old condition remains nonterminal, and unavailable frozen-
+source identity always clears readiness.
+
+Ordinary-app Flux readiness requires the current resource generation before
+interpreting Ready or Stalled conditions, including each condition generation
+when present. Preserve the explicit statusless OCI HelmRepository contract.
+Local chart directories remain local when an exact version is supplied, and
+their Chart.yaml version must match before capture. Boot-disk default sizing
+uses the authored disk type allocation unit when size is omitted; explicit
+sizes remain authoritative.
 
 Use closed pure evaluation and immutable selected rendering inputs.
 
@@ -6215,6 +6420,18 @@ Mapped behavior is wired and verified; limitations are reported independently.
 
 #### Implementation Evidence
 
+`soperator_status_collect.py` now expresses the two optional CRD checks as
+complete-name equality. `mysterybox_eso.py` accepts only the renderer's exact
+`external-secrets.io/v1` identity when checking required bindings; existing kind,
+name, namespace and mapping checks remain in the same admission boundary.
+
+Version 7: `flux_ops.py` admits Ready and terminal Stalled conditions only
+with current resource generation evidence; condition generations are checked
+when supplied. The statusless OCI source exception is unchanged.
+`helm_client.py` materializes versioned local directories directly after
+matching Chart.yaml metadata. Both compute boot-disk materializers pass the
+authored disk type to allocation-unit sizing.
+
 The packaged registry, strict parser, pure evaluator, version-set normalization, native/provider adapters, frozen catalog/chart inputs and intermediate-state planner are wired into validation, render and deployment admission. Native constraint identities are checked again during recovery and coordinated Terraform stages. Ordinary OCI and local artifacts retain immutable execution bindings. HTTP Helm charts require exact identity and freshly fetched file contents matching the render snapshot before deployment, application execution and chart upgrades. Subsequent Flux HTTP reconciliation remains publisher-trusted; Git chart execution is unsupported. Helm chart constraints use stage control-plane versions; support assessment retains node versions.
 
 HTTP/OCI transport regressions cover nested frozen contexts, fresh HTTP downloads,
@@ -6245,6 +6462,38 @@ intact; plain validation stays in-memory. Operational plans, progress, runtime
 health, compatible-choice failure guidance and blocking errors remain visible.
 
 #### Verification Evidence
+
+Identity regressions in `tests/test_application_execution.py` reproduced four
+incorrect admissions before repair: an empty version suffix, additional version
+path, invalid version and alternate v1beta1. They now fail as required, canonical
+rendered bindings pass, and empty/missing API identity retains the earlier
+resource-validation error. Ten `tests/test_soperator_status_collect.py` cases
+confirm exact Flux/Kruise discovery and rejection of lookalike names without
+changing Helm fallback behavior. The expanded status, MysteryBox, application,
+ordinary-app, rendering and ESO-waiter suite passes 352 tests. Scoped Ruff,
+formatting, Markdown and diff checks pass; the repository mypy debt ratchet passes
+with 485 existing errors against its 493 ceiling. Independent code/security review
+found no blocking issue. The three original CodeQL predicates were inspected
+against the reporting query, but CodeQL was not executed locally and GitHub alert
+closure awaits a scan of published changes. No live deployment was performed.
+
+Version 7 cross-flow verification: raw-stall inspection preserves the existing
+typed safety pause for stale Soperator main-workload resource authority.
+Additional regressions distinguish old condition generations from current
+terminal authority and prove that a source disappearing between observations
+keeps the workload pending even with a current Ready condition. The complete
+Flux, Soperator readiness/reconciler and CLI command-coverage test modules
+pass all 581 cases. These checks exercise source behavior without live cluster
+operations.
+
+Version 7: regressions first reproduced stale Ready success, stale Stalled
+failure, versioned local chart download, and wrong allocation-unit defaults.
+Affected suites pass stale/missing generation cases, current Ready/Stalled,
+statusless OCI identity checks, matching and mismatching local versions, and
+both 93-GiB disk types across node groups, MK8s defaults and VM fields while
+preserving explicit sizes. Seven CLI waiter regressions also pass with
+realistic generation metadata. Proof is offline source execution, not live
+Flux or cloud provisioning.
 
 Focused registry, artifact replay, enabled-child constraint, provider tuple, Terraform drift, transition, output-resolution and CLI tests pass. Native Helm, isolated wheel/package checks, Ruff, type and CLI architecture ratchets pass. Support assertions and local tests are distinct from live runtime evidence and do not establish deployment completion.
 
@@ -6533,7 +6782,7 @@ performed to test this second repair.
 
 <!-- /FEATURE: FEAT-038 -->
 
-<!-- FEATURE: FEAT-039 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-039: Nsight tools and catalog viewers
 
 #### Requirements Covered
@@ -6548,6 +6797,58 @@ rootfs population. The official 2026.4.1 chart renders separate nsys 2026.4.1
 and ncu 2026.2.1 Deployments with HTTP and TURN TCP Services.
 
 #### Design Details
+
+Revision 13 adds `soperator profiling show CONFIG --target TARGET`, using the
+existing positional configuration convention. A separate live access reader
+resolves recorded accepted Soperator identity and verifies the cluster UID,
+then discovers the two owned Nsight HelmReleases, ready Deployments and matching
+Services. Live chart roles, container bindings, names, namespaces, HTTP/TURN
+ports and Secret references own access instructions; local desired viewer values
+and saved reports do not. Use HelmRelease application-owner annotations followed
+by Helm release annotations and Service selectors; this chart uses app/release
+labels, not Grafana's instance labels. Require one Systems and one Compute viewer,
+completed rollouts and stable resource snapshots. Preserve the live TURN port
+locally, reject colliding mappings and require one shared password reference.
+
+Read only Secret metadata and nonempty key names, rejecting literal, optional,
+duplicate or aliased credential references without retrieving values. Reuse
+explicit-input Nsight command builders for both installation and show. Render
+exactly two loopback HTTP/TURN forwards and one quoted password-retrieval command
+with a display newline using the shared command style; print browser URLs and
+labels separately. Complete all verification before printing commands.
+
+Follow Grafana's existing kubeconfig handoff and persistence owner, preserving
+the current context, honoring opt-outs and independently proving durable access.
+Bound reads and sanitize failures. Do not acquire execution leases, run Pod
+probes, invoke installation/reconciliation, mutate cluster resources or execute
+displayed commands. Local verified kubeconfig refresh is the only persistent
+side effect. Existing installation, recovery, report and credential semantics
+remain unchanged. No schema migration, new dependency or compatibility alias is
+needed. The current installation collector intentionally remains separate because
+it validates desired values and probes Pods. Cached report replay would not meet
+freshness. Revision 13 access-command delivery is implemented in the dedicated
+live reader, registered show callback and explicit-input shared command builders.
+Read-only review identified a selector that could match another viewer release;
+the implementation now requires the exact role and release in both Deployment
+labels and the Service selector, with omitted-label regressions.
+
+Validation passed 318 focused access, installation, recovery, ordinary-app,
+deployment, Grafana, CLI-contract, architecture and presentation tests. The
+SHA256-pinned official chart rendered both viewers with production patches and
+passed live-discovery port, label and Secret-reference contract checks. Changed
+Python Ruff/format, Markdown and diff checks pass; the new access module passes
+mypy and the full-source debt remains 485 errors below its 493-error ceiling.
+The CLI architecture ratchet passes. A fresh isolated wheel built with locked,
+hashed dependencies verifies 53 public and one hidden CLI surfaces; an additional
+installed callback smoke reproduces exactly three commands from synthetic access
+evidence. No live deployment or browser-streaming validation was performed.
+
+Validate live drift, target/ownership/readiness, HTTP/TURN linkage, shared Secret
+references, safe projections, changing snapshots, persistence opt-outs, command
+quoting, exactly three styled outputs and no partial failure output. Extend the
+pinned chart-render contract, refresh CLI metadata, verify the isolated installed
+wheel, and align README, profiling guide and changelog. Source, installed-package
+and live browser evidence remain separate; no live deployment is required.
 
 Add nsight-streamer and nsight-streamer-ncu catalog entries sharing the official
 NGC Helm repository. Default to ClusterIP, one software-rendered replica,
@@ -8511,7 +8812,7 @@ and live deployment qualification were not rerun in this alignment.
 
 <!-- /FEATURE: FEAT-046 -->
 
-<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-047 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-047: Shared Grafana installation and telemetry routing
 
 Current shared deployment admission follows FEAT-048; descriptions below of
@@ -8530,6 +8831,57 @@ identity checks. Soperator owns a separate frozen native graph and protected
 lifecycle. Grafana uses shared PostgreSQL and generic dashboard import mapping.
 
 #### Design Details
+
+Revision 13 adds one shared, deterministic live Grafana access handoff used by
+successful deployment reporting and `grafana show --config PATH --target TARGET`.
+Resolve the exact managed target through existing immutable cluster handoff;
+inspect its ready owned Grafana release, Service and runtime Secret references.
+Live resources, not saved reports or undeployed settings, determine the commands.
+Keep this read path separate from dashboard sessions, credential retrieval and
+Grafana URL reconciliation. Missing or ambiguous evidence fails explicitly.
+
+Reuse the existing local kubeconfig persistence owner, preserving an existing
+current context and honoring CI/persistence opt-outs; independently verify the
+durable context. Print explicit kubeconfig/context/namespace arguments, loopback
+127.0.0.1 with local port 3000, the actual Service port, a browser URL and login
+username, plus a quoted password extraction command with newline termination.
+Never execute the displayed commands or read password data for this handoff.
+
+Carry bounded access results in the deployment summary, refresh the final
+Markdown report before disposable execution paths disappear, and include Grafana
+independently of cloud-observability settings. Cover fresh, unchanged and resumed
+runs. Retain Gateway readiness semantics. A handoff failure after acceptance is a
+warning, while explicit show fails nonzero. No offline fallback, extra dependency,
+compatibility alias, cluster mutation or validation-summary schema change is needed.
+
+The selected shared helper avoids duplicated install-only rendering and report
+parsing. Tests cover live drift versus stale configuration, identity and ownership,
+Secret bindings, command quoting, durable context refresh, opt-outs, error paths,
+publication and output parity. Update CLI help, README, observability guide and
+changelog. Normal CLI release requires no cluster migration.
+
+Revision 13 delivery is implemented in the shared access helper, CLI, accepted
+deployment finalizer and report renderer. Alignment added the required leaf help
+example and regenerated the canonical CLI contract. Access discovery rejects
+identical username/password Secret references before any Secret read, preserving
+the no-password-presentation boundary even for a misconfigured live workload.
+A regression first reproduced the unsafe projection and then passed with the guard.
+
+Validation passed 282 focused tests covering access, CLI contracts and architecture,
+shared deployment, reports, Grafana workflows and observability. Prior validation
+also passed 10 footer/kubeconfig tests and two digest-pinned Grafana/PostgreSQL
+chart renders. Changed-scope Ruff, formatting, Markdown lint, architecture checks
+and access-helper type checking passed. The full-source mypy ratchet passed with
+485 existing errors against a maximum of 493; this is not a clean full-source
+type check. Independent final review found no remaining blocking issue.
+
+An isolated wheel built offline from the current source, installed with locked
+runtime dependencies and passed dependency checks plus the repository's installed
+CLI verifier for 52 public and one hidden surface. Coverage includes fresh,
+resumed and unchanged handoffs, live-resource drift via mocks, Secret projections,
+identity/timeouts, persistence opt-outs, shell quoting and report publication.
+No live deployment, remote CI or full coverage qualification was run. Prior
+revision evidence below remains historical.
 
 Revision 9 adds a shared native graph transition owner before checks or scheduling
 maintenance. Classify fresh predecessor releases against frozen desired identities;

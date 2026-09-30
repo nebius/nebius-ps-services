@@ -1,6 +1,37 @@
-<svg viewBox="0 0 340 568" role="img" aria-labelledby="tools-grafana-panels-title tools-grafana-panels-desc">
+<svg viewBox="0 0 600 390" role="img" aria-labelledby="tools-grafana-panels-title tools-grafana-panels-desc">
 <title id="tools-grafana-panels-title">Benchmark summaries and telemetry answer different questions</title>
-<desc id="tools-grafana-panels-desc">The synthetic selected pair has 8 ms and 6 ms median durations with passing correctness. The sampled-utilization graph gives device context, not kernel timings. Its horizontal axis orders samples; spacing is illustrative. Changing the time picker does not replace the selected pair.</desc>
-<rect x="1" y="1" width="338" height="566" rx="12" fill="#ffffff" stroke="#52626b"/>
-<g font-family="Arial, sans-serif"><text x="18" y="30" font-size="21" text-anchor="start" fill="#24343d" font-weight="700">Grafana dashboard</text><text x="18" y="55" font-size="14" text-anchor="start" fill="#24343d" font-weight="400">Synthetic comparison · same workload</text><rect x="16" y="77" width="308" height="55" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/><text x="30" y="101" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">Workspace · lab · small · GPU</text><text x="30" y="122" font-size="14" text-anchor="start" fill="#24343d" font-weight="400">Time picker → telemetry interval</text><rect x="16" y="149" width="146" height="112" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/><rect x="178" y="149" width="146" height="112" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/><text x="89" y="176" font-size="17" text-anchor="middle" fill="#245880" font-weight="700">Baseline</text><text x="89" y="211" font-size="26" text-anchor="middle" fill="#245880" font-weight="700">8 ms</text><text x="89" y="239" font-size="13" text-anchor="middle" fill="#24343d" font-weight="400">Correctness: pass</text><text x="251" y="176" font-size="17" text-anchor="middle" fill="#206757" font-weight="700">Candidate</text><text x="251" y="211" font-size="26" text-anchor="middle" fill="#206757" font-weight="700">6 ms</text><text x="251" y="239" font-size="13" text-anchor="middle" fill="#24343d" font-weight="400">Correctness: pass</text><text x="170" y="288" font-size="17" text-anchor="middle" fill="#24343d" font-weight="700">Median duration: 25% lower</text><rect x="16" y="309" width="308" height="187" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/><text x="29" y="337" font-size="16" text-anchor="start" fill="#24343d" font-weight="700">Sampled GPU utilization</text><line x1="51" y1="364" x2="51" y2="458" stroke="#52626b" stroke-width="2"/><line x1="51" y1="458" x2="306" y2="458" stroke="#52626b" stroke-width="2"/><text x="43" y="371" font-size="11" text-anchor="end" fill="#24343d" font-weight="400">100%</text><text x="43" y="457" font-size="11" text-anchor="end" fill="#24343d" font-weight="400">0%</text><polyline points="61,445 103,416 145,375 187,386 229,431 298,442" fill="none" stroke="#206757" stroke-width="2"/><circle cx="61" cy="445" r="4" fill="#206757"/><circle cx="103" cy="416" r="4" fill="#206757"/><circle cx="145" cy="375" r="4" fill="#206757"/><circle cx="187" cy="386" r="4" fill="#206757"/><circle cx="229" cy="431" r="4" fill="#206757"/><circle cx="298" cy="442" r="4" fill="#206757"/><text x="59" y="480" font-size="13" text-anchor="start" fill="#24343d" font-weight="400">Earlier</text><text x="302" y="480" font-size="13" text-anchor="end" fill="#24343d" font-weight="400">Later →</text><text x="22" y="522" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">Dots are telemetry samples.</text><text x="22" y="547" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">They are not kernel timestamps.</text></g>
+<desc id="tools-grafana-panels-desc">Read the selected benchmark pair on the left and sampled GPU utilization on the right. The synthetic medians are 8 ms and 6 ms, with passing correctness. Dots are telemetry samples, not kernel timestamps; sample spacing is illustrative. The time picker changes only the telemetry interval. A new validated publication replaces the selected pair.</desc>
+<rect x="1" y="1" width="598" height="388" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">Grafana dashboard</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Synthetic comparison · same workload</text>
+<text x="152" y="118" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Selected results</text>
+<text x="449" y="118" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Device context</text>
+<rect x="20" y="140" width="128" height="143" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<rect x="160" y="140" width="128" height="143" rx="8" fill="#eef8f2" stroke="#9ac0ad" stroke-width="1.5"/>
+<text x="84" y="175" font-size="18" text-anchor="middle" fill="#245880" font-weight="700">Baseline</text>
+<text x="84" y="225" font-size="44" text-anchor="middle" fill="#245880" font-weight="700">8 ms</text>
+<text x="84" y="261" font-size="18" text-anchor="middle" fill="#24343d" font-weight="400">Pass</text>
+<text x="224" y="175" font-size="18" text-anchor="middle" fill="#206757" font-weight="700">Candidate</text>
+<text x="224" y="225" font-size="44" text-anchor="middle" fill="#206757" font-weight="700">6 ms</text>
+<text x="224" y="261" font-size="18" text-anchor="middle" fill="#24343d" font-weight="400">Pass</text>
+<text x="154" y="318" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">25% lower duration</text>
+<rect x="308" y="140" width="272" height="195" rx="8" fill="#f6f8fa" stroke="#c9d5dc" stroke-width="1.5"/>
+<text x="326" y="170" font-size="20" text-anchor="start" fill="#24343d" font-weight="700">Utilization (%)</text>
+<line x1="361" y1="196" x2="361" y2="288" stroke="#52626b" stroke-width="2"/>
+<line x1="361" y1="288" x2="563" y2="288" stroke="#52626b" stroke-width="2"/>
+<text x="351" y="208" font-size="16" text-anchor="end" fill="#52626b" font-weight="400">100</text>
+<text x="351" y="292" font-size="16" text-anchor="end" fill="#52626b" font-weight="400">0</text>
+<polyline points="372,276 408,248 445,207 482,220 520,269 555,279" fill="none" stroke="#206757" stroke-width="2"/>
+<circle cx="372" cy="276" r="4" fill="#206757"/>
+<circle cx="408" cy="248" r="4" fill="#206757"/>
+<circle cx="445" cy="207" r="4" fill="#206757"/>
+<circle cx="482" cy="220" r="4" fill="#206757"/>
+<circle cx="520" cy="269" r="4" fill="#206757"/>
+<circle cx="555" cy="279" r="4" fill="#206757"/>
+<text x="461" y="318" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">Time →</text>
+<rect x="20" y="347" width="560" height="30" rx="8" fill="#eef5f7"/>
+<text x="300" y="369" font-size="20" text-anchor="middle" fill="#24343d" font-weight="600">Time picker changes telemetry, not results</text>
+</g>
 </svg>

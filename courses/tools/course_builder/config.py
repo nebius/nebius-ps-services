@@ -17,6 +17,42 @@ COURSES = (
     "advanced-gpu-communication",
 )
 
+# Reading resources include the shared guide, which is not a course package.
+CATALOG_GROUPS = (
+    (
+        "Getting started",
+        "Learn the cluster, then prepare for practice",
+        "foundations",
+        ("soperator", "lab-guide"),
+    ),
+    (
+        "GPU foundations",
+        "Take these in order",
+        "foundations",
+        ("gpu-fundamentals", "gpu-optimizations"),
+    ),
+    (
+        "Specializations",
+        "Choose your direction",
+        "specializations",
+        ("llm-training", "llm-inference", "custom-cuda-kernels"),
+    ),
+    (
+        "Advanced communication labs",
+        "Two eight-H100 workers with InfiniBand",
+        "",
+        ("advanced-gpu-communication",),
+    ),
+)
+CATALOG_ENTRIES = tuple(name for _, _, _, names in CATALOG_GROUPS for name in names)
+GUIDE_TITLE = "Lab Guide"
+
+
+def catalog_destination(name: str) -> str:
+    if name not in CATALOG_ENTRIES:
+        raise ValueError(f"unknown catalog resource: {name}")
+    return "lab-guide.html" if name == "lab-guide" else f"{name}/index.html"
+
 
 TEXT_TITLE = "Soperator: A Nebius Slurm cluster running on Kubernetes"
 
@@ -33,6 +69,16 @@ LICENSE_PATH = ROOT.parent / "LICENSE"
 
 
 CATALOG_COPY = {
+    "lab-guide": (
+        "Prepare once, then run the labs",
+        "Set up the shared lab environment, run course experiments, and inspect measurements and profiles in Grafana and NVIDIA Nsight.",
+        (
+            "Prepare the cluster and course runtimes",
+            "Submit labs and find their results",
+            "Browse dashboards and profiler reports",
+        ),
+        ("Shared setup", "Lab execution", "Results"),
+    ),
     "advanced-gpu-communication": (
         "Follow the bytes between GPUs",
         "A laboratory course for sixteen H100 GPUs. Diagnose communication, tune training throughput and investigate distributed serving latency.",

@@ -204,6 +204,29 @@ def test_text_validator_checks_current_identity(text_validator):
         )
 
 
+@pytest.mark.parametrize("defect", ["reorder", "missing-guide", "duplicate-guide", "outside-menu", "extra-fragment"])
+def test_text_navigation_rejects_broken_resource_menus(text_validator, defect):
+    document = (ROOT / "soperator/index.html").read_text()
+    match = re.search(r'<details class="course-switcher">.*?<ul>(.*?)</ul>', document, re.S)
+    items = re.findall(r'<li>.*?</li>', match.group(1), re.S)
+    extra = ""
+    if defect == "reorder":
+        items[0], items[1] = items[1], items[0]
+    elif defect == "missing-guide":
+        items.pop(1)
+    elif defect == "duplicate-guide":
+        items.insert(1, items[1])
+    elif defect == "outside-menu":
+        extra = items.pop(1)
+    else:
+        items.append('<li><a href="#main">Extra menu item</a></li>')
+    document = document[:match.start(1)] + ''.join(items) + document[match.end(1):]
+    if extra:
+        document = document.replace('</nav>', extra + '</nav>', 1)
+    with pytest.raises(ValueError, match="navigation"):
+        text_validator.validate_document(document)
+
+
 def test_text_next_steps_link_to_shared_setup(text_validator):
     document = cb_pages.render_course("soperator")
     assert "Lab 00" not in document

@@ -16,7 +16,7 @@ Consider one request that prepares input on the CPU, copies it to the GPU, runs 
 
 ![Follow CPU work, copies and a GPU kernel](diagrams/tools-systems-timeline.svg)
 
-Read this compact diagram downward; an actual Systems timeline normally reads left to right. Boxes show activity on the CPU or GPU lane; the diagonal connector links the host submission to GPU execution. A host launch is a short submission, not the whole GPU execution. In Systems, select the request interval, expand the CUDA API and GPU rows, and follow the launch's correlation to its kernel. A long CPU interval may be executing, submitting work or waiting: inspect its calls before assigning a cause. Overlapping GPU activities can establish concurrency; their dependencies and the end-to-end result determine whether the overlap helps. The GPU operations in this example are deliberately serialized: the copies and kernel do not overlap.
+Read the timeline from left to right, following the millisecond scale. The upper row shows CPU activity; the lower row shows GPU kernels and copies (`In` for the input copy and `Out` for the output copy). Each box spans its activity's interval. The diagonal arrow links the brief host launch to the kernel it submits; the arrow is a relationship, not a duration. The CPU can submit the kernel while the input copy is still running, but the kernel shown here waits for that copy to finish. A host launch is a short submission, not the whole GPU execution. In Systems, select the request interval, expand the CUDA API and GPU rows, and follow the launch's correlation to its kernel. A long CPU interval may be executing, submitting work or waiting: inspect its calls before assigning a cause. Overlapping GPU activities can establish concurrency; their dependencies and the end-to-end result determine whether the overlap helps. The GPU operations in this example are deliberately serialized: the copies and kernel do not overlap.
 
 ### Nsight Compute: inspect one kernel
 
@@ -26,7 +26,7 @@ Suppose Systems identifies a vector-add kernel as the main GPU cost. Open its Co
 
 ![Read a kernel report as evidence for a hypothesis](diagrams/tools-compute-report.svg)
 
-The synthetic report shows memory throughput at 80% of peak, compute throughput at 20%, and achieved occupancy at 50%. These are three different ratios; they do not add to 100%. The first two suggest investigating memory traffic before adding arithmetic parallelism. Check the actual bytes, access pattern and workload size before declaring a memory bottleneck. Occupancy alone does not establish performance: increasing it may leave memory traffic unchanged. Change one relevant control and repeat the unprofiled benchmark to test the prediction. Missing counter permission means evidence is unavailable, not that a counter is zero. Use the lab's supported single-kernel capture; never replay a whole distributed collective or live serving workload as an ordinary kernel experiment.
+Read from the counters on the left to the investigation on the right. The synthetic report shows memory throughput at 80% of peak, compute throughput at 20%, and achieved occupancy at 50%. These are three different ratios; they do not add to 100%. The arrow means that the counters inform a hypothesis. The first two suggest investigating memory traffic before adding arithmetic parallelism. Check the actual bytes, access pattern and workload size before declaring a memory bottleneck. Occupancy alone does not establish performance: increasing it may leave memory traffic unchanged. Change one relevant control and repeat the unprofiled benchmark to test the prediction. Missing counter permission means evidence is unavailable, not that a counter is zero. Use the lab's supported single-kernel capture; never replay a whole distributed collective or live serving workload as an ordinary kernel experiment.
 
 ### NVTX: give the trace meaningful names
 
@@ -58,6 +58,8 @@ The `with` blocks open and close ranges, including when Python raises an excepti
 
 ![Relate NVTX markers and ranges to GPU completion](diagrams/tools-nvtx-ranges.svg)
 
+Read this schematic from left to right. Diamonds mark instants, while boxes span intervals; their widths show relative order, not measured durations. The upper row contains the CPU's `step` range and its nested ranges; the lower row shows the submitted GPU kernels. The blue dashed arrows connect submission to execution. The amber dashed arrow connects GPU completion to the explicit wait returning. The `square_submitted` marker appears before the square kernel finishes, while `result_ready` follows the wait and the end of `step`.
+
 Here are the practical capabilities illustrated by those names:
 
 - **Find an event:** search for `input_ready` or `result_ready` in Systems to locate a request boundary. A marker has no duration; it is not a timer.
@@ -75,7 +77,7 @@ Select the course and lab dashboard, persistent workspace, workload profile, GPU
 
 ![Separate selected benchmark results from sampled telemetry](diagrams/tools-grafana-panels.svg)
 
-The upper panels show the selected completed pair. The lower graph shows GPU utilization sampled over time; its dots are observations, not individual kernels. A brief kernel may run between samples, so an empty or low-utilization interval cannot replace the benchmark timer or the Systems trace. Summary panels retain the selected pair independently of the time picker; changing the interval changes the telemetry view, not which results occupy the baseline and candidate slots. Those slots change only when a new validated pair is explicitly published. Activity on a shared GPU is correlation until you establish which workload caused it.
+The panels on the left show the selected completed pair; both pass correctness. The graph on the right shows GPU utilization sampled over time, with earlier samples on the left and later samples on the right. Its dots are observations, not individual kernels. Placing the views side by side helps compare outcomes with device conditions; it does not establish that one caused the other. A brief kernel may run between samples, so an empty or low-utilization interval cannot replace the benchmark timer or the Systems trace. Summary panels retain the selected pair independently of the time picker; changing the interval changes the telemetry view, not which results occupy the baseline and candidate slots. Those slots change only when a new validated pair is explicitly published. Activity on a shared GPU is correlation until you establish which workload caused it.
 
 Instrumentation adds overhead. Use a separate diagnostic run to explain behavior, then repeat without profiling to judge performance. Compare the same profile, inputs, seed and runtime; a larger profile is not an optimization. Distributed captures produce one report per rank; align their collective and step boundaries rather than summing overlapping rank times. Serving captures wrap the GPU server while the client records request latency.
 

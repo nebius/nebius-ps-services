@@ -69,7 +69,7 @@ Agentic SDLC checkpoints.
 - The exact Git worktree and current branch selected by the user's session.
 - A current nonauthorizing root-turn receipt from the prompt hook, or exact delegated
   owner evidence from Task Implementer or Worktree. The root agent binds the receipt to an authorized
-  commit or commit-push action during preparation; delegated owners retain
+  commit or commit-push task with private `begin`; delegated owners retain
   their existing evidence path.
 - An optional user-provided commit message; otherwise the reviewed candidate
   must be coherent enough to summarize truthfully.
@@ -88,7 +88,7 @@ Agentic SDLC checkpoints.
 
 ## Writes
 
-- One owner-private authorization and claim state under the selected agent
+- Owner-private task, checkpoint, attempt authorization and claim state under the selected agent
   home transaction root; these records contain bounded identities and digests,
   not prompt, message, diff, or repository file content.
 - The real Git index and one local commit only inside the owning transaction
@@ -117,7 +117,9 @@ Agentic SDLC checkpoints.
      Do not perform network fetches only to discover the default branch.
 3. Inspect current status.
    - Run `git status --short --branch`.
-   - If the worktree is clean, report that there is nothing to commit.
+   - Bind the root task with private `begin` before preparing effects, including
+     a clean start. If the worktree is clean, close it with `finish completed`
+     and report that there is nothing to commit.
    - Inspect staged and unstaged diffs plus every untracked, renamed, deleted,
      credential-like, environment, key, and generated path before staging.
    - Stop before staging obvious secrets, private endpoints, credentials,
@@ -136,13 +138,16 @@ Agentic SDLC checkpoints.
    - The prompt hook records a nonauthorizing current root-turn receipt. Only
      after classifying an authorized action, pass its exact hook-provided
      digest as `--intent-sha256` and the typed `--requested-action commit` (or
-     `commit-push` inside that workflow) to canonical preparation. These are
-     private helper arguments, not public skill flags. The helper binds one
-     authorization under its existing lock; never hand-write or reset it.
+     `commit-push` inside that workflow) to canonical `begin`. Keep this original
+     digest as the task key for later prepare/finish calls, even after unrelated
+     turns update the receipt. These are private helper arguments, not public
+     skill flags. The immutable task grant freezes the action, native session,
+     repository, worktree and target. Never hand-write or reset private state.
+     Read `references/task-lifecycle.md` for the exact private interface.
      Subagent and generated turns do not supply root receipts. An absent
      `agent_type` remains compatible with primary UserPromptSubmit events.
    - Project lifecycle state is advisory and is never a commit prerequisite.
-     Direct preparation relies on the explicit current-turn authorization,
+     Direct preparation relies on the original authorized task grant,
      already-effective repository instructions, and the transaction's own Git,
      branch, Worktree, secret, and workflow-conflict checks. Project lifecycle
      attestations are not required for the current or any sibling scope.
@@ -180,9 +185,11 @@ Agentic SDLC checkpoints.
      Any drift makes the claim stale before real staging.
    - The helper alone runs repo-root `git add -A` with no pathspec, verifies the
      staged tree, and runs `git diff --cached --check`.
-   - If it reports whitespace errors, conflict markers, or another staged-diff
-     problem, stop and report the blocker. Keep this skill fast; do not start a
-     repair loop unless the user separately asks for fixes.
+   - On candidate drift or a failed hook with no commit, preserve the checkout.
+     Correct only already-authorized problems, prepare a new candidate, review
+     it again and execute its new token under the original task. Do not request
+     another commit phrase merely because the previous attempt became stale.
+     Semantic repairs outside this task still require their own authorization.
    - Run `git diff --stat HEAD <candidate-tree>` and
      `git diff --name-status HEAD <candidate-tree>` while reviewing.
    - If the candidate tree equals `HEAD^{tree}`, report that there is nothing
@@ -218,10 +225,15 @@ Agentic SDLC checkpoints.
      tree to complete the claim. Never amend or reset automatically. If the
      actual commit cannot be fully reviewed or is not the clean exact direct
      child, stop with `REVIEW_REQUIRED` intact.
-   - A failed hook that did not create a commit and any pre-commit drift make
-     the claim `STALE`; preserve the real index and worktree and require a fresh
-     user commit request after the blocker is resolved, unless the calling PR
-     workflow has an active scoped continuation grant.
+   - A failed hook that did not create a commit and pre-commit candidate drift
+     make that attempt `STALE`. Retry safely under the same task after the cause
+     is resolved and unchanged base history is proved. Each attempt requires a
+     fresh candidate review and token; it does not consume the one-commit limit.
+   - An actual commit consumes the standalone task's allowance, including a
+     hook-modified result awaiting review. Never create a second standalone
+     commit to repair that result. Close a completed or zero-commit task with
+     private `finish`; cancellation invalidates unused claims while preserving
+     uncertain effects and allowing exact metadata-only result review.
    - Exact crash recovery accepts only the same branch and either the unchanged
      base or one direct-child commit with the reviewed tree. A fresh authorized
      user request may rebind an otherwise unchanged prepared claim; it never uses
@@ -239,7 +251,7 @@ For an unmanaged `create-pr` task, read
 `../create-pr/references/commit-continuation.md`: its private grant permits
 successive reviewed commits and corrected no-commit retries until that PR task
 finishes. The parent PR skill owns repairs, checks and pushes. Ordinary direct
-commit and commit-push receipts remain single-use; active SDLC still owns its
+commit and commit-push tasks permit one actual commit plus safe no-commit retries; active SDLC still owns its
 commits. This exception does not grant arbitrary sibling skills indefinite
 commit authority or permit raw Git fallback.
 
@@ -268,7 +280,8 @@ commit authority or permit raw Git fallback.
 
 ## Idempotency
 
-- One authorization is consumed by one prepared claim, and execution requires
+- One immutable task grant owns independently reviewed attempt claims; each
+  execution requires
   the claim's exact session, token, reviewed tree, repository identity, and
   owner evidence.
 - Repeated execution returns the already-proven commit instead of creating a
@@ -280,8 +293,11 @@ commit authority or permit raw Git fallback.
 
 ## Failure Handling
 
-- Before real staging, repository, candidate, authorization, owner, or claim
-  drift becomes `STALE` and requires a fresh authorized user action.
+- Candidate drift at an unchanged base permits a fresh reviewed attempt under
+  the same task. Scope/owner drift, unexplained history and uncertain effects
+  require reconciliation; they do not become retry authority.
+- Structured failures return `code`, `retryable`, and `next_action`. Follow that
+  disposition rather than asking for a new prompt for every failed attempt.
 - A normal hook failure with no commit becomes `STALE`; preserve the real
   index and worktree for diagnosis rather than resetting or unstaging them.
 - A created direct child whose tree or checkout is not the exact reviewed
@@ -293,11 +309,12 @@ commit authority or permit raw Git fallback.
 
 ## Must Not
 
-- Require an authorized root-user action and its exact current receipt for
-  direct preparation. Interpret intent semantically; neither a receipt nor a
-  skill mention alone grants permission. Authorization stays single-use and
-  contains no prompt or commit-message text. A consumed receipt cannot mint a
-  second authorization; a fresh user action has a new receipt.
+- Require an authorized root-user action and its exact current receipt at
+  `begin`. Interpret intent semantically; neither a receipt nor a skill mention
+  alone grants permission. The task contains no prompt or commit-message text.
+  Closed tasks cannot reopen; a fresh authorized task needs its own receipt.
+  Root task/authorization/claim schemas never import old root authority.
+  Delegated Task Implementer and Worktree protocols stay unchanged.
 - Do not use the helper to bypass already-effective repository instructions,
   unresolved Git state, active Worktree ownership, or workflow-owned commit
   policy. Project lifecycle status remains advisory in every case.

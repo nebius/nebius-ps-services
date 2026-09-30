@@ -79,7 +79,7 @@ Resolve and record:
 - Python, pytest, and active plugin versions
 - pytest rootdir and configuration file
 - configured testpaths, addopts, markers, warning filters, and cache behavior
-- requested selection and expected collection/outcome counts
+- requested selection, exact collected/selected node IDs and expected outcome counts
 - warm-cache or cold-cache policy
 - CPU, memory, storage, container, and external-service constraints relevant
   to the comparison
@@ -233,11 +233,44 @@ pytest_target=tests/path
 These confirm the current environment but still load pytest and installed
 plugins. Run them only after static plugin and environment inspection.
 
+### Effective Arguments Before Every Diagnostic
+
+Record the effective arguments from config `addopts`, `PYTEST_ADDOPTS`, the native
+command and plugin settings. A plain invocation can inherit coverage, xdist,
+testmon, JUnit or report destinations. It is not automatically serial or
+coverage-free. Keep the native correctness command unchanged.
+
+In a dedicated Bash diagnostic shell, explicitly reconstruct the inspected
+options before using any command below:
+
+```bash
+# Example for the python-project baseline; adapt to the inspected project.
+# Preserve ALL safety, import, warning, marker and selection requirements.
+export PYTEST_ADDOPTS=
+pytest_base_args=(-o addopts= -ra --strict-config --strict-markers
+  --import-mode=importlib --disable-socket
+  -m "not slow and not e2e and not external")
+```
+
+This is an example, not a universal option allowlist. If the project does not
+use pytest-socket, preserve its actual guard instead. Explicitly retain required
+plugins when disabling autoload. Remove only inspected instrumentation from the
+reconstructed options; inspect plugin-specific defaults too. Use `-n 0` when
+xdist is installed and its default worker behavior needs overriding, and
+`--no-cov` for a pytest-cov no-coverage diagnostic when needed. Do not pass plugin
+flags to environments without that plugin. If safe reconstruction is uncertain,
+measure the unchanged native lane, label its instrumentation, and defer the
+uninstrumented comparison rather than dropping safety rules.
+
+Keep the same reconstructed options and exact test identities in both arms.
+Relocate inherited JUnit, log and coverage reports as well as raw data into the
+validated temporary directory. Clearing only the terminal report is insufficient.
+
 ### Collection Baseline
 
 ```bash
 /usr/bin/time -p \
-  "${pytest_python}" -m pytest \
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   --collect-only \
   -q \
   -o "cache_dir=${perf_dir}/pytest-cache" \
@@ -251,7 +284,7 @@ startup and collection.
 
 ```bash
 /usr/bin/time -p \
-  "${pytest_python}" -m pytest \
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   -q \
   -o "cache_dir=${perf_dir}/pytest-cache" \
   "${pytest_target}"
@@ -263,7 +296,7 @@ of the primary wall-time baseline.
 ### Phase Duration Diagnostic
 
 ```bash
-"${pytest_python}" -m pytest \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   -q \
   --durations=100 \
   --durations-min=0.05 \
@@ -279,7 +312,7 @@ attribution, but compare primary wall time with an otherwise normal run.
 Add `--collect-only` so plugin tracing does not accidentally run the suite:
 
 ```bash
-"${pytest_python}" -m pytest \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   --trace-config \
   --collect-only \
   -q \
@@ -294,7 +327,7 @@ artifact directory.
 
 ```bash
 "${pytest_python}" -X importtime \
-  -m pytest \
+  -m pytest "${pytest_base_args[@]}" \
   --collect-only \
   -q \
   -o "cache_dir=${perf_dir}/pytest-cache" \
@@ -308,11 +341,12 @@ Use it to find candidates, not as a wall-time benchmark.
 
 ### Plugin-Autoload Comparison
 
-Use this only as a diagnostic comparison:
+Use this only as a diagnostic comparison. Re-add every required safety plugin
+through explicit `-p` options in `pytest_base_args` before disabling autoload:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  "${pytest_python}" -m pytest \
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   --collect-only \
   -q \
   -o "cache_dir=${perf_dir}/pytest-cache" \
@@ -338,19 +372,25 @@ or parallelism change.
 pytest_package=your_package
 
 /usr/bin/time -p \
-  "${pytest_python}" -m pytest \
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   -q \
   -o "cache_dir=${perf_dir}/pytest-cache" \
   "${pytest_target}"
 
-/usr/bin/time -p \
-  "${pytest_python}" -m pytest \
+COVERAGE_FILE="${perf_dir:?}/coverage-data" \
+  /usr/bin/time -p \
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   -q \
   --cov="${pytest_package}" \
   --cov-report= \
   -o "cache_dir=${perf_dir}/pytest-cache" \
   "${pytest_target}"
 ```
+
+The reconstructed arguments for this pair must not contain `--no-cov`; remove
+inherited coverage before both runs and add it only in the second arm.
+`--cov-report=` suppresses reports, not `.coverage` data. `COVERAGE_FILE` also
+contains subprocess/worker data; explicitly relocate any remaining report paths.
 
 Honor repository policy when coverage is required in a local or pull-request
 gate. The skill may recommend a separate coverage lane; it must not silently
@@ -361,7 +401,7 @@ remove a required gate.
 ### Fixture Inventory
 
 ```bash
-"${pytest_python}" -m pytest \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   tests/path/test_module.py::test_name \
   -o "cache_dir=${perf_dir}/pytest-cache" \
   --fixtures-per-test
@@ -372,7 +412,7 @@ This identifies requested and autouse fixtures for the selected test.
 ### Fixture Execution Trace
 
 ```bash
-"${pytest_python}" -m pytest \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" \
   tests/path/test_module.py::test_name \
   --setup-show \
   -o "cache_dir=${perf_dir}/pytest-cache" \
@@ -389,7 +429,7 @@ collection imports and hooks still run.
 ```bash
 "${pytest_python}" -m cProfile \
   -o "${perf_dir}/slow-test.prof" \
-  -m pytest \
+  -m pytest "${pytest_base_args[@]}" \
   tests/path/test_module.py::test_name \
   -o "cache_dir=${perf_dir}/pytest-cache" \
   -q
@@ -443,7 +483,7 @@ reason.
 Before accepting a speedup, require equivalent:
 
 - command purpose and test selection
-- collected and deselected counts
+- exact selected node IDs and collected/deselected counts
 - passed, failed, skipped, xfailed, xpassed, error, and rerun counts
 - exit status
 - plugin and configuration set

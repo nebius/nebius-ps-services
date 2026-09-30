@@ -1816,7 +1816,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=7 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=8 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -1850,30 +1850,26 @@ at any position. Both commit skills permit semantic selection, which alone
 never grants authority. Discussion, help, examples, negation, and skill repair
 remain non-actions. No model service or new agent runtime is introduced.
 
-Direct `prepare` requires a typed requested action and exact receipt digest.
-Under the existing repository lock it verifies the canonical receipt, session,
-repository and base identity, rejects replay, and binds one authorization.
-Semantic classification is the root agent's responsibility; a digest proves
-provenance, not meaning. The transaction independently enforces Git state,
-candidate review, claim consumption, and workflow ownership. Default-branch
-consent remains separately asserted and is forbidden for commit-push.
-Worktree and Task Implementer retain their existing delegated owner evidence.
-Active Agentic SDLC retains its ordinary-commit denial. Do not add a lexical
-authorization fallback or reset consumed claims.
+Root `begin` validates a typed requested action against the hook-owned receipt
+before any branch switch or HEAD-changing operation. It creates one immutable
+session/task grant, independent of dirty files, with frozen target descriptors,
+remote/base identity and dependency edges. Private per-target state tracks
+verified heads, commit counts and pending sync operations. No model or new
+runtime is introduced; all grant and effect transitions are deterministic.
+Begin returns the canonical authorization path and a per-target claim-path map,
+so a branch switch never requires guessing private paths from the intake ref.
+A retained conflict supports a private temporary-index preview before reviewed
+continuation; preview never changes the real index.
 
-Add an installed commit transaction helper with `prepare`, `execute`, and
-private `review` transitions. `prepare` copies the current index into a private
-temporary index, applies whole-repository `git add -A`, writes the candidate
-tree, and persists only repository/worktree/ref identities, head and tree IDs,
-bounded digests, explicit authorization source, status, and a
-token hash. `execute` acquires the selected installation's shared
-common-directory/ref lock, recomputes and compares the candidate, stages the real index, runs cached checks and the
-normal-hook commit, then proves unchanged branch, one direct child, matching
-commit tree, and the expected final checkout state. If a successful hook
-changes the committed tree, `review` can complete only the retained current,
-clean, exact direct child after the agent supplies its independently reviewed
-commit and tree IDs. A failed hook that creates no commit and pre-commit drift
-become stale for a fresh explicit invocation.
+`prepare`, `execute` and `review` retain exact per-attempt tree claims. Direct
+root attempts use new schema identities; delegated Task Implementer and
+Worktree contracts stay unchanged. A corrected no-commit failure at the same
+base may prepare a fresh token under the existing grant. Any actual commit,
+including one requiring review, consumes the standalone one-commit allowance.
+Unrelated prompt receipts never overwrite task authority. Reconcile interrupted
+effects before retry; inherited execution locks keep surviving Git writers
+serialized. Structured errors distinguish retryable candidate/no-commit failure
+from unknown effects, review, identity/history drift and closed authority.
 
 Before any Git discovery or transaction command, reject caller environment
 variables that can reshape repository discovery, common/worktree directories,
@@ -1927,28 +1923,39 @@ ordering-only rejection is recoverable only when the failed task plane remains
 bound to the same immutable result digest and direct-child commit and no other
 task in the wave is failed.
 
-For unmanaged PR preparation, the same helper additionally owns an immutable
-`create-pr` grant in private transaction state. It binds the original receipt,
-selected feature ref, native session, canonical repository, effective origin
-fetch/push URL digests, default ref and selected base lineage. A fresh semantic
-PR action creates the grant; continuation derives a new single-use commit
-claim only from that grant's exact predecessor. Completed direct children and
-unchanged-base failed attempts may advance; interrupted direct children use
-existing recovery and uncertain commits require explicit review. Intervening
-history must consist solely of two-parent base merges with correct first-parent
-orientation and a forward-moving recorded base lineage. Every execute/review
-revalidates grant identity. Private completion closes the grant permanently for
-that receipt. Grant metadata never contains prompt bodies, remote URLs or tokens.
-The PR skill owns validation, explicit-ref pushes and terminal GitHub checks;
-ordinary commit/commit-push and active SDLC authority are unchanged.
+For unmanaged PRs, begin freezes all selected local, remote-only or planned
+feature refs and initial heads before switching. Default starts create the
+feature at the receipt HEAD before updating its base. Private `sync` records
+source and target SHAs under the repository lock, then performs a normal-hook
+merge and proves the exact no-op, fast-forward or two-parent result. A conflict
+retains one pending transition; continuation requires its exact merge state
+and independently reviewed candidate. Actual merge results require review and
+affected checks before more commits or publication. Sources are the recorded
+base or verified checkpoints of declared target dependencies, never arbitrary
+refs. Temporary merge-order validation uses a declared non-publication ref and
+exact-SHA cleanup. Ordinary claims remain single-parent.
+
+Private `finish` closes completed or cancelled tasks, including zero-commit
+workflows. Commit-push keeps publication separate from its consumed local
+commit allowance. Cancellation preserves unresolved effects and invalidates
+future tokens. Scope/ownership changes, unknown history, closed-task replay,
+secret hazards and required human approvals retain their existing boundaries.
+
+Roll out source, tests, portable artifacts and installed runtime together after
+quiescent-state inspection. Preserve old terminal evidence and resolve old
+active operations through their owner before replacement; never convert old
+root records into new authority or add a compatibility fallback. Verify source,
+installed fixture and native prompt dispatch separately. Rollback replaces only
+the reviewed installation after quiescing new transactions.
 
 #### Selected Option
 
-Use one hidden claim-bound transaction behind a bounded explicit `$commit`
-invocation, including common leading imperative forms, with workflow-specific
-delegated adapters and a shared Git-ref conflict registry. Keep user
-interaction to one command while retaining exact review, recovery, and
-cross-workflow ownership.
+Bind semantically explicit root intent once at task intake, then consume exact
+per-attempt claims inside that immutable scope. Keep delegated adapters and
+shared repository/ref coordination unchanged. Supported correction and recovery
+reuse the task; scope expansion and new standalone commits require their own
+authority. This avoids repeated prompts while preserving exact review,
+normal-hook execution and cross-workflow ownership.
 
 #### Alternatives Considered
 
@@ -2009,7 +2016,15 @@ their existing owners.
   and completion rejects replay. Origin/session/ref/base drift, unrelated
   commits, reversed merges, different owner claims and unreviewed hook commits
   cannot acquire continuation. Correct base merges and crash recovery preserve
-  the existing exact-tree boundary. Ordinary consumed receipts still fail.
+  the existing exact-tree boundary. Standalone tasks allow one actual commit.
+- TDD-009: Clean starts, zero-commit completion, default-to-feature and remote-only
+  targets, A-to-B-to-A repairs, dependency synchronization and ordered scratch
+  merges retain the frozen task scope. Scratch conflicts and ignored local
+  files survive interrupted or refused cleanup.
+- TDD-010: A Git child retains the shared lock after helper death. A cancelled
+  unused claim admits independently authorized new work; a cancelled actual
+  commit permits metadata-only review without reopening execution. Recorded
+  base advancement cannot be replaced by a sibling descendant.
 
 #### Validation Plan
 
@@ -2029,17 +2044,21 @@ contradictory explicit origins, and alternate-index environment injection.
 
 #### Evaluation Plan
 
-Validate source in disposable homes and repositories. In a separately
-authorized rollout, install source and hook bundles together, confirm source to
-installed digest parity and trust, restart, then run a fresh multi-project
-commit probe. Source tests or byte parity alone do not prove activation.
+Verify disposable Git state-machine tests, unchanged delegated contracts,
+selected-host installation fixtures and native packaging independently. Source
+and installed parity do not prove active native prompt dispatch, model intent
+classification or real publication. Do not synthesize production receipts to
+fill those evidence gaps.
 
 #### Rollout And Rollback
 
-Land source and tests first. Runtime installation, hook registration, trust,
-restart, and fresh-session verification require separate authorization and
-recoverable backups. Roll back only the exact installed bundle; unsupported or
-incomplete claims remain inert private metadata and never trigger Git cleanup.
+The accepted task includes source and installed Codex rollout. Inspect private
+claim states and quiesce mutation writers before updating the source-owned
+skills and hook bundles through their existing installer provenance. Preserve
+old terminal evidence; never convert old root records into active authority.
+Verify exact installed parity and fresh-process imports. Rollback restores only
+the backed-up installation after quiescing new transactions. It never rewrites
+Git history or discards unresolved effects.
 
 #### Done Definition
 
@@ -2051,35 +2070,39 @@ behavior are reported as separate proof gates.
 
 #### Implementation Evidence
 
-The existing nonauthorizing receipt and single-use transaction remain intact.
-Root capture validates nonblank native identity strings and returns fixed
-nonblocking reasons for unavailable prompt, native identity, repository or
-receipt publication. Excluded generated events remain inert. Capture failures
-never return a usable digest or raw input/error details and never alter
-active authorization or claim state. Validation preserves the old receipt;
-a write may already have replaced it before directory synchronization fails.
+Root task grants now precede branch or HEAD movement, including clean starts.
+Per-target checkpoints and immutable per-attempt authorizations support safe
+no-commit retries and PR repair loops across a frozen target set. Standalone
+commit and commit-push permit one actual commit. Private begin, finish, sync and
+validate-order complement prepare/execute/review. Delegated v1 contracts remain
+unchanged; new root schemas do not adopt legacy authority.
 
-The reviewed hook was installed through the canonical scoped installer, which
-backed up its prior bytes and left registration unchanged. Native trust and
-fresh-session receipt capture remain separate completion gates. No real
-commit or publication was performed during this repair.
+Synchronization records exact source/destination identity, accepts only the
+recorded no-op, fast-forward or oriented two-parent result, and requires actual
+result review. Forward base checkpoints survive changes of selected branch.
+Scratch validation records progress, protects ignored files and intervening
+conflict edits, restores the exact checkout, and removes only its expected ref.
+Git children inherit the repository lock. Cancellation retires unused claims
+and retains actual effects for exact metadata-only reconciliation.
+
+Skill guidance, private protocol references, prompt context, SDLC helper
+classification, catalog and changelog use the same lifecycle. The existing
+nonauthorizing receipt capture and normal-hook, secret-handling, Worktree,
+SDLC and required human-review boundaries remain intact.
 
 #### Verification Evidence
 
-On 2026-09-14, the new invalid-root-input regression failed before the source
-change and passed afterward. All 29 disposable-repository transaction tests
-and five static contract tests passed. Two targeted runtime/installation tests
-passed with separate authentic Codex turn_id and Claude prompt_id fixtures,
-including missing-identity advisories and unchanged prior receipt bytes.
-Post-replacement synchronization failure coverage confirms no success context
-or authorization is emitted even when the new receipt bytes already exist.
-Ruff, Python syntax, scoped Markdown, paired spec validation and changed-scope
-code/security review passed. Runtime hook byte parity was verified separately.
-
-These checks fix the silent diagnostic failure; they do not prove the cause of
-an active native session omitting capture or prove restored native dispatch.
-Fresh native prompt capture and real publication remain unverified. Do not
-replay synthetic root events against actual transaction state to fill that gap.
+Disposable-repository transaction regressions cover same-task corrected retries,
+clean/zero-commit tasks, named and remote-only targets, default starts,
+multi-target repairs, dependency and base synchronization, conflict review,
+closure, exact-child crash recovery, inherited child locking, scratch cleanup,
+intervening user edits, ignored files and malformed or legacy records.
+Shared SDLC policy, Worktree and Task Implementer suites verify preserved
+ownership boundaries. Scoped Python and Markdown lint, skill structure for
+both hosts, static plugin catalogs and paired project-spec validation cover
+source wiring. Installation fixtures and actual installed parity are reported
+separately in the task result; no native session restart, real commit, push or
+PR publication is claimed by these source checks.
 
 <!-- /FEATURE: FEAT-010 -->
 
@@ -3910,7 +3933,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-020 -->
 
-<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready delivery=implemented priority=P0 version=2 -->
+<!-- FEATURE: FEAT-021 reqs=REQ-022 status=ready delivery=implemented priority=P0 version=3 -->
 ### FEAT-021: Semantic Git-effect classification for commit-push
 
 #### Requirements Covered
@@ -3956,8 +3979,10 @@ ambiguity keeps the command denied because it can introduce unmodeled project
 effects. Upstream setup is a known local Git-config effect, not a project-file
 effect, and remains bounded to the already validated branch and remote.
 
-The root agent binds a semantically explicit commit-and-push request to its
-current nonauthorizing root-turn receipt for the local commit phase. Update the
+The root agent begins a scoped commit-and-push task from its
+current nonauthorizing root-turn receipt at task intake, even when clean.
+Corrected no-commit attempts retain that authority, while one actual commit
+consumes its local allowance even if push remains pending. Update the
 workflow to call the claim-bound commit helper whenever the checkout is dirty;
 raw staging and commit remain transaction-denied. Keep repository-owned
 publication policies and remote authentication authoritative after workflow
@@ -3985,8 +4010,8 @@ owns exactly that local effect.
 Owned surfaces are commit-push Git parsing and classification, focused workflow
 tests, commit prompt intent, `commit-push` guidance and trigger coverage, root
 documentation, canonical specs, and changelog. Remote policy,
-credentials, hosting-provider behavior, runtime installation, and an actual
-push are outside this source repair.
+credentials, hosting-provider behavior and an actual push remain outside this
+repair. The accepted rollout includes installed Codex parity.
 
 #### Test-First Success Criteria
 
@@ -4029,11 +4054,11 @@ behavior, and real remote publication as independent gates.
 
 #### Rollout And Rollback
 
-Land source and tests first. Install the source and hook bundle only under
-separate authorization, verify exact parity and trust, restart, then perform a
-fresh-session preflight. Roll back the exact installed bundle if activation
-regresses; never repair a publication failure by weakening unsafe command
-denials.
+The accepted task includes installed Codex rollout after source validation.
+Use the FEAT-010 quiescence, backup, provenance and parity procedure. Fresh
+native-session behavior remains a separate observation; do not claim it from
+fixtures. Roll back the exact installed bundle if activation regresses; never
+repair publication by weakening unsafe-command denials.
 
 #### Done Definition
 
@@ -4045,17 +4070,18 @@ from installed and live behavior.
 
 #### Implementation Evidence
 
-The local commit phase now uses the semantic root-turn receipt protocol from
-FEAT-010. Publication command and remote safety rules remain unchanged.
-
-No implementation evidence was recorded before schema v2 migration.
+The local phase begins one immutable task, retries proven no-commit attempts
+with new candidate review, consumes its allowance on one actual commit, and
+closes completed/cancelled/zero-commit tasks. Pending publication does not
+create a second local-commit allowance. Publication command, remote safety and
+delegated workflow rules remain unchanged.
 
 #### Verification Evidence
 
-The shared receipt-bound local phase passed the FEAT-010 source and disposable
-host checks. No real push or native model classification was exercised.
-
-No independent verification evidence was recorded before schema v2 migration.
+The shared transaction regressions verify a failed normal hook can retry under
+the original commit-push task and that a second actual commit is denied. Source,
+installed fixtures and actual installation parity are separate evidence lanes.
+No real push or native model classification was exercised.
 
 <!-- /FEATURE: FEAT-021 -->
 
@@ -4796,7 +4822,6 @@ and learning-record defaults do not express that contract.
 #### Design Details
 
 Current approved results/build-template revision: Supply generic build-courses.sh, tools/build_course_html.py, tools/publication.py and tools/course_adapter.py templates. The adapter defines plan_outputs(project_root) returning relative output paths and bytes, plus explicit publication configuration; fail clearly until configured. Keep the existing renderer-neutral Markdown/shell/CSS contract. Provide reading-only, technical-download and shared-guide collection fixtures. Shared helpers handle safe output paths, deterministic explicit-inventory archives, planned-output budget checks, read-only freshness and atomic per-file writes. Add checker --links-manifest and --publication-root for exact declared existing local anchor targets with fragment and containment checks. Keep reading content embedded and bulky downloads external; runtime files use the actual delivery workflow. GitHub limits are conditional host policy, exact 100 MiB/file and conservative 1000000000-byte site default. Preserve explicit invocation and real installed copies; test disposable copies and report static/runtime/quality separately.
-
 
 The presentation consistency extension uses the existing shared stylesheet and
 semantic title/section hierarchy. Templates and bounded checks require numbered
@@ -6774,6 +6799,131 @@ and read-order trace checks were NOT_RUN. Delivery remains implemented rather
 than verified until behavioral evidence is available.
 
 <!-- /FEATURE: FEAT-037 -->
+
+<!-- FEATURE: FEAT-038 reqs=REQ-039 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-038: Purpose-based Python testing and bounded pytest optimization
+
+#### Requirements Covered
+
+- REQ-039: Meaningful Python tests and safe optimization evidence.
+
+#### Context Evidence
+
+python-project mixes E2E, filesystem and release behavior under integration;
+its guard patches only two socket APIs and exempts integration. Its nine contract
+tests do not execute generated tests. optimize-pytest has strong measurement
+rules but bare --lf can broaden selection, coverage can overwrite .coverage,
+and inherited addopts can invalidate serial/coverage-free labels.
+
+#### Design Details
+
+Use unit/integration and optional contract/E2E directories; derive layer markers
+and separate slow, smoke, local_network and external properties. Default pytest
+and Make/PR commands select fast non-external non-E2E tests. Full/coverage select
+all non-external tests. External tests require --run-external and a target
+preflight; unit tests reject network escapes. Required pytest-socket owns socket
+interception; concise conftest hooks own policy. Document plugin limits rather
+than implementing an egress sandbox. Keep pytest configuration in pyproject,
+use importlib, strict_xfail and validated pytest/cov/socket versions; add xdist
+only for measured benefit. A shared wheel helper uses locked runtime dependencies,
+an exact built wheel and execution outside the checkout. Optimizer guidance
+preserves targets, safety settings, temporary artifacts and selected identities.
+
+#### Selected Option
+
+Improve existing skills and templates with behavior-level executable checks.
+Use pytest-socket as explicitly selected by the user. Keep the fixed Python/uv
+stack, implicit invocation, Help, Learning Loop and candidate ownership.
+
+#### Alternatives Considered
+
+Documentation-only changes leave unsafe runnable examples. Maintaining custom
+socket interception increases complexity. Extra default test layers and a new
+runner framework add no necessary confidence.
+
+#### Implementation Boundaries
+
+Both named skills, their directly related catalog/changelog entries and source
+validation CI. Canonical documents remain owner-published; unrelated dirty
+changes, installed copies, live systems and Git publication are excluded.
+
+#### Test-First Success Criteria
+
+- TDD-001: Rendered tests expose old selection/network policy gaps.
+- TDD-002: Wheel checks fail for broken entrypoints and missing resources.
+- TDD-003: Optimizer fixtures expose empty-cache widening and coverage writes.
+
+#### Validation Plan
+
+Run focused tests on Python 3.11-3.13; lint Python/Markdown and rendered workflows;
+validate both skills for core/Codex/Claude and run scoped align-skill and align.
+
+#### Test Plan
+
+Use disposable local fixtures only. Test default/full/layer and external-node
+selection, plugin absence, escapes, loopback, lifecycle limits, duplicate import
+names, strict XPASS, optional xdist, subprocess coverage, artifact smoke and
+optimizer option/cache/artifact regressions. Preserve exact selection evidence.
+
+#### Evaluation Plan
+
+Extend trigger CSVs and output-quality JSON. Compare captured previous working
+bytes with candidate outputs when native isolated authentication is available;
+static definitions never establish runtime or quality success.
+
+#### Rollout And Rollback
+
+Source-only adoption through the normal skill release workflow. No migration
+shims or installed-state changes. Keep owner-only temporary baselines through
+comparison and remove the exact task tree after validation.
+
+#### Done Definition
+
+Source guidance, executable assets, CI, docs and evals agree. Executed failures
+are resolved and each unavailable evidence lane is explicit.
+
+#### Implementation Evidence
+
+Implemented in python-project SKILL.md, references, pytest/Make/CI/conftest
+assets and the installed-wheel helper. The obsolete CliRunner-as-integration
+example is removed; its help assertion stays in the unit template. Generated
+projects use pytest 9.1.1+, pytest-cov 7.1+ and pytest-socket 0.8.1+, with xdist
+conditional. The wheel helper builds sdist-to-wheel in clean staging and checks
+imports, metadata, resources and console scripts outside the checkout.
+
+optimize-pytest now reconstructs inspected effective arguments, retains safety
+selectors, bounds last-failed feedback and keeps coverage data in task storage.
+Testmon feedback explicitly intersects affected tests with safety exclusions.
+Source-only validation dependencies, three executable check scripts, a Python
+3.11-3.13 CI job, trigger/output evals and catalog/changelog updates are present.
+Package-manager and coordinated-candidate ownership remain unchanged.
+
+#### Verification Evidence
+
+Local macOS validation: 27 checks passed on each of Python 3.11, 3.12 and 3.13
+(9 source contracts, 12 rendered-template/artifact tests, 6 executed optimizer
+examples). Coverage includes selection identities, socket guards and documented
+limits, external opt-in/preflight, importlib/XPASS, optional xdist, subprocess
+coverage, broken entrypoint/missing-resource negative controls, inherited
+options, bounded failure caches, isolated coverage and testmon selection.
+A socket-construction regression failed against the captured prior working
+source and passed against the candidate without sending traffic.
+
+Ruff, changed-scope Markdown lint, rendered/source workflow actionlint and scoped
+diff checks passed. Whole-design Markdown lint reports one pre-existing MD012
+blank-line warning in unrelated FEAT-026; the new feature record passes. Core, Codex and Claude structure/strict-frontmatter checks passed without
+warnings; pinned skills CLI 1.5.26 discovery, copy parity, repeat installation and
+isolation passed for both skills and both hosts. Invocation metadata is unchanged.
+Nested code-review and apply-security lanes found no remaining blockers.
+
+STATIC_PASS: deterministic source checks; trigger definitions total 18 cases for
+python-project and 25 for optimize-pytest, with 8 and 2 output-quality cases.
+Native trigger runtime is NOT_RUN; comparative native output quality is
+UNAVAILABLE without isolated authenticated runners. Hosted CI and live external
+infrastructure were not run. Delivery remains implemented pending that separate
+quality evidence; passing local fixtures do not claim model-output quality.
+
+<!-- /FEATURE: FEAT-038 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

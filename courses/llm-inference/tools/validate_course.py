@@ -22,7 +22,8 @@ COURSE_NAMES = (
     "custom-cuda-kernels",
     "advanced-gpu-communication",
 )
-COURSE_NAVIGATION_LINKS = {"../index.html"} | {
+CATALOG_ENTRIES = ("soperator", "lab-guide", *COURSE_NAMES[1:])
+COURSE_NAVIGATION_LINKS = {"../index.html", "../lab-guide.html"} | {
     f"../{name}/index.html" for name in COURSE_NAMES
 }
 ALLOWED_HOSTS = {
@@ -353,6 +354,7 @@ class Parser(html.parser.HTMLParser):
         self.course_nav_depth = 0
         self.catalog_navigation_depth = 0
         self.course_navigation_links: list[str] = []
+        self.course_navigation_order: list[tuple[str, str | None]] = []
         self.current_courses: list[str | None] = []
 
     def check_css(self, css: str) -> None:
@@ -414,6 +416,9 @@ class Parser(html.parser.HTMLParser):
                 self.catalog_navigation_depth = 1
         if self.catalog_navigation_depth and values.get("aria-current") == "page":
             self.current_courses.append(values.get("data-course"))
+            self.course_navigation_order.append(("current", values.get("data-course")))
+        if self.catalog_navigation_depth and tag == "a":
+            self.course_navigation_order.append(("link", values.get("href")))
         if element_id:
             if element_id in self.ids:
                 self.errors.append(f"duplicate id: {element_id}")
@@ -1461,15 +1466,21 @@ def validate_figures(
 def validate_course_navigation(parser: Parser, course_name: str) -> None:
     if course_name not in COURSE_NAMES:
         fail("course metadata needs a known catalog slug")
-    expected = {"../index.html"} | {
+    expected = {"../index.html", "../lab-guide.html"} | {
         f"../{name}/index.html" for name in COURSE_NAMES if name != course_name
     }
+    expected_order = [("link", "../index.html")] + [
+        ("current", name) if name == course_name else
+        ("link", "../lab-guide.html" if name == "lab-guide" else f"../{name}/index.html")
+        for name in CATALOG_ENTRIES
+    ]
     if (
         len(parser.course_navigation_links) != len(expected)
         or set(parser.course_navigation_links) != expected
         or parser.current_courses != [course_name]
+        or parser.course_navigation_order != expected_order
     ):
-        fail("course navigation needs the catalog, six siblings and the current course")
+        fail("course navigation needs the catalog and eight ordered resources with one current course")
 
 
 def validate_labs_only() -> None:

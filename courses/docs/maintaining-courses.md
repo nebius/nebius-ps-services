@@ -1,6 +1,8 @@
 # Maintaining the courses
 
-For course maintainers. Learners start with the [shared lab guide](../README.md).
+For course maintainers. Learners start with the
+[course website](https://nebius.github.io/nebius-ps-services/courses/index.html)
+or the [local catalog](../index.html).
 
 ## Website publication
 
@@ -25,6 +27,36 @@ Catalog introductions and learning outcomes live in the renderer, while
 instead of generated HTML. A selected-course build also refreshes the shared guide and catalog;
 rebuild all seven pages when shared metadata, navigation, styles or licensing
 changes. `--check` always checks the shared guide and catalog as well as the selected courses.
+
+The reader-facing order is Soperator, Lab Guide, GPU Fundamentals, GPU Performance
+Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs.
+`course_builder.config.CATALOG_GROUPS` owns the presentation groups and derives
+the eight-entry sequence used by cards, the learning path, and every course/guide
+menu. `COURSES` remains the seven real course packages; never add the README-derived
+guide to that build registry. Its generated title is Lab Guide, and it has no
+invented guided hours. Each menu has one current-page marker and a separate
+catalog backlink. Display order does not change course prerequisites.
+
+Keep every Course overview to three short paragraphs in its canonical
+`COURSE.md`: purpose and outcomes, audience and prerequisites, then practical
+scope and the next step. Retain brief course-specific hardware and safety limits.
+Merge shared setup, submission, logs and workload-profile guidance into the
+root README's existing Lab Guide sections. Preserve unique interpretation,
+qualification and completion guidance in the embedded course README or owning
+lab before removing an overview repetition; authoring-only mission and syllabus
+files do not provide a learner-facing destination.
+
+The shared browsing instructions use `nebius-cxcli grafana show` and
+`nebius-cxcli soperator profiling show` for current forwarding commands,
+password-retrieval commands and browser URLs. Keep installation and routine
+access separate. Do not duplicate service names, Secret bindings or port mappings
+in the guide; retain the explicit-target, loopback and paired Nsight HTTP/TURN
+instructions and the installation-selected Nsight username.
+
+Navigation validation lives in the canonical `tools/validate_course_template.py`
+and the text-only `tools/validate_text_course.py`. After changing the shared
+template, run `python3 -B tools/sync_course_tools.py`; do not edit generated
+standalone validator copies individually.
 
 After editing lesson text, embedded guides, lab sources, diagrams or styles,
 run `./build-courses.sh` from `courses`, then refresh your browser. From

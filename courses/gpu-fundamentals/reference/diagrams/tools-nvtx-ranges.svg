@@ -1,6 +1,41 @@
-<svg viewBox="0 0 340 558" role="img" aria-labelledby="tools-nvtx-ranges-title tools-nvtx-ranges-desc">
+<svg viewBox="0 0 600 455" role="img" aria-labelledby="tools-nvtx-ranges-title tools-nvtx-ranges-desc">
 <title id="tools-nvtx-ranges-title">Names identify submission and completion</title>
-<desc id="tools-nvtx-ranges-desc">This schematic follows the code example; positions and box heights are not measured durations. Point markers name instants. Nested CPU ranges name parts of step. GPU kernels may outlast their submission ranges. The explicit synchronize call waits before result_ready; NVTX alone does not wait.</desc>
-<rect x="1" y="1" width="338" height="556" rx="12" fill="#ffffff" stroke="#52626b"/>
-<g font-family="Arial, sans-serif"><text x="18" y="30" font-size="21" text-anchor="start" fill="#24343d" font-weight="700">NVTX annotations</text><text x="18" y="55" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">Schematic order · time ↓</text><text x="108" y="86" font-size="16" text-anchor="middle" fill="#245880" font-weight="700">CPU annotations</text><text x="272" y="86" font-size="16" text-anchor="middle" fill="#206757" font-weight="700">GPU work</text><text x="22" y="113" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">◆ input_ready</text><rect x="18" y="127" width="183" height="325" rx="8" fill="#f4f7f9" stroke="#52626b" stroke-width="1.5"/><text x="31" y="150" font-size="16" text-anchor="start" fill="#24343d" font-weight="700">step</text><rect x="30" y="164" width="157" height="48" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/><text x="108" y="192" font-size="16" text-anchor="middle" fill="#24343d" font-weight="400">square</text><rect x="224" y="190" width="100" height="101" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/><text x="274" y="232" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">Square</text><text x="274" y="254" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">kernel</text><line x1="187" y1="181" x2="223" y2="202" stroke="#245880" stroke-width="2" stroke-dasharray="3 3"/><text x="30" y="236" font-size="14" text-anchor="start" fill="#24343d" font-weight="400">◆ square_submitted</text><rect x="30" y="252" width="157" height="45" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/><text x="108" y="280" font-size="16" text-anchor="middle" fill="#24343d" font-weight="400">reduce</text><rect x="224" y="312" width="100" height="65" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/><text x="274" y="338" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">Reduce</text><text x="274" y="359" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">kernel</text><line x1="187" y1="273" x2="223" y2="322" stroke="#245880" stroke-width="2" stroke-dasharray="3 3"/><rect x="30" y="315" width="157" height="119" rx="8" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/><text x="108" y="344" font-size="14" text-anchor="middle" fill="#24343d" font-weight="400">wait_for_result</text><text x="108" y="376" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">Explicit</text><text x="108" y="399" font-size="15" text-anchor="middle" fill="#24343d" font-weight="400">synchronize()</text><line x1="224" y1="379" x2="193" y2="419" stroke="#86500e" stroke-width="2" stroke-dasharray="3 3"/><text x="22" y="481" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">◆ result_ready</text><text x="20" y="513" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">◆ = instant   Box = interval</text><text x="20" y="537" font-size="15" text-anchor="start" fill="#24343d" font-weight="400">Dashed lines = work / wait links</text></g>
+<desc id="tools-nvtx-ranges-desc">Read left to right. Diamonds mark instants; boxes span intervals. The CPU ranges square, reduce and wait_for_result are nested inside step. GPU work can continue after its submission range ends. Blue dashed arrows link submissions to kernels; the amber arrow links GPU completion to the explicit wait returning before result_ready. Positions and widths are schematic, not measured durations.</desc>
+<rect x="1" y="1" width="598" height="453" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">NVTX annotations</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Schematic order · time →</text>
+<text x="24" y="115" font-size="18" text-anchor="start" fill="#245880" font-weight="400">input_ready</text>
+<text x="576" y="115" font-size="18" text-anchor="end" fill="#245880" font-weight="400">result_ready</text>
+<text x="210" y="151" font-size="18" text-anchor="middle" fill="#245880" font-weight="400">square_submitted</text>
+<polygon points="84,170 91,177 84,184 77,177" fill="#245880"/>
+<line x1="84" y1="124" x2="84" y2="168" stroke="#245880" stroke-width="2"/>
+<polygon points="210,170 217,177 210,184 203,177" fill="#245880"/>
+<line x1="210" y1="157" x2="210" y2="168" stroke="#245880" stroke-width="2"/>
+<polygon points="566,170 573,177 566,184 559,177" fill="#245880"/>
+<line x1="566" y1="124" x2="566" y2="168" stroke="#245880" stroke-width="2"/>
+<text x="20" y="229" font-size="20" text-anchor="start" fill="#245880" font-weight="700">CPU</text>
+<rect x="85" y="195" width="467" height="105" rx="8" fill="#f6f8fa" stroke="#aabcc6" stroke-width="1.5"/>
+<text x="99" y="222" font-size="22" text-anchor="start" fill="#24343d" font-weight="700">step</text>
+<rect x="95" y="237" width="102" height="49" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/>
+<text x="146" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">square</text>
+<rect x="219" y="237" width="102" height="49" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/>
+<text x="270" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">reduce</text>
+<rect x="341" y="237" width="200" height="49" rx="8" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/>
+<text x="441" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">wait_for_result</text>
+<text x="20" y="363" font-size="20" text-anchor="start" fill="#206757" font-weight="700">GPU</text>
+<rect x="127" y="338" width="171" height="51" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/>
+<text x="212" y="371" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">Square</text>
+<rect x="318" y="338" width="167" height="51" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/>
+<text x="402" y="371" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">Reduce</text>
+<line x1="139" y1="287" x2="151" y2="336" stroke="#245880" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="151.0,336.0 146.3,330.8 152.8,329.2" fill="#245880"/>
+<line x1="265" y1="287" x2="330" y2="336" stroke="#245880" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="330.0,336.0 323.1,335.0 327.1,329.6" fill="#245880"/>
+<line x1="487" y1="340" x2="535" y2="287" stroke="#86500e" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="535.0,287.0 533.4,293.8 528.4,289.3" fill="#86500e"/>
+<rect x="20" y="404" width="560" height="36" rx="8" fill="#eef5f7"/>
+<text x="300" y="427" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">NVTX labels; synchronize() waits</text>
+</g>
 </svg>

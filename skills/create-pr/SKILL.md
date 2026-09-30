@@ -152,7 +152,7 @@ and call the canonical installed shared `commit` helper in `create-pr` mode.
 Each commit gets a fresh exact-tree claim; only the helper runs repo-root
 `git add -A` and normal-hook `git commit`. Staging commands below describe those
 helper-owned effects, not permission for raw Git fallback. Ordinary `commit`
-and `commit-push` stay single-use. Active SDLC remains publication-only.
+and `commit-push` permit one actual commit plus safe no-commit retries. Active SDLC remains publication-only.
 
 ## Required Reads
 
@@ -214,27 +214,13 @@ For any dirty local work this skill will commit:
 
 ## Base Merge Policy
 
-Before creating or updating a PR, fetch the current base branch and merge it
-into the target PR branch. This keeps the PR branch current with the base
-without rewriting branch history.
-
-- Refresh first with `git fetch origin`.
-- Run the merge while the target PR branch is checked out. Do not merge the PR
-  branch into the default branch.
-- Merge with `git merge --no-edit origin/<base>` after local dirty work has
-  been validated and committed. For a `main` base branch, this is
-  `git merge --no-edit origin/main`.
-- If the target branch is unpublished, publish with
-  `git push -u origin HEAD:<branch>`.
-- If the target branch already exists on `origin`, push with
-  `git push origin HEAD:<branch>`.
-- Use explicit refspecs instead of a plain ambiguous `git push` when creating
-  or updating PR branches.
-- Do not rebase or force-push as part of this skill. Use non-destructive merges
-  from `origin/<base>` so shared, protected, and already-published branches keep
-  their existing history.
-- After a successful merge from the base, rerun the focused checks that prove
-  the branch still works on the current base before pushing.
+Refresh refs with `git fetch origin`, then run private `sync` on the clean,
+selected target after any dirty work has been validated and committed. The
+helper owns the normal-hook merge from the frozen base; do not perform raw
+merges. Review/check the actual result and acknowledge its exact tree before
+publication. Never merge the PR branch into the default branch, rebase or
+force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
+`git push origin HEAD:<branch>` for an existing one.
 
 ## Branch Selection
 
@@ -270,8 +256,14 @@ without rewriting branch history.
    - whether a matching active Agentic SDLC run selects the restricted
      publication mode above; if so, follow that mode and skip generic
      branch-preparation, base-merge, repair, and commit steps
-2. Resolve and commit the current feature-branch path before any branch
-   creation or switching.
+2. Freeze task scope, then handle the current feature branch.
+   - For an unmanaged task, read `references/commit-continuation.md`. Resolve
+     all targets, base, dependencies and a new scratch validation ref if needed.
+     Call the canonical helper's private `begin` with the original receipt before
+     any branch switch or HEAD movement, including a clean start.
+   - Keep the original task key for all attempts and every selected branch.
+     User authorization persists through safe retries; do not require another
+     commit invocation because a claim became stale.
    - If `HEAD` is detached, stop and explain the problem.
    - If no branch is named and the current branch is already non-default,
      reuse it as the only target branch. Do not create another branch.
@@ -288,9 +280,10 @@ without rewriting branch history.
      that `create-pr` is configured for repo-wide `git add -A` commits.
 3. Refresh base-branch context.
    Fetch `origin/<base>` and the target branch refs before resolving
-   conflicts, validating branch diffs, or opening PRs. If the local default
-   branch is clean and has no local-only commits, fast-forward it first so new
-   work starts from the latest reviewed base.
+   conflicts, validating branch diffs, or opening PRs. From the default branch,
+   create the planned feature at the receipt HEAD, then synchronize that feature
+   with the refreshed base through the helper. Do not move default-branch HEAD
+   between receipt capture and task intake.
 4. Resolve the remaining target branches.
    - If the user named branches, check whether each exists locally or on
      `origin`. Stop for unknown branches instead of guessing.
@@ -325,9 +318,9 @@ without rewriting branch history.
      for example with
      `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`.
    - Update every target branch non-destructively with the `Base Merge Policy`:
-     `git fetch origin`, then `git merge --no-edit origin/<base>`, then rerun
-     focused validation before pushing. For a `main` base branch, merge
-     `origin/main`.
+     refresh refs, invoke private `sync`, review its actual result, run affected
+     checks and acknowledge its exact tree before pushing. The helper owns the
+     normal-hook merge and recorded no-op/fast-forward/two-parent proof.
    - Resolve only straightforward conflicts where both sides are clear and
      preserving current logic is possible.
    - Do not rebase or force-push PR branches in this skill.
@@ -336,12 +329,13 @@ without rewriting branch history.
      moved nearby code, and stop when the conflict needs product or business
      judgment.
    - When multiple branches are requested, also validate the proposed merge
-     order with one temporary local branch starting at `origin/<base>` and
-     merging the target branches in order. Require a clean checkout, never
-     push that branch, and delete it with its exact expected old SHA after the
-     check. Do not create an unmanaged throwaway worktree.
+     order through private `validate-order` on the frozen temporary ref. Require
+     a clean checkout; the helper records sources, runs the merges, restores
+     the exact original checkout and performs exact-SHA cleanup. Never push
+     that branch or create an unmanaged throwaway worktree.
    - If a later branch depends on an earlier branch, either merge the earlier
-     branch into the later branch so the ordered path is conflict-free, or
+     branch into the later branch with `sync --dependency <earlier-branch>`
+     for the dependency frozen at intake, so the ordered path is conflict-free, or
      report that the later PR should be refreshed after the earlier PR lands.
      Choose the non-destructive update only when the dependency is evident from
      current branch history or the user asked for an ordered multi-branch PR
@@ -415,6 +409,11 @@ without rewriting branch history.
 
 ## Command Reference
 
+Close the private root task with `finish completed` after publication and
+checks are verified, including zero-commit tasks. Use `finish cancelled` when
+abandoning it; preserve unresolved effects. Neither closure nor passing checks
+bypasses required human approval.
+
 Read `references/command-reference.md` when exact Git or GitHub CLI commands
 are needed for branch detection, validation, base merges, ordered merge
 simulation, PR lookup, checks, or PR creation.
@@ -452,9 +451,8 @@ URLs, customer data, raw logs, or one-off local state.
 - Do not combine multiple requested branches into one PR.
 - Do not rewrite published branch history in this skill. Do not rebase or
   force-push; merge the current base branch instead.
-- Do not run `git merge --no-edit origin/<base>` with uncommitted work.
-  Validate and commit the dirty work first, then merge the current base branch
-  into the committed branch.
+- Do not run private `sync` with uncommitted work. Validate and commit dirty
+  work first, then synchronize the frozen base through the helper.
 - Do not stage or commit while local tests are still running or pending. Wait
   for terminal pass/fail status, repair branch-caused failures when safe, and
   rerun the failed checks before committing or reporting readiness.

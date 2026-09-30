@@ -4,6 +4,9 @@ These cases preserve detailed workflow and output-quality expectations.
 `trigger-prompts.csv` is the sole canonical trigger authority; this document
 does not define skill routing.
 
+Output assertions live in `evals.json`; executable command regressions live in
+`scripts/test_measurement_examples.py`. Do not infer quality from routing checks.
+
 ## Manual Runtime Check
 
 Test these prompts in a fresh Codex session where the source skill is installed

@@ -14,6 +14,7 @@ from nebius_cxcli.soperator_full_stack_upgrade import (
     load_campaign_receipt,
     run_campaign,
 )
+from nebius_cxcli.soperator_receipt_io import write_owner_only_json
 from test_soperator_flux_sources import _main_identity
 from test_soperator_full_stack_upgrade import _intent
 
@@ -51,8 +52,17 @@ def test_main_authority_can_refine_during_final_restoration(tmp_path):
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("invalid", ["missing-binding", "unfinished", "missing-segment"])
-def test_restoration_cannot_establish_unproved_workload_authority(tmp_path, invalid):
+@pytest.mark.parametrize(
+    ("invalid", "error_type", "message"),
+    [
+        ("missing-binding", SoperatorSafetyPauseError, "authority is unavailable"),
+        ("unfinished", RuntimeError, "segment order is inconsistent"),
+        ("missing-segment", RuntimeError, "segment ledger does not match intent"),
+    ],
+)
+def test_restoration_cannot_establish_unproved_workload_authority(
+    tmp_path, invalid, error_type, message
+):
     _, path, authority = _restoring(tmp_path)
     receipt = load_campaign_receipt(path)
     assert receipt is not None
@@ -65,9 +75,10 @@ def test_restoration_cannot_establish_unproved_workload_authority(tmp_path, inva
         )
     else:
         receipt = replace(receipt, segments=receipt.segments[1:])
-    _write_receipt(path, receipt)
+    # Corruption bypasses the production writer's semantic validation.
+    write_owner_only_json(path, asdict(receipt))
     before = path.read_bytes()
-    with pytest.raises(SoperatorSafetyPauseError, match="authority is unavailable"):
+    with pytest.raises(error_type, match=message):
         authority.freeze(_main_identity())
     assert path.read_bytes() == before
 
@@ -157,7 +168,10 @@ def test_restoration_retains_latest_callback_evidence(tmp_path, write_before_eve
 
 
 @pytest.mark.parametrize("record_event", [False, True])
-def test_restoration_never_overwrites_changed_campaign_authority(tmp_path, record_event):
+@pytest.mark.parametrize("rebind_intent", [False, True])
+def test_restoration_never_overwrites_changed_campaign_authority(
+    tmp_path, record_event, rebind_intent
+):
     intent, path = _intent(), tmp_path / "campaign.json"
     changed = None
 
@@ -165,13 +179,26 @@ def test_restoration_never_overwrites_changed_campaign_authority(tmp_path, recor
         nonlocal changed
         latest = load_campaign_receipt(path)
         assert latest is not None
-        _write_receipt(path, replace(latest, cluster_id="different-cluster"))
+        foreign = replace(latest, cluster_id="different-cluster")
+        if rebind_intent:
+            # A coherent receipt for another campaign must still fail the
+            # restoration callback's original frozen-authority comparison.
+            foreign_intent = replace(intent, cluster_id="different-cluster")
+            _write_receipt(
+                path,
+                replace(
+                    foreign, intent=asdict(foreign_intent), intent_sha256=foreign_intent.digest
+                ),
+            )
+        else:
+            write_owner_only_json(path, asdict(foreign))
         changed = path.read_bytes()
         if record_event:
             record({"action": "restored"})
         return {"restored": True}
 
-    with pytest.raises(RuntimeError, match="restoration authority changed"):
+    message = "restoration authority changed" if rebind_intent else "identity does not match intent"
+    with pytest.raises(RuntimeError, match=message):
         run_campaign(
             path=path,
             intent=intent,

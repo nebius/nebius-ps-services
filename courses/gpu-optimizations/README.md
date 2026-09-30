@@ -4,7 +4,7 @@
 
 The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
 
-Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a separate two-worker, sixteen-H100 cluster. The conceptual lessons here remain useful prerequisites.
+Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
 The networking workshop continues in Advanced Lab 09 for the PyTorch NCCL
 curve and Advanced Lab 10 for the MPI-enabled NCCL Tests benchmark.
@@ -70,7 +70,7 @@ umask 077
 python3 tools/submit_lab.py --lab 01_timing_basics slurm/single_gpu.sbatch labs/01_timing_basics.py --profile small
 ```
 
-Use the Nsight launchers after freezing the baseline and hypothesis. Distributed transport, scaling and profiling practice now belongs to the advanced course; its setup qualifies the separate sixteen-H100 fabric.
+Use the Nsight launchers after freezing the baseline and hypothesis. Distributed transport, scaling and profiling practice now belongs to the advanced course; its setup qualifies the sixteen-H100 fabric.
 
 ## Continue learning
 

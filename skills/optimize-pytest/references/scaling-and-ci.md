@@ -1,5 +1,9 @@
 # Scaling Pytest And CI
 
+Initialize the inspected `pytest_base_args` array from `safe-measurement.md`
+before running these Bash command examples. Keep every command inside the
+already-preflighted selection and runtime deadline.
+
 Use this reference only after serial measurements and isolation evidence show
 that execution architecture, selection, or CI distribution is the next
 bottleneck.
@@ -42,11 +46,11 @@ an immutable once-per-run artifact.
 Benchmark serial and bounded worker counts on the same selection:
 
 ```bash
-"${pytest_python}" -m pytest -q -n 0 \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" -q -n 0 \
   -o "cache_dir=${perf_dir}/pytest-cache-n0" "${pytest_target}"
-"${pytest_python}" -m pytest -q -n 2 --dist=worksteal \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" -q -n 2 --dist=worksteal \
   -o "cache_dir=${perf_dir}/pytest-cache-n2" "${pytest_target}"
-"${pytest_python}" -m pytest -q -n 4 --dist=worksteal \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" -q -n 4 --dist=worksteal \
   -o "cache_dir=${perf_dir}/pytest-cache-n4" "${pytest_target}"
 ```
 
@@ -89,15 +93,19 @@ Use the smallest relevant pytest selection during implementation:
 ```bash
 feedback_cache_dir="${perf_dir:?initialize perf_dir first}/feedback-cache"
 
-"${pytest_python}" -m pytest tests/path/test_module.py::test_name -q -x \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" tests/path/test_module.py::test_name -q -x \
   -o "cache_dir=${feedback_cache_dir:?}"
-"${pytest_python}" -m pytest --lf -q -x \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" "${pytest_target}" --lf --last-failed-no-failures=none -q -x \
   -o "cache_dir=${feedback_cache_dir:?}"
-"${pytest_python}" -m pytest tests/path/to/package -q \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" tests/path/to/package -q \
   -o "cache_dir=${feedback_cache_dir:?}"
 ```
 
-`--lf` reruns failures recorded by pytest's cache. It is not changed-code
+`--last-failed-no-failures=none` prevents an empty cache from expanding execution.
+On the tested pytest 9.1.1 baseline, an empty failure selection exits 5 (no tests);
+report that no rerun occurred rather than hiding empty-selection failures.
+Keep the explicit inspected target and selectors; collection can still execute
+imports and hooks. `--lf` reruns failures recorded by pytest's cache. It is not changed-code
 analysis and must not replace a broad gate. Set `feedback_cache_dir` to one
 intentional task-owned cache directory retained across these feedback runs;
 do not point it at a broad or unrelated directory.
@@ -111,11 +119,13 @@ affected by changed Python code:
 testmon_datafile="${perf_dir:?initialize perf_dir first}/testmondata"
 
 TESTMON_DATAFILE="${testmon_datafile:?}" \
-  "${pytest_python}" -m pytest --testmon \
-  -o "cache_dir=${perf_dir:?}/pytest-cache-testmon"
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" --testmon-noselect \
+  -o "cache_dir=${perf_dir:?}/pytest-cache-testmon" "${pytest_target}"
+# After a relevant source change, deliberately intersect affected tests with
+# the same safety selectors retained in pytest_base_args.
 TESTMON_DATAFILE="${testmon_datafile:?}" \
-  "${pytest_python}" -m pytest --testmon -q \
-  -o "cache_dir=${perf_dir:?}/pytest-cache-testmon"
+  "${pytest_python}" -m pytest "${pytest_base_args[@]}" --testmon-forceselect -q \
+  -o "cache_dir=${perf_dir:?}/pytest-cache-testmon" "${pytest_target}"
 ```
 
 Important boundaries:
@@ -124,7 +134,9 @@ Important boundaries:
 - testmon does not track arbitrary static assets or external services
 - environment, Python, and dependency variants need compatible data separation
 - selectors such as `-m`, `-k`, `--lf`, or explicit node IDs normally force
-  no-selection mode; use `--testmon-forceselect` only deliberately
+  no-selection mode; the second command deliberately uses `--testmon-forceselect`
+  to intersect affected tests with those selectors without removing safety
+  exclusions; an empty intersection means no tests ran, not a passing gate
 - coverage/debugger modes can disable testmon data collection
 - `.testmondata` is state that needs an intentional local, cached, or ignored
   location; `TESTMON_DATAFILE` keeps evaluation state in the task-owned
@@ -138,18 +150,23 @@ serialization formats, or broadly consumed public interfaces.
 
 ## Test Lanes
 
-Use directories or registered markers to distinguish:
+Distinguish behavior layers from execution properties, following
+`python-project/references/testing.md` for new scaffolds:
 
-- unit: isolated, in-process, no external services
-- component: local database, filesystem, or process boundary
-- integration: service or infrastructure boundary
-- contract: service or API compatibility
-- end-to-end: complete workflow
-- slow: intentionally excluded from the fast lane
+- unit: focused behavior with isolated external boundaries
+- integration: real collaboration or controlled local dependencies
+- contract (optional): interface/schema compatibility, usually offline
+- E2E (optional): complete user-visible workflow, potentially local
+
+`slow`, `smoke`, `local_network` and `external` are cross-cutting properties.
+Filesystem IO alone does not determine a layer. Do not introduce a physical
+component or regression layer by default. Preserve an existing project's layout
+unless migration is requested. Fast integration and offline contracts can run
+on PRs; live tests always retain independent opt-in and target preflight.
 
 During migration, do not define the fast lane as `-m unit` until existing tests
 are classified. A safe transitional lane may exclude known slower categories,
-with collection-count assertions ensuring unmarked tests are still visible.
+with selected-node identity and count assertions ensuring unmarked tests remain visible.
 Add a regression check or recorded collection evidence for every lane before
 trusting marker expressions documented in prose.
 
@@ -176,12 +193,12 @@ partition tests using stored historical durations:
 ```bash
 durations_path="${perf_dir:?initialize perf_dir first}/test-durations"
 
-"${pytest_python}" -m pytest --store-durations \
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" --store-durations \
   --durations-path="${durations_path:?}" \
-  -o "cache_dir=${perf_dir:?}/pytest-cache-split"
-"${pytest_python}" -m pytest --splits 4 --group 1 \
+  -o "cache_dir=${perf_dir:?}/pytest-cache-split" "${pytest_target}"
+"${pytest_python}" -m pytest "${pytest_base_args[@]}" --splits 4 --group 1 \
   --durations-path="${durations_path:?}" \
-  -o "cache_dir=${perf_dir:?}/pytest-cache-split"
+  -o "cache_dir=${perf_dir:?}/pytest-cache-split" "${pytest_target}"
 ```
 
 Run every group in CI. Keep evaluation data in the task-owned directory. For

@@ -78,6 +78,8 @@ HTML builder itself. Regenerate pages and results archives after source changes.
 
 ## Build and validation
 
+The build requires Python 3 and Git.
+
 Run from `courses/`. The wrapper builds HTML and the six results ZIPs, then
 checks both against their sources:
 
@@ -90,6 +92,13 @@ python3 -B tools/sync_course_tools.py --check
 For selected courses, use `python3 -B tools/build_course_html.py COURSE ...`.
 The catalog and shared guide are always included. `--check` writes nothing and
 checks both HTML and ZIP bytes against canonical inputs.
+
+The README is the single source for `lab-guide.html`. Its **Read this guide
+online** link sits immediately under **How to set up the lab**, and its final
+paragraph supplies the README attribution. The guide renderer omits that exact
+standalone link and final attribution from the article, preserving the shared
+instructions and using the standard HTML license footer once. Keep build and
+publication-budget details in this maintainer guide.
 
 The builder renders and validates every selected output before replacing any
 file. Source, checksum, SVG and Markdown errors therefore leave the previous

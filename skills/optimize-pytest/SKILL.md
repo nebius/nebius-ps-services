@@ -111,7 +111,7 @@ introducing a dependency.
    integration lane, live service, package installation, or persistent
    artifact is required.
 4. Capture the baseline context and invariants: source identity, dirty state,
-   exact command, interpreter, pytest/plugins/config, cache policy, collected
+   exact command, interpreter, pytest/plugins/config, cache policy, exact selected node IDs, collected
    and deselected counts, outcome counts, exit status, raw samples, median, and
    spread.
 5. Measure startup/collection and setup/call/teardown with the least intrusive
@@ -125,7 +125,7 @@ introducing a dependency.
    update tests, configuration, CI, docs, and changelog only where the changed
    contract requires it.
 8. Re-run the equivalent measurement and correctness checks. Claim a speedup
-   only when selection, outcomes, environment, and measurement method remain
+   only when selected node identities, outcomes, environment, and measurement method remain
    comparable. Treat selection, sharding, and affected-test workflows as
    separate feedback architectures rather than like-for-like speedups.
 
@@ -152,6 +152,8 @@ introducing a dependency.
 - Use only a fresh, validated, task-owned temporary directory for pytest cache,
   profile, or `--basetemp` output. Pytest may clear an existing `--basetemp`;
   never point it at a reused or broad directory.
+- Preserve effective guard/import/marker options when separating instrumentation;
+  bounded feedback must not expand when the failure cache is empty.
 - Do not remove tests, weaken assertions, hide failures, add permanent reruns,
   combine unrelated tests, or relabel integration behavior as unit behavior to
   improve displayed runtime.

@@ -327,8 +327,26 @@ def test_public_flux_nfs_binding_admission(application_project, monkeypatch, cap
     assert "NFS StorageClass binding is unresolved" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("binding", ["unresolved", "partial_secret", "partial_key", "resolved"])
-def test_mysterybox_binding_admission(application_project, binding):
+@pytest.mark.parametrize(
+    "binding, api_version",
+    [
+        ("unresolved", None),
+        ("partial_secret", None),
+        ("partial_key", None),
+        ("resolved", None),
+        ("wrong_api_version", "external-secrets.io/"),
+        ("wrong_api_version", "external-secrets.io/v1/extra"),
+        ("wrong_api_version", "external-secrets.io/invalid"),
+        ("wrong_api_version", "external-secrets.io/v1beta1"),
+        ("wrong_api_version", "external-secrets.io.example.test/v1"),
+        ("wrong_api_version", "example.test/external-secrets.io/v1"),
+        ("wrong_api_version", "external-secrets.io"),
+        ("wrong_api_version", ""),
+        ("wrong_api_version", None),
+        ("missing_api_version", None),
+    ],
+)
+def test_mysterybox_binding_admission(application_project, binding, api_version):
     payload, _, paths, prior = application_project(
         component="external-secrets", repos=("oci://registry.test/external-secrets",)
     )
@@ -352,21 +370,37 @@ def test_mysterybox_binding_admission(application_project, binding):
         "mysterybox": {"enabled": True, "sync_namespaces": ["default"]}
     }
     secret_ids = {} if binding == "unresolved" else {"database": "secret-database"}
-    if binding in {"resolved", "partial_key"}:
+    if binding in {"resolved", "partial_key", "wrong_api_version", "missing_api_version"}:
         secret_ids["api"] = "secret-api"
     config, manifest = render_application_project(
         payload, paths, prior, {"secrets.secret_ids": secret_ids}
     )
-    if binding == "partial_key":
+    if binding in {"partial_key", "wrong_api_version", "missing_api_version"}:
         file = flux_target_dir(paths, "cluster0") / "post-flux-mysterybox-eso.yaml"
         documents = list(yaml.safe_load_all(file.read_text()))
-        next(doc for doc in documents if doc["kind"] == "ExternalSecret")["spec"]["data"].pop()
+        external_secret = next(doc for doc in documents if doc["kind"] == "ExternalSecret")
+        assert external_secret["apiVersion"] == "external-secrets.io/v1"
+        if binding == "partial_key":
+            external_secret["spec"]["data"].pop()
+        elif binding == "missing_api_version":
+            del external_secret["apiVersion"]
+        else:
+            external_secret["apiVersion"] = api_version
         file.write_text(yaml.safe_dump_all(documents))
         manifest["render"]["application_files"] = application_files(paths)
     if binding == "resolved":
         assert admit_applications(config, paths, manifest, target_refs=["cluster0"])
     else:
-        with pytest.raises(ValueError, match="MysteryBox secret binding is unresolved"):
+        incomplete_identity = binding == "missing_api_version" or (
+            binding == "wrong_api_version" and not api_version
+        )
+        error_type = RuntimeError if incomplete_identity else ValueError
+        error_message = (
+            "Desired resource has incomplete identity"
+            if incomplete_identity
+            else "MysteryBox secret binding is unresolved"
+        )
+        with pytest.raises(error_type, match=error_message):
             admit_applications(config, paths, manifest, target_refs=["cluster0"])
         # Unselected targets do not require this target's bindings.
         assert admit_applications(config, paths, manifest, target_refs=[])

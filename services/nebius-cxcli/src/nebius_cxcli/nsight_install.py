@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
 import tempfile
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -34,6 +35,7 @@ from .nsight_runtime import NsightKubernetes, collect_nsight_status, prepare_nsi
 from .operation_config_authority import config_transition_from_payload
 from .soperator_operation_lock import SoperatorOperationLease, SoperatorOperationLocalLock
 from .soperator_upgrade_progress import SoperatorUpgradeProgress
+from .terminal_styles import print_copy_paste_command
 
 
 def candidate_config(
@@ -157,13 +159,14 @@ def finish_installation(cli, paths, generation, *, target_ref, identity, statuse
     cli.console.print(
         "Nsight Systems 2026.4.1 and Nsight Compute 2026.2.1 are installed in the shared jail."
     )
-    cli.console.print("For an already-open login shell: source /etc/profile.d/99-nsight.sh")
+    cli.console.print("For an already-open login shell:")
+    print_copy_paste_command(cli.console, "source /etc/profile.d/99-nsight.sh")
     cli.console.print(
         f"Write reports under {reports_path}; open them from /mnt/reports in each viewer."
     )
     for status in statuses:
         if status.get("port_forward_command"):
-            cli.console.print(status["port_forward_command"], markup=False, soft_wrap=True)
+            print_copy_paste_command(cli.console, status["port_forward_command"])
             cli.console.print(
                 f"Open {status['url']} — keep each port-forward running in its own terminal."
             )
@@ -174,7 +177,7 @@ def finish_installation(cli, paths, generation, *, target_ref, identity, statuse
     )
     for command in password_commands:
         cli.console.print("To display your Nsight browser password, run:")
-        cli.console.print(command, markup=False, soft_wrap=True)
+        print_copy_paste_command(cli.console, command)
 
 
 def prepare_generation(cli, paths, base, *, target_ref, settings):
@@ -767,8 +770,48 @@ def install_profiling(
 
 
 profiling_app = typer.Typer(
-    help="Install shared nsys/ncu tools and private browser viewers on an accepted Soperator target."
+    help="Install shared nsys/ncu tools, show live browser access, and recover profiling on an accepted Soperator target."
 )
+
+
+@profiling_app.command(
+    "show",
+    short_help="Verify live viewers and print three browser access commands.",
+    epilog="Examples: nebius-cxcli soperator profiling show ./config.yaml --target TARGET",
+)
+def profiling_show(
+    config: Path = typer.Argument(..., metavar="CONFIG", help="Managed project config.yaml."),
+    target: str = typer.Option(..., "--target", help="Exact accepted Soperator deployment target."),
+) -> None:
+    """Verify both live viewers and print two forwards and one shared-password command.
+
+    Refresh local kubeconfig when enabled, preserving its current context. Commands
+    use live Services and Secret references, never saved reports or pending viewer
+    settings. Requires cluster and Secret-read access. Does not run the commands,
+    retrieve password values, probe inside Pods or change Kubernetes resources.
+    """
+    from . import cli
+    from .nsight_access import show_nsight_access
+
+    try:
+        access = show_nsight_access(config.expanduser().resolve(), target)
+        for line in access.terminal_lines():
+            if line.startswith("#"):
+                cli.console.print(line, markup=False, highlight=False, soft_wrap=True)
+            else:
+                print_copy_paste_command(cli.console, line)
+    except (OSError, subprocess.SubprocessError):
+        cli.console.print(
+            "Error: Unable to verify profiling access; check connectivity and permissions.",
+            markup=False,
+        )
+        raise typer.Exit(1) from None
+    except (KeyError, TypeError, AttributeError):
+        cli.console.print("Error: Live profiling access evidence is incomplete.", markup=False)
+        raise typer.Exit(1) from None
+    except (ValueError, RuntimeError) as exc:
+        cli.console.print(f"Error: {exc}", markup=False, highlight=False)
+        raise typer.Exit(1) from None
 
 
 @profiling_app.command(

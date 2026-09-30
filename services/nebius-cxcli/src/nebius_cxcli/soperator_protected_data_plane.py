@@ -34,29 +34,40 @@ inventory_rootfs() {
     relative=${path#./}
     if [ -L "$path" ]; then
       kind=l
-      digest="$(readlink -- "$path" | sha256sum | awk "{print \$1}")"
+      link="$(readlink -- "$path" && printf .)" || exit $?
+      digest="$(printf "%s" "${link%.}" | sha256sum)" || exit $?
     elif [ -f "$path" ]; then
       kind=f
-      digest="$(sha256sum -- "$path" | awk "{print \$1}")"
+      digest="$(sha256sum < "$path")" || exit $?
     elif [ -d "$path" ]; then
       kind=d
-      digest="$(printf directory | sha256sum | awk "{print \$1}")"
+      digest="$(printf directory | sha256sum)" || exit $?
     else
       printf "unsupported rootfs path type: %s\n" "$relative" >&2
       exit 1
     fi
-    metadata_digest="$(stat -c "%f:%u:%g" -- "$path" | sha256sum | awk "{print \$1}")"
-    encoded="$(printf "%s" "$relative" | base64 | tr -d "\r\n")"
-    printf "%s\tsha256:%s\tsha256:%s\t%s\n" "$kind" "$digest" "$metadata_digest" "$encoded"
+    metadata="$(stat -c "%f:%u:%g" -- "$path")" || exit $?
+    metadata_digest="$(printf "%s\n" "$metadata" | sha256sum)" || exit $?
+    encoded="$(printf "%s" "$relative" | base64)" || exit $?
+    encoded="$(printf "%s" "$encoded" | tr -d "\r\n")" || exit $?
+    printf "%s\tsha256:%s\tsha256:%s\t%s\n" "$kind" "${digest%% *}" "${metadata_digest%% *}" "$encoded" || exit $?
   done
 ' sh {} +
+}
+sorted_rootfs_inventory() {
+  # POSIX sh reports only the last pipeline status. Check the producer first so
+  # incomplete evidence can never be mistaken for an empty filesystem.
+  inventory="$(inventory_rootfs)" || return $?
+  if [ -n "$inventory" ]; then
+    printf "%s\n" "$inventory" | LC_ALL=C sort
+  fi
 }
 """.strip()
 _ROOTFS_INVENTORY_SCRIPT = f"""
 set -eu
 cd /mnt/jail
 {_ROOTFS_INVENTORY_FUNCTION}
-inventory_rootfs | LC_ALL=C sort
+sorted_rootfs_inventory
 """.strip()
 
 
@@ -831,10 +842,11 @@ find . -xdev -mindepth 1 -depth \
   ! -path './.nebius-cxcli' \
   ! -path './.nebius-cxcli/*' \
   -delete
-test -z "$(find . -xdev -mindepth 1 \
+remaining="$(find . -xdev -mindepth 1 \
   ! -path './.nebius-cxcli' \
   ! -path './.nebius-cxcli/*' \
-  -print -quit)"
+  -print -quit)" || exit $?
+test -z "$remaining"
 """.strip()
     else:
         expected = _required_sha256(
@@ -845,8 +857,9 @@ test -z "$(find . -xdev -mindepth 1 \
 set -eu
 cd /mnt/jail
 {_ROOTFS_INVENTORY_FUNCTION}
-actual="$(inventory_rootfs | LC_ALL=C sort | sha256sum | awk '{{print $1}}')"
-if [ "sha256:$actual" != "{expected}" ]; then
+inventory="$(sorted_rootfs_inventory)" || exit $?
+actual="$(if [ -n "$inventory" ]; then printf '%s\n' "$inventory"; fi | sha256sum)" || exit $?
+if [ "sha256:${{actual%% *}}" != "{expected}" ]; then
   printf '%s\n' 'passive rootfs inventory changed before cleanup' >&2
   exit 42
 fi
@@ -854,10 +867,11 @@ find . -xdev -mindepth 1 -depth \
   ! -path './.nebius-cxcli' \
   ! -path './.nebius-cxcli/*' \
   -delete
-test -z "$(find . -xdev -mindepth 1 \
+remaining="$(find . -xdev -mindepth 1 \
   ! -path './.nebius-cxcli' \
   ! -path './.nebius-cxcli/*' \
-  -print -quit)"
+  -print -quit)" || exit $?
+test -z "$remaining"
 """.strip()
 
     return _rootfs_job_manifest(

@@ -435,19 +435,27 @@ def test_campaign_main_authority_rejects_corruption_or_lost_lease(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "change",
-    [{"maintenance": "pending"}, {"status": "complete"}, {"cluster_id": "other-cluster"}],
+    ("change", "error_type", "message"),
+    [
+        ({"maintenance": "pending"}, cli.SoperatorSafetyPauseError, "authority is unavailable"),
+        ({"status": "complete"}, RuntimeError, "inconsistent state"),
+        ({"cluster_id": "other-cluster"}, RuntimeError, "identity does not match intent"),
+    ],
 )
-def test_campaign_main_authority_requires_active_exact_campaign(tmp_path, change):
-    from dataclasses import replace
+def test_campaign_main_authority_requires_active_exact_campaign(
+    tmp_path, change, error_type, message
+):
+    from dataclasses import asdict, replace
 
+    from nebius_cxcli.soperator_receipt_io import write_owner_only_json
     from test_soperator_flux_sources import _main_identity
 
     intent, path = _intent(), tmp_path / "campaign.json"
     receipt = replace(_new_receipt(intent), maintenance="active")
-    _write_receipt(path, replace(receipt, **change))
+    # Corruption bypasses the production writer's semantic validation.
+    write_owner_only_json(path, asdict(replace(receipt, **change)))
     before = path.read_bytes()
-    with pytest.raises(cli.SoperatorSafetyPauseError, match="authority is unavailable"):
+    with pytest.raises(error_type, match=message):
         CampaignMainWorkloadAuthority(path, intent, lambda: None).freeze(_main_identity())
     assert path.read_bytes() == before
 

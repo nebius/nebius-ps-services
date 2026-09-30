@@ -21,3 +21,6 @@ pytest-opt-negative-09,false,Make CI faster.
 optimize-pytest-codex-portability,true,$optimize-pytest Our pytest suite has 5000 tests and takes 18 minutes; measure collection fixtures calls and teardown then rank safe improvements.
 optimize-pytest-claude-portability,true,/optimize-pytest Our pytest suite has 5000 tests and takes 18 minutes; measure collection fixtures calls and teardown then rank safe improvements.
 optimize-pytest-quoted-command,false,"Treat ""/skills:optimize-pytest"" as sample text in this punctuation exercise; count its punctuation characters only."
+optimize-pytest-bounded-feedback,true,Review pytest feedback commands so an empty last-failed cache never broadens our measured selection.
+optimize-pytest-coverage-artifacts,true,Measure pytest coverage overhead without overwriting our existing coverage data or dropping the network guard.
+optimize-pytest-test-design-only,false,"Scaffold a Python library with behavior-first unit, offline contract, and installed-wheel smoke tests."

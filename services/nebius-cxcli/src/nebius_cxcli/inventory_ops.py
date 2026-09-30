@@ -32,6 +32,7 @@ from .deploy_validation_report import (
     validation_section_lines,
 )
 from .generated_manifest import manifest_path_for_generated_dir
+from .grafana_access import GrafanaAccess
 from .grafana_runtime import grafana_release_specs, read_grafana_status
 from .mk8s_node_groups import (
     cluster_name as mk8s_cluster_name,
@@ -695,6 +696,7 @@ def _configured_grafana_statuses(
                 "admin_secret_name": spec.admin_secret_name,
                 "admin_user": spec.admin_user,
                 "admin_password_key": spec.admin_password_key,
+                "token_secret_name": spec.token_secret_name,
                 "gateway_name": spec.gateway_name,
                 "gateway_namespace": spec.gateway_namespace,
                 "base_url": "",
@@ -1454,11 +1456,119 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
     }
 
 
+def _grafana_report_lines(
+    config: Any,
+    paths: ProjectPaths,
+    *,
+    target_metadata: Mapping[str, Any],
+    observability_summary: Mapping[str, Any],
+    observability_read_metadata: Mapping[str, Any],
+    accesses: Sequence[GrafanaAccess],
+    access_errors: Mapping[str, str] | None,
+    command_config_path: Path,
+) -> list[str]:
+    lines: list[str] = []
+    access_by_target = {item.target_ref: item for item in accesses}
+    grafana_statuses = _merge_grafana_statuses(
+        _configured_grafana_statuses(config, target_metadata=target_metadata),
+        read_grafana_status(paths),
+    )
+    bundled_dashboards = _bundled_grafana_dashboards()
+    grafana_org_id = _grafana_org_id()
+    grafana_lines: list[str] = []
+    pending_grafana_links = False
+    for status in grafana_statuses:
+        target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
+        access = access_by_target.get(target_label)
+        cluster_id = str(_lookup(status, "cluster_id") or "").strip()
+        kube_context = str(_lookup(status, "kube_context") or "").strip()
+        if not str(_lookup(status, "base_url") or "").strip() and access is None:
+            pending_grafana_links = True
+        root_url_warning = str(_lookup(status, "root_url_warning") or "").strip()
+        access_lines = (
+            access.markdown_lines(command_config_path)
+            if access
+            else [
+                f"- Access instructions unavailable: {(access_errors or {}).get(target_label, 'run grafana show after deployment to verify current access.')}",
+                "",
+            ]
+        )
+        target_info: list[str] = []
+        if cluster_id:
+            target_info.append(f"cluster ID `{cluster_id}`")
+        if kube_context:
+            target_info.append(f"kube context `{kube_context}`")
+        bundled_dashboard_lines: list[str] = []
+        if bundled_dashboards:
+            base_url = str(_lookup(status, "base_url") or "").strip()
+            bundled_dashboard_lines = ["- Bundled dashboards:"]
+            for dashboard in bundled_dashboards:
+                dashboard_url = _bundled_dashboard_url(
+                    base_url=base_url,
+                    dashboard_uid=dashboard.uid,
+                    cluster_id=cluster_id,
+                    org_id=grafana_org_id,
+                    cluster_variable=dashboard.folder == "nebius-kubernetes",
+                )
+                dashboard_ref = f"`{dashboard.folder}/{dashboard.dashboard}`"
+                bundled_dashboard_lines.append(
+                    "  - "
+                    f"{_dashboard_markdown_link(dashboard.title, dashboard_url)} "
+                    f"({dashboard_ref})"
+                )
+        grafana_lines.extend(
+            [
+                f"### Target `{target_label}`",
+                "",
+                *([f"- MK8s: {'; '.join(target_info)}"] if target_info else []),
+                *(
+                    [f"- Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}"]
+                    if _lookup(status, "base_url") or access is None
+                    else []
+                ),
+                *bundled_dashboard_lines,
+                *access_lines,
+                *([f"- Root URL note: `{root_url_warning}`"] if root_url_warning else []),
+                "",
+            ]
+        )
+    grafana_note_lines: list[str] = []
+    if pending_grafana_links:
+        grafana_note_lines.append(
+            "- Pending Grafana links are populated after `deploy` or `flux apply` can "
+            "read each target Gateway/LoadBalancer status."
+        )
+    elif bool(_lookup(observability_summary, "grafana")) and not grafana_lines:
+        grafana_note_lines.append(
+            "- Grafana is configured for this project. The live Gateway/LoadBalancer URL is "
+            "written after `deploy` or `flux apply` can read the Gateway status."
+        )
+    if grafana_lines or grafana_note_lines:
+        grafana_lines.extend(["### Notes", "", *grafana_note_lines])
+        if any(status.get("token_secret_name") for status in grafana_statuses):
+            grafana_lines.append(
+                "- Datasources are provisioned in Grafana with server/proxy access and a deploy-time "
+                "Kubernetes Secret containing an Observability static token."
+            )
+            grafana_lines.extend(_grafana_prometheus_datasource_notes(observability_read_metadata))
+        if bundled_dashboards:
+            grafana_lines.append(
+                "- Bundled dashboard links list cxcli-owned JSON dashboards shipped "
+                "under `src/nebius_cxcli/grafana_dashboards`; operator-owned external "
+                "dashboard JSON is still imported into Grafana but is not listed here."
+            )
+        lines.extend(["## Grafana", "", *grafana_lines, ""])
+    return lines
+
+
 def write_inventory(
     config: Any,
     paths: ProjectPaths,
     *,
     validations: Sequence[Mapping[str, Any]] = (),
+    grafana_access: Sequence[GrafanaAccess] = (),
+    grafana_access_errors: Mapping[str, str] | None = None,
+    grafana_command_config_path: Path | None = None,
 ) -> InventoryArtifacts:
     """Write the human-readable deploy report artifact to disk."""
     payload = _build_payload(config, paths)
@@ -1689,101 +1799,18 @@ def write_inventory(
                     f"{_format_backtick_list(service_log_buckets)} service log buckets."
                 )
             lines.extend(["## Observability Read Endpoints", "", *read_lines, ""])
-        target_metadata = _mapping(_lookup(payload, "target_metadata"))
-        grafana_statuses = _merge_grafana_statuses(
-            _configured_grafana_statuses(config, target_metadata=target_metadata),
-            read_grafana_status(paths),
+    lines.extend(
+        _grafana_report_lines(
+            config,
+            paths,
+            target_metadata=_mapping(_lookup(payload, "target_metadata")),
+            observability_summary=observability_summary,
+            observability_read_metadata=observability_read_metadata,
+            accesses=grafana_access,
+            access_errors=grafana_access_errors,
+            command_config_path=grafana_command_config_path or paths.config_path,
         )
-        bundled_dashboards = _bundled_grafana_dashboards()
-        grafana_org_id = _grafana_org_id()
-        grafana_lines: list[str] = []
-        pending_grafana_links = False
-        for status in grafana_statuses:
-            target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
-            namespace = str(_lookup(status, "namespace") or "observability").strip()
-            admin_secret = str(_lookup(status, "admin_secret_name") or "").strip()
-            admin_user = str(_lookup(status, "admin_user") or "").strip()
-            password_key = str(_lookup(status, "admin_password_key") or "").strip()
-            cluster_id = str(_lookup(status, "cluster_id") or "").strip()
-            kube_context = str(_lookup(status, "kube_context") or "").strip()
-            kube_context_arg = f" --context={shlex.quote(kube_context)}" if kube_context else ""
-            namespace_arg = shlex.quote(namespace)
-            admin_secret_arg = shlex.quote(admin_secret)
-            password_jsonpath_arg = shlex.quote(f"{{.data.{password_key}}}")
-            if not str(_lookup(status, "base_url") or "").strip():
-                pending_grafana_links = True
-            root_url_warning = str(_lookup(status, "root_url_warning") or "").strip()
-            password_command = (
-                f"printf '%s\\n' \"$(kubectl{kube_context_arg} -n {namespace_arg} "
-                f"get secret {admin_secret_arg} -o jsonpath={password_jsonpath_arg} "
-                '| base64 -d)"'
-                if kube_context
-                else "Select the target cluster context before reading its admin Secret."
-            )
-            target_info: list[str] = []
-            if cluster_id:
-                target_info.append(f"cluster ID `{cluster_id}`")
-            if kube_context:
-                target_info.append(f"kube context `{kube_context}`")
-            bundled_dashboard_lines: list[str] = []
-            if bundled_dashboards:
-                base_url = str(_lookup(status, "base_url") or "").strip()
-                bundled_dashboard_lines = ["- Bundled dashboards:"]
-                for dashboard in bundled_dashboards:
-                    dashboard_url = _bundled_dashboard_url(
-                        base_url=base_url,
-                        dashboard_uid=dashboard.uid,
-                        cluster_id=cluster_id,
-                        org_id=grafana_org_id,
-                        cluster_variable=dashboard.folder == "nebius-kubernetes",
-                    )
-                    dashboard_ref = f"`{dashboard.folder}/{dashboard.dashboard}`"
-                    bundled_dashboard_lines.append(
-                        "  - "
-                        f"{_dashboard_markdown_link(dashboard.title, dashboard_url)} "
-                        f"({dashboard_ref})"
-                    )
-            grafana_lines.extend(
-                [
-                    f"### Target `{target_label}`",
-                    "",
-                    *([f"- MK8s: {'; '.join(target_info)}"] if target_info else []),
-                    f"- Grafana: {_markdown_link('Open Grafana', _lookup(status, 'base_url'))}",
-                    *bundled_dashboard_lines,
-                    f"- Credentials: user `{admin_user}`; password command:",
-                    "",
-                    "```bash",
-                    password_command,
-                    "```",
-                    *([f"- Root URL note: `{root_url_warning}`"] if root_url_warning else []),
-                    "",
-                ]
-            )
-        grafana_note_lines: list[str] = []
-        if pending_grafana_links:
-            grafana_note_lines.append(
-                "- Pending Grafana links are populated after `deploy` or `flux apply` can "
-                "read each target Gateway/LoadBalancer status."
-            )
-        elif bool(_lookup(observability_summary, "grafana")) and not grafana_lines:
-            grafana_note_lines.append(
-                "- Grafana is configured for this project. The live Gateway/LoadBalancer URL is "
-                "written after `deploy` or `flux apply` can read the Gateway status."
-            )
-        if grafana_lines or grafana_note_lines:
-            grafana_lines.extend(["### Notes", "", *grafana_note_lines])
-            grafana_lines.append(
-                "- Datasources are provisioned in Grafana with server/proxy access and a deploy-time "
-                "Kubernetes Secret containing an Observability static token."
-            )
-            grafana_lines.extend(_grafana_prometheus_datasource_notes(observability_read_metadata))
-            if bundled_dashboards:
-                grafana_lines.append(
-                    "- Bundled dashboard links list cxcli-owned JSON dashboards shipped "
-                    "under `src/nebius_cxcli/grafana_dashboards`; operator-owned external "
-                    "dashboard JSON is still imported into Grafana but is not listed here."
-                )
-            lines.extend(["## Grafana", "", *grafana_lines, ""])
+    )
     if validations:
         lines.extend(validation_section_lines(validation_report))
     else:

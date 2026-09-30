@@ -6,6 +6,73 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Isolate Rich's cached ANSI styles in truecolor command-output tests so earlier
+  standard-color consoles cannot alter their exact RGB assertions in CI.
+
+- Simplify the README opening and put its complete table of contents immediately
+  after the introduction. Group application updates, recovery and profiling with
+  their workflows, remove course-specific setup prose, and link detailed Grafana
+  and Nsight guidance from their existing guides.
+
+- Make the Nsight installation highlighting test declare its simulated terminal
+  capabilities so it also passes when invoked from a non-color terminal.
+
+- Match generated MysteryBox bindings against the exact rendered ESO API version,
+  rejecting malformed and alternate versions before application effects. Express
+  Soperator CRD discovery as explicit exact-name comparisons to avoid CodeQL URL
+  substring false positives while preserving resource selection.
+
+- Preserve existing GitHub Environment branch/tag deployment restrictions during
+  secret and variable synchronization; create an environment only after a
+  confirmed not-found response.
+- Wait for the current Flux resource generation before accepting Ready or
+  terminal Stalled conditions, retaining the statusless OCI repository exception
+  and Soperator's frozen-identity safety pauses and source-readiness checks.
+- Keep complete Git history in release CI so historical tags pass main-branch
+  ancestry checks and the tagged commit's parent remains available for validation.
+- Reject ambiguous SSH jump-host and WireGuard component-type selectors;
+  explicit instance IDs take precedence.
+- Publish Soperator release identity pins atomically under the per-tag lock so
+  interrupted writes do not leave partial records or prevent a valid retry.
+- Load versioned local Helm chart directories directly and reject versions that
+  disagree with their `Chart.yaml` metadata.
+- Size missing boot disks using the selected disk type's allocation unit across
+  MK8s node groups, MK8s defaults, and VM-style components; preserve explicit sizes.
+
+- Validate full-stack Soperator campaign receipts on both read and write: bind
+  identities and the ordered segment ledger to frozen intent, reject impossible
+  maintenance/completion states, and preserve valid interruption recovery and
+  completed-campaign final revalidation. Invalid receipts remain untouched and
+  cannot trigger execution, archival or replacement; schema v6 is unchanged.
+- Fail closed on rootfs inventory and cleanup inspection errors instead of
+  accepting empty or partial evidence through a successful downstream shell
+  command. Preserve the official image's POSIX shell and canonical digest format.
+- Reject regular files selected as protected jail directories before admitting
+  their retained storage bindings.
+- Execute node-template and readiness stages once when catching up lagging node
+  groups while changing OS or drivers without a control-plane version hop.
+
+- Add `soperator profiling show CONFIG --target TARGET` to reconstruct two
+  complete loopback HTTP/TURN forwards and one shared-password retrieval command
+  from live, owned, ready Nsight viewers. Verify the recorded Soperator target and
+  durable kubeconfig, preserve the current context and persistence opt-outs, and
+  print exactly three highlighted commands without reading password values or
+  changing cluster resources.
+
+- Highlight copyable workflow commands and help examples with bold dark text on
+  a light-gray background. Use one shared style across create/render/deploy,
+  Grafana and Nsight access, quota, upgrade, recovery and connection instructions;
+  preserve command text, color opt-outs and plain redirected output.
+
+- Add `grafana show --config PATH --target TARGET` to verify live Grafana access
+  and print copyable loopback port-forward and admin-password retrieval commands.
+  Refresh verified local kubeconfig entries while preserving the current context
+  and honoring persistence opt-outs; never read or print the password itself.
+  Reject aliased username/password Secret keys before reading credentials.
+- Include the same Grafana instructions and a `grafana show` reminder in successful
+  deployment output and reports, including local-only observability and resumed
+  or unchanged runs. Access handoff failures remain separate from deployment success.
+
 - Wait for authenticated PostgreSQL queries after restart and volume reuse in
   the disposable Grafana persistence check, avoiding stale Grafana health-cache
   results without replaying imports or renewing the saved login session.

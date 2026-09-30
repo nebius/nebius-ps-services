@@ -272,10 +272,14 @@ class SoperatorUpgradeCampaignIntent:
                     f"runtime-readiness:{hop}",
                 )
             )
-        if not self.kubernetes_hops and any(
-            group.source_os != group.target_os
-            or group.source_drivers_preset != group.target_drivers_preset
-            for group in self.node_groups
+        if (
+            not self.kubernetes_hops
+            and f"node-templates:{self.target_kubernetes_version}" not in segments
+            and any(
+                group.source_os != group.target_os
+                or group.source_drivers_preset != group.target_drivers_preset
+                for group in self.node_groups
+            )
         ):
             endpoint = self.target_kubernetes_version
             segments.extend((f"node-templates:{endpoint}", f"runtime-readiness:{endpoint}"))
@@ -965,6 +969,15 @@ def _receipt_from_payload(payload: object) -> SoperatorUpgradeCampaignReceipt:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("Soperator upgrade campaign receipt is invalid") from exc
+    if len(segments) != len(raw_segments):
+        raise RuntimeError("Soperator upgrade campaign segment ledger is invalid")
+    _validate_receipt(receipt)
+    return receipt
+
+
+def _validate_receipt(receipt: SoperatorUpgradeCampaignReceipt) -> None:
+    """Validate frozen authority and legal interruption states at both I/O boundaries."""
+
     if receipt.schema != SOPERATOR_UPGRADE_CAMPAIGN_RECEIPT_SCHEMA:
         raise RuntimeError("Soperator upgrade campaign receipt has an unsupported schema")
     if receipt.status not in _CAMPAIGN_STATUS or receipt.maintenance not in {
@@ -979,16 +992,14 @@ def _receipt_from_payload(payload: object) -> SoperatorUpgradeCampaignReceipt:
         raise RuntimeError("Soperator upgrade campaign receipt has an invalid intent digest")
     if _sha256(receipt.intent) != receipt.intent_sha256:
         raise RuntimeError("Soperator upgrade campaign receipt intent digest does not match")
-    if len(segments) != len(raw_segments) or any(
-        segment.status not in _SEGMENT_STATUS for segment in segments
-    ):
+    if any(segment.status not in _SEGMENT_STATUS for segment in receipt.segments):
         raise RuntimeError("Soperator upgrade campaign segment ledger is invalid")
     intent = campaign_intent_from_payload(receipt.intent)
     validate_config_transition_chain(
         receipt.config_generations,
         initial_config_sha256=intent.source_config_sha256,
     )
-    for segment in segments:
+    for segment in receipt.segments:
         evidence = dict(segment.evidence or {})
         if segment.evidence_sha256 and _sha256(evidence) != segment.evidence_sha256:
             raise RuntimeError("Soperator upgrade campaign segment evidence digest does not match")
@@ -1005,7 +1016,38 @@ def _receipt_from_payload(payload: object) -> SoperatorUpgradeCampaignReceipt:
     }
     if set(receipt.supervisor) != required_supervisor:
         raise RuntimeError("Soperator upgrade campaign supervisor state is invalid")
-    return receipt
+    if (
+        receipt.target_ref != intent.target_ref
+        or receipt.cluster_id != intent.cluster_id
+        or receipt.kubernetes_uid != intent.kubernetes_uid
+    ):
+        raise RuntimeError("Soperator upgrade campaign receipt identity does not match intent")
+    if tuple(segment.name for segment in receipt.segments) != intent.segments:
+        raise RuntimeError("Soperator upgrade campaign segment ledger does not match intent")
+
+    # The first unfinished segment is the only executable frontier. A pending
+    # frontier cannot have a running, failed or completed successor.
+    unfinished = False
+    for segment in receipt.segments:
+        if unfinished and segment.status != "pending":
+            raise RuntimeError("Soperator upgrade campaign segment order is inconsistent")
+        if segment.status != "complete":
+            unfinished = True
+
+    all_pending = all(segment.status == "pending" for segment in receipt.segments)
+    all_complete = not unfinished
+    if receipt.status == "complete":
+        valid_state = receipt.maintenance == "restored" and all_complete
+    elif receipt.maintenance in {"pending", "entering"}:
+        valid_state = all_pending
+    elif receipt.maintenance == "active":
+        valid_state = True
+    else:
+        valid_state = receipt.maintenance == "restoring" and all_complete
+    if not valid_state:
+        raise RuntimeError("Soperator upgrade campaign receipt has an inconsistent state")
+    # Supervisor fields describe the latest invocation, including failed final
+    # revalidation of completed authority. They do not determine completion.
 
 
 def load_campaign_receipt(path: Path) -> SoperatorUpgradeCampaignReceipt | None:
@@ -1021,6 +1063,7 @@ def load_campaign_receipt(path: Path) -> SoperatorUpgradeCampaignReceipt | None:
 
 
 def _write_receipt(path: Path, receipt: SoperatorUpgradeCampaignReceipt) -> None:
+    _validate_receipt(receipt)
     write_owner_only_json(path, _receipt_payload(receipt))
 
 

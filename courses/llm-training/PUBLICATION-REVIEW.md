@@ -1,6 +1,46 @@
 # Publication review
 
-## Results naming and build budgets — current local verification
+## Course overview cleanup — current local verification: 2026-09-29
+
+Current HTML SHA-256: `ad37d5163934e4faea87e7234270b887aeed82ca566cdbf44bb15919c387d8b7`.
+
+The overview follows the shared purpose, prerequisites and practical-scope
+pattern. Shared operations now belong to the Lab Guide; distinct course limits remain explicit.
+Advanced measurement and completion guidance remains in its embedded course
+guide. The Lab Guide now uses cxcli-generated access and password commands.
+
+Source/static: 261 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent review pass. All numbered lesson
+bodies and 3,479 protected source/reference/evidence files are unchanged.
+Browser/visual: 27 isolated headless Chrome 154.0.8037.58 cases pass at
+1440px, 390px and 320px, including keyboard access and enlarged-text reflow.
+Overview and connection screenshots were reviewed. Generic skill-checker
+findings match baseline and are not reported as a pass.
+
+See the [overview validation record](../docs/course-overview-validation.md) for
+artifact hashes, screenshots, the retained initial harness stall and successful
+retry, cleanup and limitations. No new installed-runtime, live-target or public
+deployment qualification is claimed.
+
+## Historical: Catalog navigation — local verification: 2026-09-28
+
+Current HTML SHA-256: `779c9d31f5001516afcbcf5d64a72052e691a67cf7e9d887d33d161cad24bcb1`.
+
+The shared resource menu now includes Lab Guide second after Soperator and keeps
+one current-page marker. This course's HTML is byte-identical outside that menu;
+its teaching, lab sources, diagrams and existing evidence remain unchanged.
+
+Source/static: 161 focused tests, all seven native validators, generated-output
+and helper parity, scoped lint and independent read-only review pass.
+Browser/visual: all 27 page/viewport cases pass in isolated headless Chrome
+153.0.8010.53 at desktop, 390px and 320px, with keyboard navigation and reflow.
+The generic checker retains baseline diagnostics and is not reported as passing.
+
+See the [catalog validation record](../docs/catalog-navigation-validation.md)
+for artifact identities, preservation, screenshots and limitations. No external
+publication, dependency installation or new live lab execution occurred.
+
+## Historical: Results naming and build budgets — current local verification
 
 Current HTML SHA-256: `9fd52d3940d585abfc55e5c5432a173777cd6c3dfed211b9d4e975cb028a389d`. All seven pages are byte-identical to the
 preceding revision except the approved download names and results wording.

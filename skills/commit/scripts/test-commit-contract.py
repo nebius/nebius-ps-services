@@ -50,7 +50,7 @@ class CommitContractTest(unittest.TestCase):
             "canonical installed `commit_transaction.py prepare`",
             "canonical installed `commit_transaction.py execute`",
             "private `review` transition",
-            "direct preparation",
+            "original authorized task grant",
         ):
             self.assertIn(required, skill)
         for required in (

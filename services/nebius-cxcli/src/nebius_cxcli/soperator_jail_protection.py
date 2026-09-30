@@ -235,7 +235,7 @@ def directory_probe_script(paths: Sequence[str]) -> str:
         parts = ("/mnt/jail" + path).split("/")
         for index in range(2, len(parts) + 1):
             ancestor = shlex.quote("/".join(parts[:index]))
-            lines.append(f"test -d {ancestor} && test ! -L {ancestor}")
+            lines.extend((f"test -d {ancestor}", f"test ! -L {ancestor}"))
         quoted = shlex.quote("/mnt/jail" + path)
         lines.extend(
             (

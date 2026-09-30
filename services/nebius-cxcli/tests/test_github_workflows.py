@@ -226,3 +226,51 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     assert ".venv/bin/python" not in workflow_text
     assert "python -m pip" not in workflow_text
     assert workflow_text.count("uv run --locked --no-sync --no-python-downloads") == 8
+
+
+def test_release_history_check_preserves_tip_and_historical_tags(tmp_path):
+    import os
+    import subprocess
+
+    def git(*args, cwd, input=None, check=True):
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            input=input,
+            text=True,
+            capture_output=True,
+            check=check,
+            env={
+                **os.environ,
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "Fixture",
+                "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                "GIT_COMMITTER_NAME": "Fixture",
+                "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+            },
+        )
+
+    remote = tmp_path / "remote.git"
+    git("init", "--bare", "--initial-branch=main", str(remote), cwd=tmp_path)
+    tree = git("mktree", cwd=remote, input="").stdout.strip()
+    base = git("commit-tree", tree, "-m", "base", cwd=remote).stdout.strip()
+    old = git("commit-tree", tree, "-p", base, "-m", "older tag", cwd=remote).stdout.strip()
+    tip = git("commit-tree", tree, "-p", old, "-m", "tip tag", cwd=remote).stdout.strip()
+    git("update-ref", "refs/heads/main", tip, cwd=remote)
+    workflow = _workflow("nebius-cxcli-release.yml")
+    steps = workflow["jobs"]["release"]["steps"]
+    script = _named_step(steps, "Ensure tag commit belongs to main history")["run"]
+    for tag, revision in [("older", old), ("tip", tip)]:
+        checkout = tmp_path / tag
+        git("clone", "--quiet", remote.as_uri(), str(checkout), cwd=tmp_path)
+        result = subprocess.run(
+            ["bash", "-c", script.replace("${{ steps.revision.outputs.commit }}", revision)],
+            cwd=checkout,
+            env={**os.environ, "MAIN_BRANCH": "main"},
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert (
+            git("rev-parse", "--verify", revision + "^", cwd=checkout, check=False).returncode == 0
+        )

@@ -93,9 +93,21 @@ def select_ssh_jumphost_component(
         raise RuntimeError("config.yaml does not enable an ssh-jumphost infra component")
     selector = _as_text(component_selector).lower().replace("_", "-")
     if selector:
-        for component in components:
-            if selector in {component.instance_id, component.label, component.component_id}:
-                return component
+        matches = [component for component in components if selector == component.instance_id]
+        if not matches:
+            matches = [
+                component
+                for component in components
+                if selector in {component.label, component.component_id}
+            ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            labels = ", ".join(component.instance_id for component in matches)
+            raise RuntimeError(
+                f"Component selector '{component_selector}' matches multiple instances. "
+                f"Select an explicit instance with --component. Available: {labels}"
+            )
         labels = ", ".join(component.label for component in components)
         raise RuntimeError(
             f"ssh-jumphost component '{component_selector}' was not found. Available: {labels}"

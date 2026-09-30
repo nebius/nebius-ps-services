@@ -34,12 +34,16 @@ from .downloads import course_downloads
 from .shell import course_switcher, license_footer, page_head
 from .config import (
     CATALOG_COPY,
+    CATALOG_ENTRIES,
+    CATALOG_GROUPS,
     COMMON_GUIDES,
     COURSES,
     FIELD_CLASSES,
+    GUIDE_TITLE,
     LAB_SECTIONS,
     ROOT,
     SUPPORTING_GUIDES,
+    catalog_destination,
 )
 
 
@@ -206,9 +210,22 @@ def render_text_course(course: Path, metadata: dict) -> str:
 
 def render_shared_guide() -> str:
     text = shared_guide_source()
-    title, _, rest = text.partition("\n")
+    # README-only navigation and attribution have their own HTML presentation.
+    # Match only these exact boundaries so instructional prose is preserved.
+    setup_heading = "## How to set up the lab\n\n"
+    online_link = (
+        "[Read this guide online]"
+        "(https://nebius.github.io/nebius-ps-services/courses/lab-guide.html).\n\n"
+    )
+    text = text.replace(setup_heading + online_link, setup_heading, 1)
+    text = text.removesuffix(
+        "\n\n© 2026 Nebius B.V. Free educational material under "
+        "[Apache License 2.0](../LICENSE)."
+    )
+    _, _, rest = text.partition("\n")
     chunks = re.split(r"^## (.+)\n", rest, flags=re.MULTILINE)
     links = {name + "/README.md": name + "/index.html" for name in COURSES}
+    links["lab-guide.html"] = "#main"
     for name in COURSES:
         course = ROOT / name
         for heading in re.findall(
@@ -222,9 +239,6 @@ def render_shared_guide() -> str:
             links[f"{name}/reference/labs/{source.stem}.md"] = (
                 f"{name}/index.html#lab-{slug(source.stem)}"
             )
-    links["docs/maintaining-courses.md"] = (
-        "https://github.com/nebius/nebius-ps-services/blob/main/courses/docs/maintaining-courses.md"
-    )
     links["skills/run-labs/SKILL.md"] = (
         "https://github.com/nebius/nebius-ps-services/blob/main/courses/skills/run-labs/SKILL.md"
     )
@@ -241,21 +255,26 @@ def render_shared_guide() -> str:
         )
         body += f'<section id="{anchor}"><h2>{html.escape(heading)}</h2>{rendered}</section>'
     css = (ROOT / "tools/course.css").read_text(encoding="utf-8")
-    return f"""{page_head(title[2:], css)}
-<body class="text-course"><a class="skip-link" href="#main">Skip to guide</a><header><h1>{html.escape(title[2:])}</h1></header>
-<div class="course-layout"><aside><nav aria-label="Lab guide contents"><a href="index.html">All courses</a><ul>{toc}</ul></nav></aside><main id="main">{body}{license_footer()}</main></div></body></html>"""
+    return f"""{page_head(GUIDE_TITLE + ' | Performance Engineering Courses', css)}
+<body class="text-course"><a class="skip-link" href="#main">Skip to guide</a><header><h1>{GUIDE_TITLE}</h1></header>
+<div class="course-layout"><aside><nav aria-label="Lab guide contents">{course_switcher('lab-guide', catalog_metadata())}<details open><summary>Table of contents</summary><ul>{toc}</ul></details></nav></aside><main id="main">{body}{license_footer()}</main></div></body></html>"""
 
 
 def render_catalog() -> str:
     metadata = catalog_metadata()
-    cards = []
-    for number, name in enumerate(COURSES, 1):
-        title = html.escape(metadata[name]["title"])
-        hours = metadata[name]["estimated_guided_hours"]
+    cards = {}
+    path_groups = []
+    collection_groups = []
+    for number, name in enumerate(CATALOG_ENTRIES, 1):
+        guide = name == "lab-guide"
+        title = html.escape(GUIDE_TITLE if guide else metadata[name]["title"])
+        hours = "Shared guide" if guide else f'{metadata[name]["estimated_guided_hours"]} guided hours'
         eyebrow, introduction, outcomes, tags = CATALOG_COPY[name]
         prerequisite = (
             "Start here · Basic Linux knowledge; no cluster required"
             if name == "soperator"
+            else "Use before running labs; no setup needed to read the courses"
+            if guide
             else "Prerequisites: GPU profiling + the relevant training or inference course; 16 H100 GPUs"
             if name == "advanced-gpu-communication"
             else "No previous GPU course required"
@@ -266,21 +285,31 @@ def render_catalog() -> str:
         )
         outcome_items = "".join(f"<li>{html.escape(item)}</li>" for item in outcomes)
         tag_items = "".join(f"<span>{html.escape(tag)}</span>" for tag in tags)
-        cards.append(f"""<article class="course-card course-{number}" id="{name}">
-<div class="card-top"><span class="course-number">0{number}</span><span class="course-hours">{hours} guided hours</span></div>
+        cards[name] = f"""<article class="course-card resource-{name}" id="{name}">
+<div class="card-top"><span class="course-number">{number:02d}</span><span class="course-hours">{hours}</span></div>
 <p class="card-eyebrow">{html.escape(eyebrow)}</p><h3>{title}</h3>
 <p class="course-description">{html.escape(introduction)}</p>
 <ul class="course-outcomes">{outcome_items}</ul>
 <div class="course-tags" aria-label="Topics">{tag_items}</div>
 <div class="card-bottom"><p class="prerequisite">{prerequisite}</p>
-<a class="course-link" href="{name}/index.html" aria-label="Read {title}">Read course <span aria-hidden="true">↗</span></a></div>
-</article>""")
+<a class="course-link" href="{catalog_destination(name)}" aria-label="Read {title}">Read {'guide' if guide else 'course'} <span aria-hidden="true">↗</span></a></div>
+</article>"""
+    path_labels = {"soperator": "Soperator", "lab-guide": GUIDE_TITLE, "advanced-gpu-communication": "Advanced Labs"}
+    for group_number, (label, description, grid_class, names) in enumerate(CATALOG_GROUPS, 1):
+        path_items = []
+        for name in names:
+            number = CATALOG_ENTRIES.index(name) + 1
+            title = html.escape(path_labels[name] if name in path_labels else metadata[name]["title"])
+            purpose = html.escape(CATALOG_COPY[name][0])
+            path_items.append(f'<li value="{number}"><span class="path-step" aria-hidden="true">{number:02d}</span><a href="#{name}">{title}<small>{purpose}</small></a></li>')
+        path_groups.append(f'<p class="path-group-label">{html.escape(label)} · {html.escape(description)}</p><ol class="path-foundations path-group-{grid_class or "advanced"}" start="{CATALOG_ENTRIES.index(names[0]) + 1}">{"".join(path_items)}</ol>')
+        collection_groups.append(f'<div class="collection-label"><span>{group_number:02d} / {html.escape(label)}</span><p>{html.escape(description)}</p></div><div class="course-grid {grid_class}">{"".join(cards[name] for name in names)}</div>')
     css = (ROOT / "tools/catalog.css").read_text(encoding="utf-8")
     lab_count = sum(len(item.get("labs", [])) for item in metadata.values())
     return f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Seven free Nebius courses: Slurm essentials, GPU foundations and specializations, and advanced sixteen-GPU communication labs.">
+<meta name="description" content="Six free Nebius courses, an Advanced Labs collection and a shared Lab Guide: explore Slurm, GPUs, language models and custom kernels.">
 <title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
 <style>{css}</style></head>
 <body><a class="skip-link" href="#main">Skip to courses</a>
@@ -289,26 +318,18 @@ def render_catalog() -> str:
 <main id="main"><header class="hero">
 <div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
 <h1>GPU Performance<br><span>Engineering</span></h1>
-<p class="hero-description">Start with Slurm and Soperator, then build your GPU mental model and explore language models and custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
+<p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then build your GPU mental model and explore language models and custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
 <div class="hero-actions"><a class="button primary" href="soperator/index.html">Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" href="lab-guide.html">Set up and run the labs <span aria-hidden="true">→</span></a></div>
 <p class="platform-note">GPU performance · Linux · Slurm</p></div>
 <aside class="learning-map" id="learning-path" aria-labelledby="path-title">
-<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">7 courses</span></div>
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">8 resources</span></div>
 <h2 id="path-title">A foundation.<br>Then your direction.</h2>
-<ol class="path-foundations"><li><span class="path-step" aria-hidden="true">01</span><a href="#soperator">Soperator<small>Learn the Slurm concepts used throughout the courses</small></a></li><li><span class="path-step" aria-hidden="true">02</span><a href="#gpu-fundamentals">GPU Fundamentals<small>Understand the hardware</small></a></li><li><span class="path-step" aria-hidden="true">03</span><a href="#gpu-optimizations">GPU Performance Optimization<small>Learn how to measure and improve</small></a></li></ol>
-<div class="path-branches"><p>Then choose a specialization</p><ul><li><a href="#llm-training">LLM Training <span aria-hidden="true">↗</span></a></li><li><a href="#llm-inference">LLM Inference <span aria-hidden="true">↗</span></a></li><li><a href="#custom-cuda-kernels">Custom CUDA Kernels <span aria-hidden="true">↗</span></a></li></ul></div>
+{"".join(path_groups)}
 <p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. The three specializations are independent. Start any of them after the two GPU foundation courses. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
 </header>
-<div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES)}</strong> focused courses</p><p><strong>{lab_count}</strong> practical labs</p><p><strong>One</strong> evidence-first approach</p><p class="fact-note">Free to read.<br>Built to put into practice.</p></div>
+<div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES) - 1}</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">{lab_count} practical labs.<br>Free to read.</p></div>
 <section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
-<div class="collection-label"><span>01 / Cluster essentials</span><p>Start with Slurm and Soperator</p></div>
-<div class="course-grid">{cards[0]}</div>
-<div class="collection-label"><span>02 / GPU foundations</span><p>Take these in order</p></div>
-<div class="course-grid foundations">{"".join(cards[1:3])}</div>
-<div class="collection-label"><span>03 / Specializations</span><p>Choose your direction</p></div>
-<div class="course-grid specializations">{"".join(cards[3:6])}</div>
-<div class="collection-label"><span>04 / Advanced communication labs</span><p>Two eight-H100 workers with InfiniBand</p></div>
-<div class="course-grid">{cards[6]}</div></section>
+{"".join(collection_groups)}</section>
 <section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">From concepts to evidence</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>The five GPU courses connect explanations to experiments. The Soperator introduction explains the cluster and commands through text examples. The advanced course develops communication skills through complete labs.</p></div>
 <ol><li><span>01</span><div><h3>Learn the mechanism</h3><p>Start with definitions, mental models and diagrams.</p></div></li><li><span>02</span><div><h3>Work through the experiment</h3><p>Read the prerequisites, explore the code and run the supplied lab.</p></div></li><li><span>03</span><div><h3>Explain the evidence</h3><p>Check correctness, interpret measurements and decide what to investigate next.</p></div></li></ol></section>
 <p class="environment-note">Read every course in your browser. The Soperator introduction requires no cluster. Run GPU-course labs in their documented Linux and Slurm environment with the specified hardware, dependencies and readiness checks.</p>

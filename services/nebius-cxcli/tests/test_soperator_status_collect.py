@@ -20,6 +20,7 @@ def transport(
     nodes: str = "NodeName=worker-0 State=IDLE\nNodeName=worker-1 State=ALLOCATED",
     source: dict | None = None,
     missing_crd: str = "",
+    extra_crds: tuple[str, ...] = (),
 ):
     source = healthy_snapshot() if source is None else source
     calls = []
@@ -62,6 +63,7 @@ def transport(
                     )
                     if r != missing_crd
                 ]
+                + [{"metadata": {"name": name}} for name in extra_crds]
             }
         elif kind == "helmreleases.helm.toolkit.fluxcd.io":
             payload = {"items": source["flux_releases"]}
@@ -99,6 +101,35 @@ def test_scoped_single_pass_collection_and_progress(monkeypatch: pytest.MonkeyPa
     assert progress[-2:] == ["Checking Slurm controller responses", "Reading Slurm worker states"]
     assert len([a for a, _ in calls if "exec" in a]) == 2
     assert len({tuple(a) for a, _ in calls}) == len(calls)
+
+
+@pytest.mark.parametrize(
+    "resource", ["helmreleases.helm.toolkit.fluxcd.io", "statefulsets.apps.kruise.io"]
+)
+@pytest.mark.parametrize("name_pattern", ["{}", "prefix-{}", "{}.example.test", "{}/v1", ""])
+def test_optional_resource_discovery_requires_exact_crd_name(
+    monkeypatch: pytest.MonkeyPatch, resource: str, name_pattern: str
+) -> None:
+    source = healthy_snapshot()
+    add_flux_graph(source, configurator=False)
+    calls = transport(
+        monkeypatch,
+        source=source,
+        missing_crd=resource,
+        extra_crds=(name_pattern.format(resource),),
+    )
+    collect.collect_status_snapshot(
+        kube_context="ctx", identity={"cluster_identity": {"kubernetes_uid": "uid"}}
+    )
+    queried_kinds = {
+        kind
+        for argv, _ in calls
+        if argv[0] == "kubectl" and "get" in argv
+        for kind in argv[argv.index("get") + 1].split(",")
+    }
+    assert (resource in queried_kinds) == (name_pattern == "{}")
+    if resource == "helmreleases.helm.toolkit.fluxcd.io":
+        assert any(argv[0] == "helm" for argv, _ in calls) == (name_pattern != "{}")
 
 
 @pytest.mark.parametrize("failed", ["nodesets.", "deployments", "slurm"])

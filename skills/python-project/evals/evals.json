@@ -59,6 +59,43 @@
         "Adds service arguments only when the generated entrypoint implements and tests them",
         "Validates module importability and the rendered systemd unit"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Scaffold a small uv-managed Python library with configuration parsing and no external services. Keep tests meaningful and avoid unused plugins.",
+      "expected_output": "A minimal behavior-first scaffold with isolated unit tests and artifact verification.",
+      "files": [],
+      "assertions": [
+        "Uses importlib, strict xfail and required pytest-socket without unconditional xdist",
+        "Generates no empty contract/E2E layers or pretend integration tests",
+        "Keeps normal files real through tmp_path and tests observable parser success and failures",
+        "Uses locked uv commands and a clean installed-wheel smoke check"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Harden a Python CLI that writes configuration files, integrates with a local database, and calls a cloud SDK. Include offline API schema contracts and an optional live workflow.",
+      "expected_output": "Meaningful layers, fixtures and explicit network permissions with safe CI.",
+      "files": [],
+      "assertions": [
+        "Distinguishes unit, real local integration, offline contract and full E2E behavior",
+        "Runs fast local integration and offline contracts on PRs",
+        "External tests require a marker, --run-external and configured non-production target preflight; tags never enable them",
+        "Documents pytest-socket collection, teardown, subprocess and allow-host limitations",
+        "Populates required package resource assertions and tests the actual installed console entrypoint"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Fix a Python CLI parser bug where zero is silently accepted as a positive count. Strengthen the existing testing approach and keep the package manager unchanged.",
+      "expected_output": "A lowest-layer regression with meaningful boundary coverage.",
+      "files": [],
+      "assertions": [
+        "Adds a parser-level regression with failing-first evidence or a concrete practical gap",
+        "Tests zero, valid and invalid counts without escalating a parser bug to deployed E2E",
+        "Preserves the existing package manager and does not add compatibility wrappers",
+        "Uses parametrization without redundant cases and asserts observable results"
+      ]
     }
   ]
 }

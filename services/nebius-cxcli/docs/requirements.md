@@ -44,6 +44,10 @@ graph, and live revisions.
 
 #### Test Method
 
+Inject interrupted identity writes and file synchronization failures; prove
+retry can publish a complete single-link pin under the per-tag lock, while
+concurrent and changed identities cannot overwrite established history.
+
 Run latest and exact discovery, durable moved-tag and concurrent-ledger,
 hostile-archive, package-mismatch, structural-contract, downgrade, and frozen
 recovery tests.
@@ -243,6 +247,8 @@ operation to continue from its exact durable evidence.
 - AC-010: Local recovery writes remain atomic, bounded and owner-only; malformed command-owned checkpoints retain their originating command recovery contract. Backend lease renewal, takeover and conditional release are not part of generic deployment.
 
 - AC-011: Contained subprocess supervision remains active across cancellation and parent death independently of remote leases. Local ownership lasts until contained writers stop. Dedicated command checkpoints and their command-specific locks remain unchanged. Input larger than a pipe buffer must be delivered completely despite slow child startup, while stdout/stderr drain concurrently and cancellation, deadlines and quiescence remain enforced.
+
+- AC-012: Full-stack campaign receipt reads and writes validate the same schema-v6 invariants before execution or publication: top-level target and cluster identities equal the digest-verified intent; the ordered segment ledger equals the intent exactly; completed segments form a prefix followed by at most one running or failed frontier and pending successors. Pending or entering maintenance requires an active campaign with every segment pending; active maintenance requires an active campaign; restoring maintenance requires an active campaign with every segment complete; completion requires restored maintenance and every segment complete. Supervisor diagnostics do not change completion authority, including interrupted final-readiness revalidation of a completed campaign. Invalid evidence fails before callbacks, archival, replacement or new-campaign creation and is never migrated or repaired automatically.
 
 #### Negative Criteria
 
@@ -632,6 +638,10 @@ and user-facing terminology.
 
 #### Test Method
 
+Verify GitHub environment lookup preserves existing branch/tag protection
+during secret and variable synchronization, creates only on a confirmed
+missing environment, and does not create after failed lookup.
+
 Inject failure at every stage, fsync, commit, materialization, credential
 creation, delivery, and compensation boundary; test concurrent edits, unsafe
 links, secret redaction, and exact rerun convergence.
@@ -662,6 +672,8 @@ state, and external adapters separated and guarded by repository quality gates.
 - AC-006: Installed-wheel verification imports only the isolated artifact, renders every public help surface, exercises the version path, and reaches every public callback through a deterministic fail-before-external-effect case. Status smoke verification independently proves the injected configuration-read boundary was reached exactly once, requires the sanitized failure diagnostic and overall Error with nonzero exit, and rejects disclosure of the injected exception text.
 - AC-007: Every Python-backed Make target enters one shared uv environment boundary. The committed lock must be current, a validated whitespace-free custom `VENV` maps to `UV_PROJECT_ENVIRONMENT`, lock inspection and exact locked synchronization use the selected supported Python without automatic downloads, synchronization is serialized per resolved environment, and isolated wheel-build dependencies are hash-constrained by the same lock without a second installer authority.
 
+- AC-008: Commands explicitly presented for copying and running use one shared terminal style: bold dark text on a light-gray background covering only command text. Apply the style to workflow handoffs, access and recovery commands, and public help examples. Keep labels, commentary and help separators outside command highlighting; preserve complete command text, quoting, runtime soft wrapping, normal redirected plain output and existing color-disable behavior. Saved command/report artifacts remain free of terminal styling.
+
 #### Negative Criteria
 
 - NC-001: Do not perform a big-bang rewrite or retain an alternate legacy command path.
@@ -675,6 +687,10 @@ Inspect import direction, command registration, locked uv synchronization,
 coverage reports, workflow matrices, and isolated wheel behavior.
 
 #### Test Method
+
+Run the release workflow history check against an isolated local Git remote
+for both historical and tip commits; retain tag ancestry and parent-baseline
+resolution after fetching main.
 
 Run architecture/import guards, command snapshots, unsafe-path, stale-lock,
 environment-drift, concurrency, and missing-tool fault-injection tests, then
@@ -705,6 +721,7 @@ the selected VM before they invoke privileged remote helpers.
 - AC-002: The selected file must already exist and contain an independently verified key for the target host. Missing, unknown, or mismatched identities fail before any remote helper runs.
 - AC-003: SSH uses strict host-key checking and the selected cxcli trust file without falling back to the user's global known-hosts database.
 - AC-004: The cxcli-managed deployments-root `.gitignore` excludes each project `generated/ssh_known_hosts` file while preserving the rest of the generated deployment contract.
+- AC-005: Day-2 selection resolves exactly one enabled component instance before output lookup or SSH. An exact instance ID takes precedence; shared type selectors matching multiple instances fail with explicit-instance guidance.
 
 #### Negative Criteria
 
@@ -1026,6 +1043,8 @@ versioned registry before installation and every upgrade stage.
 
 - AC-009: Support both HTTP/HTTPS Helm repositories and OCI chart sources through the existing deployment, application and upgrade commands. HTTP charts require an exact chart version, matching chart identity and a fresh extracted-content comparison against the frozen render snapshot before deployment effects; unavailable or changed content blocks execution. OCI releases retain digest-bound execution. Native HTTP reconciliation continues to trust the versioned upstream repository, so its preflight content check must not be described as continuous digest pinning. Git chart execution remains unsupported without its own adapter.
 
+- AC-010: Kubernetes resource discovery compares complete CRD names. Generated MysteryBox binding admission requires the exact rendered `external-secrets.io/v1` API version, resource kind, name and namespace; malformed or alternate API versions cannot satisfy a required binding.
+
 #### Negative Criteria
 
 - NC-001: No executable policy language, arbitrary evidence-URL fetching, blanket bypass or legacy reader.
@@ -1036,6 +1055,17 @@ versioned registry before installation and every upgrade stage.
 Inspect parser, adapters, command wiring, exact-source evaluation and frozen recovery.
 
 #### Test Method
+
+Exercise exact and lookalike CRD names through status collection. Alter the
+API version in rendered MysteryBox objects and prove malformed, missing and
+alternate versions fail application admission while canonical renders pass.
+
+Preserve frozen main-workload safety pauses and source-readiness checks.
+
+Exercise stale Ready/Stalled observations followed by current-generation
+readiness, versioned local chart capture and mismatched versions, and missing
+boot-disk sizes for authored disk types across MK8s and VM inputs. Explicit
+sizes remain unchanged.
 
 Cover malformed data, distribution/patch boundaries, unknown/stale/conflicting
 evidence, mixed versions, source remediation, package contents and catalog drift.
@@ -1150,6 +1180,8 @@ and browser analysis on a laptop without copying reports off the cluster.
 - AC-013: Installation observes installed tools, shared storage and viewers only; empty reports and failed user profiling workloads do not affect readiness. Reuse healthy components without new package Jobs, repair only proven owned omissions through a receipt-bound transaction, and resume safe interrupted work through the same command without new flags or commands. Missing ownership, foreign content, active competing writers and ambiguous storage remain blocked. Successful output always includes both complete loopback port forwards.
 
 - AC-014: Profiling installation shows descriptive phase progress before and after viewer deployment, including cluster and storage checks, credential Secret I/O, shared-jail package admission, installation and verification, and final acceptance. Terminals show a spinner and elapsed time; redirected output emits bounded START/OK/FAILED records. Prompts and existing deployment displays have exclusive terminal ownership. Cluster-handoff notices share the progress output owner so completed phases leave one clean success row without stale spinner fragments. Exceptions and interruption stop progress without reporting success; progress labels never contain credential values or raw remote output.
+
+- AC-015: `soperator profiling show CONFIG --target TARGET` reconstructs exactly two complete loopback HTTP/TURN port-forward commands and one shared-password retrieval command from the live, owned, ready viewers on the recorded accepted Soperator cluster. Require explicit verified durable kubeconfig/context and shared password references; preserve the current context and honor local persistence opt-outs. Do not use saved commands or undeployed viewer values, execute the displayed commands, retrieve password data, probe inside Pods, reconcile installations or change cluster resources. Missing, ambiguous, unready, changing or unverifiable access fails without a partial command set. Apply the shared copyable-command style and show browser URLs separately.
 
 #### Negative Criteria
 
@@ -1337,6 +1369,9 @@ MK8s and Soperator targets, with independently selectable telemetry destinations
 
 - AC-016: Shared Soperator deployment admission classifies the fresh owned predecessor and frozen desired graphs before maintenance or job holds. Retained and added releases remain staged; only qualified, identity-bound removals may retire. The native telemetry token writer retires through its owning umbrella and normal Helm uninstall, with its exact child resumed under a suspended parent before pruning. Verify HelmRelease, Deployment and Pod absence before opening desired stages. Preserve token Secrets and persistent storage; unknown ownership, keep policies, hooks or unsupported inventory fail before mutation.
 - AC-017: Interrupted same-release reconciliation may acquire retirement authority only through an explicit sealed successor at the validated failed-apply frontier. Preserve immutable bundle and execution controls, source and target maintenance preimages, scheduling holds and history. Bind fresh parent and child identities and predecessor source evidence; absence of a completed apply receipt does not prove no writes. Replay publication interruptions without recapturing mutation authority or inheriting acceptance success. Preserve the saved source configuration independently of expanded runtime defaults, and keep subsequent checks-policy publications under the same native graph checkpoint. Exact suspended child publication may materialize an explicit empty values map left null by server-side apply, using a durable preimage/postimage intent bound to child identity and the parent Helm revision. No other specification drift is admitted. Preserve ordinary first-install staging and qualify unchanged deployment alongside recovery. For an exhausted SSA upgrade followed by successful rollback, recover the exact VMAgent empty-map failure through a field-only, identity-checked materialization and one journaled Flux retry reset. Authenticate desired content against the frozen chart and effective values; preserve all other fields until normal Helm reconciliation applies them. Reject changed sources, references, ownership, preimages or a second failed retry. Private admission rendering preserves an authenticated compatibility observation across date changes only after fresh compatibility checks pass and all evidence except its observation date and derived digest matches exactly. Preserve Fast readiness receipts as lifecycle-owned files outside render replacement.
+
+- AC-018: After successful Grafana installation or ordinary deployment, terminal output and the deployment report show identical target-bound commands for loopback port forwarding and admin-password retrieval, with a browser URL and login username. Derive Service ports and Secret references from current owned live resources. Never retrieve password values for presentation, automatically open a tunnel, or let private forwarding satisfy public Gateway readiness. Include local-only observability and successful resumed or unchanged deployment.
+- AC-019: `grafana show --config PATH --target TARGET` verifies the exact live managed target on every invocation and constructs fresh access commands without cached-report fallback, application reconciliation or Grafana API access. It may refresh verified local kubeconfig access while preserving the current context and honoring persistence opt-outs. Commands reference a verified durable kubeconfig and explicit context. Missing, ambiguous, unready or unverifiable access fails clearly; post-deployment handoff failure remains distinct from accepted deployment success.
 
 #### Negative Criteria
 

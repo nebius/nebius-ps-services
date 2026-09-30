@@ -968,7 +968,7 @@ def require_rendered_mysterybox_bindings(
             doc
             for doc in documents
             if doc.get("kind") == "ExternalSecret"
-            and str(doc.get("apiVersion", "")).startswith("external-secrets.io/")
+            and doc.get("apiVersion") == "external-secrets.io/v1"
             and doc.get("metadata", {}).get("name") == item["name"]
             and doc.get("metadata", {}).get("namespace") == item["namespace"]
         ]

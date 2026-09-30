@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
+
 import nebius_cxcli.github_secrets as github_secrets
 from nebius_cxcli.github_secrets import (
     _repo_slug_from_remote_url,
@@ -68,7 +70,14 @@ def test_build_github_environment_name_normalizes_tokens() -> None:
 
 
 def test_ensure_github_environment_puts_encoded_environment(monkeypatch) -> None:
+    from urllib.error import HTTPError
+
     captured: dict[str, object] = {}
+
+    def missing(request, **kwargs):
+        raise HTTPError(request.full_url, 404, "missing", {}, None)
+
+    monkeypatch.setattr(github_secrets, "urlopen", missing)
 
     monkeypatch.setattr(
         github_secrets,
@@ -93,7 +102,7 @@ def test_ensure_github_environment_puts_encoded_environment(monkeypatch) -> None
         "method": "PUT",
         "path": f"/repos/owner/repo/environments/{quote('Client A / project-123', safe='')}",
         "token": "gh-token",
-        "payload": {"deployment_branch_policy": None},
+        "payload": {},
     }
 
 
@@ -255,6 +264,34 @@ def test_upsert_environment_variables_ensures_environment_then_upserts_each_vari
     ]
 
 
+@pytest.mark.parametrize("exists", [True, False])
+def test_environment_variable_presence_queries_encoded_resource(monkeypatch, exists) -> None:
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    paths = []
+
+    def urlopen(request, timeout):
+        paths.append((request.method, request.full_url))
+        if not exists:
+            raise HTTPError(request.full_url, 404, "Not Found", {}, BytesIO(b"{}"))
+        return BytesIO(b"{}")
+
+    monkeypatch.setattr(github_secrets, "urlopen", urlopen)
+    assert github_secrets.environment_variables_presence(
+        repo_slug="owner/repo",
+        token="test-token",
+        environment_name="Client A / project",
+        names=["SMTP_HOST"],
+    ) == {"SMTP_HOST": exists}
+    assert paths == [
+        (
+            "GET",
+            "https://api.github.com/repos/owner/repo/environments/Client%20A%20%2F%20project/variables/SMTP_HOST",
+        )
+    ]
+
+
 def test_delete_environment_variable_deletes_when_present(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -327,3 +364,53 @@ def test_delete_environment_secret_deletes_when_present(monkeypatch) -> None:
         "token": "gh-token",
         "payload": None,
     }
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"protected_branches": True, "custom_branch_policies": False},
+        {"protected_branches": False, "custom_branch_policies": True},
+    ],
+)
+@pytest.mark.parametrize("operation", ["ensure", "secrets", "variables"])
+def test_environment_sync_preserves_existing_protection(monkeypatch, policy, operation):
+    import json
+    from contextlib import nullcontext
+    from io import BytesIO
+
+    reads = []
+    writes = []
+
+    def read(request, **kwargs):
+        reads.append(request.method)
+        return nullcontext(BytesIO(json.dumps({"deployment_branch_policy": policy}).encode()))
+
+    monkeypatch.setattr(github_secrets, "urlopen", read)
+    monkeypatch.setattr(github_secrets, "_github_request", lambda **kwargs: writes.append(kwargs))
+    monkeypatch.setattr(github_secrets, "upsert_environment_secret", lambda **kwargs: None)
+    monkeypatch.setattr(github_secrets, "upsert_environment_variable", lambda **kwargs: None)
+    kwargs = dict(repo_slug="owner/repo", token="fixture", environment_name="protected")
+    if operation == "ensure":
+        ensure_github_environment(**kwargs)
+    elif operation == "secrets":
+        upsert_environment_secrets(**kwargs, secrets={"FIXTURE": "fixture"})
+    else:
+        upsert_environment_variables(**kwargs, variables={"FIXTURE": "fixture"})
+    assert reads == ["GET"]
+    assert writes == []
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+def test_environment_sync_does_not_create_after_failed_lookup(monkeypatch, status):
+    from urllib.error import HTTPError
+
+    def fail(request, **kwargs):
+        raise HTTPError(request.full_url, status, "fixture", {}, None)
+
+    writes = []
+    monkeypatch.setattr(github_secrets, "urlopen", fail)
+    monkeypatch.setattr(github_secrets, "_github_request", lambda **kwargs: writes.append(kwargs))
+    with pytest.raises(RuntimeError, match=str(status)):
+        ensure_github_environment(repo_slug="owner/repo", token="fixture", environment_name="test")
+    assert writes == []

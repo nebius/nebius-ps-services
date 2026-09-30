@@ -10,6 +10,7 @@ import yaml
 from nebius_cxcli import cli, nsight_install
 from nebius_cxcli.helm_client import render_chart_template_documents
 from nebius_cxcli.nsight import VIEWER_IMAGES
+from nebius_cxcli.nsight_access import _secret_ref, _service_port
 from nebius_cxcli.nsight_profiling import default_settings
 from test_nsight_install import installed_project  # noqa: F401
 
@@ -77,6 +78,20 @@ def test_official_chart_accepts_production_values_and_postrenderers(installed_pr
         assert not next(d for d in patched if d["kind"] == "Role")["rules"]
         service = next(d for d in patched if d["kind"] == "Service")
         assert service["spec"]["type"] == "ClusterIP"
+        assert service["spec"]["selector"]["release"] == release_name
+        assert service["spec"]["selector"]["app"] == f"nsight-streamer-{spec['values']['tool']}"
+        assert all(
+            deployment["spec"]["template"]["metadata"]["labels"].get(key) == value
+            for key, value in service["spec"]["selector"].items()
+        )
+        # Access discovery must understand the pinned chart's actual port/env
+        # shape, including unnamed container ports and omitted targetPort.
+        for role in ("http", "turn"):
+            assert (
+                _service_port(service, container, role) == spec["values"]["service"][f"{role}Port"]
+            )
+        assert _secret_ref(container, "WEB_PASSWORD") == ("nsight-streamer-auth", "password")
+        assert _secret_ref(container, "WEB_USERNAME") == ("nsight-streamer-auth", "username")
         assert {p["port"] for p in service["spec"]["ports"]} == {
             spec["values"]["service"]["httpPort"],
             spec["values"]["service"]["turnPort"],

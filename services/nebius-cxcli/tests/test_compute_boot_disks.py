@@ -934,3 +934,39 @@ def test_resolve_compute_boot_disk_recommendation_uses_node_group_gpu_cluster_ke
 
     assert resolved is not None
     assert resolved.context.gpu_cluster_enabled is True
+
+
+@pytest.mark.parametrize("disk_type", ["NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"])
+@pytest.mark.parametrize("kind", ["node-group", "mk8s-default", "vm"])
+@pytest.mark.parametrize("explicit_size", [None, 186])
+def test_materialize_missing_size_uses_authored_disk_type(
+    tmp_path, monkeypatch, disk_type, kind, explicit_size
+):
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_sources_file(sources_file)
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", lambda _source: ())
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+    disk = {"type": disk_type}
+    if explicit_size is not None:
+        disk["size_gibibytes"] = explicit_size
+    shape = {"platform": "cpu-d3", "preset": "4vcpu-16gb", "boot_disk": disk}
+    if kind == "node-group":
+        inputs = {"node_groups": {"cpu": {**shape, "node_count": 1, "gpu": False}}}
+    elif kind == "mk8s-default":
+        inputs = {"node_group_defaults": {"cpu": shape}}
+    else:
+        inputs = {"platform": "cpu-d3", "preset": "4vcpu-16gb", "boot_disk_type": disk_type}
+        if explicit_size is not None:
+            inputs["boot_disk_size_gib"] = explicit_size
+    payload = {
+        "client_info": {"nebius": {"project_id": "project-fixture"}},
+        "infra": {
+            "components": [
+                {"id": "vm" if kind == "vm" else "mk8s", "enabled": True, "inputs": inputs}
+            ]
+        },
+    }
+    materialize_compute_boot_disk_defaults(payload)
+    actual = inputs["boot_disk_size_gib"] if kind == "vm" else disk["size_gibibytes"]
+    assert actual == (explicit_size or 93)

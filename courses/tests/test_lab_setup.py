@@ -118,7 +118,20 @@ def test_shared_guide_and_lab_referrals_render_as_links():
     document = cb_pages.render_shared_guide()
     for course in cb_config.COURSES:
         assert f'href="{course}/index.html"' in document
-    assert 'href="index.html">Browse the catalog</a>' in document
+    assert 'href="index.html">Browse the courses catalog</a>' in document
+    assert (
+        'href="https://nebius.github.io/nebius-ps-services/courses/index.html">Explore the courses</a>'
+        in document
+    )
+    for removed in (
+        "GitHub Pages",
+        "Course maintainer guide",
+        "no lab-kit ZIP is needed",
+        "./build-courses.sh",
+        "The seven courses share one reading format",
+    ):
+        assert removed not in document
+    assert '<h1>Lab Guide</h1>' in document
     assert 'href="#license"' in document
     assert (
         'href="https://github.com/nebius/nebius-ps-services/blob/main/courses/skills/run-labs/SKILL.md"'
@@ -141,6 +154,40 @@ def test_shared_guide_and_lab_referrals_render_as_links():
             'href="../lab-guide.html#how-to-set-up-the-lab">environment setup</a>'
             in page
         )
+
+
+def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeypatch):
+    source = cb_metadata.shared_guide_source()
+    pointer = (
+        "[Read this guide online]"
+        "(https://nebius.github.io/nebius-ps-services/courses/lab-guide.html)."
+    )
+    attribution = (
+        "© 2026 Nebius B.V. Free educational material under "
+        "[Apache License 2.0](../LICENSE)."
+    )
+    assert source.count(pointer) == 1
+    assert "## How to set up the lab\n\n" + pointer + "\n\n" in source
+    assert source.count(attribution) == 1
+    assert source.endswith("\n\n" + attribution)
+
+    document = cb_pages.render_shared_guide()
+    assert "Read this guide online" not in document
+    assert document.count("© 2026 Nebius B.V.") == 1
+    assert 'Free educational material under' not in document
+    assert document.count('<footer class="license-footer">') == 1
+    assert '</section><footer class="license-footer">' in document
+    assert document.endswith('</footer></main></div></body></html>')
+    assert "Third-party materials retain their respective licenses." in document
+    assert "execution, and profiling instructions." in document
+
+    # Removing only those presentation fragments from the source must produce
+    # identical HTML; every other paragraph and command remains rendered.
+    article = source.replace(pointer + "\n\n", "", 1).removesuffix(
+        "\n\n" + attribution
+    )
+    monkeypatch.setattr(cb_pages, "shared_guide_source", lambda: article)
+    assert cb_pages.render_shared_guide() == document
 
 
 @pytest.mark.parametrize(
@@ -306,7 +353,7 @@ def test_shared_guide_embeds_existing_monitoring_diagram():
     assert match and "telemetry" in match[1]
     assert base64.b64decode(match[2], validate=True) == (ROOT / "docs/grafana.png").read_bytes()
     assert "# Performance Engineering Courses\n" in source
-    assert "nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway" in source
+    assert 'nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway' in source
 
 
 @pytest.mark.parametrize("relative", ["../private.png", "docs/../private.png", "/tmp/private.png", "https://example.invalid/image.png", "docs/missing.png"])

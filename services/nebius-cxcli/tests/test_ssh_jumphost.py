@@ -417,3 +417,28 @@ def test_ssh_jumphost_command_rejects_repeated_allowed_cidr_for_add_remove(
 
     assert result.exit_code == 1
     assert "require exactly one --allowed-cidr option" in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_component_type_selector_rejects_ambiguous_instances(reverse):
+    rows = [
+        {"id": "ssh-jumphost", "instance_id": name, "enabled": True, "inputs": {}}
+        for name in ("gateway-a", "gateway-b")
+    ]
+    if reverse:
+        rows.reverse()
+    with pytest.raises(RuntimeError, match="multiple"):
+        select_ssh_jumphost_component(
+            {"infra": {"components": rows}}, component_selector="ssh-jumphost"
+        )
+
+
+def test_exact_instance_id_takes_precedence_over_shared_component_type():
+    rows = [
+        {"id": "ssh-jumphost", "instance_id": name, "enabled": True, "inputs": {}}
+        for name in ("gateway-a", "ssh-jumphost")
+    ]
+    selected = select_ssh_jumphost_component(
+        {"infra": {"components": rows}}, component_selector="ssh-jumphost"
+    )
+    assert selected.instance_id == "ssh-jumphost"

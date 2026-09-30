@@ -647,6 +647,41 @@ def test_campaign_catches_up_one_minor_lagging_node_groups_before_control_plane_
     )
 
 
+def test_campaign_catchup_and_template_change_execute_once_without_control_plane_hop(tmp_path):
+    base = _intent()
+    intent = replace(
+        base,
+        source_kubernetes_version="1.35",
+        kubernetes_hops=(),
+        node_groups=(replace(base.node_groups[0], source_version="1.34"),),
+        compatibility_rows=tuple(
+            row for row in base.compatibility_rows if row.kubernetes_version == "1.35"
+        ),
+    )
+    validate_campaign_intent(intent)
+    calls = []
+
+    def execute(name):
+        calls.append(name)
+        return CampaignSegmentResult(evidence={"segment": name})
+
+    run_campaign(
+        path=campaign_receipt_path(tmp_path, target_ref=intent.target_ref),
+        intent=intent,
+        segment_executors={name: lambda name=name: execute(name) for name in intent.segments},
+        enter_maintenance=lambda _record, _existing: {},
+        restore_maintenance=lambda _record, _existing: {},
+        assert_fence=lambda: None,
+    )
+
+    assert calls == [
+        "soperator-release",
+        "node-templates:1.35",
+        "runtime-readiness:1.35",
+        "final-readiness",
+    ]
+
+
 def test_campaign_resume_skips_completed_segment_and_keeps_maintenance(
     tmp_path: Path,
 ) -> None:

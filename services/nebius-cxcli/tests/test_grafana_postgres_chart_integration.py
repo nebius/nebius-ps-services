@@ -95,6 +95,16 @@ def test_pinned_charts_render_generated_binding_and_authenticated_readiness(
                 == f"{grafana_name}-encryption"
             )
             assert container["readinessProbe"]["httpGet"]["path"] == "/api/health"
+            for name, key in (
+                ("GF_SECURITY_ADMIN_USER", "admin-user"),
+                ("GF_SECURITY_ADMIN_PASSWORD", "admin-password"),
+            ):
+                assert variables[name]["valueFrom"]["secretKeyRef"] == {
+                    "name": row["values"]["admin"]["existingSecret"],
+                    "key": key,
+                }
+            http_port = container["readinessProbe"]["httpGet"]["port"]
+            assert any(port["name"] == http_port for port in container["ports"])
             config = next(
                 doc
                 for doc in docs

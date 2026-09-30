@@ -159,7 +159,7 @@ def collect_status_snapshot(
     progress("Reading the installed Soperator release")
     release: dict[str, Any] = {}
     graph: list[Mapping[str, Any]] = []
-    if "helmreleases.helm.toolkit.fluxcd.io" in crds:
+    if any(name == "helmreleases.helm.toolkit.fluxcd.io" for name in crds):
         flux = read(
             "helmreleases.helm.toolkit.fluxcd.io",
             selector=f"{SOPERATOR_GRAPH_LABEL}={SOPERATOR_GRAPH_LABEL_VALUE}",
@@ -249,7 +249,7 @@ def collect_status_snapshot(
     for ns in sorted(namespaces - {""}):
         progress("Reading component workload readiness")
         kinds = "deployments.apps,statefulsets.apps,daemonsets.apps,replicasets.apps,pods"
-        if "statefulsets.apps.kruise.io" in crds:
+        if any(name == "statefulsets.apps.kruise.io" for name in crds):
             kinds += ",statefulsets.apps.kruise.io"
         payload = read(kinds, ns)
         if not payload:
