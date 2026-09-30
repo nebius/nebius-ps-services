@@ -1,0 +1,11 @@
+{
+  "branch": "feature/demo",
+  "start_SHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_SHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "MERGE_HEAD": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "unmerged_index": [],
+  "merge_exit": 1,
+  "reason": "pre-merge-commit hook rejected result",
+  "status": "staged merge changes"
+}

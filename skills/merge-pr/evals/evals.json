@@ -1,0 +1,325 @@
+{
+  "skill_name": "merge-pr",
+  "evals": [
+    {
+      "id": "merge-result",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/merge-result.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged, destination verified, and exact-result CI passed.",
+      "files": [
+        "evals/fixtures/merge-result.json"
+      ],
+      "assertions": [
+        "Reports 2222222222222222222222222222222222222222 as the resulting merge commit and 1111111111111111111111111111111111111111 separately as the guarded head.",
+        "Uses the frozen release/stable branch in example/widget, not an assumed main branch.",
+        "Reports merged, destination verified, and CI passed from the result SHA; does not require original-head ancestry.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "squash-result",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/squash-result.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged, destination verified, and exact-result CI passed.",
+      "files": [
+        "evals/fixtures/squash-result.json"
+      ],
+      "assertions": [
+        "Reports 2222222222222222222222222222222222222222 as the resulting squash commit and 1111111111111111111111111111111111111111 separately as the guarded head.",
+        "Uses the frozen release/stable branch in example/widget, not an assumed main branch.",
+        "Reports merged, destination verified, and CI passed from the result SHA; does not require original-head ancestry.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "rebase-result",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/rebase-result.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged, destination verified, and exact-result CI passed.",
+      "files": [
+        "evals/fixtures/rebase-result.json"
+      ],
+      "assertions": [
+        "Reports 2222222222222222222222222222222222222222 as the resulting rebase commit and 1111111111111111111111111111111111111111 separately as the guarded head.",
+        "Uses the frozen release/stable branch in example/widget, not an assumed main branch.",
+        "Reports merged, destination verified, and CI passed from the result SHA; does not require original-head ancestry.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "target-advanced",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/target-advanced.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Destination verified despite a newer remote tip.",
+      "files": [
+        "evals/fixtures/target-advanced.json"
+      ],
+      "assertions": [
+        "Accepts 2222222222222222222222222222222222222222 as an ancestor of 3333333333333333333333333333333333333333 without requiring tip equality.",
+        "Checks CI on 2222222222222222222222222222222222222222, not 3333333333333333333333333333333333333333.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "target-diverged",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/target-diverged.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged with destination verification failed.",
+      "files": [
+        "evals/fixtures/target-diverged.json"
+      ],
+      "assertions": [
+        "Preserves confirmed merged state and reports destination failed.",
+        "Does not repair the branch, revert, or repeat the merge; successful CI does not override failed containment.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "missing-result",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/missing-result.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged with result identity, destination, and CI unverified after settlement.",
+      "files": [
+        "evals/fixtures/missing-result.json"
+      ],
+      "assertions": [
+        "Reports merged without inventing the missing resulting SHA.",
+        "Does not use the PR head, target tip, or fixture check SHA as a substitute; destination and post-merge CI remain unverified.",
+        "Stops settlement at 60 seconds and never retries the merge.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "unmerged-test-sha",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/unmerged-test-sha.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merge/queue membership not established; the test SHA cannot prove completion.",
+      "files": [
+        "evals/fixtures/unmerged-test-sha.json"
+      ],
+      "assertions": [
+        "Does not claim merged or queued merely from an open PR, zero CLI exit, or non-null test merge SHA.",
+        "Treats destination and post-merge CI as not applicable and does not repeat the merge.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "queue-confirmed",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/queue-confirmed.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Queued as of the final refresh; deletion deferred.",
+      "files": [
+        "evals/fixtures/queue-confirmed.json"
+      ],
+      "assertions": [
+        "Reports queue entry MQE_example_42, enqueue time, position 2, and current state.",
+        "Returns after verified membership without watching for a merge or checking result CI.",
+        "Reports destination and post-merge CI not applicable, and branch deletion requested but not performed.",
+        "Does not reject membership because the synthetic queue head differs from the guarded PR head.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "queue-removed",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/queue-removed.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Removed from queue and still unmerged.",
+      "files": [
+        "evals/fixtures/queue-removed.json"
+      ],
+      "assertions": [
+        "Uses prior positive entry evidence plus the current absent entry to report removal.",
+        "Does not report currently queued and does not automatically requeue or enable auto-merge.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "auto-merge-only",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/auto-merge-only.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Delayed auto-merge, with queue membership not established.",
+      "files": [
+        "evals/fixtures/auto-merge-only.json"
+      ],
+      "assertions": [
+        "Does not confuse autoMergeRequest with a queue entry or infer removal without prior membership.",
+        "Does not claim a completed merge or mutate auto-merge settings.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "queue-merged-race",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/queue-merged-race.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "The queue entry disappeared because the PR merged; verify result and CI.",
+      "files": [
+        "evals/fixtures/queue-merged-race.json"
+      ],
+      "assertions": [
+        "Reports merged rather than removed from queue or still queued.",
+        "Uses the authoritative REST resulting commit, verifies containment, and reports exact-result CI.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "result-ci-failed",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/result-ci-failed.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged; destination verified; CI failed despite unrelated green checks.",
+      "files": [
+        "evals/fixtures/result-ci-failed.json"
+      ],
+      "assertions": [
+        "Separately preserves successful merge and destination verification while reporting CI failed.",
+        "Uses failure on 2222222222222222222222222222222222222222; green PR, synthetic queue, or newer-tip checks cannot satisfy result CI.",
+        "Reports the failing run link without dispatching, rerunning, reverting, or retrying merge.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "ci-deadline",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-deadline.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "CI pending at the original one-hour deadline despite a recent rerun.",
+      "files": [
+        "evals/fixtures/ci-deadline.json"
+      ],
+      "assertions": [
+        "Reports pending with the outstanding run and the 12:00 start / 13:00 deadline.",
+        "Does not reset the 3600-second deadline for an external rerun, issue a rerun, or continue waiting beyond the supplied deadline.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "ci-not-configured",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-not-configured.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "No CI configured for this target update, supported by complete configuration evidence.",
+      "files": [
+        "evals/fixtures/ci-not-configured.json"
+      ],
+      "assertions": [
+        "Reports CI not configured, not passed, based on affirmative configuration/provider evidence.",
+        "Preserves merged and destination verified and does not wait a full hour for provably inapplicable CI.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "ci-registration-delay",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-registration-delay.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Expected CI was pending during registration and later passed.",
+      "files": [
+        "evals/fixtures/ci-registration-delay.json"
+      ],
+      "assertions": [
+        "Does not classify the early empty observations as not configured or passed.",
+        "Uses the later complete expected results to report passed before the one-hour deadline.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "unknown-external-ci",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/unknown-external-ci.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "CI unverified because external provider applicability is unknown.",
+      "files": [
+        "evals/fixtures/unknown-external-ci.json"
+      ],
+      "assertions": [
+        "Does not infer not configured from absent workflow YAML or empty API results.",
+        "Reports the provider/configuration visibility gap without requesting new credentials or claiming full CI success.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "ci-api-denied",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-api-denied.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged and destination verified, but CI unverified due to denied check access.",
+      "files": [
+        "evals/fixtures/ci-api-denied.json"
+      ],
+      "assertions": [
+        "Treats 403 as unverified instead of zero checks, not configured, or a pipeline failure.",
+        "Does not treat readable successful Actions/status evidence as complete check visibility.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "neutral-skipped",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/neutral-skipped.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Check policy passed with neutral/skipped disclosures; no successful test execution established.",
+      "files": [
+        "evals/fixtures/neutral-skipped.json"
+      ],
+      "assertions": [
+        "Reports neutral and skipped conclusions explicitly and does not claim tests executed successfully.",
+        "May report passed check policy only with the clear qualification that no successful test execution was established.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "terminal-failures",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/terminal-failures.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Every listed applicable terminal failure remains failed, with the original conclusion.",
+      "files": [
+        "evals/fixtures/terminal-failures.json"
+      ],
+      "assertions": [
+        "Classifies every listed variant as failed, including cancellation, timeout, action required, stale, and startup failure.",
+        "Retains merge success and does not treat these terminal failures as passing or indefinitely pending.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "unknown-conclusion",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/unknown-conclusion.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Completed with missing conclusion is CI unverified.",
+      "files": [
+        "evals/fixtures/unknown-conclusion.json"
+      ],
+      "assertions": [
+        "Does not call a completed run with null conclusion passed or keep it pending indefinitely.",
+        "Preserves known merge and destination outcomes.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "destination-changed-during-ci",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/destination-changed-during-ci.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Merged, CI passed, but current destination verification failed after a force-push.",
+      "files": [
+        "evals/fixtures/destination-changed-during-ci.json"
+      ],
+      "assertions": [
+        "Refreshes destination evidence after the long wait and reports the later containment failure.",
+        "Does not let an earlier valid comparison or passing CI hide loss of current target containment.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "ambiguous-command-merged",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ambiguous-command-merged.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Readback confirms a successful merge despite the interrupted command response.",
+      "files": [
+        "evals/fixtures/ambiguous-command-merged.json"
+      ],
+      "assertions": [
+        "Reports the authoritative merged result rather than declaring the merge failed solely from the CLI exit.",
+        "Verifies destination/CI without repeating the merge command.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "readiness-preserved",
+      "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/readiness-preserved.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
+      "expected_output": "Blocked before merge despite passing checks and mergeability.",
+      "files": [
+        "evals/fixtures/readiness-preserved.json"
+      ],
+      "assertions": [
+        "Does not merge with REVIEW_REQUIRED or reuse approval from the previous head.",
+        "Does not use admin bypass, force-push, or self-approval to clear the blocker.",
+        "Uses only the supplied offline observations and does not perform external writes or real waiting."
+      ]
+    },
+    {
+      "id": "cleanup-head-race",
+      "prompt": "Use $merge-pr to replay evals/fixtures/cleanup-head-race.json. This is an offline simulation: read the skill and fixture and report merge verification and requested cleanup. Use only these observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep.",
+      "expected_output": "Merge and destination are verified, CI passed, but remote branch deletion was refused because the head advanced.",
+      "files": [
+        "evals/fixtures/cleanup-head-race.json"
+      ],
+      "assertions": [
+        "Requires an atomic expected-SHA condition at deletion, not only a read-before-delete check.",
+        "Reports deletion requested but not performed after the lease rejection; retains the newer head and does not retry deletion using its SHA.",
+        "Preserves merge/destination/CI outcomes separately from the cleanup failure.",
+        "Uses only offline observations and performs no external mutation."
+      ]
+    }
+  ]
+}

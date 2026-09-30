@@ -5478,7 +5478,8 @@ coverage.
 #### Context Evidence
 
 The initial distribution baseline contained 70 skills and seven hook payload
-owners; the current catalog contains 71 skills including config-claude.
+owners; the current catalog contains 72 skills including config-claude and
+update-branch.
 The Bash installer has ownership, backups and registration preflight.
 Before this change, align-skill required OpenAI metadata unconditionally and
 runtime readers were bound to Codex. Current adapters retain native identity
@@ -5638,7 +5639,7 @@ publication were not changed.
 
 #### Full-Catalog Execution Alignment
 
-All 71 skills share native invocation and capability boundaries. Codex metadata
+All catalog skills share native invocation and capability boundaries. Codex metadata
 and Claude frontmatter policies remain source-owned and unchanged. Shared state
 uses the selected native home; intentional configured products, protocol names,
 worker ownership, commit claims, recovery and Stop ordering remain intact.
@@ -6981,6 +6982,322 @@ infrastructure were not run. Delivery remains implemented pending that separate
 quality evidence; passing local fixtures do not claim model-output quality.
 
 <!-- /FEATURE: FEAT-038 -->
+
+<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-039: Evidence-based completion for general-purpose PR merges
+
+#### Requirements Covered
+
+- REQ-040: Verify merge destination, queue membership, and result-commit CI.
+
+#### Context Evidence
+
+`merge-pr/SKILL.md` currently verifies only PR state, merge timestamp, and merge
+state after `gh pr merge`; its nine trigger cases do not evaluate completion
+behavior. Release publishing callers already require an actual merge before
+continuing. GitHub documents method-dependent REST `merge_commit_sha`, GraphQL
+`PullRequest.mergeQueueEntry`, remote comparison, and exact-SHA check APIs.
+
+#### Design Details
+
+Keep the existing instruction-based skill and GitHub CLI/API stack. The core
+workflow owns readiness, explicit authorization, immutable target identity,
+completion branches, and reporting; one verification reference owns exact read
+queries, method semantics, CI applicability, bounded polling, and conclusions.
+No new service, persistent workflow state, public flag, or compatibility path
+is introduced. These are deterministic evidence rules executed by the existing
+agent; no new agent topology or AI stack selection is needed.
+
+Freeze the host, base repository/ref, and reviewed head. Confirm merged state
+before accepting REST `merge_commit_sha`: merge commit for merge, squashed
+commit for squash, updated destination commit for rebase. Read-retry incomplete
+result evidence for at most 60 seconds. Snapshot the remote target tip and compare
+result SHA to that immutable tip; identical/ahead ancestry with the result as
+merge base proves containment even when the target advanced. Failure to prove
+containment does not erase authoritative merged state or justify retrying a write.
+
+For queues, require a current entry with ID, enqueue time, state, position, and
+matching PR identity. Refresh before returning queued; a merge race enters
+merged verification, while a disappeared previously observed entry is removal.
+Auto-merge intent alone is not queue evidence. Deletion remains deferred while
+queued. Remote cleanup uses an atomic explicit expected-SHA condition or is
+deferred; local cleanup requires no checked-out worktree/concurrent writer. Report destination and post-merge CI as not applicable until merged.
+
+For a merged PR, observe checks/statuses and Actions runs on the exact resulting
+SHA, with source, branch, event, and latest-attempt provenance. Determine expected
+branch-update CI from the result revision and available provider configuration;
+exclude unrelated PR, queue, tag, scheduled, and manual-only executions. Unknown
+applicability or unreadable providers remain unverified. Expected missing checks
+remain pending. Poll every 30 seconds until a terminal result or the absolute
+3600-second deadline starting at first merged observation in this invocation;
+read retries and observed reruns never reset it. Neutral/skipped conclusions are
+explicitly disclosed as non-executed or non-successful tests even when accepted
+by check policy. No reruns, dispatch, requeue, or automatic rollback is performed.
+
+Keep merge outcome, result SHA, destination proof, CI state, and deletion outcome
+separate in reports. Release callers must not treat queued or incomplete evidence
+as a verified merge. This change does not redesign publishing workflows.
+
+#### Selected Option
+
+Extend instructions with one focused evidence reference and fixture-backed quality
+evaluations. This keeps runtime rules reviewable without adding a verifier
+framework, new configuration, or state storage to a four-file skill.
+
+#### Alternatives Considered
+
+Keeping only PR state cannot prove completion. Merely adding a resulting SHA
+still misses destination containment and post-merge failures. A new executable
+controller could enforce polling mechanically but adds packaging/state/transport
+maintenance; revisit it if quality evaluations expose persistent instruction
+execution failures. Waiting through the queue was declined in favor of returning
+on verified membership.
+
+#### Implementation Boundaries
+
+Change only the target skill instructions, reference, README, and quality fixtures,
+plus the catalog description, changelog, and this canonical spec pair. Preserve
+metadata, trigger policy, public options, release callers, and SDLC ownership.
+
+#### Test-First Success Criteria
+
+- TDD-001: Squash/rebase result identities work without original-head ancestry;
+  an advanced destination passes and a divergent target cannot pass.
+- TDD-002: An open PR or auto-merge request without an entry never reports queued;
+  removal, immediate merging, and deferred branch deletion remain distinct.
+- TDD-003: Passing PR/new-tip checks cannot hide failed result-commit CI; pending,
+  missing, inaccessible, filtered, skipped, neutral, and rerun cases stay truthful.
+
+#### Validation Plan
+
+Run three strict structure profiles, quality JSON/fixture checks, Markdown and
+whitespace checks, and pinned disposable npx discovery/copy parity. Apply nested
+code-review and apply-security plus final changed-scope align.
+
+#### Test Plan
+
+Use static fixture validation and observation replay cases for the acceptance
+boundaries; preserve the nine invocation-selection cases. No live merge tests.
+
+#### Evaluation Plan
+
+Capture owner-only current working bytes before edits. Compare candidate/baseline
+quality on clean native Codex and Claude runners when authenticated; probe once
+per host before broader runs. Keep unavailable runtime/quality evidence explicit.
+
+#### Rollout And Rollback
+
+Source-only delivery; real-home installation and GitHub mutations are not part of
+this task. Revert only this focused source change if later behavior evidence fails.
+Delete exact task-owned baseline/eval storage after comparison, retaining only
+sanitized evidence summaries.
+
+#### Done Definition
+
+Source, docs, and eval definitions agree; strict/static and available installation
+checks pass; review findings are resolved; missing runtime/quality evidence is
+explicit and never promoted to verified behavior.
+
+#### Implementation Evidence
+
+Implemented in `merge-pr/SKILL.md` and the required completion-verification
+reference: method-specific result identity, remote ancestry, authoritative queue
+membership, one-hour result-CI observation, independent outcomes, and conditional
+branch cleanup. The skill README, catalog, and Unreleased changelog describe the
+same behavior. Metadata and all nine trigger cases remain byte-identical.
+
+Added 24 output-quality definitions with contained synthetic API fixtures covering
+all merge methods, target advancement/divergence, missing evidence, queue states,
+CI provenance/conclusions/deadlines/access, preserved readiness, and cleanup races.
+The fixtures simulate clocks and forbid network effects; no runtime controller,
+public flag, shared validator, publishing caller, or SDLC change was introduced.
+
+#### Verification Evidence
+
+STATIC_PASS: strict repository Codex and Claude profiles plus portable core,
+canonical quality loader/payload safety and definition assertions for all 24
+cases, local reference links, and unchanged trigger/metadata bytes. Scoped
+Markdown and whitespace checks passed. Full changelog lint reports one unchanged
+MD024 duplicate Changed heading, reproduced from HEAD; disabling only that
+baseline rule yields a clean changelog check without changing lint configuration.
+
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation,
+and isolation passed for Codex and Claude in disposable locations. A local-only
+bare Git fixture independently proved that an explicit expected-SHA deletion
+lease rejects an advanced remote head and preserves it, while allowing deletion
+of the exact expected head. This is Git primitive evidence, not model behavior.
+
+Nested code-review and apply-security found one cleanup race; the atomic condition
+and regression case resolve it, and the reviewer confirmed closure. Changed-scope
+align checked source/docs, public help, references, fixtures, caller boundaries,
+metadata preservation, and the spec pair. No live GitHub mutation or real-home
+installation occurred.
+
+Native Codex and Claude quality probes both returned UNAVAILABLE for isolated
+agent authentication; no account credentials were copied. Full comparative
+quality and fresh trigger runtime were not run, so delivery remains implemented
+and REQ-040 remains active. Source and installation checks do not establish
+RUNTIME_PASS or QUALITY_PASS. Temporary working-byte and eval storage is removed
+after retaining this sanitized evidence summary.
+
+<!-- /FEATURE: FEAT-039 -->
+
+<!-- FEATURE: FEAT-040 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-040: Lightweight update-branch workflow
+
+#### Requirements Covered
+
+- REQ-041: Update the current feature branch from the remote default.
+
+#### Context Evidence
+
+The catalog has no update-branch skill. Existing commit transactions accept
+commit, commit-push and create-pr; synchronization belongs to create-pr grants.
+Worktree publication guards do not expose branch-update eligibility. Reuse Git
+merge directly while honoring installed guards; never invent owner authority.
+
+#### Design Details
+
+Explicit-only instruction skill with bare invocation and -h/--help. Resolve the
+Git root, branch and HEAD; require clean status with explicit untracked/submodule
+visibility. Reject unfinished Git operations, default/detached branches, linked
+worktrees and Worktree/coordinator footprints, including stale namespace state.
+Assume one Git writer and recheck eligibility immediately before mutation.
+For dirty-checkout blocks, tell the user to review, stage and commit their work,
+verify the checkout is clean, then rerun update-branch. This is recovery advice,
+not authority to stage or commit local work; dirty submodule work must first be
+resolved in the submodule repository.
+
+Use origin and query live symbolic HEAD, never a guessed main or cached origin/HEAD.
+Fetch the exact branch through an explicit remote-tracking refspec with an empty
+refmap, no pruning/tags/submodule recursion; freeze the commit. Merge with normal
+fast-forward behavior, no editor/autostash/ignored overwrite/rerere auto-staging.
+Reject conflicting effective merge options, preserve hooks and signing, and never
+retry a failed merge blindly. Native Git owns pending merge state.
+
+Resolve only clear conflicts, review reused resolutions, run focused checks,
+verify all changed files belong to this merge before root git add -A, then finish
+the existing merge. Ask about ambiguous choices without aborting or discarding
+work. Report success only after unchanged branch identity, both input ancestors,
+clean status and no pending operation are independently checked.
+
+#### Selected Option
+
+One short instruction file using existing Git primitives; no controller, custom
+runtime state, new dependencies or sibling-owner changes. Git performs deterministic
+history operations; the existing host agent judges conflict intent. No new AI
+subsystem or stack selection is needed.
+
+#### Alternatives Considered
+
+Bare fetch/merge lacks target, local-work and completion checks. Fast-forward-only
+cannot handle divergent feature history. Rebase rewrites commits. A worktree
+eligibility API adds scope and is deferred in favor of ordinary checkouts only.
+
+#### Implementation Boundaries
+
+New update-branch skill/metadata/README/evals; native plugin lists, catalog and
+changelog. No installed-home change, real branch update, shared helper or hook edit.
+Preserve unrelated working changes, including the concurrent merge-pr work.
+
+#### Test-First Success Criteria
+
+- TDD-001: Local fixtures preserve branch/ancestry for no-op, fast-forward and merge.
+- TDD-002: Dirty/ignored files and hook/config failures never produce false success.
+- TDD-003: Conflicts require semantic review; unresolved or ambiguous work stays pending.
+
+#### Validation Plan
+
+Run target quick/strict structure checks for core/Codex/Claude, plugin catalog
+validation, focused Markdown and diff checks, and pinned disposable npx installs.
+Apply nested code-review, apply-security and final changed-scope align.
+
+#### Test Plan
+
+Cover renamed default, failed fetch, stale tracking refs, dirty tracked/untracked
+and submodule state, ignored collisions, repeated rerere conflicts, hook rejection,
+merge-option bypass, detached/default branches and coordination boundaries.
+
+#### Evaluation Plan
+
+Use at least three positive and three near-miss trigger cases and focused quality
+assertions. Compare with an isolated baseline containing the original two-command
+approach when a clean authenticated runner exists; never copy account credentials.
+Unavailable runtime or quality lanes remain explicit.
+
+#### Rollout And Rollback
+
+Source-only addition. Verify disposable installation; actual invocation and personal
+installation are separate tasks. Remove only this addition if rollback is needed;
+never reset existing work. Remove exact private baseline/eval storage at completion.
+
+#### Done Definition
+
+Source, public help, metadata, catalogs and specs agree; applicable static/local
+checks pass, review findings are resolved and missing native evidence is explicit.
+
+#### Implementation Evidence
+
+Implemented the 149-line instruction-only update-branch skill, explicit-only
+Codex/Claude metadata, concise README, nine trigger cases and fourteen offline
+behavioral scenarios. Registered both native plugin catalogs and updated the
+catalog README and Unreleased changelog. No execution helper, custom state,
+runtime dependency, owner API, hook change or personal installation was added.
+Existing merge-pr files and pre-existing shared README/changelog edits remain
+byte-identical outside this task's additions.
+
+#### Verification Evidence
+
+STATIC_PASS: target repository Codex/Claude profiles and portable core fields;
+both native plugin catalogs; canonical evaluation loader and contained payload;
+changed Markdown and whitespace checks. Native disable-model-invocation remains
+a recognized extension: the generic scaffold quick checker rejects this field,
+while the repository's host-aware validators accept it. Do not remove the native
+control to satisfy the narrower checker.
+
+Nine disposable local Git checks passed: no-op/repeat, live renamed default and
+fast-forward, divergent merge ancestry, conflict/continue, ignored-file collision,
+hidden untracked/submodule changes, fetch failure with a stale ref, hook rejection
+with a configuration-bypass negative control, and reused rerere resolution without
+auto-staging. These verify Git primitives, not autonomous agent behavior.
+
+Pinned skills CLI 1.5.26 discovery, copy parity, repeat installation and isolation
+passed for Codex and Claude in disposable locations. Nested code-review approved
+with no blockers; apply-security found no concrete findings. Final changed-scope
+align checked runtime instructions, help, metadata, fixtures, catalog wiring,
+documentation and the canonical pair. Full changelog lint retains one MD024
+Changed-heading duplicate reproduced from the initial working-byte baseline;
+all other scoped Markdown checks pass, including changelog with only that
+pre-existing rule disabled for the check.
+
+QUALITY: UNAVAILABLE on both fresh native probes because isolated authentication
+was unavailable; no credentials were copied. The original two-command baseline
+was prepared but comparative quality could not run. Fresh trigger RUNTIME was
+NOT_RUN after those authentication failures. No live remote merge or personal-home
+installation occurred. REQ-041 remains active and delivery implemented rather than
+verified; source/install evidence does not establish native behavior.
+
+Temporary working-byte, baseline and evaluation storage is owner-only and removed
+by this task at completion after retaining this sanitized evidence summary.
+
+Dirty-checkout message follow-up: runtime instructions, both READMEs, Unreleased
+notes, the existing trigger case and dirty-file output assertions now direct the
+user to review, stage and commit local work, ensure a clean checkout, then rerun.
+Dirty submodule work is resolved first; the skill does not stage or commit the
+existing work automatically.
+
+STATIC_PASS for this follow-up: repository Codex/Claude and portable core
+validation, nine trigger and fourteen quality definitions with contained fixtures,
+scoped Markdown and whitespace checks. The pre-existing changelog MD024 duplicate
+was reproduced against the captured working-byte baseline; the remaining rules
+pass. Disposable pinned npx discovery, copy parity, repeat installation and
+isolation passed for both hosts. Read-only code-review and apply-security found
+no blockers. Runtime triggering is NOT_RUN because invocation policy is unchanged;
+comparative output quality is UNAVAILABLE without isolated native authentication.
+The working-byte baseline is removed after comparison. Personal installation and
+real branch updates are outside this change.
+
+<!-- /FEATURE: FEAT-040 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

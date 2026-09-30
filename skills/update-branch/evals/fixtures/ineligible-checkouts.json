@@ -1,0 +1,12 @@
+{
+  "independent_scenarios": [
+    "detached HEAD",
+    "unborn HEAD",
+    "current branch equals live origin default",
+    "two registered worktrees",
+    "primary checkout with branch worktreeSkill metadata",
+    "dangling sibling project-worktrees symlink",
+    "active coordinator workflow",
+    "unrelated pre-existing merge"
+  ]
+}

@@ -50,7 +50,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 71 flat skill folders with shared execution instructions,
+The catalog contains 72 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -106,11 +106,12 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated repairs across frozen targets with recorded synchronization and explicit task closure; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
-| `merge-pr` | Explicit only | Verify and merge a ready GitHub pull request without admin bypass after checking reviews, checks, mergeability, branch state, and head SHA. |
+| `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify queue membership or resulting-commit ancestry and post-merge CI. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
+| `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch, preserving commits without switching or pushing; ordinary checkouts only. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
 
 ### Project Engineering
@@ -1388,6 +1389,23 @@ no-strategy merge-queue path when the base branch requires one. It does not use
 admin bypass, force-push, delete branches by default, or merge when branch
 protection, required reviews, environment approvals, conflicts, or failing
 checks still block the PR.
+
+Completion records the method-specific resulting commit, proves ancestry in the
+remote target, and observes applicable exact-commit CI for up to one hour. A
+verified queue entry returns queued with branch cleanup deferred. Merge success,
+destination proof, and CI outcome remain separate; see the
+[skill README](merge-pr/README.md) for result and evaluation details.
+
+### `update-branch`
+
+`$update-branch` discovers origin’s current default branch, fetches it and merges
+its exact commit into the current feature branch. It requires a clean ordinary
+checkout, preserves commits and hooks, resolves clear conflicts with focused
+checks, and verifies the final branch and ancestry. It never switches, rebases,
+stashes or pushes. If local changes block the update, review, stage, and commit
+your work, then rerun the skill once the checkout is clean.
+See the [skill README](update-branch/README.md) for boundaries
+and `$update-branch --help` for side-effect-free usage.
 
 ### `code-info`
 

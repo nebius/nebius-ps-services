@@ -1,0 +1,105 @@
+{
+  "fixture_kind": "synthetic API observations; no live services",
+  "target": {
+    "host": "github.com",
+    "repository": "example/widget",
+    "branch": "release/stable",
+    "pr_number": 42,
+    "pr_url": "https://github.com/example/widget/pull/42",
+    "guarded_head_sha": "1111111111111111111111111111111111111111"
+  },
+  "requested": {
+    "merge_method": "squash",
+    "delete_branch": true
+  },
+  "command": {
+    "issued": true,
+    "exit_code": 0
+  },
+  "clock": {
+    "first_merged_observation": "2026-01-01T12:00:00Z",
+    "now": "2026-01-01T12:01:00Z",
+    "settlement_elapsed_seconds": 5
+  },
+  "pr": {
+    "merged": true,
+    "merged_at": "2026-01-01T12:00:00Z",
+    "state": "closed",
+    "merge_commit_sha": "2222222222222222222222222222222222222222",
+    "head": {
+      "sha": "1111111111111111111111111111111111111111"
+    },
+    "base": {
+      "repo": {
+        "full_name": "example/widget"
+      },
+      "ref": "release/stable"
+    }
+  },
+  "target_ref": {
+    "object": {
+      "sha": "2222222222222222222222222222222222222222"
+    }
+  },
+  "compare": {
+    "status": "identical",
+    "merge_base_commit": {
+      "sha": "2222222222222222222222222222222222222222"
+    }
+  },
+  "ci_configuration": {
+    "revision": "2222222222222222222222222222222222222222",
+    "visibility": "complete",
+    "external_providers": "affirmatively none configured",
+    "expected": [
+      {
+        "workflow_id": 10,
+        "event": "push",
+        "branch": "release/stable",
+        "check": "test",
+        "app": "github-actions"
+      }
+    ]
+  },
+  "check_runs": [
+    {
+      "id": 101,
+      "name": "test",
+      "app": {
+        "slug": "github-actions"
+      },
+      "head_sha": "2222222222222222222222222222222222222222",
+      "workflow_id": 10,
+      "run_id": 11,
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/example/widget/actions/runs/11"
+    }
+  ],
+  "statuses": [],
+  "actions_runs": [
+    {
+      "id": 11,
+      "workflow_id": 10,
+      "head_sha": "2222222222222222222222222222222222222222",
+      "head_branch": "release/stable",
+      "event": "push",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/example/widget/actions/runs/11"
+    }
+  ],
+  "original_head_ancestry": {
+    "original_pr_head_is_ancestor_of_target": false
+  },
+  "cleanup_observations": {
+    "head_repository": "example/widget",
+    "head_ref": "refs/heads/feature",
+    "initial_head_sha": "1111111111111111111111111111111111111111",
+    "head_sha_at_deletion": "3333333333333333333333333333333333333333",
+    "conditional_delete_result": "rejected: stale expected SHA",
+    "local_branch": "not present"
+  }
+}

@@ -73,6 +73,7 @@
     "./task-implementer-test",
     "./terraform",
     "./troubleshoot",
+    "./update-branch",
     "./worktree"
   ],
   "hooks": {

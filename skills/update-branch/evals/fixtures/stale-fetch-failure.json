@@ -1,0 +1,7 @@
+{
+  "branch": "feature/demo",
+  "live_origin_HEAD": "refs/heads/trunk",
+  "cached_origin_trunk": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "fetch_exit": 128,
+  "reason": "remote access unavailable"
+}

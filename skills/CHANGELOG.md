@@ -4,6 +4,14 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Branch update skill
+
+- Add the small, explicit-only `update-branch` skill to merge origin’s live
+  default into a clean current feature branch, with local-work protection,
+  clear-conflict resolution, ancestry checks and no branch switching or push.
+- Explain how to recover from a dirty-checkout block: review, stage, and commit
+  local work, then rerun `update-branch` once the working directory is clean.
+
 ### Python testing guidance and optimization
 
 - Strengthened `python-project` with behavior-first unit/integration and optional
@@ -17,6 +25,11 @@ All notable changes to the reusable Agent Skills are tracked here.
   Testmon feedback intersects affected tests with the same safety exclusions.
 
 ### Changed
+
+- Strengthen `merge-pr` completion evidence with method-correct result SHAs,
+  remote destination ancestry, authoritative queue entries, and separate
+  result-commit CI outcomes with a one-hour observation limit. Defer branch
+  cleanup while queued and add fixture-backed behavior evaluations.
 
 - Add conditional README design guidance to `design`: an adaptable reader-first
   outline, early TOC, verified quick-start path, concise formatting and links to

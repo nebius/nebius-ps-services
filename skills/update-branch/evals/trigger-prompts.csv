@@ -1,0 +1,10 @@
+id,should_trigger,prompt
+default-update,true,Use $update-branch to bring origin’s default branch into my current feature branch.
+preserve-history,true,Run $update-branch; preserve my commits and explain how to prepare the checkout if my local edits block the update.
+clear-conflicts,true,Use $update-branch and resolve conflicts whose intended result is clear.
+help,true,Show $update-branch --help.
+feature-upstream,false,Pull updates from this feature branch’s upstream only; do not bring in main.
+rebase,false,Rebase my branch onto origin/main and force-push it.
+merge-pr,false,Use $merge-pr to merge the approved GitHub pull request.
+explain-only,false,Explain git fetch origin followed by git merge origin/main; do not execute it.
+commit-push,false,Commit my uncommitted work and push my feature branch.

@@ -1,0 +1,13 @@
+{
+  "branch": "feature/demo",
+  "merge_exit": 1,
+  "MERGE_HEAD": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "rerere": "reused prior resolution in policy.txt",
+  "unmerged_index": [
+    "policy.txt"
+  ],
+  "new_unrelated_file": "notes.txt",
+  "configuration": {
+    "rerere.autoupdate": true
+  }
+}
