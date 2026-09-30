@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Create `/run/sshd` before SSH validation so fresh gateway bootstrap does not
+  stop before its required kernel reboot when the runtime directory is absent.
+
 - Require `cryptography>=50.0.0,<51.0.0` and lock 50.0.1 to fix
   CVE-2026-69247 (Dependabot alert #44), preventing runtime and development
   installs from selecting the affected releases.

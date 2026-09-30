@@ -8454,7 +8454,7 @@ class VMManager:
             "  - [ systemctl, start, log-restart-required.timer ]\n"
             '  - [ bash, -lc, "if [ ! -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr; fi" ]\n'
             "  # Validate SSH configuration, then activate the service model provided by the image\n"
-            '  - [ bash, -lc, "set -e; /usr/sbin/sshd -t; systemctl reset-failed ssh.service ssh.socket 2>/dev/null || true; if systemctl is-active --quiet ssh.socket || systemctl is-enabled --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh.service; fi; ss -H -lnt sport = :22 | grep -q ." ]\n'
+            '  - [ bash, -lc, "set -e; install -d -m 0755 /run/sshd; /usr/sbin/sshd -t; systemctl reset-failed ssh.service ssh.socket 2>/dev/null || true; if systemctl is-active --quiet ssh.socket || systemctl is-enabled --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh.service; fi; ss -H -lnt sport = :22 | grep -q ." ]\n'
             "  # Reboot only after cloud-init has written files and enabled services\n"
             '  - [ bash, -lc, "if [ -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then logger -t vpngw \\"Rebooting to activate ESP4/kernel update before VPN services start\\"; shutdown -r +1 \\"Nebius VPN Gateway rebooting to activate ESP4/kernel update\\"; fi" ]\n'
             "  # Log completion\n"
