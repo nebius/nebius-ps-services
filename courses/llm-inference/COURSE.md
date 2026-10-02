@@ -46,6 +46,8 @@ Prefill processes the known prompt and stores reusable attention keys and values
 
 Check end-of-sequence, stop rules and the output budget after token selection. Detokenize permitted output and return or stream it; release request state when the request finishes. The newest selected token only acquires KV entries if it is subsequently processed by a forward pass. While weights stay fixed, the token history, cache, random-number state and scheduler membership can change. CPU and GPU responsibilities depend on the engine: formatting and networking are usually host work, while model tensor computation is GPU work. Never assume every step or every sampling implementation runs on one processor.
 
+![Autoregressive inference lifecycle](reference/diagrams/autoregressive-inference-lifecycle.svg)
+
 ### Execution and dependencies
 
 A request will become token IDs, model computations and generated tokens. Before loading any model, establish what artifact supplies those computations and whether it is safe and compatible to load. No running engine is needed for this first metadata audit; GPU Fundamentals and Optimizations supply the device and measurement prerequisites.
@@ -53,6 +55,8 @@ A request will become token IDs, model computations and generated tokens. Before
 Loading a model turns an artifact bundle into an executable computation. The configuration describes the architecture; the weight shards and index supply its tensors; the tokenizer and chat template determine the input IDs. Generation settings, adapters and quantization metadata can change how the same visible request is processed. Immutable revisions and checksums identify which bundle is being used, while expected tensor shapes, dtypes and special-token IDs check that its parts agree.
 
 The loading path has several stages. Metadata is resolved first, files are downloaded or staged on the CPU if needed, loading places the weights in device memory, and libraries or kernels perform first-use setup. Readiness follows only after the intended request path can run. Mixing those stages into a steady-state benchmark makes loading and warm-up look like ordinary inference cost.
+
+![Artifact loading](#diagram-1-artifact-loading)
 
 Enabling `trust_remote_code=True` permits Python code supplied by the model repository to execute. It is not merely permission to read weight data. License metadata also needs review rather than automatic acceptance. The artifact record distinguishes local, fetched, transformed and compiled components while keeping credentials and private paths out of shared evidence.
 
@@ -99,11 +103,15 @@ The final prompt position's logits already describe the first output-token distr
 
 If generation continues, the sampled token becomes the input to the next forward pass. That pass reads prior K/V, appends K/V for its current input token and produces logits for the following token. Selection and stopping checks repeat. A token gains cache entries only when a forward pass processes it; the final sampled token may never enter KV if generation stops immediately afterward.
 
+![Prefill and decode](#diagram-2-prefill-and-decode)
+
 Hugging Face Transformers provides model/tokenizer classes and a DynamicCache that grows as new inputs are processed. Parameters stay fixed during this loop, while request history, cache blocks, random number generator (RNG) state and scheduler membership can change. Detokenization may buffer incomplete byte sequences, and a Hypertext Transfer Protocol (HTTP) chunk can carry zero, one or several model tokens.
 
 ### Match the attention mask to the phase
 
 For one head, attention forms scores `Q @ K.T / sqrt(head_dim)`, applies the allowed-position mask, converts scores to weights with softmax and combines V using those weights. Square prompt attention has a lower-triangular allowed region. A one-token continuation instead needs access to all valid cached positions, including its current input. A square-prefill masking rule applied without checking absolute positions can hide required history in this nonsquare case.
+
+![Prefill writes the KV cache; decode reads and appends it](reference/diagrams/prefill-writes-the-kv-cache-decode-reads-and-appends-it.svg)
 
 PyTorch's scaled dot-product attention (SDPA) application programming interface (API), `scaled_dot_product_attention`, expresses the operation but does not by itself identify the chosen kernel. Correct shapes and allowed context come first; Lesson 11 develops backend optimization.
 
@@ -140,6 +148,8 @@ Temperature T > 0 divides logits by T before softmax. A smaller T makes high-sco
 
 Repetition controls, maximum tokens, stop IDs or strings and sampling choices affect both the output and the amount of work. A candidate that stops earlier can appear faster without executing equivalent generation. Prompt-token counts, output-length distributions, finish reasons and empty or error responses make that difference visible.
 
+![Decoding policy](#diagram-13-decoding-policy)
+
 A deterministic regression profile, often greedy or fixed settings and seed, checks a bounded reproducible behavior. A fixed seed helps replay on the same qualified stack but does not promise identical samples across kernels or engines. A representative stochastic profile tests a declared distribution of requests and outputs instead. Exact token/text comparisons suit an exact-equality contract; task evaluators and confidence intervals suit stochastic quality claims. Generated length must be reported when it is both an outcome and a performance denominator.
 
 A candidate can look faster only because it emits fewer tokens, stops earlier, uses a different seed, or changes randomness. Deterministic regression and representative stochastic service evaluation answer different questions.
@@ -174,11 +184,15 @@ The factor of two counts keys and values. The head count is the number of KV hea
 
 The ideal payload is only one part of peak device memory. Weights and quantization metadata coexist with the KV pool, while prefill activations, attention workspaces, graph pools and communication buffers can add phase-specific peaks. Loading and staging can create a different peak again. Allocator overhead, fragmentation and operational headroom need separate allowance without double-counting active bytes already included in reserved memory.
 
+![Inference memory by lifecycle phase](reference/diagrams/inference-memory-by-lifecycle-phase.svg)
+
 Actual allocated blocks can exceed the formula because of padding, alignment, page metadata, replication or engine-specific layouts. Hybrid attention layers can also require a layer-specific calculation. Comparing the logical formula with allocated blocks and measured peaks explains the difference between expected payload and usable admission capacity.
 
 KV cache often limits active sequence concurrency, but the ideal formula is only one part of peak memory. Ignoring weights, workspaces, graph pools, communication buffers, fragmentation, and safety reserve creates unsafe admission limits.
 
 For a hypothetical model with 32 layers, 8 key/value heads per layer, 128 values per head and 2 bytes per stored value, one cached token needs 2 × 32 × 8 × 128 × 2 = 131,072 bytes, or 128 KiB. The initial factor of two counts keys and values. At 2,048 cached tokens, one request needs 256 MiB; eight such requests need 2 GiB. This excludes block rounding, metadata and all other model memory. It is a capacity calculation, not a measured allocation or a promise that every architecture uses this layout.
+
+![KV capacity](#diagram-3-kv-capacity)
 
 **Practice**
 
@@ -208,6 +222,8 @@ Prefill cost scales with input sequence length, decode lifetime with output leng
 A workload cell describes both how a request begins and how long it continues. ISL sets the amount of prompt processing and initial key/value (KV) state. Observed OSL sets the number of generated tokens, continuation passes and growth of history reads. A long prompt with a short answer therefore stresses different phases from a short prompt with a long answer.
 
 Concurrency adds requests that compete or batch together. Arrival rate and burstiness determine how quickly new requests reach the queue; they are not implied by the number currently active. An ISL×OSL heat map should therefore include short/short, long/short, short/long and long/long cases, with the arrival process and concurrency defined alongside it. Weighted aggregate results are useful only after individual cells remain visible, especially those with strict service targets. Changing traffic patterns can justify versioned operational profiles with explicit conditions for switching or review.
+
+![ISL and OSL matrix](#diagram-4-isl-and-osl-matrix)
 
 Batch shape introduces a further cost. Padding lengths 3, 4 and 8 into one rectangular batch uses 24 positions for 15 real tokens. Bucketing `[3,4]` separately from `[8]` uses 16 positions for those same 15 tokens. It reduces padding but creates extra batches or scheduling constraints. Prompt identity, masks and position information must survive grouping and ungrouping; otherwise the apparent saving changes the computation.
 
@@ -245,6 +261,8 @@ Artifact identity, generation, sampling, KV capacity and the workload matrix are
 A serving request reaches an API, is checked against its schema, and is passed to the model's execution path. vLLM supplies an engine and serving interface with continuous scheduling and paged KV management. TensorRT-LLM supplies NVIDIA-optimized model execution, while Triton Inference Server can manage the request boundary and model repository around a supported backend. Their components must be combined through a supported version contract.
 
 Hypertext Transfer Protocol (HTTP) carries requests and responses; JavaScript Object Notation (JSON) represents structured request fields and results. A client supplies a model name, prompt and generation settings, and receives output plus available usage metadata. Offline generation calls the engine directly and omits that service boundary. OpenAI-compatible and Triton APIs can both use HTTP while requiring different payload schemas.
+
+![Serving stack](#diagram-11-serving-stack)
 
 ### Establish readiness before measuring service
 
@@ -290,6 +308,8 @@ TTFT starts at the declared request-submission boundary and ends when the first 
 
 After the first token, individual token-arrival gaps show how evenly output arrives. For N > 1 output tokens, mean TPOT is `(last_token_time - first_token_time)/(N-1)`: N tokens contain N−1 post-first-token gaps. A single-token output has no such interval. Last-token latency ends at the final content token, while response-completion latency can extend to later protocol or finish metadata. Substituting completion time into TPOT includes that extra overhead unless the timestamps coincide.
 
+![LLM request latency decomposition](reference/diagrams/llm-request-latency-decomposition.svg)
+
 ### Distinguish tokens from transport events
 
 Server-Sent Events (SSE) carries successive events on a Hypertext Transfer Protocol (HTTP) response. An event can contain metadata, several tokens or no content token, and transport chunks need not match event or token boundaries. First-content timestamps and inter-chunk gaps are therefore proxies unless the client has appropriate per-token accounting. Bundled tokens do not provide enough information to invent individual arrival times.
@@ -297,6 +317,8 @@ Server-Sent Events (SSE) carries successive events on a Hypertext Transfer Proto
 ### Read AIPerf metric names precisely
 
 AIPerf reports `inter_token_latency` as one average per request. Its documented default calculation is `(request_latency - time_to_first_token)/(output_sequence_length - 1)`, requiring at least two output tokens. Check the metric definition for the installed version and configuration, and use its timestamp endpoints rather than silently substituting the last-token timestamp in the conceptual TPOT calculation above. A percentile of these ITL values describes request averages, not every individual token gap. AIPerf's inter-chunk latency (ICL) instead records gaps between content-bearing response chunks. Token counts normalize ITL; they do not reconstruct arrival times for tokens delivered together.
+
+![Service metrics](#diagram-5-service-metrics)
 
 ### Count completed work under a defined load
 
@@ -338,6 +360,8 @@ The last block may be only partly filled. That unused tail is real capacity over
 
 Completion releases a request's ownership of its blocks. A block returns to the free list only when no active owner or retention policy still needs it. Shared prefixes may remain for other requests or later reuse, using reference counts to track ownership. Copy-on-write creates private storage before a request changes shared state. These rules prevent one completed request from freeing values another still needs.
 
+![Paged KV](#diagram-6-paged-kv)
+
 When the pool is under pressure, an engine can reject new admission, preempt and later recompute a request, swap retained state to another tier, or evict reusable prefixes. Each choice preserves required state differently and has a different cost. Free and active blocks, churn, partial-block waste, preemption, recomputation, swapping and allocation failures show how the policy behaves over scheduler rounds.
 
 Reserving one contiguous maximum-length buffer per request wastes capacity and makes growth difficult. Paged KV improves flexibility but still has partial-block waste, metadata, eviction, and admission limits.
@@ -372,7 +396,11 @@ Paged key/value (KV) storage helps allocate and reclaim cache capacity as reques
 
 At the end of a model iteration, the scheduler removes completed requests and decides which waiting requests can join the next active batch. It has a token-work budget and a finite amount of KV space. Continuous batching changes membership between iterations so a short request can leave without forcing every request in a fixed batch to finish first.
 
+![Continuous batching](#diagram-7-continuous-batching)
+
 Prompt processing and decode compete within that budget. One long prefill can occupy the device while existing requests wait for their next token. Chunked prefill divides the prompt into smaller segments, allowing decode work to be scheduled between them. Smaller chunks can reduce waiting but add scheduling and kernel-launch overhead. They do not remove the prompt tokens or let one request generate dependent output tokens simultaneously.
+
+![Continuous batching changes membership at scheduler iterations](reference/diagrams/continuous-batching-changes-membership-each-decode-step.svg)
 
 Admission also needs an overload policy. A bounded queue, rejection or backpressure limits what happens when arrivals exceed capacity. Queue arrival, admission, phase-specific scheduled tokens, active requests, free blocks, preemptions and completion connect that policy to observed waiting.
 
@@ -424,6 +452,8 @@ A new request first identifies its model/engine artifact, adapter, tokenized tem
 
 A match must still have valid retained storage. Shared immutable blocks need reference tracking so an entry is not reclaimed while a request uses it. A miss, expired entry or incompatible identity requires recomputing the affected prefix. Lookup outcome, matched tokens/blocks, miss reason and occupancy explain how much prefill can actually be saved.
 
+![Prefix reuse](#diagram-8-prefix-reuse)
+
 ### Locate the retained state
 
 Prefix reuse needs an index from an exact token prefix and its model context to reusable KV state. A hash/block design identifies reusable complete token blocks; a radix tree shares a path of token prefixes and branches where requests diverge. SGLang calls its radix-tree-based reuse approach RadixAttention. These are alternative indexing organizations, not alternatives to computing attention itself. Both require valid ownership, eviction and isolation rules. A similar-looking prompt or a hash without the complete identity contract is insufficient. The supplied prefix experiments use the course's pinned serving path; an SGLang comparison is optional source study, not an installed or qualified engine lab.
@@ -431,6 +461,8 @@ Prefix reuse needs an index from an exact token prefix and its model context to 
 ### Compare restoration with recomputation
 
 A valid device-resident hit can be used without a host or storage restore. A hit in a slower tier must be restored before attention consumes it. Cache value depends on whether a compatible prefix is still present when the next request arrives and whether restoration costs less than recomputing prefill. Account for bytes per token, reused length, transfer bandwidth and startup, cache lookup/reconstruction, write traffic, queueing and active-request headroom. Report device, host and storage hits separately: a slow-tier hit can still be slower than recomputation. Saving prefill does not directly remove decode steps. A larger working set or longer reuse interval may require more retention capacity, but more cache can also create churn, disk writes or resource contention.
+
+![Retain only compatible reusable state](reference/diagrams/kv-tier-retention.svg)
 
 Cold and warm trials must be independent, preserve output equivalence and expose eviction and admission effects. A warmer inherited cache cannot fairly demonstrate a better policy.
 
@@ -474,6 +506,10 @@ Prefill offers many query positions at once, enabling large matrix-like tiles. D
 
 PyTorch SDPA controls or engine logs and profiler evidence identify which backend actually ran. Kernel names, score/intermediate allocations, shapes and output comparisons establish what changed. Holding tokenizer, scheduler and cache policy fixed keeps an attention improvement attributable to the attention implementation.
 
+Attention-backend selection and CUDA Graph eligibility are separate decisions. A captured graph records GPU operations and their dependencies for replay with fixed shapes and memory addresses. An engine may group supported shapes into capture buckets; a request outside those buckets needs an eligible execution path instead of an incompatible replay. The diagram first separates prefill from decode, then shows backend and graph routing as distinct choices.
+
+![Phase-specific attention and CUDA Graph routing](reference/diagrams/phase-specific-attention-and-cuda-graph-routing.svg)
+
 “Flash attention” or SDPA is not one universal kernel. Masks, dtype, head dimension, sequence, GQA layout, dropout/training mode, and software version can select different implementations or fall back.
 
 TensorRT-LLM's XQA is a multi-query attention (MQA)/GQA generation optimization with a limited support matrix and heuristic dispatch, so it must be observed rather than assumed.
@@ -507,6 +543,8 @@ The serving ledger separates weights, activations, and KV. Quantization can targ
 Quantization first maps values into a smaller set of representable levels. The stored codes need scale metadata and sometimes a zero point to reconstruct their approximate numerical values. The kernel must either consume that representation directly or unpack/dequantize it before computation. Smaller stored weights do not by themselves demonstrate faster arithmetic.
 
 For symmetric per-tensor 8-bit integer (INT8), one positive scale serves the tensor. For nonzero values, choose `scale = max(abs(values))/127`, encode `clamp(round(values/scale), -127, 127)`, and reconstruct `integer*scale`. An all-zero tensor needs an explicit positive-scale convention to avoid division by zero. With an illustrative scale of 0.10, 0.26 rounds to code 3 and reconstructs as 0.30. That approximation and the extra scale storage are both part of the representation.
+
+![Quantized representation](#diagram-14-quantized-representation)
 
 The state being quantized determines the consequences. Weight quantization changes model storage; per-channel, group or block scales can fit local ranges more closely than one tensor-wide scale. Activation quantization changes intermediate computation and may require calibration or dynamic scales. KV quantization changes cache bytes read and written for each token, adding conversion work and potentially altering long-context attention.
 
@@ -544,7 +582,11 @@ After prefill supplies the first output token, ordinary decode uses one target-m
 
 The proposal mechanism drafts `k` candidate tokens from the current accepted history. The target evaluates their conditional probabilities in a verification pass. The acceptance rule checks a consecutive prefix; accepting a later token cannot repair an earlier rejected context.
 
+![Speculative decoding](#diagram-9-speculative-decoding)
+
 At the first rejection, the algorithm emits a recovery token selected by the appropriate target or corrected sampling rule, discards later draft tokens and resumes from the accepted history. If every proposal is accepted, the algorithm may also supply a target bonus token, subject to the output budget and stopping rules. Greedy equality and stochastic distribution preservation need different acceptance arguments.
+
+![Speculative decoding proposal, verification, recovery, and bonus paths](reference/diagrams/speculative-decoding-proposal-verification-recovery-and-bonus-paths.svg)
 
 ### Choose a proposal method compatible with the target
 
@@ -581,6 +623,8 @@ Serving data parallelism (DP) replicates a complete model and routes independent
 
 A collective is group communication, and topology is the actual path connecting the workers' devices. Key/value (KV) ownership describes which worker holds the attention state needed to continue a request. Serving replicas do not average training gradients per request: their model weights are fixed during inference. Partitioning can help a model fit while adding communication on its token-generation path, so parallelism must be understood as a placement decision before it is treated as a performance feature.
 
+![Inference placement](#diagram-10-inference-placement)
+
 Scheduling shares one engine instance. Parallelism decides whether to replicate that instance or partition its weights, layers, context, or experts across devices.
 
 ### Decide whether a request needs one replica or several workers
@@ -589,6 +633,8 @@ Serving DP creates complete model replicas and routes independent requests to th
 
 TP instead splits matrices within a layer. Ranks exchange the output pieces or partial sums needed to continue the same request, adding latency-sensitive collectives to its execution. PP divides layers into stages and transfers activations between them; fill/drain bubbles and the time to traverse the stages matter. EP places different MoE experts on ranks and sends tokens to their selected owners. Request ownership, KV placement and communication follow these assignments.
 
+![Serving replicas versus model parallelism](reference/diagrams/serving-replicas-versus-model-parallelism.svg)
+
 ### Derive the tensor exchange from the calculation
 
 For stored weights shaped `[output_features,input_features]`, a linear layer computes `Y = X @ W.T`. Column parallelism splits output features, producing different columns of Y that an all-gather concatenates in rank order. Row parallelism splits input features and the corresponding weight columns; each rank produces a partial dot product and all-reduce sums them. For `X=[2,3]` and one weight row `[5,7]`, the two row-partial results are 10 and 21 and their sum is 31.
@@ -596,6 +642,8 @@ For stored weights shaped `[output_features,input_features]`, a linear layer com
 ### Return expert outputs to the original token order
 
 All-to-all sends different token groups to their chosen expert owners. The receiving rank applies its local expert operation and sends results back according to the inverse routing, restoring each token to its original position. Keep split counts, order and reference values explicit. Correct reconstruction and slowest-rank timing are separate requirements: every token must return to its intended position, and the group result is not ready until its slowest required rank finishes. Parallel groups use the trusted private fabric and a controlled readiness endpoint; a loopback client boundary does not expose a public service.
+
+![Two-node serving communication by parallelism type](reference/diagrams/two-node-serving-communication-by-parallelism-type.svg)
 
 Training parallelism names are reused in serving but the synchronization contract differs. Serving data parallel replicas do not all-reduce gradients per request, while TP communication lies on every decode token’s latency path.
 
@@ -635,11 +683,15 @@ AIPerf sends requests according to a declared workload: endpoint/model identity,
 
 A prefill worker processes the prompt and produces KV state. The request and required state then move to a decode worker, which cannot continue until transfer and reconstruction finish. The handoff adds work and waiting; phase specialization helps only if its benefit exceeds those costs. Capacity must be compared in prompt-token and output-token units because a rate of prompt completion alone does not describe the amount of decode work arriving.
 
+![Disaggregation](#diagram-12-disaggregation)
+
 KV-aware routing considers both reusable prefixes and active load. A cache-hot worker may still be a poor destination if its queue is long. The first growing queue identifies a rate mismatch worth investigating, whether at prefill, handoff or decode.
 
 ### Include later model turns in an application measurement
 
 In an agentic tool loop, the model requests a permitted external operation and the application validates and executes it under its own authority. The returned data becomes untrusted input to a later model invocation. Schema and authority checks, tool latency, new tokenization/prefill work and task-success criteria extend the request path beyond one generation call.
+
+![Disaggregated prefill, decode, and agentic queues](reference/diagrams/disaggregated-prefill-decode-and-agentic-queues.svg)
 
 ### Keep benchmark conventions consistent
 
@@ -684,6 +736,8 @@ A short profile connects an observed delay to one candidate change, such as chun
 
 The final keep/reject decision must satisfy correctness, quality and capacity gates as well as performance goals. It includes the rejected hypothesis, uncertainty, the limits of the available cluster and the next experiment. A valid rejection or an inconclusive result is useful evidence; a speedup is not required to complete the investigation.
 
+![Inference decision evidence](#diagram-15-inference-decision-evidence)
+
 Maximum tokens/s can hide unacceptable TTFT/ITL tails, queue growth, quality drift, or fragile capacity. A causal report must include a rejected hypothesis and the limits of the two-node test.
 
 **Practice**
@@ -705,6 +759,8 @@ Distinguish replication from partitioning and explain how placement changes mode
 **How it works**
 
 Replicas improve aggregate capacity by serving independent requests with complete model copies. Tensor parallelism partitions model operations, introducing communication at each dependent layer or decode step. Pipeline parallelism places stages on different devices and introduces pipeline fill, drain and stage imbalance. The tensor-parallel (TP) degree is the number of cooperating ranks, or processes, in each tensor group; the pipeline-parallel (PP) degree is the number of sequential stages. On two eight-H100 nodes, TP8/PP2 means eight cooperating ranks in each of two stages. Placing one stage per node can keep tensor collectives local while passing activations between nodes. TP16/PP1 means one stage spanning sixteen ranks, so its tensor collectives cross InfiniBand. Neither layout wins universally. First isolate the dependency using identical projection decoding, then measure a real model with fixed prompt lengths, output lengths, request count and concurrency. Time to first token (TTFT) measures the interval from the client request to its first output token. Compare successful output-token throughput with TTFT and inter-token latency, not throughput alone. A capacity benefit and a latency benefit are different claims.
+
+![Parallel generation and serving placement](#diagram-16-parallel-generation-and-serving-placement)
 
 The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
 

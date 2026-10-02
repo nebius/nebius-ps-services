@@ -4,7 +4,7 @@ NVIDIA NCCL Tests separates collective performance from model computation. In th
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/10_nccl_tests_report.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -12,7 +12,7 @@ Qualify the benchmark's own MPI and NCCL libraries. Its MPI-enabled binary uses 
 
 Use an MPI-enabled `all_reduce_perf` built from the reviewed nccl-tests v2.20.0 source, commit `b4d5beebca8a76cf01335f724d154b9b9d394d96`. This is a researched candidate, not a build qualified by this course. The same executable and compatible CUDA/NCCL/MPI libraries must be available on both nodes. Keep its per-node binary hashes, build configuration and loaded-library identities in a private qualification record. The runner records only the local binary hash; that does not prove the remote copy matches.
 
-shared environment setup prepares the vendor benchmark with `MPI=1` and explicit MPI_HOME, CUDA_HOME and NCCL_HOME paths. Verify that qualified build is the one used here. Do not install drivers or replace system MPI as part of this lab. A non-MPI build launched twice can misleadingly run two isolated benchmarks, which is not one collective spanning the allocation.
+The build below prepares the vendor benchmark with `MPI=1` and explicit MPI_HOME, CUDA_HOME and NCCL_HOME paths. Verify that qualified build is the one used here. Do not install drivers or replace system MPI as part of this lab. A non-MPI build launched twice can misleadingly run two isolated benchmarks, which is not one collective spanning the allocation.
 
 The site must qualify its MPI/Slurm integration. `srun --mpi=list` lists available modes, but listing PMIx does not prove that the benchmark's MPI build is compatible with it. Use the mode provided by the owner. Eight processes per node, one thread/process and one GPU/thread produce eight ranks on one node or sixteen across two nodes. Under one-device-per-task visibility, the correct visible ordinal is zero on each node—not the cluster-wide rank number.
 
@@ -50,39 +50,22 @@ Only selected metrics and non-identifying version fields enter the report; hostn
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/10_nccl_tests_report.py` runs or parses an MPI nccl-tests all-reduce sweep. It validates version, rank placement, complete message sizes, in-place/out-of-place correctness, and completion markers before writing structured latency and bandwidth results.
 
-Submit from the `advanced-gpu-communication` course directory. Replace the generic path and MPI mode with the owner's qualified values. The default maximum is 64 MiB; `--max-bytes` can extend a separately declared experiment up to 256 MiB. There is no automatic tool download or cluster repair.
-
-Soperator's NCCL-debug SPANK plugin can override `NCCL_DEBUG` at step launch.
-The timing shell below keeps both controls at `WARN`; the separate diagnostic
-submission sets `SNCCLD_LOG_LEVEL=INFO`, matching the runner's `--diagnostic`
-setting. Confirm the plugin's `--nccld-log-level` support in `srun --help`.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-export COURSE_NCCL_TESTS=/path/to/nccl-tests/build/all_reduce_perf
-export COURSE_MPI=pmix
-export NCCL_DEBUG=WARN
-export SNCCLD_LOG_LEVEL=WARN
-SNCCLD_LOG_LEVEL=INFO python3 tools/submit_lab.py --lab 10_nccl_tests_report slurm/nccl_tests.sbatch default --diagnostic --max-bytes 1048576
-python3 tools/submit_lab.py --lab 10_nccl_tests_report slurm/nccl_tests.sbatch default
-python3 tools/submit_lab.py --lab 10_nccl_tests_report slurm/nccl_tests.sbatch socket
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" \
+  slurm/nccl_tests.sbatch \
+  default
 ```
-
-The first job supplies INIT/NET/GRAPH diagnostics and is labeled non-acceptance timing. The next jobs measure without enabling verbose logs. Submit at least three independent jobs for each compared profile, alternating their order. Choose one of `gdr-off`, `ring`, `tree`, `qp1` or `qp4` only when its prerequisites and hypothesis are satisfied. Keep message sizes, warmups, iterations, rank placement and versions fixed.
-
-For an offline parse, supply the recorded exit status. Parsed logs are diagnostic only.
-
-```bash
-"$COURSE_PYTHON" labs/10_nccl_tests_report.py --mode parse \
-  --input /path/to/private-successful-run.log --exit-code 0 \
-  --variant default --max-bytes 67108864
-```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
+
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
 Use the result inspector and publisher for the clean timing jobs. Diagnostic
 and profiler artifacts deliberately exclude acceptance timing and are rejected
@@ -90,12 +73,18 @@ by those helpers; inspect their private logs, correctness rows and reports
 separately. Retain diagnostic transport selection before interpreting a
 default-versus-Socket timing comparison as an RDMA comparison.
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 10_nccl_tests_report --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/10_nccl_tests_report/logs/$LAB_JOB_ID.out"
+cat "results/10_nccl_tests_report/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Start with identity, not bandwidth. Verify sixteen ranks across two nodes (or eight on one node), eight distinct full H100 devices per node and visible device zero for each task. Check nccl-tests version separately from nccl_headers and nccl_library; a header/library difference needs compatibility review, and matching numbers alone do not prove every node loaded the same file. Confirm the intended size range was not silently reduced, and that validation_iterations is positive.
 
@@ -111,7 +100,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Rows / case / out of place / algbw GBps | `rows.*.out_of_place.algbw_GBps` | `Bps` |
 | Rows / case / in place / time (seconds) | `rows.*.in_place.time_us` | `s` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_nccl_tests_report \
@@ -124,18 +113,74 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit from the `advanced-gpu-communication` course directory. Replace the generic path and MPI mode with the owner's qualified values. The default maximum is 64 MiB; `--max-bytes` can extend a separately declared experiment up to 256 MiB. There is no automatic tool download or cluster repair.
+
+Soperator's NCCL-debug SPANK plugin can override `NCCL_DEBUG` at step launch.
+The timing shell below keeps both controls at `WARN`; the separate diagnostic
+submission sets `SNCCLD_LOG_LEVEL=INFO`, matching the runner's `--diagnostic`
+setting. Confirm the plugin's `--nccld-log-level` support in `srun --help`.
+
+```bash
+export COURSE_NCCL_TESTS=/path/to/nccl-tests/build/all_reduce_perf
+export COURSE_MPI=pmix
+export NCCL_DEBUG=WARN
+export SNCCLD_LOG_LEVEL=WARN
+SNCCLD_LOG_LEVEL=INFO sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch default --diagnostic --max-bytes 1048576
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch default
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch socket
+```
+
+The first job supplies INIT/NET/GRAPH diagnostics and is labeled non-acceptance timing. The next jobs measure without enabling verbose logs. Submit at least three independent jobs for each compared profile, alternating their order. Choose one of `gdr-off`, `ring`, `tree`, `qp1` or `qp4` only when its prerequisites and hypothesis are satisfied. Keep message sizes, warmups, iterations, rank placement and versions fixed.
+
+For an offline parse, supply the recorded exit status. Parsed logs are diagnostic only.
+
+```bash
+"$COURSE_PYTHON" labs/10_nccl_tests_report.py --mode parse \
+  --input /path/to/private-successful-run.log --exit-code 0 \
+  --variant default --max-bytes 67108864
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Read the outputs in four passes: capability, selected path, correctness, then performance. Read-only `nvidia-smi topo -m` describes local proximity; `ibv_devinfo`, `ibstat` and `rdma link show` can establish port/link context when installed. They are not substitutes for the runtime log. An IB transport may carry RoCE; an active Ethernet port does not prove RoCE use. A Socket profile intentionally selects NCCL's Socket network plugin. Default versus socket is an RDMA comparison only if diagnostics establish that default selected RDMA.
 
 For GDR, compare default versus gdr-off only after the owner has qualified direct GPU-memory registration and the same RDMA transport is used in both. GPU-memory versus host-memory `perftest` checks can help the owner isolate that boundary; supported options depend on the installed build. The course does not launch unapproved listeners or reconfigure registration support.
 
 For QP tuning, compare qp1 against qp4 with the same fabric, messages and splitting policy. A queue pair supplies hardware work queues; more QPs may distribute traffic across paths but cost overhead. For each representative size and mode, keep the three independent job values, compare their median and range, and investigate disagreement instead of choosing the best run. Repeat a retained candidate in application Labs 08 and 13; a synthetic improvement is not automatically a shorter training or inference step.
 
-For example, if Ring was the promising single change, use a fresh submission shell with `NCCL_ALGO=Ring python3 tools/submit_lab.py --lab 13_collective_overlap slurm/two_node.sbatch labs/13_collective_overlap.py --profile small`. Compare it with otherwise identical submissions without that override. These application labs do not take --variant; the NCCL setting is passed through the job environment before their communicator starts. Keep the global batch explicit for Lab 12, collect three runs per condition, and check that the application loaded the intended NCCL version and selected path.
+For example, if Ring was the promising single change, use a fresh submission shell with:
+
+```bash
+NCCL_ALGO=Ring sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_collective_overlap/logs/%j.out" \
+  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/two_node.sbatch labs/13_collective_overlap.py --profile small
+```
+
+ Compare it with otherwise identical submissions without that override. These application labs do not take --variant; the NCCL setting is passed through the job environment before their communicator starts. Keep the global batch explicit for Lab 12, collect three runs per condition, and check that the application loaded the intended NCCL version and selected path.
 
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 10_nccl_tests_report --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/nccl_tests.sbatch default
+srun --nodes=2 --ntasks=16 --ntasks-per-node=8 --gpus-per-task=1 --cpus-per-task=4 \
+  --mpi="${COURSE_MPI:?select the qualified MPI plugin}" --gres-flags=allow-task-sharing --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/10_nccl_tests_report/logs/capture-%J-%t.out" \
+  --error="results/10_nccl_tests_report/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS NCCL_TESTS_DEVICE=0 COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/10_nccl_tests_report/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_NCCL_TESTS:?qualified all_reduce_perf binary}" \
+  -b 8 -e 1048576 -f 2 -t 1 -g 1 -d float -o sum -w 5 -n 20 -c 1 -a 3 -I 0 -U 0 -C 0 -S 0 -T 120
 ```
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.

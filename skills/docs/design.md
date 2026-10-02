@@ -5478,7 +5478,8 @@ coverage.
 #### Context Evidence
 
 The initial distribution baseline contained 70 skills and seven hook payload
-owners; the current catalog contains 71 skills including config-claude.
+owners; the current catalog contains 72 skills including config-claude and
+update-branch.
 The Bash installer has ownership, backups and registration preflight.
 Before this change, align-skill required OpenAI metadata unconditionally and
 runtime readers were bound to Codex. Current adapters retain native identity
@@ -5638,7 +5639,7 @@ publication were not changed.
 
 #### Full-Catalog Execution Alignment
 
-All 71 skills share native invocation and capability boundaries. Codex metadata
+All catalog skills share native invocation and capability boundaries. Codex metadata
 and Claude frontmatter policies remain source-owned and unchanged. Shared state
 uses the selected native home; intentional configured products, protocol names,
 worker ownership, commit claims, recovery and Stop ordering remain intact.
@@ -6676,8 +6677,8 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=2 -->
-### FEAT-037: Code-grounded design and conditional README planning
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-037: Code-grounded software and portable artifact design
 
 #### Requirements Covered
 
@@ -6687,9 +6688,9 @@ fresh native behavior is still outside the verified scope.
 
 The existing source skill grounds seven-phase plans in code, allows explicitly
 requested implementation when the host permits it, and retains canonical
-publication with maintain-project-specs. Its 457-line core delegates detail to
-a workflow reference. Before this extension, 32 trigger cases and nine quality
-cases cover those boundaries but omit conditional README design guidance.
+publication with maintain-project-specs. Before the portable-HTML extension,
+its 468-line core uses conditional workflow and README references. Its 36 trigger
+cases and 11 quality cases cover software/README design but omit portable HTML.
 
 #### Design Details
 
@@ -6712,18 +6713,44 @@ Use references/readme-design.md as the sole detailed README guidance owner.
 Load it for new-project design, material user-workflow changes or explicit README
 design. Keep only conditional routing, README impact and reference registration
 in the core; the workflow handoff records the first-success path, useful
-sections, deeper-document destinations and validation. Preserve the current
-frontmatter, host metadata, help behavior and implementation authority.
+sections, deeper-document destinations and validation. README guidance alone
+does not broaden triggers; preserve Help, implicit invocation and implementation
+authority when adding the separately requested portable-HTML scope.
 The reference supplies one adaptable outline, early TOC guidance, concise
 formatting, prerequisites and minimum configuration before commands, relative
 links, accessible images and evidence-based current-versus-planned claims.
 Detailed architecture, reference material, runbooks and policy remain separate.
 
+Version 3 adds references/portable-html-design.md as the sole detailed owner for
+standalone HTML documents, reports and presentations. Share one portability
+contract and the approved warm-neutral theme; vary information hierarchy,
+interaction and print behavior by profile. Keep essential content in semantic
+HTML, use embedded CSS/JavaScript/SVG/data and local system fonts, allow external
+citations only as reader-followed links, and keep state in memory or fragments.
+Require offline direct-file operation without automatic requests or neighboring
+files, no-JavaScript reading, relocation resilience and complete printing.
+
+The reference retains exact approved color/typography/spacing defaults,
+configurable category meanings, accessible controls/diagrams, safe shortcuts,
+responsive layouts, reduced motion, report snapshot/data semantics and safe
+embedded-data handling. Ten acceptance checks distinguish artifact evidence
+from skill definitions, including blocked request attempts and copied files.
+MDN, W3C and OWASP sources substantiate browser/accessibility/security claims.
+
+Extend the trigger description, purpose and UI prompt for this new artifact
+scope; preserve implicit invocation, Help, public usage, planning authority and
+existing software/README/specialist routes. Add short conditional core routing
+and workflow handoff fields. Hosted-page/app work skips this reference unless
+a standalone portable artifact is part of its scope. No new generator or
+starter artifact is needed. Fixed native web technologies require no stack
+selection or AI subsystem handoff.
+
 #### Selected Option
 
 Add focused core directives and conditional detail in the existing workflow
 reference, preserving current specialist routes, help and source-owned metadata.
-Add one conditional README reference rather than another skill or a generator.
+Add focused conditional README and portable-HTML references rather than new
+skills or generators. Preserve detailed guidance in its one reference owner.
 
 #### Alternatives Considered
 
@@ -6733,6 +6760,9 @@ default. A new writer or mode flag would duplicate existing ownership or authori
 Putting the full README template into the core would load irrelevant detail;
 broad README frontmatter would capture routine edits. Mandatory template sections
 would create repetition and empty headings. Reject all three approaches.
+A single fixed HTML layout would impose presentation structure on reports and
+documents. A hosted application framework would add dependencies without serving
+the offline artifact contract. Reject these in favor of three native profiles.
 
 #### Implementation Boundaries
 
@@ -6751,6 +6781,13 @@ configuration unchanged; preserve unrelated working changes.
   four trigger additions distinguish design work from wording/link maintenance.
 - TDD-005: Native traces verify conditional reference reads and help short-circuiting;
   output assertions do not substitute for successful read evidence.
+- TDD-006: Three HTML profile trigger positives and two implementation/cosmetic
+  negatives extend the existing 36 cases to 41 without removing old cases.
+- TDD-007: Three HTML quality cases extend 11 cases to 14, exercising portability,
+  the theme, distinct profiles, report data and non-mutating planning.
+- TDD-008: Native process checks prove conditional HTML-reference loading and
+  preserve unrelated-design and Help boundaries; all ten artifact checks remain
+  required for future delivered HTML, not claimed from instruction validation.
 
 #### Validation Plan
 
@@ -6786,6 +6823,22 @@ remain distinct from source or installation evidence.
 
 #### Implementation Evidence
 
+Version 3 portable-HTML extension is implemented in source. The 258-line focused
+reference owns one portability contract, the exact approved theme defaults,
+three layout profiles, optional interaction, accessibility, responsive/print
+behavior, data safety and ten artifact acceptance checks. Fifteen MDN, W3C and
+OWASP links substantiate browser, accessibility and security guidance. Internal
+organization systems were not relevant to this public reusable contract.
+
+Core conditional routing, Phase 7 and reference registration use that owner;
+frontmatter and UI metadata expose the additional artifact design scope without
+changing implicit invocation. The workflow handoff, skill README, catalog and
+Unreleased changelog agree. Five added trigger cases bring coverage to 41
+(24 positive, 17 negative); three profile quality cases bring coverage to 14.
+Process cases cover conditional reference reads, unrelated-design exclusion and
+Help short-circuiting. The core grew from 468 to 481 lines, below the soft review
+budget. No generator, starter HTML, library or shared-validator change is needed.
+
 Version 2 README extension is implemented in the source skill. The new focused
 reference owns reader journey, an adaptable template, early TOC, prerequisites,
 first success, formatting, documentation boundaries and quality checks. Core
@@ -6806,6 +6859,34 @@ No shared validators, installers, real host configuration or installed skill
 copies were modified by this task.
 
 #### Verification Evidence
+
+Version 3 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
+passed with strict frontmatter, required repository evals and no warnings.
+Eval JSON/CSV and all fixture containment/payload checks passed. All 36 old
+trigger cases, 11 old quality cases and fixture bytes are preserved. Working-byte
+comparison confirms unchanged Help, public usage, execution/document ownership,
+implementation continuation, guardrails and Learning Loop. The implicit policy
+remains true; metadata text intentionally adds the accepted artifact scope.
+
+Scoped Markdown lint with the repository configuration, Markdown rendering,
+four reference tables, all ten checklist entries, all 13 palette values, 15
+primary-source links, core reference targets and diff whitespace checks passed.
+The paired canonical documents validate with no pending findings. An independent
+nested read-only code-review and advisory apply-security found no actionable
+findings; no executable product or browser behavior was inferred from review.
+
+Disposable skills CLI 1.5.26 installation passed discovery, copied-resource
+parity, repeat installation and isolation for Codex and Claude. The source repair
+does not alter real installed skills or hooks. This is distribution evidence,
+not native activation evidence.
+
+Fresh isolated Codex and Claude runs of the new document trigger each returned
+UNAVAILABLE because agent authentication was absent. Comparative QUALITY is
+UNAVAILABLE for the same prerequisite; remaining trigger and native read-order
+process checks are NOT_RUN. No existing credentials were copied or changed.
+Actual HTML offline/no-JavaScript/browser/print/data behavior is NOT_RUN because
+this change supplies guidance and eval definitions, not a generated artifact.
+REQ-038 remains active and FEAT-037 delivery implemented, not verified.
 
 Version 2 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
 passed with required evals, strict frontmatter and no warnings. Eval definitions,
@@ -6981,6 +7062,329 @@ infrastructure were not run. Delivery remains implemented pending that separate
 quality evidence; passing local fixtures do not claim model-output quality.
 
 <!-- /FEATURE: FEAT-038 -->
+
+<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-039: Evidence-based completion for general-purpose PR merges
+
+#### Requirements Covered
+
+- REQ-040: Verify merge destination, queue membership, and result-commit CI.
+
+#### Context Evidence
+
+`merge-pr/SKILL.md` currently verifies only PR state, merge timestamp, and merge
+state after `gh pr merge`; its nine trigger cases do not evaluate completion
+behavior. Release publishing callers already require an actual merge before
+continuing. GitHub documents method-dependent REST `merge_commit_sha`, GraphQL
+`PullRequest.mergeQueueEntry`, remote comparison, and exact-SHA check APIs.
+
+#### Design Details
+
+Keep the existing instruction-based skill and GitHub CLI/API stack. The core
+workflow owns readiness, explicit authorization, immutable target identity,
+completion branches, and reporting; one verification reference owns exact read
+queries, method semantics, CI applicability, bounded polling, and conclusions.
+No new service, persistent workflow state, public flag, or compatibility path
+is introduced. These are deterministic evidence rules executed by the existing
+agent; no new agent topology or AI stack selection is needed.
+
+Freeze the host, base repository/ref, and reviewed head. Confirm merged state
+before accepting REST `merge_commit_sha`: merge commit for merge, squashed
+commit for squash, updated destination commit for rebase. Read-retry incomplete
+result evidence for at most 60 seconds. Snapshot the remote target tip and compare
+result SHA to that immutable tip; identical/ahead ancestry with the result as
+merge base proves containment even when the target advanced. Failure to prove
+containment does not erase authoritative merged state or justify retrying a write.
+
+For queues, require a current entry with ID, enqueue time, state, position, and
+matching PR identity. Refresh before returning queued; a merge race enters
+merged verification, while a disappeared previously observed entry is removal.
+Auto-merge intent alone is not queue evidence. Deletion remains deferred while
+queued. Remote cleanup uses an atomic explicit expected-SHA condition or is
+deferred; local cleanup requires no checked-out worktree/concurrent writer. Report destination and post-merge CI as not applicable until merged.
+
+For a merged PR, observe checks/statuses and Actions runs on the exact resulting
+SHA, with source, branch, event, and latest-attempt provenance. Determine expected
+branch-update CI from the result revision and available provider configuration;
+exclude unrelated PR, queue, tag, scheduled, and manual-only executions. Unknown
+applicability or unreadable providers remain unverified. Expected missing checks
+remain pending. Poll every 30 seconds until a terminal result or the absolute
+3600-second deadline starting at first merged observation in this invocation;
+read retries and observed reruns never reset it. Neutral/skipped conclusions are
+explicitly disclosed as non-executed or non-successful tests even when accepted
+by check policy. No reruns, dispatch, requeue, or automatic rollback is performed.
+
+Keep merge outcome, result SHA, destination proof, CI state, and deletion outcome
+separate in reports. Release callers must not treat queued or incomplete evidence
+as a verified merge. This change does not redesign publishing workflows.
+
+#### Selected Option
+
+Extend instructions with one focused evidence reference and fixture-backed quality
+evaluations. This keeps runtime rules reviewable without adding a verifier
+framework, new configuration, or state storage to a four-file skill.
+
+#### Alternatives Considered
+
+Keeping only PR state cannot prove completion. Merely adding a resulting SHA
+still misses destination containment and post-merge failures. A new executable
+controller could enforce polling mechanically but adds packaging/state/transport
+maintenance; revisit it if quality evaluations expose persistent instruction
+execution failures. Waiting through the queue was declined in favor of returning
+on verified membership.
+
+#### Implementation Boundaries
+
+Change only the target skill instructions, reference, README, and quality fixtures,
+plus the catalog description, changelog, and this canonical spec pair. Preserve
+metadata, trigger policy, public options, release callers, and SDLC ownership.
+
+#### Test-First Success Criteria
+
+- TDD-001: Squash/rebase result identities work without original-head ancestry;
+  an advanced destination passes and a divergent target cannot pass.
+- TDD-002: An open PR or auto-merge request without an entry never reports queued;
+  removal, immediate merging, and deferred branch deletion remain distinct.
+- TDD-003: Passing PR/new-tip checks cannot hide failed result-commit CI; pending,
+  missing, inaccessible, filtered, skipped, neutral, and rerun cases stay truthful.
+
+#### Validation Plan
+
+Run three strict structure profiles, quality JSON/fixture checks, Markdown and
+whitespace checks, and pinned disposable npx discovery/copy parity. Apply nested
+code-review and apply-security plus final changed-scope align.
+
+#### Test Plan
+
+Use static fixture validation and observation replay cases for the acceptance
+boundaries; preserve the nine invocation-selection cases. No live merge tests.
+
+#### Evaluation Plan
+
+Capture owner-only current working bytes before edits. Compare candidate/baseline
+quality on clean native Codex and Claude runners when authenticated; probe once
+per host before broader runs. Keep unavailable runtime/quality evidence explicit.
+
+#### Rollout And Rollback
+
+Source-only delivery; real-home installation and GitHub mutations are not part of
+this task. Revert only this focused source change if later behavior evidence fails.
+Delete exact task-owned baseline/eval storage after comparison, retaining only
+sanitized evidence summaries.
+
+#### Done Definition
+
+Source, docs, and eval definitions agree; strict/static and available installation
+checks pass; review findings are resolved; missing runtime/quality evidence is
+explicit and never promoted to verified behavior.
+
+#### Implementation Evidence
+
+Implemented in `merge-pr/SKILL.md` and the required completion-verification
+reference: method-specific result identity, remote ancestry, authoritative queue
+membership, one-hour result-CI observation, independent outcomes, and conditional
+branch cleanup. The skill README, catalog, and Unreleased changelog describe the
+same behavior. Metadata and all nine trigger cases remain byte-identical.
+
+Added 24 output-quality definitions with contained synthetic API fixtures covering
+all merge methods, target advancement/divergence, missing evidence, queue states,
+CI provenance/conclusions/deadlines/access, preserved readiness, and cleanup races.
+The fixtures simulate clocks and forbid network effects; no runtime controller,
+public flag, shared validator, publishing caller, or SDLC change was introduced.
+
+#### Verification Evidence
+
+STATIC_PASS: strict repository Codex and Claude profiles plus portable core,
+canonical quality loader/payload safety and definition assertions for all 24
+cases, local reference links, and unchanged trigger/metadata bytes. Scoped
+Markdown and whitespace checks passed. Full changelog lint reports one unchanged
+MD024 duplicate Changed heading, reproduced from HEAD; disabling only that
+baseline rule yields a clean changelog check without changing lint configuration.
+
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation,
+and isolation passed for Codex and Claude in disposable locations. A local-only
+bare Git fixture independently proved that an explicit expected-SHA deletion
+lease rejects an advanced remote head and preserves it, while allowing deletion
+of the exact expected head. This is Git primitive evidence, not model behavior.
+
+Nested code-review and apply-security found one cleanup race; the atomic condition
+and regression case resolve it, and the reviewer confirmed closure. Changed-scope
+align checked source/docs, public help, references, fixtures, caller boundaries,
+metadata preservation, and the spec pair. No live GitHub mutation or real-home
+installation occurred.
+
+Native Codex and Claude quality probes both returned UNAVAILABLE for isolated
+agent authentication; no account credentials were copied. Full comparative
+quality and fresh trigger runtime were not run, so delivery remains implemented
+and REQ-040 remains active. Source and installation checks do not establish
+RUNTIME_PASS or QUALITY_PASS. Temporary working-byte and eval storage is removed
+after retaining this sanitized evidence summary.
+
+<!-- /FEATURE: FEAT-039 -->
+
+<!-- FEATURE: FEAT-040 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-040: Lightweight update-branch workflow
+
+#### Requirements Covered
+
+- REQ-041: Update the current feature branch from the remote default.
+
+#### Context Evidence
+
+The existing instruction-only skill rejects any sibling worktree container,
+additional worktree or worktreeSkill metadata, even without a current-branch link.
+This blocks ordinary primary checkouts. Existing commit transactions accept
+commit, commit-push and create-pr; synchronization belongs to create-pr grants.
+Worktree publication guards do not expose branch-update eligibility. Reuse Git
+merge directly while honoring installed guards; never invent owner authority.
+
+#### Design Details
+
+Explicit-only instruction skill with bare invocation and -h/--help. Resolve the
+Git root, branch and HEAD; require clean status with explicit untracked/submodule
+visibility. Reject unfinished Git operations and default/detached branches.
+Resolve the exact full current branch ref with git symbolic-ref --quiet HEAD.
+Parse git worktree list --porcelain -z as NUL-delimited records; exclude the first
+primary record and block only linked records with an exact branch-ref match,
+including locked/prunable registrations and invocation within a linked checkout.
+Report the matching branch/path; failed identity or registration inspection stops.
+
+Unrelated/detached worktrees, sibling containers or symlinks, ancestry and
+worktreeSkill metadata alone do not establish an association, including stale
+current-branch metadata. Preserve active restrictions applicable to the current
+branch/checkout and explicit repository-wide Git-write locks; do not infer active
+ownership from metadata or another branch alone. Never parse private owner schemas,
+repair registrations or call publication guards under a false action.
+Assume one Git writer and recheck eligibility immediately before mutation.
+For dirty-checkout blocks, tell the user to review, stage and commit their work,
+verify the checkout is clean, then rerun update-branch. This is recovery advice,
+not authority to stage or commit local work; dirty submodule work must first be
+resolved in the submodule repository.
+
+Use origin and query live symbolic HEAD, never a guessed main or cached origin/HEAD.
+Fetch the exact branch through an explicit remote-tracking refspec with an empty
+refmap, no pruning/tags/submodule recursion; freeze the commit. Merge with normal
+fast-forward behavior, no editor/autostash/ignored overwrite/rerere auto-staging.
+Reject conflicting effective merge options, preserve hooks and signing, and never
+retry a failed merge blindly. Native Git owns pending merge state.
+
+Resolve only clear conflicts, review reused resolutions, run focused checks,
+verify all changed files belong to this merge before root git add -A, then finish
+the existing merge. Ask about ambiguous choices without aborting or discarding
+work. Report success only after unchanged branch identity, both input ancestors,
+clean status and no pending operation are independently checked.
+
+#### Selected Option
+
+One short instruction file using existing Git primitives; no controller, custom
+runtime state, new dependencies or sibling-owner changes. Git performs deterministic
+history operations; the existing host agent judges conflict intent. No new AI
+subsystem or stack selection is needed.
+
+#### Alternatives Considered
+
+Bare fetch/merge lacks target, local-work and completion checks. Fast-forward-only
+cannot handle divergent feature history. Rebase rewrites commits. A worktree
+eligibility API adds scope and is deferred in favor of native Git registration.
+Keeping only the folder check removed still rejects unrelated worktrees; trusting
+metadata alone retains stale-marker false positives. Git registration is the
+selected authority, with independent active workflow guards preserved.
+
+#### Implementation Boundaries
+
+New update-branch skill/metadata/README/evals; native plugin lists, catalog and
+changelog. No installed-home change, real branch update, shared helper or hook edit.
+Preserve unrelated working changes, including the concurrent merge-pr work.
+
+#### Test-First Success Criteria
+
+- TDD-001: Local fixtures preserve branch/ancestry for no-op, fast-forward and merge.
+- TDD-002: Dirty/ignored files and hook/config failures never produce false success.
+- TDD-003: Conflicts require semantic review; unresolved or ambiguous work stays pending.
+- TDD-004: Unrelated containers/worktrees and stale metadata pass association checks;
+  exact current-branch linked records, failed inspection or a new matching
+  registration before merge stop with specific evidence.
+
+#### Validation Plan
+
+Run target quick/strict structure checks for core/Codex/Claude, plugin catalog
+validation, focused Markdown and diff checks, and pinned disposable npx installs.
+Apply nested code-review, apply-security and final changed-scope align.
+
+#### Test Plan
+
+Cover renamed default, failed fetch, stale tracking refs, dirty tracked/untracked
+and submodule state, ignored collisions, repeated rerere conflicts, hook rejection,
+merge-option bypass, detached/default branches and coordination boundaries.
+Add disposable registration checks for container directories/dangling symlinks,
+unrelated/detached worktrees, stale current-branch metadata, locked/prunable
+matching records, linked invocation, exact-ref boundaries and unusual path names.
+Offline cases cover inspection failures, registration races and applicable
+active reservations versus unrelated workflow activity.
+
+#### Evaluation Plan
+
+Use at least three positive and three near-miss trigger cases and focused quality
+assertions. Compare the worktree change with captured pre-change working bytes
+when a clean authenticated runner exists; never copy account credentials.
+Unavailable runtime or quality lanes remain explicit.
+
+#### Rollout And Rollback
+
+Source-only update. Verify disposable installation; actual invocation and personal
+installation are separate tasks. Restore only this change if rollback is needed;
+never reset existing work. Remove exact private baseline/eval storage at completion.
+
+#### Done Definition
+
+Source, public help, metadata, catalogs and specs agree; applicable static/local
+checks pass, review findings are resolved and missing native evidence is explicit.
+
+#### Implementation Evidence
+
+The 155-line instruction-only skill now matches the exact full current branch
+ref against Git linked-worktree registrations, excluding only the primary record.
+It preserves matching locked/prunable registrations and applicable active guards,
+while allowing unrelated/detached worktrees, containers, ancestry and metadata
+alone. Identity/registry failures and actual associations have distinct reports;
+association checks repeat before merging. Dirty-checkout recovery guidance remains.
+
+Both READMEs, Unreleased notes and existing eligibility fixtures are aligned.
+Eleven trigger cases and seventeen output-quality cases include nineteen new
+worktree scenarios across three contained fixtures. No runtime helper, dependency,
+public flag, metadata policy, owner API or hook change was introduced.
+
+#### Verification Evidence
+
+STATIC_PASS: repository Codex/Claude and portable core validators, canonical
+trigger/output case loading and contained payload checks, scoped Markdown and
+whitespace checks. Standard fields pass; disable-model-invocation remains a
+recognized native extension rather than strict standard-only frontmatter.
+
+Twelve disposable Git checks passed: primary exclusion, ordinary container,
+dangling container symlink, unrelated branch, detached checkout, stale
+current-branch metadata, child source-ref metadata, lookalike refs with unusual
+paths, a new matching registration on recheck, linked-checkout invocation,
+locked registration and prunable registration with a missing directory.
+These prove Git record semantics, not autonomous execution of the instruction.
+Offline definitions additionally cover failed identity/registry inspection,
+malformed records, current-branch reservations and explicit repository-wide locks.
+
+Pinned skills CLI 1.5.26 discovery, copy parity, repeat installation and isolation
+passed for Codex and Claude in disposable locations. Read-only code-review and
+apply-security found no blockers. Final changed-scope align covered instructions,
+metadata/help preservation, docs, fixtures and the canonical pair. Changelog lint
+retains one MD024 duplicate reproduced from the captured pre-change baseline;
+all other scoped Markdown rules pass. No shared tooling or catalog wiring changed.
+
+RUNTIME: NOT_RUN; invocation policy is unchanged. QUALITY: UNAVAILABLE because
+isolated native authentication is absent; account credentials were not copied.
+The current working-byte baseline was captured before edits, then removed with
+the owner-only disposable Git fixture tree after validation. No personal-home
+installation or real branch update occurred. REQ-041 remains active and delivery
+implemented; source and installation evidence do not establish native behavior.
+
+<!-- /FEATURE: FEAT-040 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

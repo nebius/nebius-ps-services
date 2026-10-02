@@ -13,7 +13,7 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab 31_training_capstone %s [--profile small|large] [other Lab 31 options]\n' "$0"
+  printf 'Usage: sbatch %s [--profile small|large] [other Lab 31 options]\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then

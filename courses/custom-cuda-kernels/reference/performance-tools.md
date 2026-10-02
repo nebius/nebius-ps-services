@@ -16,6 +16,8 @@ Use a timeline, a kernel report, and a dashboard to answer different performance
 
 Instrumentation adds overhead. Use a separate diagnostic run to explain behavior, then repeat without profiling to judge performance. The `small` and `large` profiles change workload size; compare the same profile, inputs, seed, and runtime. A larger profile is not an optimization. Distributed captures produce one report per rank; align their collective and step boundaries rather than summing overlapping rank times. Serving captures wrap the GPU server while the client records request latency.
 
+![A measured optimization loop](#tools-measurement-loop)
+
 ## Practice
 
 Complete the setup checks once, then follow the first experiment's local commands. Save the baseline result, inspect a bounded capture, predict the effect of one change, and run that change without instrumentation. Publish the two validated artifacts and explain both the measured outcome and its limits. An unsuccessful optimization with a sound explanation is a valid result.

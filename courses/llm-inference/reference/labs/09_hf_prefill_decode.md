@@ -4,7 +4,7 @@ The first generated token normally comes from the final-position logits produced
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/09_hf_prefill_decode.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Qualify the mechanics environment and the approved immutable model/tokenizer artifact. Use one H100 and keep generated data private. Review artifact auditing in Lab 16 before choosing a different model.
 
@@ -22,26 +22,35 @@ Run Lab 09 and annotate phase boundaries, shapes, synchronizations, and output t
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/09_hf_prefill_decode.py` runs a pinned Hugging Face model through prefill and token-by-token decoding. It verifies token counts, attention masks, cache positions, and cache lengths, then records separate prefill and decode timings.
 
-Use one-token and multi-token cases to expose the boundary. The one-token request should not require a separate decode pass after prefill.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 8
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/09_hf_prefill_decode.py --profile small --new-tokens 1
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 09_hf_prefill_decode --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/09_hf_prefill_decode/logs/$LAB_JOB_ID.out"
+cat "results/09_hf_prefill_decode/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require the requested token count and advancing mask, cache position, and cache length. Inspect `decode_steps_per_request`, `prefill_timing`, and `decode_timing`; the latter is absent when no continuation pass is needed. These device-phase timings are not client-observed TTFT.
 
@@ -58,7 +67,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Prompt tokens | `prompt_tokens` | `none` |
 | Decode steps per request | `decode_steps_per_request` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 09_hf_prefill_decode \
@@ -71,6 +80,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Use one-token and multi-token cases to expose the boundary. The one-token request should not require a separate decode pass after prefill.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 8
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Draw which token is input to each pass and which token is sampled from its output. Why is the last generated token not necessarily already represented in the returned cache when generation stops?
 
 Larger scheduling batches improve decode throughput but add queueing and per-user delay. Streaming improves perceived latency while adding protocol overhead and making chunk gaps an imperfect proxy for token ITL.
@@ -78,7 +102,16 @@ Larger scheduling batches improve decode throughput but add queueing and per-use
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/09_hf_prefill_decode/logs/capture-%J-%t.out" \
+  --error="results/09_hf_prefill_decode/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/09_hf_prefill_decode/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/09_hf_prefill_decode.py --profile small --new-tokens 1
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
@@ -86,10 +119,20 @@ Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_
 The Compute command selects the first model matrix kernel inside `model_forward`, after cache-position construction. It is a first-request prefill diagnostic; it does not measure continuation counters or client-observed TTFT. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
 
 ```bash
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=model_forward,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/09_hf_prefill_decode/logs/capture-%J-%t.out" \
+  --error="results/09_hf_prefill_decode/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include model_forward/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/09_hf_prefill_decode/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/09_hf_prefill_decode.py --profile small --new-tokens 1
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Use `--new-tokens` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `new_tokens` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
 

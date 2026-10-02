@@ -96,7 +96,7 @@ def test_light_palette_contrast_and_responsive_reading_rules() -> None:
 
 def test_all_course_lessons_labs_and_diagrams_remain_published() -> None:
     counts = {
-        "gpu-fundamentals": (12, 11, 31),
+        "gpu-fundamentals": (12, 11, 32),
         "gpu-optimizations": (16, 14, 29),
         "llm-training": (17, 16, 23),
         "llm-inference": (17, 22, 29),

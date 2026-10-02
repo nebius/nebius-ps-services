@@ -14,7 +14,6 @@ Run from the Training course root with the approved environment described in
 submitting any job, restrict files created by the submitting shell:
 
 ```bash
-umask 077
 "$COURSE_PYTHON" -m pip check
 python3 tools/validate_course.py
 ```
@@ -37,12 +36,24 @@ one-GPU labs in Gate 2 perform their own H100 device check.
 ## Gate 2: causal objective and one-GPU correctness
 
 ```bash
-python3 tools/submit_lab.py --lab 32_learning_basics slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
-python3 tools/submit_lab.py --lab 13_loss_masking slurm/single_gpu.sbatch labs/13_loss_masking.py --profile small
-python3 tools/submit_lab.py --lab 01_tiny_transformer_train slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
-python3 tools/submit_lab.py --lab 02_gradient_accumulation slurm/single_gpu.sbatch labs/02_gradient_accumulation.py --profile small
-python3 tools/submit_lab.py --lab 14_activation_checkpointing slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
-python3 tools/submit_lab.py --lab 21_mixed_precision_training slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/32_learning_basics/logs/%j.out" \
+  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_loss_masking/logs/%j.out" \
+  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/single_gpu.sbatch labs/13_loss_masking.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_tiny_transformer_train/logs/%j.out" \
+  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/02_gradient_accumulation/logs/%j.out" \
+  --error="$PWD/results/02_gradient_accumulation/logs/%j.err" slurm/single_gpu.sbatch labs/02_gradient_accumulation.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
+  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile small
 ```
 
 Lab 32 can first be studied locally with `--device cpu`. Require a learned
@@ -70,9 +81,15 @@ that the other is correct.
 ## Gate 3: adaptation and reward-guided objectives
 
 ```bash
-python3 tools/submit_lab.py --lab 05_lora_sft slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
-python3 tools/submit_lab.py --lab 06_grpo_objective slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small
-python3 tools/submit_lab.py --lab 07_grpo_trainer slurm/single_gpu.sbatch labs/07_grpo_trainer.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_lora_sft/logs/%j.out" \
+  --error="$PWD/results/05_lora_sft/logs/%j.err" slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/06_grpo_objective/logs/%j.out" \
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/07_grpo_trainer/logs/%j.out" \
+  --error="$PWD/results/07_grpo_trainer/logs/%j.err" slurm/single_gpu.sbatch labs/07_grpo_trainer.py --profile small
 ```
 
 External model exercises require pinned, approved artifacts. Check trainable
@@ -83,10 +100,18 @@ held-out model quality or production training efficiency.
 ## Gate 4: precision, resume, and data efficiency
 
 ```bash
-python3 tools/submit_lab.py --lab 24_checkpoint_resume slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile small
-python3 tools/submit_lab.py --lab 25_sequence_packing slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small
-python3 tools/submit_lab.py --lab 26_input_pipeline slurm/single_gpu.sbatch labs/26_input_pipeline.py --profile small
-python3 tools/submit_lab.py --lab 27_fused_graph_trace slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/24_checkpoint_resume/logs/%j.out" \
+  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/25_sequence_packing/logs/%j.out" \
+  --error="$PWD/results/25_sequence_packing/logs/%j.err" slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/26_input_pipeline/logs/%j.out" \
+  --error="$PWD/results/26_input_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/26_input_pipeline.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/27_fused_graph_trace/logs/%j.out" \
+  --error="$PWD/results/27_fused_graph_trace/logs/%j.err" slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small
 ```
 
 Resume must reproduce the next batch and update under the stated deterministic
@@ -100,7 +125,9 @@ Run the conditional FP8 gate only after a compatible Transformer Engine build
 and its recipe have been qualified in the approved environment:
 
 ```bash
-python3 tools/submit_lab.py --lab 22_transformer_engine_fp8 slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/22_transformer_engine_fp8/logs/%j.out" \
+  --error="$PWD/results/22_transformer_engine_fp8/logs/%j.err" slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
 ```
 
 Record the resolved version and recipe. Collect warmed delayed-scaling samples
@@ -137,8 +164,12 @@ failure propagation, CUDA tracing and cross-node timelines need target evidence.
 ## Gate 6: profiler and causal capstone
 
 ```bash
-python3 tools/submit_lab.py --lab 30_training_profiler slurm/single_gpu.sbatch labs/30_training_profiler.py --profile small
-python3 tools/submit_lab.py --lab 31_training_capstone slurm/capstone_three_trials.sbatch --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/30_training_profiler/logs/%j.out" \
+  --error="$PWD/results/30_training_profiler/logs/%j.err" slurm/single_gpu.sbatch labs/30_training_profiler.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/31_training_capstone/logs/%j.out" \
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
 ```
 
 Retain all three fresh-process capstone records and confirm the launcher

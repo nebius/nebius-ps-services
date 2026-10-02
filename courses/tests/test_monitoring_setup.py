@@ -546,6 +546,7 @@ def test_removed_installer_flags_are_rejected(flag):
         [
             sys.executable,
             str(ROOT / "tools/course_setup.py"),
+            "monitoring",
             "--config",
             "config.yaml",
             "--target",

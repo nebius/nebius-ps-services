@@ -47,8 +47,12 @@ barrier and buffer-management costs can erase either predicted benefit.
 After the documented CMake build, submit:
 
 ```bash
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small --work-iterations 32
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small --work-iterations 32
 ```
 
 The first command runs all four work points. The second isolates one point for

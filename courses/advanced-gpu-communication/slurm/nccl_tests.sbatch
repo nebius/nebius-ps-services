@@ -10,7 +10,7 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab 10_nccl_tests_report [Slurm --name=value options] %s VARIANT [lab options]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s VARIANT [lab options]\n' "$0"
   printf '\nRuns MPI-enabled NCCL Tests on two nodes, eight full H100 GPUs per node.\n'
   printf 'Set COURSE_NCCL_TESTS to the shared all_reduce_perf executable.\n'
   printf 'Set COURSE_MPI to the site-qualified pmix/pmix_vN/pmi2 integration.\n'

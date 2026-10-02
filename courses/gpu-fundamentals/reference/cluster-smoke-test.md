@@ -4,9 +4,7 @@
 
 Run from the `gpu-fundamentals` course root after activating a cluster-approved environment that satisfies [VERSIONS.md](../VERSIONS.md). Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
-Before submitting jobs, run `umask 077` in the submitting shell. The launchers
-repeat this setting for child-process artifacts, but the scheduler can create
-its output file before the script begins.
+Complete the one-time directory preparation in the shared Lab Guide before submitting. Keep runtime evidence in those private result directories.
 
 This runbook is a complete platform-qualification checklist, not the teaching
 order. Learners follow the [syllabus](../SYLLABUS.md): Lab 10 checks the local
@@ -25,14 +23,30 @@ Accept only two distinct hostnames, world size 2, local rank 0 on each node, one
 Submit in this order:
 
 ```bash
-python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
-python3 tools/submit_lab.py --lab 02_tensor_core_precision slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile small
-python3 tools/submit_lab.py --lab 03_transfer_and_pinning slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small
-python3 tools/submit_lab.py --lab 04_layout_and_coalescing slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
-python3 tools/submit_lab.py --lab 05_roofline_microbench slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
-python3 tools/submit_lab.py --lab 07_async_streams slurm/single_gpu.sbatch labs/07_async_streams.py --profile small
-python3 tools/submit_lab.py --lab 08_operator_to_kernels slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile small
-python3 tools/submit_lab.py --lab 09_triton_launch_geometry slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/02_tensor_core_precision/logs/%j.out" \
+  --error="$PWD/results/02_tensor_core_precision/logs/%j.err" slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
+  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
+  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/07_async_streams/logs/%j.out" \
+  --error="$PWD/results/07_async_streams/logs/%j.err" slurm/single_gpu.sbatch labs/07_async_streams.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_operator_to_kernels/logs/%j.out" \
+  --error="$PWD/results/08_operator_to_kernels/logs/%j.err" slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/09_triton_launch_geometry/logs/%j.out" \
+  --error="$PWD/results/09_triton_launch_geometry/logs/%j.err" slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
 ```
 
 For each job, write the prediction first, require the lab's correctness result,
@@ -59,9 +73,15 @@ Repeat selected labs with their supported `small` or `large` profiles. Change on
 ## Gate 5: compatibility, scheduling, and read-only health
 
 ```bash
-python3 tools/submit_lab.py --lab 10_compatibility_stack slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
-python3 tools/submit_lab.py --lab 11_scheduler_tail slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile small
-python3 tools/submit_lab.py --lab 12_read_only_health slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_compatibility_stack/logs/%j.out" \
+  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/11_scheduler_tail/logs/%j.out" \
+  --error="$PWD/results/11_scheduler_tail/logs/%j.err" slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/12_read_only_health/logs/%j.out" \
+  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
 ```
 
 Record the wheel/runtime/driver/toolkit roles separately. The lane-work model

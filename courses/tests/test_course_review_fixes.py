@@ -181,6 +181,9 @@ def test_slurm_launchers_are_private_fail_closed(course: str) -> None:
         text = launcher.read_text()
         assert "set -euo pipefail" in text
         assert "umask 077" in text
+        if launcher.stem == "cpu":
+            assert "#SBATCH --gpus" not in text
+            continue
         expected_gpus = (
             8
             if launcher.stem

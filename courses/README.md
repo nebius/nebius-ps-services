@@ -13,6 +13,9 @@ or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
 are independent. [Advanced Labs](advanced-gpu-communication/index.html)
 owns the multi-GPU, multi-node experiments.
 
+Diagrams appear immediately after the passage they explain, within the owning
+lesson or practical guide.
+
 Every course ends with one Where to Go Next, one A–Z Glossary, and then
 Official references. Lessons and performance-tool guides share these course-wide
 sections; optional lesson References follow Mental model and come last.
@@ -27,398 +30,461 @@ results ZIP for comparison, plus a link to this lab setup guide. Use
 
 [Read this guide online](https://nebius.github.io/nebius-ps-services/courses/lab-guide.html).
 
-The browser edition is generated from this README and contains the same setup,
-execution, and profiling instructions.
+The browser edition is generated from this README and contains the same instructions.
+**Workstation** means your computer; **Login node** means after SSH. Slurm allocates
+GPU workers to execute workloads. Prepare the cluster once, then each course runtime
+you need. Commands below use Bash.
 
-Prepare the shared cluster and monitoring once, then each course runtime you need.
-**Workstation** means your local computer; **Login node** means after SSH.
-Workloads run on GPU workers through Slurm.
+### Prepare your workstation
 
-### Prerequisites and hardware
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, kubectl,
+SSH and rsync. Install and configure the [Nebius CLI](https://docs.nebius.com/cli/install)
+for your project. The login account needs SSH-key access and storage shared with
+workers at the same path.
 
-The five ordinary GPU courses use one full, non-MIG H100 per allocation. Prepare two workers
-with one H100 each, or reuse the advanced cluster with one-GPU allocations.
-Advanced communication requires two eight-H100 SXM workers, local NVLink/NVSwitch
-and active InfiniBand. TCP/IP connectivity alone does not qualify that route;
-the two one-GPU workers support local exercises, not GPU-fabric qualification.
-
-**Workstation:** install [nebius-cxcli](https://github.com/nebius/nebius-ps-services/tree/main/services/nebius-cxcli),
-authenticate the Nebius CLI, and have kubectl, Python 3, Git, Bash, SSH and rsync.
-The login account needs SSH-key access, rsync and storage shared at the same path
-with workers. Check quota and regional hardware availability before provisioning.
+Clone the sources and install cxcli in its own Python 3.12 tool environment.
+Editable installation uses this checkout's source. `update-shell` adds uv's command
+directory to future shells; the PATH line enables it in this shell.
 
 ```bash
 git clone https://github.com/nebius/nebius-ps-services.git
-cd nebius-ps-services/courses
+cd nebius-ps-services
+uv tool install --python 3.12 --editable ./services/nebius-cxcli
+uv tool update-shell
+export PATH="$(uv tool dir --bin):$PATH"
+nebius-cxcli --version
+cd courses
 export COURSES_ROOT="$PWD"
 ```
 
-### Create and deploy Soperator
+### Create or select Soperator
 
-Soperator runs Slurm on Kubernetes. Select the required workers in the wizard,
-retain local monitoring, and configure persistent `/data` storage for reports.
-Use the configuration path and exact target printed by the wizard:
+Soperator runs Slurm on Kubernetes. The five ordinary GPU courses use one full,
+non-MIG H100 per allocation. Prepare two one-H100 workers, or reuse the advanced
+cluster with one-GPU allocations. Advanced communication needs two eight-H100
+SXM workers, local NVLink/NVSwitch and active InfiniBand. TCP/IP alone does not
+qualify that route. Check quota and hardware availability before provisioning.
+
+Run the wizard, then use its printed configuration path and exact target name.
+Keep local monitoring and persistent `/data` storage for profiler reports.
+`render` generates deployment artifacts; `deploy` applies the configuration.
+For an existing prepared cluster, reuse its accepted configuration instead.
 
 ```bash
 nebius-cxcli soperator create ./deployments
-export CLUSTER_CONFIG='<absolute path to the created config.yaml>'
-export CLUSTER_TARGET='<exact Soperator target name>'
+export CLUSTER_CONFIG='<absolute path to config.yaml>'
+export CLUSTER_TARGET='<exact configured Soperator target>'
 nebius-cxcli render "$CLUSTER_CONFIG"
 nebius-cxcli deploy "$CLUSTER_CONFIG"
-export KUBECONFIG='<absolute path to this cluster kubeconfig>'
-nebius mk8s cluster get-credentials --id '<cluster_ID>' --external --kubeconfig "$KUBECONFIG"
-export CLUSTER_CONTEXT='<context for this cluster in that kubeconfig>'
 ```
 
-Use this deployment's cluster ID, following the [Nebius Kubernetes connection guide](https://docs.nebius.com/kubernetes/connect).
-For an already prepared cluster, reuse its accepted configuration and target.
+Save Kubernetes credentials to a private kubeconfig. Use this deployment's cluster
+ID and select its context explicitly. Check the printed context before synchronization;
+no-argument synchronization uses it to discover the login node.
+See [Nebius cluster connections](https://docs.nebius.com/kubernetes/connect).
 
-### Install profiling tools and viewers
+```bash
+export KUBECONFIG='<absolute path to this cluster kubeconfig>'
+nebius mk8s cluster get-credentials --id '<cluster ID>' --external --kubeconfig "$KUBECONFIG"
+export CLUSTER_CONTEXT='<context for this cluster>'
+kubectl config use-context "$CLUSTER_CONTEXT"
+kubectl config current-context
+```
 
-**Workstation:** after deployment, install shared Nsight Systems, Nsight Compute
-and their private browser viewers. First-time setup uses masked credential prompts:
+### Install profiling and Grafana
+
+**Workstation:** install the paired Nsight tools and private viewers before
+monitoring changes or dashboard imports. Profiling installation requires an accepted
+deployment matching the configuration and rendered state.
 
 ```bash
 nebius-cxcli soperator profiling install "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --interactive
 ```
 
-The installer prints complete connection and password-retrieval commands.
-For later access, use `soperator profiling show` as described in
-[Browsing Grafana and Nsight Profilers](#browsing-grafana-and-nsight-profilers).
-If installation must be rerun, omit `--interactive` to reuse valid existing
-viewer credentials. Install profiling
-before monitoring changes and dashboard imports: installation requires an accepted
-deployment with matching configuration and rendered state.
+First-time credentials use masked prompts. Valid credentials are reused automatically;
+use `--no-interactive` when a rerun must require existing credentials. The installer
+prints connection instructions. For later access, use the
+[show commands](#browsing-grafana-and-nsight-profilers).
 
-cxcli owns the paired tool/viewer versions. Already-open login shells load them
-with `source /etc/profile.d/99-nsight.sh`. Check `nsys --version` and `ncu --version`;
-actual worker/container captures are verified in environment readiness below.
-
-### How measurements reach Grafana
-
-Each lab saves its benchmark measurements in an immutable JSON result file.
-The course publication client sends selected baseline and candidate measurements,
-such as execution time and throughput, to Pushgateway. Separately, DCGM and native
-exporters expose GPU and cluster telemetry.
-
-VMAgent scrapes both sources and writes the samples to local VictoriaMetrics.
-Grafana queries VictoriaMetrics to display the measurements and comparisons in
-course dashboards. Precise benchmark timings come from the lab results; GPU
-telemetry is sampled over time. The original JSON files remain the authoritative
-results.
-
-![Course measurements and GPU telemetry flowing to Grafana](docs/grafana.png)
-
-Arrows show data flow. VMAgent initiates scrapes; Grafana initiates queries.
-
-### Install Grafana on the cluster
-
-**Workstation:** cxcli installs Grafana and Pushgateway and configures the native
-VMAgent results scrape. Substitute the deployment configuration and exact target:
+Review pending project changes before installing Grafana: this command saves
+monitoring settings, regenerates artifacts and runs the **whole project deployment**.
+It installs Grafana and Pushgateway and configures the native VMAgent results scrape.
+Keep metrics storage **local**; **both** also supports course readback. Remote-only
+storage is insufficient. Reuse an accepted installation if already configured.
 
 ```bash
 nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway
 ```
 
-Keep metrics storage **local** in the installer; **both** also supports course
-readback. Remote-only metrics do not support this course setup. Reuse the accepted
-private installation when already configured. The installer owns these services;
-the course helper only discovers connections and verifies their identities.
-
-After installation, prepare a persistent learner identifier and a fresh private
-output directory. Use the same explicit kubeconfig and context selected above:
-
-```bash
-cd "$COURSES_ROOT/gpu-fundamentals"
-export COURSE_WORKSPACE='<persistent lowercase learner identifier>'
-export COURSE_SETUP_DIR="$(dirname "$CLUSTER_CONFIG")/course-monitoring/$CLUSTER_TARGET"
-python3 -m venv "$HOME/.gpu-course-tools"
-"$HOME/.gpu-course-tools/bin/pip" install -r tools/profiling-requirements.txt
-"$HOME/.gpu-course-tools/bin/python" tools/course_setup.py \
-  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
-  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
-  --workspace "$COURSE_WORKSPACE" --output-dir "$COURSE_SETUP_DIR"
-source "$COURSE_SETUP_DIR/laptop-environment.sh"
-```
-
-Keep deployment and connection files private. If the installation changes, rerun
-discovery into a fresh directory and replace the copied course environment file.
-
 ### Import course dashboards
 
-Start the Grafana connection in [Browsing Grafana and Nsight Profilers](#browsing-grafana-and-nsight-profilers).
-In Grafana select or create `course-gpu-fundamentals` using
-**Dashboards → New → New folder**. Copy its UID from `/dashboards/f/<uid>/...`
-in the address bar; its name is not its UID.
-
-**Workstation:** import every dashboard for the selected course, including
-Environment readiness. Repeat for each course you will use with its own
-`course-<course-name>` folder and observed UID:
+Connect using the [Grafana browsing instructions](#browsing-grafana-and-nsight-profilers).
+In Grafana use **Dashboards → New → New folder** to create `course-gpu-fundamentals`,
+or select its existing folder. Copy the UID from `/dashboards/f/<uid>/...` in the
+address bar; the folder name is not its UID.
 
 ```bash
 export COURSE='gpu-fundamentals'
-export COURSE_GRAFANA_FOLDER_UID='<observed course folder UID>'
+export COURSE_GRAFANA_FOLDER_UID='<observed folder UID>'
 cd "$COURSES_ROOT/$COURSE"
 nebius-cxcli grafana import ./reference/grafana --recursive \
   --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
-  --folder-uid "$COURSE_GRAFANA_FOLDER_UID" \
-  --datasource-map "course-soperator-metrics=$COURSE_DATASOURCE_UID"
-nebius-cxcli grafana validate ./reference/grafana --recursive \
-  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
-  --datasource-map "course-soperator-metrics=$COURSE_DATASOURCE_UID"
+  --folder-uid "$COURSE_GRAFANA_FOLDER_UID"
 ```
 
-Imports take effect immediately. Add `--overwrite` only when intentionally updating
-those dashboards. Validation checks JSON and bindings; inspect the rendered
-contents separately. Individual labs reuse their prepared dashboards.
+In the wizard, select the installed local metrics datasource for
+`course-soperator-metrics`. The import saves dashboard declarations in the deployment
+project and installs them immediately. Add `--overwrite` only for an intentional
+update. Open the imported dashboards to inspect their contents. Repeat for other
+courses with a separate `course-<course-name>` folder. Publishing measured values
+is a later step; empty panels do not prevent the first GPU check.
 
-### Prepare course runtimes
+### Synchronize and prepare Python
 
-**Workstation, from `courses/` in your Git clone:**
+**Workstation:** verify the context, then synchronize. The script finds one login
+LoadBalancer in that context, copies sources to `~/courses`, and opens SSH there
+as `root`. It installs no dependencies and preserves remote-only results.
 
 ```bash
-./sync-labs.sh '<slurm-login-ip-address>'
+cd "$COURSES_ROOT"
+kubectl config current-context
+./sync-labs.sh
 ```
 
-This copies the courses and opens SSH in `~/courses`. A bare address uses `root`;
-use `user@<slurm-login-ip-address>` for another account. Rerun after local changes
-before submitting jobs; remote-only results remain in place. See `--help` for
-SSH identity, port and sync-only options.
+Use `./sync-labs.sh 'user@<login address>'` for another account or an explicit
+endpoint. See `./sync-labs.sh --help` for SSH key, port and sync-only options.
+With `--receipt FILE`, the private connection receipt records the port used for
+the sync, including an SSH alias's configured port. Use a new receipt path for
+each sync; existing receipts are never overwritten.
+Rerun synchronization after source changes.
 
-The script transfers source; prepare dependencies below once on the login node.
-From a separate workstation terminal, copy the private monitoring environment to
-that same account (match any custom SSH port/key):
-
-```bash
-scp "$COURSE_SETUP_DIR/environment.sh" '<user>@<slurm-login-ip-address>:courses/.course-environment.sh'
-```
-
-**Login node:** select the course and prepare shared publishing dependencies once:
+**Login node:** select a course and check Python. Use **3.12** explicitly;
+`python3` alone may select an older interpreter.
 
 ```bash
-umask 077
 export COURSE='gpu-fundamentals'
 cd "$HOME/courses/$COURSE"
-source "$HOME/courses/.course-environment.sh"
-source /etc/profile.d/99-nsight.sh
-export COURSE_TOOLS="$HOME/courses/.profiling-tools"
-python3 -m venv "$COURSE_TOOLS/venv"
-"$COURSE_TOOLS/venv/bin/pip" install -r tools/profiling-requirements.txt
-export COURSE_PUBLISH_PYTHON="$COURSE_TOOLS/venv/bin/python"
-mkdir -p "$HOME/courses/.runtime"
+python3.12 --version
 ```
 
-**Python courses:** create an isolated environment per course. Fundamentals,
-Optimizations, Training and Advanced Communication use `requirements.txt`;
-Inference uses `requirements-mechanics.txt` for its local mechanics labs.
-For Custom CUDA Kernels, skip this Python block and use Lab 13 below.
+If missing, an administrator can install Python on supported Ubuntu 24.04:
+
+```bash
+sudo apt update
+sudo apt install -y python3.12 python3.12-venv
+```
+
+Prepare the entire synchronized catalog once. This standard-library command creates
+private result, log and profiler-report directories for every practical lab, plus
+the shared `.runtime` and `.profiling-tools` directories; it
+preserves existing results and rejects unsafe existing directories. Rerun it after
+synchronizing new labs or replacing the checkout. It does not install dependencies,
+submit jobs, or contact monitoring services.
+
+```bash
+python3.12 "$HOME/courses/tools/course_setup.py" prepare --courses-root "$HOME/courses"
+```
+
+For an independently copied course, use its `tools/course_setup.py prepare
+--course-root "$PWD"` instead. Directory preparation cannot be deferred to a batch
+script: Slurm opens its log files before that script starts.
+
+Generic `python3` on another Ubuntu release does not guarantee 3.12. Keep package
+installation separate from jobs. Fundamentals, Optimizations, Training and Advanced
+Communication use `requirements.txt`; Inference's local mechanics use
+`requirements-mechanics.txt`. For Custom CUDA Kernels, skip this Python block and
+use the specialized container/build instructions below.
 
 ```bash
 requirements='requirements.txt'
 if [ "$COURSE" = llm-inference ]; then requirements='requirements-mechanics.txt'; fi
-python3 -m venv "$HOME/courses/.venvs/$COURSE"
+python3.12 -m venv "$HOME/courses/.venvs/$COURSE"
 export COURSE_PYTHON="$HOME/courses/.venvs/$COURSE/bin/python"
 "$COURSE_PYTHON" -m pip install -r "$requirements"
 export COURSE_TORCHRUN="$HOME/courses/.venvs/$COURSE/bin/torchrun"
 export COURSE_CUDNN_LIB="$("$COURSE_PYTHON" -c 'import importlib.util; print(next(iter(importlib.util.find_spec("nvidia.cudnn").submodule_search_locations)) + "/lib")')"
 test -f "$COURSE_CUDNN_LIB/libcudnn.so.9"
 export LD_LIBRARY_PATH="$COURSE_CUDNN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-declare -p COURSE_TOOLS COURSE_PUBLISH_PYTHON COURSE_PYTHON COURSE_TORCHRUN COURSE_CUDNN_LIB \
-  > "$HOME/courses/.runtime/$COURSE.sh"
+declare -p COURSE_PYTHON COURSE_TORCHRUN COURSE_CUDNN_LIB > "$HOME/courses/.runtime/$COURSE.sh"
 ```
 
-For specialized runtimes, continue in the owning guide:
+The cuDNN lookup finds the library installed with the selected Python environment;
+`LD_LIBRARY_PATH` makes it visible to native loaders. The final file records runtime
+selectors so a later login can restore the same environment.
 
-- [Inference serving](llm-inference/README.md#serving-runtime-preparation): container images and the separate serving client.
-- [CUDA Lab 13](custom-cuda-kernels/reference/labs/13_h100_preflight.md): CUDA image, CUTLASS and the course build.
-- [Training Lab 22](llm-training/reference/labs/22_transformer_engine_fp8.md): compatible Transformer Engine, CUDA headers and runtime compiler.
-- [Advanced runtime preparation](advanced-gpu-communication/README.md#runtime-preparation): fabric tools and vendor environments.
+### Check basic GPU execution
 
-### Verify environment readiness
-
-**Workstation, selected course directory:** require exactly one healthy results
-scrape and fresh telemetry for all GPUs on both workers:
+**Login node:** inspect the real partitions. An asterisk marks the default;
+partition membership does not itself request a GPU. Allocate one GPU explicitly.
+Add `--partition=<name>` if your site needs it.
 
 ```bash
+sinfo --format='%P %a %D %G'
+srun --nodes=1 --ntasks=1 --gres=gpu:1 nvidia-smi
+source /etc/profile.d/99-nsight.sh
+nsys --version
+ncu --version
+```
+
+`nvidia-smi` shows the NVIDIA driver and the CUDA level it supports.
+`nvcc --version`, when installed, shows the **compiler toolkit**. PyTorch has its
+own CUDA build version. These need compatibility, not identical numbers. A missing
+compiler does not prevent a prebuilt PyTorch wheel from running. Do not upgrade
+Soperator's CUDA/driver stack with a generic toolkit install; it belongs to the
+supported cluster images. See [NVIDIA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+and [Soperator limitations](https://github.com/nebius/soperator/blob/main/docs/limitations.md).
+
+With the Fundamentals runtime prepared, run its compatibility script.
+`labs/10_compatibility_stack.py` records:
+
+- PyTorch's version and the CUDA version it was built against.
+- The NVIDIA driver version from `nvidia-smi`.
+- The CUDA compiler release from `nvcc`, if installed.
+- GPU architectures supported by the PyTorch build.
+
+It executes a tiny GPU tensor operation and prints the result JSON path. It does
+not compile an extension or prove profiler, container or fabric readiness.
+
+```bash
+cd "$HOME/courses/gpu-fundamentals"
+source "$HOME/courses/.runtime/gpu-fundamentals.sh"
+srun --nodes=1 --ntasks=1 --gres=gpu:1 \
+  "$COURSE_PYTHON" labs/10_compatibility_stack.py --profile small
+```
+
+A successful operation and passing correctness fields establish basic GPU execution
+in this runtime. Full qualification appears below when you need profiling or
+monitored comparisons.
+
+## How to run the labs
+
+### Select a course and submit a job
+
+**Login node:** restore the selected runtime. Lab numbers identify files; follow
+the syllabus for their order. Python courses also restore the cuDNN library path.
+
+```bash
+export COURSE='gpu-fundamentals'
+cd "$HOME/courses/$COURSE"
+source "$HOME/courses/.runtime/$COURSE.sh"
+export LD_LIBRARY_PATH="${COURSE_CUDNN_LIB:+$COURSE_CUDNN_LIB:}${LD_LIBRARY_PATH:-}"
+```
+
+Each lab gives one native `sbatch` baseline command after a short explanation of
+its program. The one-time preparation above has already created its log directories.
+`--chdir` fixes the working directory; `%j` becomes the job number in separate
+stdout/stderr filenames. The launcher allocates the workload with `srun` and uses
+the selected runtime. The baseline explicitly disables external capture, including
+any profiling settings left in the login environment.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+```
+
+Submission means accepted, not completed. Record the printed job number, check
+that exact job, then read its own log and the JSON path printed there. Never select
+the newest file from an earlier run.
+
+```bash
+export LAB_JOB_ID='<job number printed by sbatch>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/01_cpu_gpu_crossover/logs/$LAB_JOB_ID.out"
+cat "results/01_cpu_gpu_crossover/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed in that job log>'
+cat "$RESULT_JSON"
+```
+
+Continue only after `COMPLETED` with exit code `0:0`. Check `lab_id`,
+`experiment.slurm_job_id`, `correctness`, profile and instrumentation fields.
+Reading JSON does not validate it. Multi-result launchers print several originals
+and aggregates; retain all records required by that lab.
+
+### Publish a measured comparison
+
+Original result JSON files retain the measurements. `publish_results.py` validates
+an allowed pair of unprofiled results, serializes its selection to Pushgateway and
+verifies the published generation. VMAgent scrapes those metrics and native GPU/node
+exporters into local VictoriaMetrics; Grafana queries that datasource. Sampled
+telemetry provides context; unprofiled benchmark timers measure the experiment.
+
+![Course measurements and GPU telemetry flowing to Grafana](docs/grafana.png)
+
+Arrows show data flow. VMAgent initiates scrapes; Grafana initiates queries.
+
+**Workstation, once before publishing:** `course_setup.py` discovers and verifies
+cxcli-owned monitoring services, datasource and routing. It installs nothing and
+writes private connection settings and a verification receipt. Choose a persistent
+lowercase learner identifier and a fresh output directory.
+
+```bash
+export COURSE='gpu-fundamentals' # use the course you are preparing
+cd "$COURSES_ROOT/$COURSE"
+export COURSE_WORKSPACE='<persistent lowercase learner identifier>'
+export COURSE_SETUP_DIR="$(dirname "$CLUSTER_CONFIG")/course-monitoring/$CLUSTER_TARGET"
+uv venv --python 3.12 --seed "$HOME/.gpu-course-tools"
+"$HOME/.gpu-course-tools/bin/pip" install -r tools/profiling-requirements.txt
+"$HOME/.gpu-course-tools/bin/python" tools/course_setup.py monitoring \
+  --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" \
+  --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT" \
+  --workspace "$COURSE_WORKSPACE" --output-dir "$COURSE_SETUP_DIR"
+source "$COURSE_SETUP_DIR/laptop-environment.sh"
+scp "$COURSE_SETUP_DIR/environment.sh" '<user>@<login address>:courses/.course-environment.sh'
+```
+
+Match the sync account and SSH key/port overrides. If installation changes,
+rediscover into a fresh directory and replace the copied worker environment.
+Keep connection files private.
+
+`verify_monitoring.py` checks current services against the receipt, requires one
+healthy results scrape and fresh telemetry for all GPUs on both workers. It briefly
+opens local forwards; it does not install or repair monitoring.
+In a new workstation terminal, restore the connection settings and select the
+course's checkout directory before verification. Use the same course you prepared:
+
+```bash
+export COURSE_SETUP_DIR='<absolute setup directory>'
+source "$COURSE_SETUP_DIR/laptop-environment.sh"
+export COURSES_ROOT='<absolute checkout path>/courses'
+export COURSE='gpu-fundamentals'
+cd "$COURSES_ROOT/$COURSE"
 "$HOME/.gpu-course-tools/bin/python" tools/verify_monitoring.py \
   --receipt "$COURSE_SETUP_DIR/monitoring.json" \
   --kubeconfig "$KUBECONFIG" --context "$CLUSTER_CONTEXT"
 ```
 
-**Login node, selected course directory:** verify both workers in the actual runtime:
+**Login node:** prepare publishing dependencies once, separately from the workload
+runtime. Restore the connection file and runtime settings before later publication.
 
 ```bash
+source "$HOME/courses/.course-environment.sh"
+export COURSE_TOOLS="$HOME/courses/.profiling-tools"
+python3.12 -m venv "$COURSE_TOOLS/venv"
+"$COURSE_TOOLS/venv/bin/pip" install -r tools/profiling-requirements.txt
+export COURSE_PUBLISH_PYTHON="$COURSE_TOOLS/venv/bin/python"
+declare -p COURSE_TOOLS COURSE_PUBLISH_PYTHON >> "$HOME/courses/.runtime/$COURSE.sh"
+```
+
+Use the lab's publication command and two exact JSON paths. The expected generation
+is `0` initially; afterward use the reviewed current selection generation. Keep
+original files if publication fails and inspect its cause. The publisher rejects
+invalid comparisons, failed correctness and unqualified runtimes.
+
+### Capture and qualify profiling
+
+A version check establishes command availability, not usable worker captures.
+Before profiling claims, qualify both workers in the actual execution runtime.
+`readiness.py` runs a tiny canary, captures Systems/Compute, checks matching
+kernels, NVTX and counters, and prints JSON/report paths.
+
+```bash
+source /etc/profile.d/99-nsight.sh
 srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=1 \
   "$COURSE_PYTHON" tools/readiness.py
 ```
 
-For CUDA, replace the Python invocation with
-`"$COURSE_CONTAINER_RUNNER" "$CUDA_IMAGE_DIGEST" python3 tools/readiness.py --workload cuda`.
-For inference containers, use the runner with `"$VLLM_IMAGE_DIGEST" python3 tools/readiness.py --workload torch`
-and export `COURSE_RUNTIME_ID` as that digest. For CUDA export
-`COURSE_RUNTIME_ID="$CUDA_IMAGE_DIGEST"` before the check. Repeat for each execution runtime.
-Publish the two printed JSON paths from the same runtime:
+Require one full GPU visible to each task. If an eight-GPU worker exposes other
+devices to `nvidia-smi`, have the owner qualify device isolation;
+`CUDA_VISIBLE_DEVICES` alone does not establish that boundary. For CUDA, replace
+the Python invocation with
+`"$COURSE_CONTAINER_RUNNER" "$CUDA_IMAGE_DIGEST" python3 tools/readiness.py --workload cuda`
+and export `COURSE_RUNTIME_ID="$CUDA_IMAGE_DIGEST"` first. For inference containers,
+use `"$VLLM_IMAGE_DIGEST" python3 tools/readiness.py --workload torch` through the same
+runner and export `COURSE_RUNTIME_ID` as that digest. Repeat for each runtime.
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab environment_readiness \
   --baseline "${WORKER_ONE_RESULT:?first worker JSON path}" \
-  --candidate "${WORKER_TWO_RESULT:?second worker JSON path}" --expected-generation 0
-```
-
-For later selections use the reviewed current generation. Open **Environment
-readiness** in the course Grafana folder, then inspect both workers' reports using
-the viewing steps below. Require matching canary kernels, NVTX, Compute counters
-and publication generation.
-
-## How to run the labs
-
-Reconnect with `./sync-labs.sh '<slurm-login-ip-address>'` from your workstation.
-For a downloaded lab kit, extract it on a prepared login node and enter its
-course directory; synchronization requires a Git clone.
-
-### Select a course and run a lab
-
-**Login node:** restore the prepared runtime. Follow the syllabus; lab numbers
-identify files rather than a universal execution order.
-
-```bash
-umask 077
-export COURSE='gpu-fundamentals'
-cd "$HOME/courses/$COURSE"
-source "$HOME/courses/.course-environment.sh"
-source "$HOME/courses/.runtime/$COURSE.sh"
-source /etc/profile.d/99-nsight.sh
-if [ -n "${COURSE_CUDNN_LIB:-}" ]; then
-  export LD_LIBRARY_PATH="$COURSE_CUDNN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
-python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
-  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
-```
-
-Use each lab's own command and runtime prerequisites for other courses.
-`small` and `large` select workload presets, independently of GPU model or the baseline/candidate choice. Some qualification, modeling and fixed server experiments use identical parameters in both profiles. Compare the effective configuration recorded by each lab, and keep the same profile within a comparison.
-
-Use `tools/submit_lab.py` for each submission; it creates private log files before
-calling Slurm and prints the job ID and log directory. Slurm writes
-`results/<lab>/logs/<job>.out` and `.err` in the remote course directory.
-After completion inspect the job and authoritative JSON results:
-
-```bash
-sacct -j '<job-id>' --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 01_cpu_gpu_crossover --job '<job-id>'
-```
-
-### Capture a profile
-
-Submit separate diagnostic runs; instrumentation changes timing. Nsight Systems
-shows CUDA activity, phase overlap and dependencies; Nsight Compute examines one
-selected kernel's counters. PyTorch profiling can attribute framework operations.
-Use the tool and capture recipe assigned by the lab.
-
-```bash
-python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
-  --export=ALL,COURSE_PROFILE_TOOL=nsys \
-  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
-```
-
-Identify the measured kernel in Systems, then capture it with Compute:
-
-```bash
-export COURSE_PROFILE_KERNEL='<regular expression matching the measured kernel>'
-python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover \
-  --export=ALL,COURSE_PROFILE_TOOL=ncu \
-  slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
-```
-
-Use each lab's declared capture recipe; distributed, server and CPU-only labs
-have specific applicability limits. A nonempty report alone does not establish
-that it captured the experiment.
-
-Kernel expressions match full demangled names, with name simplification
-disabled. This includes template arguments: a GEMM may appear as `Kernel2` in
-the short-name view while its full name identifies the matrix operation.
-
-### Compare results in Grafana
-
-Choose two successful, equivalent, unprofiled runs and follow the lab's allowed
-comparison. From the login node publish their printed JSON paths:
-
-```bash
-"$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_cpu_gpu_crossover \
-  --baseline "${BASELINE_RESULT:?baseline JSON path}" \
-  --candidate "${CANDIDATE_RESULT:?candidate JSON path}" \
+  --candidate "${WORKER_TWO_RESULT:?second worker JSON path}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
 ```
 
-Inspect the selected comparison using the [Grafana browsing steps](#browsing-grafana-and-nsight-profilers).
+Open **Environment readiness** and both workers' reports using the browsing steps.
+Require matching canary kernels, NVTX, Compute counters and publication generation.
+
+For each experiment, first run the baseline without external profiling and check
+correctness. Then use the lab's explicit `srun ... nsys profile ...` command to
+capture execution on its allocated GPU worker. This command waits for resources
+and stays attached until the diagnostic finishes. Keep that terminal open; the
+per-job logs and reports remain in the prepared lab directories. Coordinated
+NIXL/Dynamo diagnostics keep their native `sbatch` allocation and pass visible `nsys profile`
+arguments to each GPU worker; their lifecycle driver preserves readiness and cleanup.
+
+Systems reveals CPU/GPU work, transfers and gaps. Inspect the exact report with
+`nsys stats <report.nsys-rep>` and the Systems timeline. If a particular kernel
+limits the workload, select it from that trace and use the lab's native
+`srun ... ncu ...` command. Inspect its counters with `ncu --import <report.ncu-rep>
+--page details` and Compute. Each lab specifies its relevant NVTX range and kernel
+selection; CPU models and unsupported distributed/server replays explain why
+Compute is omitted.
+
+The command-local `COURSE_CAPTURE=1` enables the supplied NVTX annotations and marks
+result JSON as diagnostic. `COURSE_PROFILE_TOOL` records the selected tool; neither
+variable launches a profiler in these native commands. Report names incorporate
+the job, step and worker/rank identity. Distributed capture runs inside each rank;
+serving capture runs around the GPU server with explicit start/stop controls.
+The complete native commands and lifecycle sources accompany those labs.
+
+After changing one factor, repeat the baseline command without external profiling.
+Use these clean runs for performance comparisons: Compute replay and profiler
+collection can alter timings. A nonempty report is only a first check; verify it
+contains this experiment's kernels, copies or NVTX ranges before interpreting it.
+[NVIDIA's triage workflow](https://docs.nvidia.com/nsight-compute/ComputeTriage/)
+and [profiling overhead guidance](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#overhead)
+explain the Systems-to-Compute investigation and measurement limits.
+
+### Prepare specialized runtimes when needed
+
+Prepare these **before** the affected course's first job:
+
+- [Inference serving](llm-inference/README.md#serving-runtime-preparation): immutable images and the separate serving client.
+- [CUDA Lab 13](custom-cuda-kernels/reference/labs/13_h100_preflight.md): container, CUTLASS, compilation/execution checks and the completed build directory.
+- [Training Lab 22](llm-training/reference/labs/22_transformer_engine_fp8.md): compatible Transformer Engine, CUDA headers and runtime compiler.
+- [Advanced runtime preparation](advanced-gpu-communication/README.md#runtime-preparation): fabric tools, runtime selectors and vendor environments.
+
+The CUDA and inference example runners use Apptainer. They validate immutable image
+digests, use `managed_profilers.py` to discover complete installed profiler packages
+for read-only mounts, and execute the requested command with GPU access. An
+administrator may install Apptainer on supported Ubuntu with the
+[official PPA instructions](https://apptainer.org/docs/admin/main/installation.html):
+
+```bash
+sudo apt update
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y ppa:apptainer/ppa
+sudo apt update
+sudo apt install -y apptainer
+apptainer version
+```
+
+Check the prepared runner inside a Slurm GPU allocation with its approved image.
+A login-node version check does not prove worker, GPU, user-namespace or nested
+container support. Preserve the site's supported runtime and driver configuration.
 
 ### Optional agent-assisted runs
 
-From the workstation's `courses/` directory install the project-scoped skill:
+From the workstation's `courses/` directory, install the project-scoped skill:
 
 ```bash
 npx --yes skills add ./skills/run-labs -a codex --yes
 ```
 
-The first `--yes` skips npm confirmation; the last skips the skill wizard and
-optional extra-skill offer. Do not add `--global`. Use `-a claude-code` for Claude.
-On a prepared environment, `$run-labs run --course gpu-fundamentals` runs both
-workload profiles and collects verified results. See the [run-labs skill](skills/run-labs/SKILL.md)
-for selection, resume and evidence details.
-For qualification labs without numeric metrics, the evidence crop must show
-the selected generation and both correctness values after the panels render.
-The skill independently rechecks the prepared monitoring runtime before jobs.
-Resuming alone does not repeat setup or issue new connection files; missing
-runtime prerequisites still block execution. Existing local-only metrics routing
-must remain local-only.
-The campaign may fully recover its identified Grafana service, Nsight
-Systems/Compute viewers and streamers, `nsys`/`ncu` runtimes, browser sessions and
-owned forwards as often as needed, without a fixed recovery count or repeated
-approval within existing target authority. It restores exact-target loopback
-connections for all three services, retaining Nsight HTTP/TURN mappings, and
-checks visible browser responses. If reconnection is insufficient, it may restart
-the affected authorized deployment/service while preserving configuration,
-persistent storage, originals and unrelated work. Exited prior-session forwards
-reuse existing access authorization; local reconnection does not need remote
-service-restart approval.
-A terminal profiler-tool failure is recovered through a fresh campaign for only
-the affected lab/profile after diagnosis, repair and normal claim release. That
-unit runs its complete unchanged recipe; unaffected completed units and failed
-evidence are preserved. Viewer-only recovery resumes capture without GPU replay.
-See [recovery details](skills/run-labs/references/tool-recovery.md).
-For transfer-only labs such as Fundamentals Lab 03, run-labs verifies the
-declared memory copies and their actual Systems views. A CUDA kernel is not
-required to demonstrate a host-to-device transfer.
-
-Inference Lab 10 retains the guide's in-process diagnostic mode and requests
-256 GiB of host memory only for Compute replay. The runner freezes this request
-on that stage; clean timing retains its normal engine mode and allocation.
-Compute selects a matrix kernel in measured generation; verify its role in
-Systems before interpreting counters for that individual launch.
-
-Inference Lab 30 runs two fresh qualification jobs per protocol in each profile.
-It publishes OpenAI and Triton pairs separately; the bounded requests qualify
-their APIs without establishing an engine speedup or latency distribution.
-Before submitting container jobs, verify that the prepared runner admits the
-newly synchronized campaign workspace and can import its required packages; see the
-[prepared environment checks](skills/run-labs/references/environment.md).
-
-Inference Lab 35 repeats each CUDA, CPU and one-token CPU configuration for
-separate equivalent publications. Only its CUDA configuration has a Systems
-capture; both profile labels retain the same fixed bigram exercise.
-
-Inference Lab 32 and Training Lab 31 each run two independent three-trial
-capstone groups. Retain all six originals and both aggregates; publish
-corresponding children with matching seeds and variant orders. Training Lab 32
-repeats each device configuration separately and profiles only CUDA. Inference
-Lab 36 publishes five one-control policy comparisons; its computed costs are
-model outputs, not measured storage or serving latency.
+This optional command requires Node.js/npm. The first `--yes` skips npm's prompt;
+the last skips the skill wizard. Do not add `--global`; use `-a claude-code` for
+Claude. On a fully qualified environment, `$run-labs run --course gpu-fundamentals`
+runs both profiles and collects verified evidence. The
+[run-labs skill](skills/run-labs/SKILL.md) owns preparation, recovery, resume and
+lab-specific recipes. Its submission/inspection helpers remain for automation;
+the learner commands above expose those operations directly.
 
 ## Browsing Grafana and Nsight Profilers
 
 ### Connect from your workstation
 
-Use the deployment configuration and target selected during setup. These commands
+In each new workstation terminal, restore CLUSTER_CONFIG and CLUSTER_TARGET
+from your setup notes, or source the generated laptop-environment.sh using its
+absolute path after preparing publication. These commands
 check the installed services and print their complete connection instructions:
 
 ```bash
@@ -457,7 +523,7 @@ Sampled telemetry provides context; unprofiled measurements determine performanc
 
 ### Browse Nsight Compute and Systems
 
-**Login node:** the helper prints the private report path. Copy only a selected
+**Login node:** the capture prints the private report path. Copy only a selected
 completed native report into the installed report submount. These copies are
 readable by viewer users; original results and logs remain private.
 

@@ -97,10 +97,10 @@ its installed CUDA data-validation plugin while preserving owner library paths.
 
 DDP and FSDP memory dashboards convert the artifact’s MiB values to bytes; Grafana selects the displayed byte unit.
 
-Every submission uses `tools/submit_lab.py`, which prepares private per-lab logs. Shared Nsight tools, private Grafana and publication helpers are installed once in shared environment setup. JSON artifacts remain authoritative; selected comparison metrics are a replaceable cache. `small` and `large` are workload-size profiles.
+Submit with native `sbatch` after preparing private per-lab logs as shown below. Follow the Lab Guide for shared Nsight tools and private Grafana, then prepare publishing when you need monitored comparisons. JSON artifacts remain authoritative; selected comparison metrics are a replaceable cache. `small` and `large` are workload-size profiles.
 
 Keep custom output directories under `results/`, as in Lab 24's batch-one
-example, so `tools/inspect_results.py` can find completed artifacts by job ID.
+example. Inspect the exact JSON paths printed by each completed job.
 
 Lab 14's separate PyTorch trace shows framework operations, input shapes and
 CUDA activity. Its preallocated tensors may produce no allocation events;
@@ -130,7 +130,7 @@ The new NVIDIA environments are isolated qualification candidates. Source valida
 python3 tools/validate_course.py
 ```
 
-The self-contained HTML embeds the full lab guides, source listings, dashboard downloads and a complete lab kit. It contains no separate conceptual lessons. Estimated guided time is 64 hours, excluding provisioning, queues and independent investigations.
+The self-contained HTML embeds the full lab guides, source listings and dashboard downloads. Synchronize the repository sources using the Lab Guide. It contains no separate conceptual lessons. Estimated guided time is 64 hours, excluding provisioning, queues and independent investigations.
 
 Nsight Systems capture commands and report views are assigned per lab in `reference/observability.json` and repeated in each lab guide. Shared setup imports each course dashboard directory once; CPU-only and protocol-only results omit unrelated GPU telemetry. Explicit profiling exceptions explain which evidence to use instead. Keep captures separate from the unprofiled result pair. Labs 30–33 show separate diagnostic commands for both comparison settings; run them sequentially and retain both sets of reports.
 
@@ -143,7 +143,7 @@ still has 34 numbered labs; native Compute qualification remains pending.
 
 ## Runtime preparation
 
-After the shared Python/publishing setup, work from
+After the shared Python setup, work from
 `~/courses/advanced-gpu-communication`. Prepare fabric tools in
 [Lab 01](reference/labs/01_fabric_topology.md) and MPI-enabled NCCL Tests in
 [Lab 10](reference/labs/10_nccl_tests_report.md). Source

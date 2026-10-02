@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
 if [[ ${1:-} == --help ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab LAB slurm/vendor_job.sbatch labs/LAB.py [options]\n'
+  printf 'Usage: sbatch slurm/vendor_job.sbatch labs/LAB.py [options]\n'
   exit 0
 fi
 : "${SLURM_JOB_ID:?submit through the course launcher}"

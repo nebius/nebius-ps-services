@@ -7,6 +7,7 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
 ## Contents
 
 - [Installation](#installation)
+  - [Credentials and tools](#credentials-and-tools)
 - [Quick start](#quick-start)
 - [Core concepts](#core-concepts)
 - [Commands by category](#commands-by-category)
@@ -15,7 +16,8 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
   - [Deployment, Terraform, and Flux](#deployment-terraform-and-flux)
   - [MK8s](#mk8s)
   - [Soperator](#soperator)
-  - [Applications and Grafana](#applications-and-grafana)
+  - [Helm-chart (apps) upgrade](#helm-chart-apps-upgrade)
+  - [Grafana](#grafana)
   - [VM access](#vm-access)
   - [Authentication, CI, and reporting](#authentication-ci-and-reporting)
 - [Security and operational essentials](#security-and-operational-essentials)
@@ -24,29 +26,55 @@ and provides MK8s, Soperator, Grafana, and access-management commands.
 
 ## Installation
 
-Use Python **3.12, 3.13, or 3.14**. Install into a virtual environment and keep
-that environment active when running the CLI.
+Use Git, an installed Python **3.12, 3.13, or 3.14**, and uv **0.12.9 or a
+compatible 0.12.x release**. Install the CLI with `uv tool` to run
+`nebius-cxcli` from any directory without activating a virtual environment.
 
-From the repository's `services/nebius-cxcli` directory:
+If uv is not installed, install it with an existing, working `pipx`:
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
+pipx install 'uv>=0.12.9,<0.13'
+```
+
+If `pipx` is unavailable, use an installation method from the
+[official uv guide](https://docs.astral.sh/uv/getting-started/installation/).
+Ensure `uv --version` works in your terminal before continuing.
+
+From the directory where you want to keep the checkout:
+
+```bash
+git clone https://github.com/nebius/nebius-ps-services.git
+uv tool install --python 3.12 --no-python-downloads \
+  --editable ./nebius-ps-services/services/nebius-cxcli
+uv tool update-shell
+```
+
+The example selects an already-installed Python 3.12; use `3.13` or `3.14` if
+that is your installed version. If you already have a checkout, skip the clone
+and use its `services/nebius-cxcli` path. Keep that checkout at the same path:
+editable installation uses its source directly, so source edits affect the CLI.
+After dependency or package-metadata changes, rerun the installation command
+with `--reinstall`.
+
+Open a new terminal after shell setup, then verify the installed command:
+
+```bash
 nebius-cxcli --version
+nebius-cxcli --help
 ```
 
 Or install a chosen repository branch or release tag. Replace `BRANCH_OR_TAG`
-before running the install command:
+before running this alternative installation command:
 
 ```bash
-python3.12 -m venv ~/.venvs/nebius-cxcli
-source ~/.venvs/nebius-cxcli/bin/activate
-python -m pip install --upgrade pip
-python -m pip install "git+https://github.com/nebius/nebius-ps-services.git@BRANCH_OR_TAG#subdirectory=services/nebius-cxcli"
-nebius-cxcli --help
+uv tool install --python 3.12 --no-python-downloads \
+  "git+https://github.com/nebius/nebius-ps-services.git@BRANCH_OR_TAG#subdirectory=services/nebius-cxcli"
+uv tool update-shell
 ```
+
+This option does not depend on retaining a local checkout. Open a new terminal
+and run the same version/help checks afterward. Contributor setup is covered in
+the [development guide](docs/development.md).
 
 ### Credentials and tools
 
@@ -311,14 +339,17 @@ See [destruction](docs/mk8s.md#destruction) before either form.
 
 | Command | Input | Purpose |
 | --- | --- | --- |
-| `soperator create` | Deployments root | Configure a fresh Soperator cluster |
-| `soperator discover` | Output root and cloud scope flags | Inspect an existing cluster into a support bundle |
-| `soperator onboard` | Config path or deployments root | Register an existing official Soperator installation |
+| `soperator create` | Deployments path | Configure a fresh Soperator cluster |
+| `soperator discover` | Output path and cloud scope flags | Inspect an existing cluster into a support bundle |
+| `soperator onboard` | Config path or deployments path | Register an existing official Soperator installation |
 | `soperator status` | `CONFIG_YAML` | Show operation state and live health; `--no-live` uses recorded state |
 | `soperator upgrade` | `CONFIG_YAML` | Plan or execute an integrated Soperator/Kubernetes/OS/GPU upgrade |
-| `soperator profiling show` | `CONFIG_YAML` | Print access commands for deployed Nsight viewers |
 | `soperator profiling install` | `CONFIG_YAML` | Install the profiling stack and worker tooling |
+| `soperator profiling show` | `CONFIG_YAML` | Print access commands for deployed Nsight viewers |
 | `soperator profiling recover` | `CONFIG_YAML` and failed-job selectors | Preview or perform supported profiling-job recovery |
+
+Deployments and output paths are directories; a config path identifies the
+project's `config.yaml` file.
 
 Create configuration, then follow the shared quick-start deployment sequence:
 
@@ -376,11 +407,19 @@ and separate from lifecycle completion. See the [Soperator guide](docs/soperator
 for discovery, profiles, job controls, recovery and diagrams, and the
 [Nsight guide](docs/nsight-profiling.md) for profiling installation and recovery.
 
-### Applications and Grafana
+### Helm-chart (apps) upgrade
 
 | Command | Input | Purpose |
 | --- | --- | --- |
 | `upgrade helm-chart` | `CONFIG_YAML`, app selector, and `--to-version` | Upgrade an ordinary app chart |
+
+For ordinary chart upgrades use `upgrade helm-chart`; Soperator release changes
+belong to `soperator upgrade`.
+
+### Grafana
+
+| Command | Input | Purpose |
+| --- | --- | --- |
 | `grafana install` | `--config CONFIG_YAML --target TARGET_ID` | Configure Grafana/telemetry, render, and deploy |
 | `grafana show` | `--config CONFIG_YAML --target TARGET_ID` | Print access instructions for deployed Grafana |
 | `grafana import` | Dashboard path and `--config CONFIG_YAML` | Install dashboards and save project intent |
@@ -402,9 +441,13 @@ Collectors and datasources follow that routing and the target type.
 [dashboard guide](docs/grafana-dashboards.md) for import/export examples,
 datasource mapping, overwrite rules, and ownership.
 
-For ordinary chart upgrades use `upgrade helm-chart`; Soperator release changes
-belong to `soperator upgrade`. See [observability](docs/observability.md) for
-routing, authentication, and private browser access.
+Repeated imports avoid redundant conversion of already-canonical dashboards;
+cached Kubernetes authentication avoids loading the full CLI for each request.
+Cache misses retain the existing credential exchange and refresh behavior.
+Ownership checks, version guards, recovery copies and readback still run.
+
+See [observability](docs/observability.md) for routing, authentication, and private
+browser access.
 
 ### VM access
 

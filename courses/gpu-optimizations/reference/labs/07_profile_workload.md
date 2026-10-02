@@ -4,7 +4,7 @@ A useful profile connects application regions to GPU activity so that you can ex
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/07_profile_workload.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Complete the [diagnostic tooling setup](../../../README.md#how-to-set-up-the-lab) on the compute node. Use one H100. Trace files may contain paths or environment details and must remain private until reviewed.
 
@@ -14,30 +14,41 @@ Discover installed section sets and permissions on the target rather than hard-c
 
 The source generates tensors and executes projection, activation, and reduction work inside named ranges. The literal `train_step` range is only a label: there is no backward pass or optimizer update. Internal profiling aggregates CUDA operators and optionally exports a trace. External-only mode leaves NVTX ranges available without nesting PyTorch Profiler inside the NVIDIA tool.
 
+![Framework-to-kernel attribution with NVTX](../diagrams/framework-to-kernel-attribution-with-nvtx.svg)
+
 Given a slow `aten::linear` region in PyTorch Profiler, inspect a Systems trace and find a 400-microsecond CPU gap before one 80-microsecond GEMM. Change the hypothesis from “inefficient GEMM” to “host launch delay.” Expected observation: Nsight Compute is unnecessary until a control removes the gap and the GEMM itself remains limiting; a privileged-counter error is recorded as a blocker, not bypassed.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/07_profile_workload.py` executes labeled matrix projection, activation, and reduction regions. It writes a bounded CUDA operator summary, checks finite output, and can export a PyTorch trace or disable its internal profiler for Nsight capture.
 
-Choose one profiler route per run. The first command requests an exported PyTorch trace; the second collects an external system timeline with internal profiling disabled.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 07_profile_workload slurm/single_gpu.sbatch labs/07_profile_workload.py --profile small --export-trace
-python3 tools/submit_lab.py --lab 07_profile_workload slurm/nsys_single_gpu.sbatch labs/07_profile_workload.py --profile small --external-only
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/07_profile_workload/logs/%j.out" \
+  --error="$PWD/results/07_profile_workload/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/07_profile_workload.py --profile small --export-trace
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 07_profile_workload --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/07_profile_workload/logs/$LAB_JOB_ID.out"
+cat "results/07_profile_workload/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Confirm finite output and inspect `trace_exported` and the available CUDA table for the chosen mode. Default execution alone does not export a Chrome trace. A captured range is not proof that its human-readable name describes a complete training step.
 
@@ -53,6 +64,8 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 
 Select two successful, equivalent diagnostic runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot; the two slots are independent diagnostic repetitions. Their instrumented durations are not acceptance timings. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 07_profile_workload \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
@@ -64,25 +77,61 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Choose one profiler route per run. The first command requests an exported PyTorch trace; the second collects an external system timeline with internal profiling disabled.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/07_profile_workload/logs/%j.out" \
+  --error="$PWD/results/07_profile_workload/logs/%j.err" slurm/single_gpu.sbatch labs/07_profile_workload.py --profile small --export-trace
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/07_profile_workload/logs/%j.out" \
+  --error="$PWD/results/07_profile_workload/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/07_profile_workload.py --profile small --external-only
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Follow one application range into its operator and kernel activity. Identify whether time lies in large kernels, many small launches, or idle gaps. Explain what further evidence would distinguish CPU starvation from device saturation.
+
+![Nsight Systems evidence for synchronization and launch fixes](../diagrams/nsight-systems-evidence-for-synchronization-and-launch-fixes.svg)
 
 Higher-detail tools add overhead, serialization, replay, storage, and analysis cost. Stop escalation as soon as the current hypothesis is confirmed or disproved; then remeasure the candidate without the profiler.
 
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 07_profile_workload --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/07_profile_workload.py --profile small --external-only
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/07_profile_workload/logs/capture-%J-%t.out" \
+  --error="results/07_profile_workload/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/07_profile_workload/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/07_profile_workload.py --profile small --external-only
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The command selects `projection`, the named range around `x @ weight`, so tensor initialization falls outside the filter. The launcher captures the first matching projection kernel, which belongs to warmup with the default arguments. Its launch-count limit applies after the range and kernel-name filters. Match the selected GEMM and `projection` range to the Systems trace before interpreting its counters; this diagnostic does not measure a complete step or steady-state application latency. To investigate a different kernel, select its named range with `COURSE_PROFILE_RANGE` and its regular expression with `COURSE_PROFILE_KERNEL`.
+For one kernel, use the same fixed workload in a separate Compute capture. The command selects `projection`, the named range around `x @ weight`, so tensor initialization falls outside the filter. The Compute command captures the first matching projection kernel, which belongs to warmup with the default arguments. Its launch-count limit applies after the range and kernel-name filters. Match the selected GEMM and `projection` range to the Systems trace before interpreting its counters; this diagnostic does not measure a complete step or steady-state application latency. To investigate a different kernel, select its named range with `--nvtx-include RANGE/` and its regular expression with `COURSE_PROFILE_KERNEL`.
 
 ```bash
-python3 tools/submit_lab.py --lab 07_profile_workload --export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=projection slurm/single_gpu.sbatch labs/07_profile_workload.py --profile small --external-only
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/07_profile_workload/logs/capture-%J-%t.out" \
+  --error="results/07_profile_workload/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include projection/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/07_profile_workload/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/07_profile_workload.py --profile small --external-only
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Follow one named phase into CUDA launches and GPU activity. Independently choose a suspected kernel for Compute and state which counter result would falsify the hypothesis.
 

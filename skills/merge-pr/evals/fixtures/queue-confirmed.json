@@ -1,0 +1,86 @@
+{
+  "fixture_kind": "synthetic API observations; no live services",
+  "target": {
+    "host": "github.com",
+    "repository": "example/widget",
+    "branch": "release/stable",
+    "pr_number": 42,
+    "pr_url": "https://github.com/example/widget/pull/42",
+    "guarded_head_sha": "1111111111111111111111111111111111111111"
+  },
+  "requested": {
+    "merge_method": "squash",
+    "delete_branch": true
+  },
+  "command": {
+    "issued": true,
+    "exit_code": 0
+  },
+  "clock": {
+    "now": "2026-01-01T12:00:10Z",
+    "settlement_elapsed_seconds": 10
+  },
+  "pr": {
+    "merged": false,
+    "merged_at": null,
+    "state": "open",
+    "merge_commit_sha": "4444444444444444444444444444444444444444",
+    "head": {
+      "sha": "1111111111111111111111111111111111111111"
+    },
+    "base": {
+      "repo": {
+        "full_name": "example/widget"
+      },
+      "ref": "release/stable"
+    }
+  },
+  "graphql": {
+    "id": "PR_example_42",
+    "number": 42,
+    "url": "https://github.com/example/widget/pull/42",
+    "state": "OPEN",
+    "merged": false,
+    "mergedAt": null,
+    "isInMergeQueue": true,
+    "autoMergeRequest": null,
+    "mergeQueueEntry": {
+      "id": "MQE_example_42",
+      "enqueuedAt": "2026-01-01T12:00:00Z",
+      "state": "AWAITING_CHECKS",
+      "position": 2,
+      "headCommit": {
+        "oid": "4444444444444444444444444444444444444444"
+      },
+      "pullRequest": {
+        "id": "PR_example_42",
+        "number": 42,
+        "url": "https://github.com/example/widget/pull/42"
+      }
+    }
+  },
+  "final_refresh": {
+    "id": "PR_example_42",
+    "number": 42,
+    "url": "https://github.com/example/widget/pull/42",
+    "state": "OPEN",
+    "merged": false,
+    "mergedAt": null,
+    "isInMergeQueue": true,
+    "autoMergeRequest": null,
+    "mergeQueueEntry": {
+      "id": "MQE_example_42",
+      "enqueuedAt": "2026-01-01T12:00:00Z",
+      "state": "AWAITING_CHECKS",
+      "position": 2,
+      "headCommit": {
+        "oid": "4444444444444444444444444444444444444444"
+      },
+      "pullRequest": {
+        "id": "PR_example_42",
+        "number": 42,
+        "url": "https://github.com/example/widget/pull/42"
+      }
+    }
+  }
+}

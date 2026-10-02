@@ -75,7 +75,7 @@ def test_glossary_escapes_content_and_preserves_code():
 
 @pytest.mark.parametrize("profile", ["gpu-fundamentals", "soperator"])
 def test_optional_references_follow_mental_model_and_local_appendices_fail(
-    profile, tmp_path
+    profile, tmp_path, authored_figure_placeholders
 ):
     source = (ROOT / profile / "COURSE.md").read_text()
     heading = (
@@ -96,7 +96,7 @@ def test_optional_references_follow_mental_model_and_local_appendices_fail(
         + source[boundary:]
     )
     lesson = parse(path)[2][0]
-    rendered = cb_content.lesson_markup(lesson, 1, {destination: "#practice" for value in lesson.values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)})
+    rendered = cb_content.lesson_markup(lesson, 1, {destination: "#practice" for value in lesson.values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)}, figures=authored_figure_placeholders(lesson))
     assert cb_metadata.valid_lesson_fields(list(lesson)[1:])
     assert rendered.index('class="mental-model"') < rendered.index(
         'class="lesson-references"'

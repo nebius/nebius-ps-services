@@ -9,10 +9,10 @@ import os
 import re
 from pathlib import Path
 
-from course_evidence import allocation_gpu_family
 from common import add_common_args, validate_common_args, write_result
+from course_evidence import allocation_gpu_family
 from job_processes import Processes, allocated_nodes, private_folder, start_etcd, step
-from vendor_capture import worker_command
+from vendor_capture import add_worker_prefix, validate_worker_prefix, worker_command
 
 
 def parse_rows(text, block_bytes, batch_size):
@@ -100,7 +100,9 @@ def main():
     add_common_args(parser)
     parser.set_defaults(warmup=50, iterations=500)
     parser.add_argument("--progress-thread", choices=("off", "on"), default="off")
+    add_worker_prefix(parser)
     args = parser.parse_args()
+    validate_worker_prefix(args)
     validate_common_args(args)
     if args.iterations < 100:
         parser.error(
@@ -123,7 +125,7 @@ def main():
                         "env",
                         "CUDA_VISIBLE_DEVICES=0",
                         *worker_command(
-                            command, folder / f"rank{rank}.stdout", ucx=True
+                            command, folder / f"rank{rank}.stdout", ucx=True, prefix=args.worker_prefix
                         ),
                     ],
                 ),

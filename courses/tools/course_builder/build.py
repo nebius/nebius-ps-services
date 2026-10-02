@@ -11,7 +11,7 @@ from html.parser import HTMLParser
 from urllib.parse import unquote, urlsplit
 
 from course_archives import MAX_FILE_BYTES, archive_bytes, result_entries, write_atomic
-from publication import check_budget
+from publication import check_budget, format_mb
 
 from .config import COURSES, ROOT
 from .metadata import course_metadata
@@ -95,9 +95,9 @@ def publication_preflight(outputs: dict[Path, bytes]) -> dict:
         max_site_bytes=1_000_000_000,
     )
     print(
-        f"Publication estimate: {report['total_bytes']} bytes; largest {report['largest_path']} "
-        f"({report['largest_bytes']} bytes); site headroom {report['headroom_bytes']} bytes; "
-        f"limits {report['max_file_bytes']} bytes/file, {report['max_site_bytes']} bytes/site",
+        f"Publication estimate: {format_mb(report['total_bytes'])}; largest {report['largest_path']} "
+        f"({format_mb(report['largest_bytes'])}); site headroom {format_mb(report['headroom_bytes'])}; "
+        f"limits {format_mb(report['max_file_bytes'])}/file, {format_mb(report['max_site_bytes'])}/site",
         flush=True,
     )
     return report
@@ -155,4 +155,4 @@ def main() -> None:
             write_atomic(path, content)
             print(f"built {output_label(path)}", flush=True)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-        raise SystemExit(str(error)) from error
+        report_check(str(error), current=False)

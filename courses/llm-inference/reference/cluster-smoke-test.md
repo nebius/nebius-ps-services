@@ -14,7 +14,6 @@ site-approved container runner and immutable image identities before engine
 jobs. Before submitting, set the submitting shell's file-creation mask:
 
 ```bash
-umask 077
 "$COURSE_PYTHON" -m pip check
 python3 tools/validate_course.py
 ```
@@ -26,7 +25,9 @@ follow [evidence-security.md](evidence-security.md) before sharing aggregates.
 ## Gate 1: allocation and artifact identity
 
 ```bash
-python3 tools/submit_lab.py --lab 16_model_artifact_audit slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/16_model_artifact_audit/logs/%j.out" \
+  --error="$PWD/results/16_model_artifact_audit/logs/%j.err" slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small
 ```
 
 Require a full non-MIG H100, compute capability 9.0, immutable model/tokenizer
@@ -39,13 +40,27 @@ to Gate 5 and must use the two-node launcher.
 ## Gate 2: generation and cache semantics
 
 ```bash
-python3 tools/submit_lab.py --lab 35_inference_basics slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda
-python3 tools/submit_lab.py --lab 08_kv_cache slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
-python3 tools/submit_lab.py --lab 17_sampling_semantics slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small
-python3 tools/submit_lab.py --lab 18_padding_bucketing slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small
-python3 tools/submit_lab.py --lab 23_speculative_decoding slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small
-python3 tools/submit_lab.py --lab 24_sdpa_attention slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/35_inference_basics/logs/%j.out" \
+  --error="$PWD/results/35_inference_basics/logs/%j.err" slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_kv_cache/logs/%j.out" \
+  --error="$PWD/results/08_kv_cache/logs/%j.err" slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/17_sampling_semantics/logs/%j.out" \
+  --error="$PWD/results/17_sampling_semantics/logs/%j.err" slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/18_padding_bucketing/logs/%j.out" \
+  --error="$PWD/results/18_padding_bucketing/logs/%j.err" slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/23_speculative_decoding/logs/%j.out" \
+  --error="$PWD/results/23_speculative_decoding/logs/%j.err" slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/24_sdpa_attention/logs/%j.out" \
+  --error="$PWD/results/24_sdpa_attention/logs/%j.err" slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small
 ```
 
 Lab 35 can first be studied with `--device cpu` without downloads or an engine.
@@ -65,11 +80,21 @@ shape, dtype, and correctness tolerances fixed.
 ## Gate 3: workload, capacity, and scheduling mechanics
 
 ```bash
-python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small
-python3 tools/submit_lab.py --lab 26_kv_capacity slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small
-python3 tools/submit_lab.py --lab 27_paged_kv slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small
-python3 tools/submit_lab.py --lab 28_continuous_batching slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
-python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/25_workload_metrics/logs/%j.out" \
+  --error="$PWD/results/25_workload_metrics/logs/%j.err" slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/26_kv_capacity/logs/%j.out" \
+  --error="$PWD/results/26_kv_capacity/logs/%j.err" slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/27_paged_kv/logs/%j.out" \
+  --error="$PWD/results/27_paged_kv/logs/%j.err" slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/28_continuous_batching/logs/%j.out" \
+  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/29_quantization/logs/%j.out" \
+  --error="$PWD/results/29_quantization/logs/%j.err" slurm/single_gpu.sbatch labs/29_quantization.py --profile small
 ```
 
 Define ISL/OSL, arrival pattern, concurrency, TTFT/ITL timestamp endpoints and AIPerf aggregation conventions, and output
@@ -98,10 +123,18 @@ KV persistence, GPUDirect Storage activation, TTFT or storage performance.
 ## Gate 4: one-GPU serving and streaming
 
 ```bash
-python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small
-python3 tools/submit_lab.py --lab 11_serving_client slurm/vllm_benchmark.sbatch
-python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch
-python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/11_serving_client/logs/%j.out" \
+  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/vllm_benchmark.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/20_prefix_cache_client/logs/%j.out" \
+  --error="$PWD/results/20_prefix_cache_client/logs/%j.err" slurm/vllm_prefix_cache.sbatch
 ```
 
 Use the launchers' documented model and immutable revision inputs. Keep cold
@@ -137,7 +170,9 @@ bash slurm/trtllm_triton.sbatch --help
 bash slurm/aiperf.sbatch --help
 bash slurm/dynamo_disaggregated_preflight.sbatch --help
 bash slurm/vllm_speculative_ab.sbatch --help
-python3 tools/submit_lab.py --lab 32_inference_capstone slurm/capstone_three_trials.sbatch --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/32_inference_capstone/logs/%j.out" \
+  --error="$PWD/results/32_inference_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
 ```
 
 Lab 30 and its engine profiles document TensorRT-LLM/Triton, AIPerf, and

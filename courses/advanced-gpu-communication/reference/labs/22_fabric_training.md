@@ -4,7 +4,7 @@ Data parallelism replicates the model and partitions examples. In this experimen
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/22_fabric_training.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -16,23 +16,37 @@ Data parallelism replicates the model and partitions examples. Global batch equa
 
 ## Practice
 
-On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+`labs/22_fabric_training.py` changes microbatch size while keeping the global batch fixed across eight or sixteen DDP ranks. It checks accumulated loss and updates against a full-batch reference and writes timing, throughput, accumulation count, and peak memory.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 22_fabric_training slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1
-python3 tools/submit_lab.py --lab 22_fabric_training slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 4
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/22_fabric_training/logs/%j.out" \
+  --error="$PWD/results/22_fabric_training/logs/%j.err" \
+  slurm/fabric.sbatch \
+  labs/22_fabric_training.py --profile small --microbatch 1
 ```
-
-Logs are created before submission under `results/22_fabric_training/logs/<job>.out` and `.err`. A submitted job is not a completed result.
 
 ## Check your results
 
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
 Wait for both jobs to complete successfully. Inspect the measured fields and correctness status; a failed check must be resolved before comparing performance.
 
+Record each successful submission's job number. For each job, require `COMPLETED` and exit code `0:0`, then open its own logs and printed result path:
+
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 22_fabric_training --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/22_fabric_training/logs/$LAB_JOB_ID.out"
+cat "results/22_fabric_training/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 | Dashboard panel | Field under `measurements` | Display unit |
 | --- | --- | --- |
@@ -42,6 +56,8 @@ sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
 | Global mean loss | `loss` | none |
 
 Select the two unprofiled result artifacts. The publisher checks equivalent parameters and allows only the named change. Repeated qualification uses no changed parameter.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 22_fabric_training \
@@ -53,12 +69,37 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 
 ## Investigate the behavior
 
+### Workload variations
+
+On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/22_fabric_training/logs/%j.out" \
+  --error="$PWD/results/22_fabric_training/logs/%j.err" slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/22_fabric_training/logs/%j.out" \
+  --error="$PWD/results/22_fabric_training/logs/%j.err" slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 4
+```
+
+Slurm writes job logs under `results/22_fabric_training/logs/<job>.out` and `.err`. A submitted job is not a completed result.
+
 Use Systems forward, backward and optimizer ranges to count launch gaps and locate the final gradient synchronization. Grafana compares useful samples/s, slowest-rank step time, peak allocated memory and global mean loss. The tiny MLP isolates update and communication mechanics; it is not a production LLM throughput estimate. Each timed replay includes model reset, identically in both variants. Peak memory includes reference buffers. Independently test microbatch 2, then explain whether larger kernels repaid memory cost. A separate --nodes=1 campaign tests strong scaling with the same global batch; never change node count inside a microbatch comparison.
 
 Capture separately from timing. Check exported statistics for every rank, then open representative `.nsys-rep` reports from each worker in Systems, loading large reports in small groups. Rank filenames retain the Slurm job and global rank; correlate matching phases across reports. Use a local-kernel exercise for Compute: replaying distributed collectives can stall their peers.
 
 ```bash
-python3 tools/submit_lab.py --lab 22_fabric_training --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/22_fabric_training/logs/capture-%J-%t.out" \
+  --error="results/22_fabric_training/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 8 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/22_fabric_training/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/22_fabric_training.py --profile small --microbatch 1
 ```
 
 Repeat the unprofiled baseline and candidate after inspecting the trace. Instrumented artifacts are rejected by the comparison publisher.

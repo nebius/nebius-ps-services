@@ -46,6 +46,18 @@ def test_lab_narrative_and_identity_survive_rendering(course):
     lessons = cb_metadata.parse_course(root / "COURSE.md")[2]
     metadata = cb_metadata.course_metadata(root)
     document = (root / "index.html").read_text()
+    # Narrative parity includes authored figures at their exact source positions.
+    figures = {
+        "../diagrams/" + entry["path"].rsplit("/", 1)[-1]: re.search(
+            rf'<figure\b[^>]*id="detail-{cb_markdown.slug(entry["path"].rsplit("/", 1)[-1][:-4])}"[^>]*>.*?</figure>',
+            document,
+            re.DOTALL,
+        ).group()
+        for entry in json.loads((root / "reference/visual-manifest.json").read_text())[
+            "diagrams"
+        ]
+        if entry["home"].startswith("lab:")
+    }
     lesson_html = sorted(
         re.findall(r'<section class="lesson".*?</section>', document, re.DOTALL),
         key=lambda block: int(re.search(r'data-lesson-number="([0-9]+)"', block)[1]),
@@ -84,6 +96,7 @@ def test_lab_narrative_and_identity_survive_rendering(course):
                     guide["sections"][section],
                     links,
                     prefix=f"{target}-{cb_markdown.slug(section)}-",
+                    figure=lambda path, title: figures[path],
                 )
                 in article
             )
@@ -113,7 +126,7 @@ def fixture_course(tmp_path):
     for section in SECTIONS:
         body += f"## {section}\n\n{paragraph}\n\n"
         if section == "Practice":
-            body += "```bash\npython labs/01_example.py --help\n```\n\n"
+            body += "`labs/01_example.py` demonstrates the example operation.\n\n```bash\nsbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 slurm/single_gpu.sbatch labs/01_example.py --help\n```\n\n"
     path = tmp_path / "reference/labs/01_example.md"
     path.write_text(body)
     metadata = {

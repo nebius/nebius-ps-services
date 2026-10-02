@@ -15,7 +15,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 usage() {
-  printf 'Usage: python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch [MODEL] [REQUESTS_PER_COHORT] [REVISION]\n'
+  printf 'Usage: sbatch slurm/vllm_prefix_cache.sbatch [MODEL] [REQUESTS_PER_COHORT] [REVISION]\n'
   printf 'Runs three independent, counterbalanced prefix-cache trials per policy.\n'
   printf 'Uses batch-invariant execution and TRITON_ATTN in every policy and phase.\n'
 }

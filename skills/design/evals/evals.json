@@ -190,6 +190,51 @@
         "Keeps the full architecture, API/configuration reference and runbook detail with their owners; does not invent unneeded configuration, support channels, license terms or policy files.",
         "Makes no implementation or documentation writes and distinguishes checks actually performed from proposed validation."
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "Use $design to plan a standalone HTML guide explaining rainwater collection to adult community volunteers. It will be emailed as one file and opened offline on laptops or phones, sometimes with JavaScript disabled. No project or artifact exists yet. Use the shared theme and native HTML/CSS/SVG with small optional JavaScript. Organize an introduction, collection/storage/use relationships, practical examples and citations; plan optional navigation and explanations without forcing a slide deck. Do not create or modify files.",
+      "expected_output": "A general-document design with a shared warm-neutral theme, semantic reading baseline, portable single-file delivery, purposeful enhancement and explicit artifact verification.",
+      "files": [],
+      "assertions": [
+        "Selects the general-document profile with descriptive sections, examples, real contents/fragment links and references; does not impose fixed tabs, an inspector, a fixed section count or A3 pages.",
+        "Specifies one HTML file with embedded required styles, scripts, graphics and data, local system fonts, direct offline file opening, no automatic network or neighboring-file dependencies, and no localStorage correctness requirement; distinguishes followed citations from runtime dependencies.",
+        "Uses the shared warm-neutral background, white surfaces, dark slate text and restrained accents through semantic variables, with readable document typography and configurable category meanings rather than a blanket color-to-status mapping.",
+        "Preserves essential explanations in semantic HTML without JavaScript and provides a diagram relationship equivalent; optional disclosures and navigation retain keyboard access, visible focus, non-color cues and safe shortcuts.",
+        "Plans responsive reflow, contained two-dimensional scrolling and complete continuous printing; distinguishes design defaults from accessibility thresholds.",
+        "Includes all ten artifact acceptance areas and explicit renamed/relocated copy and attempted-request checks, without claiming offline, browser or print validation occurred.",
+        "Leaves the workspace unchanged, does not invent existing implementation and treats the approved native stack as fixed."
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Use $design to plan an offline single-file HTML report of fictional support throughput for 2026-01-01 through 2026-03-31, generated 2026-04-02 UTC. Source: a supplied synthetic monthly export; units: tickets. January planned 100/completed 80; February planned 100/completed 60; March planned 100/completed missing. The report needs summary findings, evidence, implications, methodology, a month filter and reset. Identify trustworthy totals and completion rates without treating missing values as zero. Use the shared theme and fixed native HTML/CSS/SVG/JavaScript, keep essential content available without JavaScript, and plan the complete printable snapshot. There is no existing project or artifact. Do not implement or write files.",
+      "expected_output": "A report-profile design with accurate snapshot metadata, explicit missing-data semantics, consistent filter scope and complete offline/no-JavaScript/print requirements.",
+      "files": [],
+      "assertions": [
+        "Uses the report hierarchy of summary, findings, evidence, implications and methodology; shows reporting period, generation date, units, synthetic source, definitions and snapshot status without suggesting live data.",
+        "Identifies 140 known completed tickets across two observed months and a 70% completion rate for those months (140/200); does not assert a complete quarterly total or rate from missing March data and exposes coverage/denominator choices.",
+        "Shows active filter scope and reset, updates visible summary values consistently, and defines missing-data and empty-result behavior without equating missing values to zero.",
+        "Uses the shared warm-neutral palette, semantic configurable color roles and readable report typography; keeps essential findings and evidence in semantic HTML and provides text/table equivalents for meaningful charts.",
+        "Plans single-file direct offline opening with embedded dependencies, no automatic requests or neighboring files, portable state and safe serialization/text insertion; recognizes that hidden embedded data travels with the file.",
+        "Plans complete findings/evidence in print with explicit full-snapshot scope rather than only the filtered screen view, alongside keyboard, responsive and intended-browser checks.",
+        "Covers all ten artifact acceptance areas with independent data calculations, relocated/renamed file and attempted-network-request checks; distinguishes proposed checks from observed evidence and leaves files unchanged."
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use $design to plan a 10-minute standalone HTML presentation for engineers explaining how a request passes through intake, validation, scheduling and execution. There is no existing project or page. Use the shared visual theme and fixed native HTML/CSS/SVG/JavaScript. It will be projected at 1920x1080, read later on phones or with JavaScript disabled, and printed as a complete handout. Include optional component exploration, previous/next and presentation mode. Choose the narrative structure from the content; do not implement or write files.",
+      "expected_output": "A presentation-profile design with a coherent speaker narrative, shared theme, readable projection sizing, accessible optional controls and complete continuous/print fallbacks.",
+      "files": [],
+      "assertions": [
+        "Chooses a presentation profile with one principal message per view and a content-driven narrative; derives navigation counts, boundaries and default selections from its sections rather than hardcoding five tabs or inheriting an inspector.",
+        "Applies the shared theme, usually 20-28px projected body text, shorter text blocks and approximately 1.3-1.5 line height; reorganizes or splits dense content before shrinking text.",
+        "Specifies one portable HTML file with embedded required assets and data, local fonts, no automatic network or neighboring-file dependencies and state in memory/fragments without requiring localStorage.",
+        "Preserves the essential narrative and diagram relationships in readable semantic HTML without JavaScript, stacks supporting detail on phones, and maintains arrow meaning with a text equivalent or readable alternate diagram view.",
+        "Makes component exploration and previous/next keyboard-accessible, combines selection color with another cue, provides obvious presentation-mode exit, preserves deep/skip links and history, and avoids an unconditional global character-only shortcut.",
+        "Uses deliberate complete-print pagination and suitable orientation without forcing A3; includes details outside the selected view and keeps essential print content available without JavaScript.",
+        "Includes all ten artifact acceptance areas with the stated projection viewport, narrow layout/enlarged text, reduced motion, renamed/relocated files, attempted requests and actual-browser reporting; makes no validation or implementation claims and leaves the workspace unchanged."
+      ]
     }
   ]
 }

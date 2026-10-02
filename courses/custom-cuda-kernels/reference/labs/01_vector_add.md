@@ -4,7 +4,7 @@ Vector addition is simple enough to expose the essential CUDA program structure 
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/01_vector_add.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Complete the SM90 build and preflight, then set `COURSE_BUILD_DIR` to the completed build. Use one H100. The small case contains 1,003 elements; the full case contains 2^24 elements. Both use 256 threads per block.
 
@@ -30,43 +30,47 @@ The following shared-memory reduction scenario explains sanitizer scope; it is n
 
 Given a shared-memory reduction missing one barrier, 100 ordinary runs happen to match. Change only scheduling with a different block size and failures appear. Expected observation: racecheck may identify the shared-memory hazard; synccheck checks invalid synchronization usage and is not a general detector for every missing barrier; after repair, Systems locates the region and Compute explains it, while final timing comes from a clean uninstrumented executable.
 
-Start with `python3 tools/submit_lab.py --lab 01_vector_add slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small`, then apply the profiler launchers to the same completed vector lab. Choose one timing or memory question rather than every counter. The allow-listed `racecheck`, `initcheck`, and `synccheck` modes have different scopes; revisit them with the shared-memory labs as those mechanisms are introduced. Return to this validation sequence during the capstone.
+Start with:
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+```
+
+Then apply the native profiler commands to the same completed vector lab. Choose one timing or memory question rather than every counter. The allow-listed `racecheck`, `initcheck`, and `synccheck` modes have different scopes; revisit them with the shared-memory labs as those mechanisms are introduced. Return to this validation sequence during the capstone.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/01_vector_add.cu` adds two vectors with a bounds-checked CUDA kernel, verifies every result against a CPU reference, and reports launch geometry and timing for the selected block size. The baseline launcher records its output as course result JSON.
 
-Run the 1,003-element small case, confirm every output, then run the larger case. Calculate how many threads are inactive in the final block.
-
-```bash
-umask 077
-python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
-python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add"
-```
-
-Run memcheck to detect invalid memory accesses. Its instrumented timing is diagnostic and must not be used as ordinary benchmark timing.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 01_vector_add slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
 ```
-
-For the guided candidate, keep the same small elements:
-
-```bash
-python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small --threads 128
-```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 01_vector_add --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/01_vector_add/logs/$LAB_JOB_ID.out"
+cat "results/01_vector_add/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require the full CPU-reference comparison at FP32 `rtol=1e-5, atol=1e-6`, and no relevant memcheck errors. Inspect element count, sample count, median, and p90. A successful launch alone does not prove every tail element was written correctly.
 
@@ -90,7 +94,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Blocks | `blocks` | `none` |
 | Threads per block | `threads_per_block` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_vector_add \
@@ -103,6 +107,37 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run the 1,003-element small case, confirm every output, then run the larger case. Calculate how many threads are inactive in the final block.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add"
+```
+
+Run memcheck to detect invalid memory accesses. Its instrumented timing is diagnostic and must not be used as ordinary benchmark timing.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+```
+
+For the guided candidate, keep the same small elements:
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small --threads 128
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Calculate the block count and number of inactive final-block threads for 1,003 elements. Which bytes are read and written per useful element? Explain why transfer-inclusive application time differs from the distribution of kernel execution times.
 
 Higher-level paths may leave a narrow optimization opportunity but carry wider testing and upgrade coverage. Handwritten specialization can remove exact overhead while creating more variants, qualification work, and long-term risk.
@@ -114,18 +149,39 @@ Sanitizers and profilers can be extremely slow and perturb scheduling. Focused e
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 01_vector_add --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/01_vector_add/logs/capture-%J-%t.out" \
+  --error="results/01_vector_add/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/01_vector_add/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-python3 tools/submit_lab.py --lab 01_vector_add --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/01_vector_add/logs/capture-%J-%t.out" \
+  --error="results/01_vector_add/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/01_vector_add/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/01_vector_add" --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare 256 with 128 threads per block using the same 1,003 small elements. Independently test 512 threads and explain the final-block waste and Compute occupancy; keep the fastest correct measured configuration.
 

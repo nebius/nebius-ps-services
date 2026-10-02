@@ -41,6 +41,8 @@ Supervised fine-tuning (SFT) trains an existing model on selected input/target e
 
 Take a small batch of examples. The forward pass computes predictions using the current weights. For next-token training, the model produces logits, which are unnormalized scores for vocabulary entries. Softmax converts scores into probabilities. A loss turns the probability assigned to each known target into a scalar penalty; cross-entropy penalizes low probability on the correct token. The backward pass calculates gradients: how sensitive that loss is to small changes in each trainable weight. An optimizer uses those gradients to change the weights. Repeat with more batches, evaluate on held-out data, and save checkpoints so the state can be used or resumed.
 
+![Training lifecycle](#diagram-1-training-lifecycle)
+
 The model's forward pass computes predictions and the loss function assesses their error. Backward does not itself update the weights; the optimizer performs the update. Labels are used to assess predictions during training; the answer for the next generated token is not supplied during ordinary inference. During a causal training forward, many known sequence positions can be processed in parallel while the attention mask prevents a position from seeing its future. Generation must instead obtain later tokens from earlier outputs.
 
 The CPU prepares batches and submits operations. GPU kernels perform the large tensor operations in forward, backward and the update. Weights persist between batches; activations are intermediate values, gradients carry the current learning signal, and an optimizer may keep additional history. This is why training memory is more than a model-file size. GPU optimization must preserve the learning task, not merely make a different or incomplete update finish faster.
@@ -56,6 +58,8 @@ A training procedure connects examples to a parameter update. Text becomes a tok
 The training stage changes what enters this loop and what is allowed to change. Pretraining commonly learns next-token prediction from broad corpora while updating the full model. Continued pretraining starts from existing weights and applies a similar objective to another domain or distribution. Supervised fine-tuning uses curated input-response examples. Its loss policy determines whether prompt tokens, response tokens or both contribute; padding is normally excluded.
 
 Parameter-efficient methods change the trainable state rather than defining a separate kind of supervision. They freeze base weights and update smaller adapter components, so they can be combined with SFT. Reward-guided methods instead generate candidate responses, score them and use comparative signals to construct the policy objective. They add generation and scoring to the loop before the update.
+
+![LLM training lifecycle](reference/diagrams/llm-training-lifecycle.svg)
 
 To know which procedure a result describes, identify the trainable parameters, the examples and their provenance, the loss denominator, the held-out evaluation split and the checkpoint lineage. Two runs with the same architecture can still be performing different learning tasks if any of these differ.
 
@@ -97,7 +101,11 @@ Text first passes through a tokenizer's vocabulary and normalization rules to be
 
 A loss mask decides which predictions contribute to the objective. Padding and any excluded prompt positions receive an ignore label and are left out of both the loss sum and the valid-token denominator. An attention mask answers a separate question: which input positions may influence each prediction? Ignoring a label does not stop other positions from attending to its input token.
 
+![Text, tokens, token IDs, embeddings, and shifted labels](reference/diagrams/text-tokens-token-ids-embeddings-and-shifted-labels.svg)
+
 Packing puts several examples into fewer tensor rows. If those examples must remain independent, their attention regions need boundaries: a block-diagonal causal mask, or explicit packed-sequence metadata understood by the selected backend, blocks cross-example attention. Position IDs must follow the intended positional scheme. Resetting positions alone does not isolate examples unless that backend explicitly converts the resets into attention boundaries.
+
+![Causal batch](#diagram-2-causal-batch)
 
 First-fit packing supplies a concrete storage plan. Process example lengths in order, place each in the first bin with enough capacity, and open a new bin if none fits. With capacity 8 and lengths 5, 3 and 4, lengths 5 and 3 share the first bin; length 4 starts a second. This simple rule need not find the fewest bins. Each stored example span must still receive its own lower-triangular causal region. Lab 25 checks the allocation and mask structure; constructing labels and validating an actual packed learning objective remain separate work.
 
@@ -130,6 +138,8 @@ A decoder-only transformer is a neural-network architecture that builds a repres
 
 Activations are intermediate values produced during a forward pass. Normalization rescales them using statistics of the vector, and residual addition adds an earlier representation to a transformed one. Attention creates query, key and value vectors through learned projections: queries seek relevant context, keys supply information for matching, and values supply the information mixed into the result. Rotary positional embeddings (RoPE) encode relative position through rotations of query/key components. The final projection produces logits—unnormalized vocabulary scores. This architecture description explains the stages before the lesson follows their tensor shapes and memory costs.
 
+![Decoder-only language model from token IDs to logits](reference/diagrams/decoder-only-language-model-from-token-ids-to-logits.svg)
+
 Batches contain IDs, masks, positions, and labels. The transformer maps those tensors into logits while retaining intermediate activations needed by backward.
 
 ### From token IDs to attention inputs
@@ -148,9 +158,13 @@ For one head, scaled dot-product attention is `softmax(Q @ K.T / sqrt(head_dim) 
 
 The attention output projection returns to width H so it can be added to the residual path. The MLP expands the hidden dimension, applies a nonlinear activation and contracts it again before another residual addition. This example uses Gaussian error linear unit (GELU), `x*Phi(x)`, where Phi is the standard normal cumulative probability. Final normalization and a vocabulary projection produce logits `[B,S,V]`.
 
+![Causal self-attention and MLP data flow](reference/diagrams/causal-self-attention-and-mlp-data-flow.svg)
+
 A logit is a score, not a probability. Softmax exponentiates the scores and divides by their sum, producing nonnegative probabilities that sum to one. Cross-entropy for a known next token is the negative natural logarithm of its probability, so assigning that token more probability lowers the loss.
 
 Backward traces how that loss depends on each trainable parameter and computes its gradient. Simple gradient descent subtracts learning rate times gradient. AdamW instead uses running averages of gradients and squared gradients to adapt the update, with decoupled weight decay separately shrinking parameters toward zero. It does not mix that decay into the gradient used for the adaptive calculation.
+
+![Decoder training step](#diagram-3-decoder-training-step)
 
 Shape reasoning reveals compute, activation memory, communication, and kernel efficiency. It also separates parameters that persist across steps from activations whose size grows with microbatch and sequence length.
 
@@ -181,6 +195,8 @@ The decoder produces logits and the batch supplies valid labels. Training conver
 ### Build gradients, then update parameters
 
 Forward computes logits from the current parameters, and the loss combines errors over valid labels. Backward differentiates that scalar and accumulates gradients into parameter buffers. The optimizer consumes those gradients to change the weights. Clearing gradients after the update, or before the next intended backward, prevents an earlier step from unintentionally contributing to the next one.
+
+![Forward, backward, optimizer, and next training step](reference/diagrams/forward-backward-optimizer-and-next-training-step.svg)
 
 Lab 01 runs forward and loss inside CUDA bfloat16 (BF16) autocast, then exits the context before backward. Autocast selects computation formats for supported operations; it does not convert every stored parameter to BF16. This BF16 recipe does not use 16-bit floating point (FP16) loss scaling. When a separate FP16 recipe does use scaling, gradients must be unscaled before their true magnitudes are checked or clipped.
 
@@ -235,6 +251,8 @@ Saving should expose only a complete snapshot. Data is written to a temporary pr
 
 Restoration is tested by continuing both an uninterrupted run and a restored run from the same boundary with the same next data. A deterministic supported recipe may require bitwise equality; a nondeterministic kernel path needs an explicit tolerance-based continuation claim. Merely loading the file proves neither. Evaluation separately uses held-out data and weights loss by valid tokens so unequal batch lengths do not distort the reported mean.
 
+![Exact resume](#diagram-4-exact-resume)
+
 For example, save immediately after update 40 with no partial gradients. The checkpoint records the model and optimizer after that update, the scheduler position, the RNG states and the cursor for the next batch, B41. Both an uninterrupted run and a restored run must now consume B41 and use the same update-41 learning rate and random choices. Restoring only the weights can instead restart optimizer moments, replay an earlier batch or draw different dropout masks. Compare the next update under the declared deterministic or tolerance-based contract; these update numbers illustrate the boundary, not a measured run.
 
 Missing optimizer, scheduler, scaler, RNG, sampler, or partial-accumulation state can silently fork the run. A checkpoint that loads successfully may still fail continuation equivalence.
@@ -270,6 +288,8 @@ Forward adds activations and temporary workspaces. Some activations remain until
 Distributed or specialized execution adds more intervals: Fully Sharded Data Parallel (FSDP) all-gather buffers, DistributedDataParallel (DDP) buckets, 8-bit floating point (FP8) metadata and graph pools. Place each allocation on a timeline from creation to last use. The forward, backward and optimizer peaks are the totals that coexist at those moments, not the sum of everything allocated during the step.
 
 Allocator accounting overlaps this tensor ledger. Reserved bytes already include active allocations plus capacity retained for reuse. Add only additional unused reservation or other uncounted overhead when reconciling against reserved memory; adding the entire reserved total to live tensor bytes double-counts them. Snapshots and peak APIs help compare calculated, measured and still-unknown quantities.
+
+![Training memory](#diagram-5-training-memory)
 
 Checkpoint loading has a separate peak: model files, optimizer shards and temporary load or staging buffers can coexist differently from training. A model-file size therefore cannot stand in for either the training peak or the load-time peak.
 
@@ -321,6 +341,8 @@ Stochastic rounding probabilistically selects adjacent representable values to r
 
 Matching initial parameters and inputs allow loss, gradients and parameter changes to be compared across recipes. Relative Euclidean (L2) error divides the candidate-minus-reference vector magnitude by the reference magnitude; it describes aggregate discrepancy rather than the worst element. Finite checks, scaling/amax behavior and selected kernels explain what happened along the path. A short correct update test can detect a broken recipe, but cannot establish training convergence.
 
+![Precision ledger](#diagram-6-precision-ledger)
+
 “FP8 training” does not mean every tensor is FP8. Unsupported shapes, cast/scaling overhead, overflow/underflow, cold scaling history, or a changed optimizer can erase performance or learning equivalence.
 
 FP8 weight caching retains a quantized copy of unchanged weights across microbatches in an accumulation window, avoiding repeated conversions. Fused weight-gradient accumulation writes matrix-product gradients directly into an accumulation buffer, combining gradient production and addition instead of requiring a separate temporary gradient and addition step. These techniques can remove conversions or launches only for supported recipes, modules and shapes. Weight caching still needs numerical checks because changing scale history can make cached and freshly converted values differ.
@@ -347,6 +369,8 @@ Compare microbatching and selective/full activation recomputation at fixed effec
 Gradient accumulation and activation checkpointing are two different ways to change a training step's memory needs. Accumulation processes smaller microbatches, combines their correctly weighted gradients and performs one optimizer update for the intended effective batch. It saves memory by not holding every example's activations at once. The global batch counts the work contributing to that update across microbatches and, where used, ranks; variable valid-token counts require token-aware weighting.
 
 Activation checkpointing retains selected forward values and recomputes missing intermediates when backward needs them. It trades extra computation for fewer saved activations. Selective recomputation repeats chosen operations or regions; full-block recomputation repeats a larger region. This is not saving a restart checkpoint to disk. The two techniques can be combined, but each changes a different part of the step, so measure memory, total work and update equivalence separately.
+
+![Two ways to save training memory](#diagram-11-two-ways-to-save-training-memory)
 
 The training step defines effective tokens and update cadence; the memory ledger identifies saved activations that dominate peak capacity. Accumulation and checkpointing change different parts of that ledger.
 
@@ -389,6 +413,8 @@ Accumulation and recomputation optimize the GPU step only when a valid next batc
 
 A dataset maps an index to sample content. Workers read, decompress, parse and tokenize that content; packing and collation assemble the selected examples into tensors; pinning and H2D copies make those tensors available to the GPU. A delay at any producer stage can leave the trainer waiting for its next batch.
 
+![Input pipeline](#diagram-9-input-pipeline)
+
 Prefetch lets workers prepare future batches while the current batch runs. It can absorb variation, but its queue consumes memory and eventually empties if production is consistently slower than consumption. Persistent workers avoid restarting their processes. Offline tokenization removes repeated CPU work but creates a prepared artifact tied to the tokenizer, configuration and data revision.
 
 Training correctness follows the examples through these changes. Worker seeds, distributed sampler ownership and epoch updates must preserve the intended global sample IDs, order, content and unmasked-token counts. Dropping a slow example or giving two ranks the same sample changes the task even if the device becomes busier.
@@ -427,6 +453,8 @@ Fusion can combine compatible operations and avoid writing some intermediates. M
 
 CUDA Graph replay addresses repeated submission of stable work. After warm-up, capture records operations whose addresses, control flow and dependencies remain compatible across replays. Parameters and optimizer state can change values in their retained storage. Graph pools retain memory, and a bounded set of captures can handle selected microbatch or sequence-shape buckets. Unsupported cases need an explicitly supported fallback.
 
+![Training execution strategies](#diagram-12-training-execution-strategies)
+
 These transformations must preserve random number generator (RNG) advancement, gradient zeroing, scaler or 8-bit floating point (FP8) state and collective ordering. A faster forward fragment does not establish a faster complete update. Compilation, capture and steady replay have separate time and memory costs, and backward/update equivalence must be checked alongside the final step time.
 
 Training graphs include autograd, mutation, RNG, optimizer state, dynamic shapes, and collective boundaries. A transformation that works for an inference fragment can produce graph breaks or incorrect gradients in training.
@@ -462,6 +490,8 @@ All-reduce returns the complete reduced gradient to every rank. Reduce-scatter a
 
 FSDP2 changes ownership. It shards selected parameters, gradients and optimizer state. Before computation needs a full parameter group, all-gather assembles its pieces; after gradients are computed, reduce-scatter returns the reduced pieces to their owners. This reduces persistent per-rank state while introducing temporary gathered parameters and communication. Its mixed-precision policy can also distinguish parameter-computation and gradient-reduction formats.
 
+![Replicated and sharded state](#diagram-13-replicated-and-sharded-state)
+
 ZeRO-style stages describe progressively sharding optimizer state, gradients and parameters. Actual implementations differ in when they gather or retain tensors, so the persistent ledger alone cannot predict peak memory or step time. Global non-padding tokens, sample ownership, loss reduction and optimizer semantics must remain the same in a comparison. Transient buffers, bucket overlap, the slowest-rank step and checkpoint/restart behavior describe the resulting execution.
 
 DDP and FSDP2 solve different constraints. A small two-rank job may run faster with replication, while a larger model may require sharding merely to fit.
@@ -491,6 +521,8 @@ Map tensor, pipeline, context, and expert parallelism to partitioned state and c
 Model parallelism divides one model's work when replication alone is not the desired layout. Tensor parallelism (TP) splits tensors and parts of an operation across ranks. Pipeline parallelism (PP) puts groups of layers on different stages and passes intermediate activations between them. Context parallelism (CP) partitions sequence context and coordinates the attention information needed across those partitions. Expert parallelism (EP) distributes the experts in a mixture-of-experts (MoE) layer: a router selects which expert networks process each token.
 
 A pipeline bubble is idle time while a stage waits for work or results. All-to-all communication exchanges different pieces between ranks, often for expert routing. Grouped matrix multiplication, also called grouped general matrix multiplication (GEMM), executes several matrix problems together. A capacity factor sets an expert's token-capacity allowance relative to a stated average. Sequence parallelism can instead partition particular non-attention activations or operations within another parallel layout; it is not a universal synonym for CP. Each scheme changes a different ownership boundary.
+
+![Parallelism map](#diagram-7-parallelism-map)
 
 DistributedDataParallel (DDP) and Fully Sharded Data Parallel (FSDP) partition data and training state. Model parallel strategies partition computation or model structure when one rank cannot efficiently own the full layer, sequence, pipeline, or expert set.
 
@@ -554,6 +586,8 @@ Each parallel strategy creates a collective dependency. Overlap is possible only
 
 Backward produces different gradients at different times. DistributedDataParallel (DDP) assigns gradients to buckets; a bucket can communicate when every gradient it needs is ready. Its collective can then progress while independent backward work computes other gradients. The optimizer must wait for all reduced gradients it consumes, so an unfinished collective at that point still extends the step.
 
+![Communication overlap](#diagram-8-communication-overlap)
+
 Smaller buckets may become ready earlier but create more calls and fixed latency. Larger buckets amortize that overhead but start later, leaving less independent computation available to overlap their transfer. Parameter sizes, readiness order and topology determine the trade-off. A rank-aligned timeline connects readiness, launch, transfer, completion and the optimizer wait; a fast-returning API call cannot establish overlap.
 
 Other layouts expose different opportunities. Fully Sharded Data Parallel (FSDP) can schedule gradient reduce-scatter or parameter all-gather alongside suitable independent work. TP collectives, EP all-to-all and PP point-to-point communication each have their own producer and consumer dependencies. Rank arrival skew and contention matter because communication and computation can compete for memory or fabric resources.
@@ -567,6 +601,8 @@ PowerSGD approximates a large gradient matrix using two smaller matrices whose p
 ### Distinguish readiness observation from a replacement reduction
 
 A gradient hook is a callback triggered at a defined point in differentiation. A post-accumulate hook runs after a parameter's gradient has been accumulated, allowing an already-complete gradient to be reduced while independent backward work continues. It must not communicate an unfinished accumulation window. A DDP communication hook instead replaces the bucket's communication path and returns a future for its result. Keep the framework's averaging contract and identical collective order on every rank; observing readiness is different from silently changing the reduction.
+
+![Observe DDP before choosing a hook](reference/diagrams/ddp-bucket-decision.svg)
 
 Total collective duration can remain unchanged while step time improves, or an “asynchronous” collective can remain fully exposed. The optimization target is critical-path wait, not merely a shorter communication bar.
 
@@ -594,6 +630,8 @@ Supervised fine-tuning (SFT) continues training an existing model on selected in
 LoRA's rank is the limited dimension through which the update factors are composed; it is unrelated to a distributed process's rank number. SFT specifies the supervision, while LoRA specifies which parameters express the change, so they can be used together. LoRA is not automatically quantization, and freezing weights does not eliminate every activation or backward cost. End-of-sequence (EOS) labels and response masks determine which behavior the fine-tuning objective actually teaches.
 
 For an input column vector x, a bias-free projection produces `Wx`. LoRA adds a second path: `y = Wx + s * B(Ax)`. A maps input width to the smaller rank r, B maps that r-dimensional result to output width, and s scales the update. Train A and B while W stays fixed. For a hand calculation, let W be the 2-by-2 identity, A=[1, 0], B=[0, 2] as a column, s=0.5 and x=[3, 4]. Then Ax=3, B(Ax)=[0, 6], the scaled update is [0, 3], and y=[3, 7]. This illustrates composition, not the library's initialization. Standard scaling is alpha/r unless a different recipe is explicitly selected; the lab's configuration defines it. The shapes of A and B explain the parameter count below.
+
+![Frozen base and trainable adapter paths](reference/diagrams/adapter-paths.svg)
 
 The core training path now explains updates, optimizer memory, precision, data flow and distributed placement. Apply that ledger to SFT, which changes the supervised-data contract, and LoRA, which changes the trainable parameterization. The supplied single-GPU adapter lab does not require a distributed run; the preceding distributed lessons provide context for scaling it later.
 
@@ -646,6 +684,8 @@ For advantage A and clip width epsilon, the maximized surrogate is `min(ratio ×
 
 The full loop includes generation, reward or verifier execution, objective computation and a trainer update. Colocating generation and training avoids some weight transfers; separating them allows independent scaling but adds queues and synchronization. Policy versions identify which weights produced each sample and prevent stale rollouts from being interpreted as fresh ones.
 
+![Post-training rollout and update loop](reference/diagrams/post-training-rollout-and-update-loop.svg)
+
 Candidate lengths, filtering, reward components, rollout latency, verifier latency and trainer time explain where work is spent. Held-out and adversarial cases test whether the score rewards the intended behavior. Improving the surrogate or reward alone cannot rule out reward hacking.
 
 The objective is only one part of the system. Rollout generation, verifier/reward execution, variable output lengths, policy weight transfer, and stale samples can dominate time or corrupt learning.
@@ -681,6 +721,8 @@ A causal report connects an observed delay to one change that should remove it. 
 
 A short profiler window identifies a plausible limiting stage. The candidate changes that stage, while a disconfirming control tests whether the proposed explanation survives an alternative. DistributedDataParallel (DDP) versus Fully Sharded Data Parallel, second-generation interface (FSDP2) or eager versus checkpointed comparisons are meaningful only when they preserve the same work and update semantics. A keep/reject decision combines numerical gates, the complete-step result, uncertainty and the next unresolved question.
 
+![Training decision](#diagram-10-training-decision)
+
 Utilization ratios summarize work under a stated counting convention. MFU uses useful model arithmetic and measured useful token rate; HFU may also count extra executed arithmetic. Neither ratio identifies the bottleneck. The following calculation explains why they can move in opposite directions.
 
 For a purely illustrative calculation, suppose a step performs 100 trillion useful floating-point operations in 1 second against a matching 200-trillion-operations/second peak: both ratios are 50 percent under this counting convention. Recomputing another 50 trillion operations while taking 1.2 seconds raises HFU to 150/(1.2 × 200) = 62.5 percent, but MFU falls to 100/(1.2 × 200) ≈ 41.7 percent. More hardware work did not produce more useful updates. State the exact FLOP convention, precision, dense/sparse peak, time boundary and measured inputs. These hypothetical numbers are not H100 results.
@@ -711,6 +753,8 @@ Strong scaling holds useful global work fixed while changing available resources
 The linked advanced labs require the separate two-node, sixteen-H100 cluster. Confirm eight full GPUs per worker, healthy NVLink/NVSwitch and active InfiniBand. Capture each rank separately; profiler overhead belongs to diagnostic evidence. Grafana provides measured comparison summaries and job-window context. State what the evidence can establish before choosing the next change.
 
 For the small workload, 128 global examples on eight ranks means 16 examples per rank. At microbatch 4, each rank accumulates four gradients; on sixteen ranks it accumulates two. This changes the communication-to-compute balance while preserving the global objective. A valid strong-scaling report states speedup as the eight-rank step duration divided by the sixteen-rank duration, and efficiency as that speedup divided by two. For example, 20 ms becoming 12 ms yields about 1.67 times speedup and 83 percent efficiency. A faster run with half the global examples is not that experiment. Recheck update equivalence and loss before interpreting the ratio.
+
+![Scaling a fixed training workload](#diagram-14-scaling-a-fixed-training-workload)
 
 **Practice**
 

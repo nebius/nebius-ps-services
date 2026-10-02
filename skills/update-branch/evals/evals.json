@@ -1,0 +1,236 @@
+{
+  "skill_name": "update-branch",
+  "evals": [
+    {
+      "id": "renamed-default",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/renamed-default.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Fetch trunk only, freeze its fetched commit and merge without switching.",
+      "files": [
+        "evals/fixtures/renamed-default.json"
+      ],
+      "assertions": [
+        "Uses live trunk rather than cached main and fetches the exact branch without pruning, tags or submodule recursion.",
+        "Plans to stop on a failed fetch, freeze the fetched commit and recheck initial branch/HEAD/cleanliness before merging.",
+        "Does not synchronize feature/demo upstream, rebase, push or switch.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "already-current",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/already-current.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Already current; no merge commit or project suite needed.",
+      "files": [
+        "evals/fixtures/already-current.json"
+      ],
+      "assertions": [
+        "Reports already current with unchanged branch and no new merge commit.",
+        "Does not run a full project test suite or create custom state for this no-op.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "fast-forward",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/fast-forward.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Fast-forwarded and locally verified.",
+      "files": [
+        "evals/fixtures/fast-forward.json"
+      ],
+      "assertions": [
+        "Reports a fast-forward and distinguishes it from a merge commit.",
+        "Reports unchanged branch and preserved ancestry without claiming remote publication.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "divergent-merge",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/divergent-merge.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Merged with both histories preserved.",
+      "files": [
+        "evals/fixtures/divergent-merge.json"
+      ],
+      "assertions": [
+        "Reports the new merge commit and both input histories preserved.",
+        "Does not propose rebase, cherry-pick, push or branch switching.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "dirty-hidden-files",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/dirty-hidden-files.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked before fetch; preserve both local changes and tell the user to review, stage and commit their work, then rerun update-branch once the checkout is clean.",
+      "files": [
+        "evals/fixtures/dirty-hidden-files.json"
+      ],
+      "assertions": [
+        "Uses explicit untracked-files=all and ignore-submodules=none rather than trusting plain status.",
+        "Stops before fetch and never stashes, commits, cleans or resets the local files.",
+        "Tells the user to review, stage and commit their work, verify a clean working directory, then rerun update-branch; does not stage existing work automatically.",
+        "Explains that dirty submodule work must be resolved inside the submodule first.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "stale-fetch-failure",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/stale-fetch-failure.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked; never merge the cached ref.",
+      "files": [
+        "evals/fixtures/stale-fetch-failure.json"
+      ],
+      "assertions": [
+        "Does not merge cached origin/trunk after the failed fetch.",
+        "Reports the fetch/access failure without changing credentials or exposing remote URLs.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "ignored-collision",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/ignored-collision.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked; ignored local file preserved.",
+      "files": [
+        "evals/fixtures/ignored-collision.json"
+      ],
+      "assertions": [
+        "Uses no-overwrite-ignore and leaves the ignored file untouched.",
+        "Does not delete the collision, retry without protection or report success.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "clear-conflict",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/clear-conflict.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Combine independent edits, verify, stage root scope and continue this merge.",
+      "files": [
+        "evals/fixtures/clear-conflict.json"
+      ],
+      "assertions": [
+        "Preserves green from ours and large from theirs instead of choosing an entire side.",
+        "Requires focused check and complete changed-path review before root git add -A and completing the merge with hooks/signing.",
+        "Does not report completion before final branch, both ancestries and clean/pending-state checks.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "ambiguous-conflict",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/ambiguous-conflict.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Ask which approval behavior is intended; preserve pending merge.",
+      "files": [
+        "evals/fixtures/ambiguous-conflict.json"
+      ],
+      "assertions": [
+        "Asks for the intended behavior instead of choosing an ours/theirs policy.",
+        "Leaves the merge pending; does not abort, reset, stage unrelated work or commit a guess.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "rerere-and-new-work",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/rerere-and-new-work.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Review reused resolution and stop before staging unrelated notes.",
+      "files": [
+        "evals/fixtures/rerere-and-new-work.json"
+      ],
+      "assertions": [
+        "Specifies no-rerere-autoupdate and reviews reused resolution semantically.",
+        "Does not run root git add -A while unrelated notes.txt is present.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "hook-bypass",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/hook-bypass.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked by incompatible configuration without overriding it.",
+      "files": [
+        "evals/fixtures/hook-bypass.json"
+      ],
+      "assertions": [
+        "Rejects configured no-verify before mutation rather than silently bypassing the hook.",
+        "Does not disable hooks, edit configuration, reuse a commit grant or call a publication guard under another action.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "hook-failure",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/hook-failure.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked with pending merge; no blind retry.",
+      "files": [
+        "evals/fixtures/hook-failure.json"
+      ],
+      "assertions": [
+        "Distinguishes hook failure from a conflicted merge and does not claim completion.",
+        "Preserves pending state and hook/signing requirements without reset, abort or unrelated commit.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "ineligible-checkouts",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/ineligible-checkouts.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Block every scenario without repairing ownership or Git state.",
+      "files": [
+        "evals/fixtures/ineligible-checkouts.json"
+      ],
+      "assertions": [
+        "Rejects detached/unborn/default HEAD, the applicable active coordinator restriction and the pre-existing merge; does not infer ownership from a folder or metadata alone.",
+        "Does not change branch, delete coordination records, remove locks or adopt somebody else\u2019s merge.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "postcondition-failure",
+      "prompt": "Use $update-branch to replay the offline scenario in evals/fixtures/postcondition-failure.json. This is a simulation: read the skill and fixture, then report the outcome or exact next permitted steps. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Blocked by failed identity/ancestry checks despite command success.",
+      "files": [
+        "evals/fixtures/postcondition-failure.json"
+      ],
+      "assertions": [
+        "Does not report a successful update based on exit zero.",
+        "Identifies changed branch and missing target ancestry; does not reset or force repair.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-unrelated",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-unrelated.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Pass all association checks and proceed to default discovery.",
+      "files": [
+        "evals/fixtures/worktree-unrelated.json"
+      ],
+      "assertions": [
+        "Passes worktree eligibility for every scenario, including current-branch stale metadata, and proceeds only to default discovery without claiming the branch update completed.",
+        "Excludes only the first primary record and compares full branch refs exactly; unrelated or detached records and lookalike branch names do not match.",
+        "Treats NUL-delimited registered paths intact, including spaces and newlines; never infers association from folder names, shared commits or source-branch metadata.",
+        "Does not remove a directory or symlink, prune records, repair metadata or parse private owner state.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-associated",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-associated.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Block every matching linked registration with its branch and path.",
+      "files": [
+        "evals/fixtures/worktree-associated.json"
+      ],
+      "assertions": [
+        "Blocks every scenario before fetch or merge and identifies the exact current branch and registered linked path.",
+        "Blocks locked and prunable matching registrations even if the registered directory is missing.",
+        "Excludes only the first primary record, not the current checkout; invocation inside a linked checkout is blocked.",
+        "Preserves unusual path characters and leaves directories, registrations and locks untouched.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    },
+    {
+      "id": "worktree-inspection",
+      "prompt": "Use $update-branch to replay each independent offline scenario in evals/fixtures/worktree-inspection.json. Read the skill and fixture, then report the eligibility outcome and exact next permitted step for each. Use only supplied facts; do not execute Git, edit files, use network services, or invent missing evidence.",
+      "expected_output": "Distinguish inspection failures, new associations and applicable active guards; allow the unrelated reservation.",
+      "files": [
+        "evals/fixtures/worktree-inspection.json"
+      ],
+      "assertions": [
+        "Reports failed branch or registry inspection separately from a proven worktree association, without guessing ownership.",
+        "Repeats association checks before merge and blocks a newly matching registration without merging or repairing records.",
+        "Honors the current-branch reservation and explicit repository-wide Git-write lock; unrelated branch reservations alone do not block.",
+        "Never uses folder or metadata presence as a substitute for an authoritative active restriction, and never calls a publication guard under a false action.",
+        "Uses only the supplied offline observations without executing repository or network mutations."
+      ]
+    }
+  ]
+}

@@ -4,7 +4,7 @@ Offline inference submits a known collection of prompts to an engine without exp
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/10_vllm_offline.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Prepare the approved container runner, exact `VLLM_IMAGE_DIGEST`, and immutable model artifact according to the runbook. Keep the engine environment isolated from mechanics PyTorch. One H100 must have enough memory for the model and configured context.
 
@@ -14,27 +14,35 @@ The launcher runs the Python lab in the engine container. The lab constructs vLL
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/10_vllm_offline.py` generates batched completions inside the pinned vLLM container. It validates one bounded, nonempty completion per prompt and records token counts, finish reasons, elapsed time, and output-token throughput.
 
-Inspect the launcher and lab options before running the pinned default. `--enforce-eager` is an explicit engine option for a separately declared comparison, not an automatic fallback on initialization failure.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-bash slurm/vllm_offline.sbatch --help
-python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small
-python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small --enforce-eager
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" \
+  slurm/vllm_offline.sbatch \
+  --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 10_vllm_offline --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/10_vllm_offline/logs/$LAB_JOB_ID.out"
+cat "results/10_vllm_offline/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require one completion per prompt, positive prompt counts, bounded positive output counts, and all iterations completed. Inspect total requests/tokens, per-request count summaries, finish reasons, elapsed seconds, and output tokens/s.
 
@@ -47,7 +55,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Prompt tokens total | `prompt_tokens_total` | `none` |
 | Output tokens total | `output_tokens_total` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_vllm_offline \
@@ -60,12 +68,38 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Inspect the launcher and lab options before running the pinned default. `--enforce-eager` is an explicit engine option for a separately declared comparison, not an automatic fallback on initialization failure.
+
+```bash
+bash slurm/vllm_offline.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small --enforce-eager
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Why can actual output length be less than the maximum token budget? Explain why comparing runs with different stopping behavior can change throughput without improving the engine. Which startup costs are excluded from this measurement?
 
 Capture a separate diagnostic run with `--in-process`. This explicit diagnostic setting keeps vLLM GPU launches in the process that owns the course NVTX range. The normal engine uses a child process, and parent NVTX ranges do not extend into that child. Keep the default process mode for clean throughput measurements; this capture cannot measure its inter-process overhead.
 
 ```bash
-python3 tools/submit_lab.py --lab 10_vllm_offline --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_offline.sbatch --profile small --in-process
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/10_vllm_offline/logs/capture-%J-%t.out" \
+  --error="results/10_vllm_offline/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${VLLM_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/10_vllm_offline/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  python3 labs/10_vllm_offline.py --profile small --in-process
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `vllm_generate`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
@@ -75,10 +109,21 @@ For one kernel, use the same fixed workload and `--in-process` setting in a sepa
 Request additional **host RAM** for Compute replay. The profiler can back up device allocations, including vLLM's KV cache, in system memory. A job that runs normally with the launcher's 64 GiB allocation can therefore be killed during capture. The command below requests 256 GiB through Slurm's `SBATCH_MEM_PER_NODE` variable, whose numeric value is in MiB. This changes the job allocation without changing its one-GPU workload. Verify that the worker can satisfy the request; an out-of-memory capture is incomplete evidence.
 
 ```bash
-SBATCH_MEM_PER_NODE=262144 python3 tools/submit_lab.py --lab 10_vllm_offline '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=vllm_generate,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/vllm_offline.sbatch --profile small --in-process
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/10_vllm_offline/logs/capture-%J-%t.out" \
+  --error="results/10_vllm_offline/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${VLLM_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include vllm_generate/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/10_vllm_offline/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  python3 labs/10_vllm_offline.py --profile small --in-process
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare the default engine with `--enforce-eager`, the two settings of this boolean control. Keep the model, prompts, sampling and profile fixed. Predict the throughput effect, verify completion accounting, and inspect the named report views. Run additional independent repetitions of both settings and explain whether measurement variation supports the prediction.
 

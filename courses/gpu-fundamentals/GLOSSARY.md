@@ -14,6 +14,7 @@
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
 - **Divergence** — a warp executing different control-flow paths for different active lanes, usually serializing the paths.
 - **DMA** — direct memory access; transfer hardware moves data without CPU instructions copying each byte.
+- **Dot product** — The sum of products of matching entries in two sequences; matrix multiplication combines one row and one column this way.
 - **ECC** — error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
 - **ECN / CNP / PFC** — congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
 - **Eligible warp** — a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
@@ -34,6 +35,7 @@
 - **JIT** — just-in-time compilation, such as translating compatible PTX when loading GPU code.
 - **Kernel** — a function launched for parallel execution on the GPU.
 - **L1 / L2 cache** — hardware-managed storage that can serve repeated accesses with less traffic to lower memory levels; L1 is local to an SM and L2 is shared across SMs.
+- **Lane** — A thread position within a warp, numbered 0–31; positions without a thread in a partial warp are unused.
 - **Latency hiding** — issuing eligible work from another resident warp while a warp waits for a dependency.
 - **Layout** — The mapping from logical tensor indices to storage addresses.
 - **Local memory** — thread-private CUDA address space normally backed by device memory; register spills can create local-memory traffic.
@@ -73,6 +75,7 @@
 - **Tensor Core** — specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
 - **TF32** — TensorFloat-32, a Tensor Core compute mode for selected FP32 matrix operations, not a tensor storage dtype.
 - **Thread-block cluster** — a group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.
+- **Tile** — A rectangular piece of a matrix processed as a unit of work; its elements need not map one-to-one to threads.
 - **TPC** — texture processing cluster; in Hopper, a TPC contains two SMs within a GPC.
 - **TPC (texture processing cluster)** — A hardware group containing two SMs on H100.
 - **Triton program** — one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.

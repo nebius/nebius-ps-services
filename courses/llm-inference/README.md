@@ -6,11 +6,11 @@ The **base route** uses two workers with one H100 each. Its TCP/IP inter-node pa
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 The optional AIPerf campaign referenced by Lab 30 belongs to Lab 15; submit
-`slurm/aiperf.sbatch` with `--lab 15_streaming_client` so its logs and serving
-artifacts retain the same lab identity.
+`slurm/aiperf.sbatch` using Lab 15's native submission block and private log
+directory so its logs and serving artifacts retain the same lab identity.
 AIPerf writes native benchmark exports; the Lab 15 dashboard and course
 publisher use the separate streaming client's JSON results.
 The streaming client uses finite closed-loop concurrency and reports median/p90
@@ -30,7 +30,7 @@ Read [Using GPU performance tools](reference/performance-tools.md) before the fi
 
 ## Serving runtime preparation
 
-On the login node, after the shared Python/publishing setup, select
+On the login node, after the shared Python setup, select
 `COURSE=llm-inference` and work from `~/courses/llm-inference`.
 The mechanics environment uses `requirements-mechanics.txt`.
 
@@ -41,7 +41,7 @@ The runner mounts managed Nsight packages and activation; qualify captures insid
 each image. Prepare the separate lightweight serving client and save its settings:
 
 ```bash
-python3 -m venv "$HOME/courses/.venvs/llm-inference-serving"
+python3.12 -m venv "$HOME/courses/.venvs/llm-inference-serving"
 export COURSE_SERVING_PYTHON="$HOME/courses/.venvs/llm-inference-serving/bin/python"
 "$COURSE_SERVING_PYTHON" -m pip install -r requirements-serving.txt
 declare -p COURSE_SERVING_PYTHON VLLM_IMAGE_DIGEST AIPERF_IMAGE_DIGEST COURSE_CONTAINER_RUNNER \
@@ -104,9 +104,10 @@ explicitly so the active serving-client environment cannot leak into the job;
 the interpreter path must exist on the allocated node.
 
 ```bash
-umask 077
 COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python" \
-python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
 ```
 
 Pinned engine profiles remain pending until their images, model revisions,
@@ -133,10 +134,11 @@ the reviewed model YAML. See [Lab 30](reference/labs/30_engine_profile.md).
 After Lesson 6, follow [Lab 10’s offline generation guide](reference/labs/10_vllm_offline.md) and run through that same immutable boundary:
 
 ```bash
-umask 077
 VLLM_IMAGE_DIGEST='docker://registry/image@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
-python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_vllm_offline/logs/%j.out" \
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small
 ```
 
 After Lessons 6–9 and qualification of both vLLM and AIPerf images, follow
@@ -149,11 +151,12 @@ fixed across both policies and phases. Keep the exact output gate; these
 controlled scheduling measurements do not qualify compiled serving performance.
 
 ```bash
-umask 077
 VLLM_IMAGE_DIGEST='docker://registry/vllm@sha256:DIGEST' \
 AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
-python3 tools/submit_lab.py --lab 34_policy_equivalence_client slurm/vllm_chunked_prefill_ab.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
+  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/vllm_chunked_prefill_ab.sbatch
 ```
 
 After Lesson 13, follow [Lab 33’s speculative-decoding guide](reference/labs/33_speculative_engine_client.md) and qualify a compatible target/draft pair before the profile;
@@ -161,11 +164,12 @@ the launcher requires immutable model revisions and rejects paired greedy
 outputs whose private digests differ:
 
 ```bash
-umask 077
 VLLM_IMAGE_DIGEST='docker://registry/vllm@sha256:DIGEST' \
 AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
-python3 tools/submit_lab.py --lab 33_speculative_engine_client slurm/vllm_speculative_ab.sbatch TARGET TARGET_REVISION DRAFT DRAFT_REVISION
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/vllm_speculative_ab.sbatch TARGET TARGET_REVISION DRAFT DRAFT_REVISION
 ```
 
 Actual distributed serving practice is in the advanced course, where Dynamo experiments own their workers, discovery, model revision, client measurements and server captures.

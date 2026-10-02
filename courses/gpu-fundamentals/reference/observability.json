@@ -4,7 +4,7 @@
   "labs": {
     "01_cpu_gpu_crossover": {
       "lab": "01_cpu_gpu_crossover",
-      "title": "Lab 01: Find the CPU–GPU crossover for vector work",
+      "title": "Lab 01: Find the CPU\u2013GPU crossover for vector work",
       "kind": "single_gpu",
       "nvtx_range": "course_measure",
       "tuning_parameters": [],
@@ -15,7 +15,7 @@
           "title": "Sizes / case / cpu median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sizes.*.cpu_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sizes.*.cpu_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false,
           "case_values": {
             "small": [
@@ -35,7 +35,7 @@
           "title": "Sizes / case / gpu resident / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sizes.*.gpu_resident.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sizes.*.gpu_resident.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false,
           "case_values": {
             "small": [
@@ -55,7 +55,7 @@
           "title": "Sizes / case / gpu with transfers median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sizes.*.gpu_with_transfers_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sizes.*.gpu_with_transfers_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false,
           "case_values": {
             "small": [
@@ -96,7 +96,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/01_cpu_gpu_crossover/logs/capture-%J-%t.out\" \\\n  --error=\"results/01_cpu_gpu_crossover/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/01_cpu_gpu_crossover/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/01_cpu_gpu_crossover.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/01_cpu_gpu_crossover/logs/capture-%J-%t.out\" \\\n  --error=\"results/01_cpu_gpu_crossover/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/01_cpu_gpu_crossover/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/01_cpu_gpu_crossover.py --profile small"
     },
     "02_tensor_core_precision": {
       "lab": "02_tensor_core_precision",
@@ -113,7 +115,7 @@
           "title": "Modes / case / timing / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.modes.*.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.modes.*.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -122,7 +124,7 @@
           "title": "Modes / case / achieved tflops",
           "unit": "FLOPS",
           "scale": 1000000000000.0,
-          "description": "Measured artifact field measurements.modes.*.achieved_tflops. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 1e+12; unit FLOPS.",
+          "description": "Measured artifact field measurements.modes.*.achieved_tflops. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e+12; unit FLOPS.",
           "optional": false
         },
         {
@@ -169,7 +171,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/02_tensor_core_precision/logs/capture-%J-%t.out\" \\\n  --error=\"results/02_tensor_core_precision/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/02_tensor_core_precision/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/02_tensor_core_precision.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/02_tensor_core_precision/logs/capture-%J-%t.out\" \\\n  --error=\"results/02_tensor_core_precision/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/02_tensor_core_precision/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/02_tensor_core_precision.py --profile small"
     },
     "03_transfer_and_pinning": {
       "lab": "03_transfer_and_pinning",
@@ -186,7 +190,7 @@
           "title": "Modes / case / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.modes.*.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.modes.*.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -195,7 +199,7 @@
           "title": "Modes / case / effective gib per s",
           "unit": "Bps",
           "scale": 1073741824,
-          "description": "Measured artifact field measurements.modes.*.effective_gib_per_s. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 1.07374e+09; unit Bps.",
+          "description": "Measured artifact field measurements.modes.*.effective_gib_per_s. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.07374e+09; unit Bps.",
           "optional": false
         }
       ],
@@ -232,7 +236,8 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/03_transfer_and_pinning/logs/capture-%J-%t.out\" \\\n  --error=\"results/03_transfer_and_pinning/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/03_transfer_and_pinning/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/03_transfer_and_pinning.py --profile small"
     },
     "04_layout_and_coalescing": {
       "lab": "04_layout_and_coalescing",
@@ -247,7 +252,7 @@
           "title": "Timings / contiguous / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.timings.contiguous.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.timings.contiguous.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -256,7 +261,7 @@
           "title": "Timings / strided view / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.timings.strided_view.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.timings.strided_view.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -298,7 +303,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/04_layout_and_coalescing/logs/capture-%J-%t.out\" \\\n  --error=\"results/04_layout_and_coalescing/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/04_layout_and_coalescing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/04_layout_and_coalescing.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/04_layout_and_coalescing/logs/capture-%J-%t.out\" \\\n  --error=\"results/04_layout_and_coalescing/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/04_layout_and_coalescing/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/04_layout_and_coalescing.py --profile small"
     },
     "05_roofline_microbench": {
       "lab": "05_roofline_microbench",
@@ -313,7 +320,7 @@
           "title": "Bandwidth kernel / timing / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.bandwidth_kernel.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.bandwidth_kernel.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -322,7 +329,7 @@
           "title": "Bandwidth kernel / estimated gib per s",
           "unit": "Bps",
           "scale": 1073741824,
-          "description": "Measured artifact field measurements.bandwidth_kernel.estimated_gib_per_s. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 1.07374e+09; unit Bps.",
+          "description": "Measured artifact field measurements.bandwidth_kernel.estimated_gib_per_s. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1.07374e+09; unit Bps.",
           "optional": false
         },
         {
@@ -331,7 +338,7 @@
           "title": "Gemm / achieved tflops",
           "unit": "FLOPS",
           "scale": 1000000000000.0,
-          "description": "Measured artifact field measurements.gemm.achieved_tflops. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 1e+12; unit FLOPS.",
+          "description": "Measured artifact field measurements.gemm.achieved_tflops. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 1e+12; unit FLOPS.",
           "optional": false
         }
       ],
@@ -361,7 +368,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/05_roofline_microbench/logs/capture-%J-%t.out\" \\\n  --error=\"results/05_roofline_microbench/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/05_roofline_microbench/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/05_roofline_microbench.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/05_roofline_microbench/logs/capture-%J-%t.out\" \\\n  --error=\"results/05_roofline_microbench/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/05_roofline_microbench/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/05_roofline_microbench.py --profile small"
     },
     "07_async_streams": {
       "lab": "07_async_streams",
@@ -376,7 +385,7 @@
           "title": "Host enqueue median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.host_enqueue_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.host_enqueue_median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -385,7 +394,7 @@
           "title": "Sequential device / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sequential_device.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sequential_device.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -394,7 +403,7 @@
           "title": "Independent streams device / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.independent_streams_device.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.independent_streams_device.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         }
       ],
@@ -424,7 +433,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/07_async_streams/logs/capture-%J-%t.out\" \\\n  --error=\"results/07_async_streams/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/07_async_streams/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/07_async_streams.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/07_async_streams/logs/capture-%J-%t.out\" \\\n  --error=\"results/07_async_streams/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include lab_workload/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/07_async_streams/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/07_async_streams.py --profile small"
     },
     "08_operator_to_kernels": {
       "lab": "08_operator_to_kernels",
@@ -467,7 +478,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/08_operator_to_kernels/logs/capture-%J-%t.out\" \\\n  --error=\"results/08_operator_to_kernels/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/08_operator_to_kernels/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/08_operator_to_kernels.py --profile small --external-only",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/08_operator_to_kernels/logs/capture-%J-%t.out\" \\\n  --error=\"results/08_operator_to_kernels/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include lab_workload/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/08_operator_to_kernels/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/08_operator_to_kernels.py --profile small --external-only"
     },
     "09_triton_launch_geometry": {
       "lab": "09_triton_launch_geometry",
@@ -482,7 +495,7 @@
           "title": "Sweeps / 128 / time / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sweeps.128.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sweeps.128.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -491,7 +504,7 @@
           "title": "Sweeps / 256 / time / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sweeps.256.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sweeps.256.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -500,7 +513,7 @@
           "title": "Sweeps / 512 / time / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.sweeps.512.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.sweeps.512.time.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         }
       ],
@@ -530,7 +543,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/09_triton_launch_geometry/logs/capture-%J-%t.out\" \\\n  --error=\"results/09_triton_launch_geometry/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/09_triton_launch_geometry/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/09_triton_launch_geometry.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/09_triton_launch_geometry/logs/capture-%J-%t.out\" \\\n  --error=\"results/09_triton_launch_geometry/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/09_triton_launch_geometry/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/09_triton_launch_geometry.py --profile small"
     },
     "10_compatibility_stack": {
       "lab": "10_compatibility_stack",
@@ -575,7 +590,7 @@
           "title": "Cases / case / timing / median (seconds)",
           "unit": "s",
           "scale": 0.001,
-          "description": "Measured artifact field measurements.cases.*.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value × 0.001; unit s.",
+          "description": "Measured artifact field measurements.cases.*.timing.median_ms. Compare identical case and workload in both selected slots; keep the original JSON for full configuration and distributions. Display conversion: source value \u00d7 0.001; unit s.",
           "optional": false
         },
         {
@@ -623,7 +638,9 @@
         "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/11_scheduler_tail/logs/capture-%J-%t.out\" \\\n  --error=\"results/11_scheduler_tail/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/11_scheduler_tail/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/11_scheduler_tail.py --profile small",
+      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/11_scheduler_tail/logs/capture-%J-%t.out\" \\\n  --error=\"results/11_scheduler_tail/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/11_scheduler_tail/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/11_scheduler_tail.py --profile small"
     },
     "12_read_only_health": {
       "lab": "12_read_only_health",

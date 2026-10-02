@@ -6,6 +6,20 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Inject the Kubernetes credential provider from the entrypoints, preserving the
+  CLI dependency boundary and lightweight cache hits without changing token
+  refresh, private-cache checks, or command output.
+
+- Make editable uv tool installation the primary README setup flow, clarify
+  Soperator path inputs, order profiling installation before access, and separate
+  Helm-chart app upgrades from Grafana with matching navigation.
+
+- Speed up Grafana imports by avoiding full CLI startup on Kubernetes
+  credential-cache hits and redundant conversion of already-canonical dashboards.
+  Preserve authentication, ownership and lease checks, version guards, serial
+  recovery checkpoints, datasource selection and final readback. Keep the existing
+  command and kubeconfig formats.
+
 - Reorganize the README into a complete command-category index with selected
   installed-CLI examples and five focused operator/contributor guides. Remove
   historical experiment narratives and duplicate internals; correct recovery,

@@ -6,11 +6,20 @@ The **base route** uses two workers with one H100 each. Its TCP/IP inter-node pa
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
 Start Lesson 1 with the whole H100 SXM 80 GB: SMs, L2 cache and HBM, then distinguish physical hardware from grids, blocks, warps and threads, including how block size limits residency. Open Lab 10 for readiness checks and Lab 01 for its formula, timing procedure and numerical acceptance.
+
+The Work hierarchy section follows a complete 2×3 by 3×2 matrix multiplication
+from four output elements to one 2×2-thread block, a partial 32-lane warp and
+execution on one SM. Its diagram highlights a row–column dot product before
+following each thread to its output. Matching matrix cells and a consistent
+type scale separate values, headings and annotations. The explanation shows
+when one thread can own one output and why optimized kernels can use different
+mappings. The output panel labels x across columns and y down rows, and connects
+the coordinate pair `(x, y)` to row-first matrix indexing `C[y, x]` for this kernel.
 
 Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Its four landscape diagrams read from left to right: Systems and NVTX timelines, Compute counters leading to an investigation, and Grafana results beside sampled telemetry. A short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
@@ -59,9 +68,12 @@ With the qualified runtime from shared environment setup, run the compatibility 
 comparison. Confirm that each job succeeds before continuing.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 10_compatibility_stack slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
-python3 tools/submit_lab.py --lab 01_cpu_gpu_crossover slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_compatibility_stack/logs/%j.out" \
+  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
 ```
 
 ## At Lesson 12

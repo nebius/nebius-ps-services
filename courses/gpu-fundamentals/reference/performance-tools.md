@@ -81,6 +81,8 @@ The panels on the left show the selected completed pair; both pass correctness. 
 
 Instrumentation adds overhead. Use a separate diagnostic run to explain behavior, then repeat without profiling to judge performance. Compare the same profile, inputs, seed and runtime; a larger profile is not an optimization. Distributed captures produce one report per rank; align their collective and step boundaries rather than summing overlapping rank times. Serving captures wrap the GPU server while the client records request latency.
 
+![A measured optimization loop](#tools-measurement-loop)
+
 ## Practice
 
 Complete the setup checks once, then follow the first experiment's local commands. Save an unprofiled baseline, inspect a bounded capture, predict the effect of one change, and repeat without instrumentation. Publish the two validated artifacts and explain both the measured outcome and its limits. An unsuccessful optimization with a sound explanation is a valid result.

@@ -1,0 +1,58 @@
+{
+  "scope": "Only worktree eligibility is under evaluation. All other eligibility checks pass unless a scenario overrides them. Passing means proceed to default discovery, not a completed update. These are independent offline scenarios; do not execute commands.",
+  "current_branch_ref": "refs/heads/feature/demo",
+  "current_checkout": "/workspace/repo",
+  "symbolic_ref_exit": 0,
+  "worktree_list_exit": 0,
+  "scenarios": [
+    {
+      "scenario": "symbolic branch identity unavailable",
+      "expected": "block_inspection_failure",
+      "symbolic_ref_exit": 1,
+      "current_branch_ref": null,
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000"
+    },
+    {
+      "scenario": "registry command failure",
+      "expected": "block_inspection_failure",
+      "worktree_list_exit": 128,
+      "worktree_porcelain_z": ""
+    },
+    {
+      "scenario": "malformed registration record",
+      "expected": "block_inspection_failure",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000branch refs/heads/feature/demo\u0000\u0000"
+    },
+    {
+      "scenario": "matching registration appears before merge",
+      "expected": "block_before_merge",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000",
+      "before_merge_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/current\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000"
+    },
+    {
+      "scenario": "active reservation applies to current branch",
+      "expected": "block_active_guard",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000",
+      "authoritative_guard": {
+        "scope": "refs/heads/feature/demo",
+        "status": "active_restriction"
+      }
+    },
+    {
+      "scenario": "active reservation applies only to another branch",
+      "expected": "proceed_to_discovery",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/other\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/other\u0000\u0000",
+      "authoritative_guard": {
+        "scope": "refs/heads/feature/other",
+        "status": "active_restriction"
+      },
+      "repository_wide_write_lock": false
+    },
+    {
+      "scenario": "explicit repository-wide Git-write lock",
+      "expected": "block_active_guard",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/other\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/other\u0000\u0000",
+      "repository_wide_write_lock": true
+    }
+  ]
+}

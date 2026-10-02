@@ -1,0 +1,36 @@
+{
+  "scope": "Only worktree eligibility is under evaluation. All other eligibility checks pass unless a scenario overrides them. Passing means proceed to default discovery, not a completed update. These are independent offline scenarios; do not execute commands.",
+  "current_branch_ref": "refs/heads/feature/demo",
+  "current_checkout": "/workspace/repo",
+  "symbolic_ref_exit": 0,
+  "worktree_list_exit": 0,
+  "scenarios": [
+    {
+      "scenario": "same branch also registered in a linked worktree",
+      "expected": "block_with_branch_and_path",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/current\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000"
+    },
+    {
+      "scenario": "locked same-branch registration",
+      "expected": "block_with_branch_and_path",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/current\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000locked portable worktree\u0000\u0000"
+    },
+    {
+      "scenario": "prunable same-branch registration with missing directory",
+      "expected": "block_with_branch_and_path",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/current\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000prunable gitdir points to missing location\u0000\u0000",
+      "registered_path_exists": false
+    },
+    {
+      "scenario": "invocation from the linked checkout",
+      "expected": "block_with_branch_and_path",
+      "current_checkout": "/workspace/repo-worktrees/current",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/main\u0000\u0000worktree /workspace/repo-worktrees/current\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000"
+    },
+    {
+      "scenario": "matching branch with unusual registered path",
+      "expected": "block_with_branch_and_path",
+      "worktree_porcelain_z": "worktree /workspace/repo\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000worktree /workspace/repo-worktrees/space and\nnewline\u0000HEAD 1111111111111111111111111111111111111111\u0000branch refs/heads/feature/demo\u0000\u0000"
+    }
+  ]
+}

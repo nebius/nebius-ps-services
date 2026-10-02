@@ -3442,7 +3442,7 @@ Other feature evidence predating this change remains unassessed.
 
 <!-- /FEATURE: FEAT-025 -->
 
-<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=10 -->
+<!-- FEATURE: FEAT-026 reqs=REQ-026 status=ready delivery=unassessed priority=P1 version=11 -->
 ### FEAT-026: Layered CLI services and ratcheted repository gates
 
 #### Requirements Covered
@@ -3458,6 +3458,38 @@ Python 3.12 test job but no enforced branch coverage, formatting, package-wide
 static-type ratchet, or every-supported-minor offline matrix.
 
 #### Design Details
+
+Revision 11 makes editable `uv tool install` the primary operator installation,
+using a portable checkout path and explicit installed Python selection without
+automatic Python downloads. Document the supported uv range, optional pipx
+bootstrap, shell refresh, version/help checks and retained-checkout requirement;
+keep a selected Git branch/tag as the secondary uv tool option. Contributor
+synchronization remains owned by Make and the locked development environment.
+
+Use path labels for Soperator directory inputs and order profiling commands as
+install, show, recover. Separate ordinary `upgrade helm-chart` into a
+Helm-chart (apps) upgrade category immediately before Grafana, retaining the
+Soperator release boundary. Match the TOC and documentation heading fixture to
+that structure while preserving complete, unique public command coverage.
+Selected option: the editable checkout requested by operators; a pinned Git
+revision remains available, while manual virtual-environment activation is
+removed from the operator entry path. No CLI/API or package behavior changes.
+
+Revision 11 is implemented in the README, heading-contract fixture and
+Unreleased changelog. The public index retains every command once across nine
+categories; the TOC matches all 17 section/subsection headings in document order.
+Soperator profiling rows follow install, show, recover and directory inputs use
+path labels. Existing unrelated documentation edits remain intact.
+
+Focused offline documentation restoration/alignment and CLI-contract tests,
+Markdown lint, navigation/order checks and diff hygiene passed. An isolated
+editable uv tool installation under Python 3.12 passed version and root-help
+checks from outside its disposable checkout; module-path readback confirmed the
+editable source binding. Review found no changed-scope correctness or security
+issues. This is local editable-install and documentation evidence, not an
+installed-wheel, alternate Git-install, full-CI or live-infrastructure claim.
+User tool installations, shell profiles and infrastructure were not changed.
+Broader FEAT-026 delivery remains unassessed.
 
 Revision 10 defines the operator documentation structure. The README owns
 installation, one quick start, core path/target concepts, and a complete public
@@ -3481,7 +3513,7 @@ maintenance cost; a short README omitting less common commands was rejected for
 incomplete discoverability. Existing CLI types, flags, behavior, schemas and
 runtime dependencies remain unchanged. No stack or AI subsystem change applies.
 
-The documentation slice is implemented. The README indexes all 43 public leaf
+The revision-10 documentation slice was implemented with all 43 public leaf
 commands in eight categories, with five linked guides and corrected upgrade and
 storage diagrams. Command-index completeness derives from the registered CLI
 tree. Operator-guide and help examples parse with product and parameter callbacks
@@ -7567,7 +7599,7 @@ qualify H100 performance, every deployment lifecycle, or the course lab catalog.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-037 status=ready delivery=implemented priority=P1 version=9 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-037 status=ready delivery=implemented priority=P1 version=10 -->
 ### FEAT-042: Unified Grafana dashboard commands
 
 #### Requirements Covered
@@ -7584,6 +7616,33 @@ File provisioning can overwrite database edits. The pinned chart 12.1.3 uses
 Grafana 13.0.1; qualify the dashboard.grafana.app/v1 API explicitly.
 
 #### Design Details
+
+Version 10 reduces import latency without weakening the existing operation boundaries.
+The package entrypoint lazily dispatches an exact leading mk8s-token command to
+a lightweight canonical command/cache owner, also registered with the full CLI.
+Warm cache hits avoid the full CLI import; cache misses preserve the existing
+credential acquisition and required initialization. Keep command and kubeconfig
+formats, binding, owner-only files, atomic writes, locking, expiry, renewable-auth
+policy, refresh cooldown/fallback, SDK budgets and sanitized failures unchanged.
+
+Preflight still converts every desired dashboard through the server. Compare its
+canonical digest with the existing portable resource and folder before converting
+the previous resource. Equal content skips only that redundant dry run; unequal
+content retains schema migration and overwrite admission. Keep all authority
+fences, fresh discovery/locked admission, version guards, serial writes, durable
+checkpoints, ownership checks and final readback. No concurrency, transport
+replacement, new dependency, flag, schema or persistent cache is introduced.
+
+Validate cache-hit subprocess import isolation and full/fast CLI parity; preserve
+cache security, refresh, failure and concurrency tests. Exercise equal, migrated,
+different-folder, changed and managed dashboards plus drift, partial batches and
+lost responses. Count HTTP/fencing calls through real boundaries. Measure three
+comparable authorized lab imports before and after using frozen source/workload
+and aggregate-only instrumentation, separating initial reconciliation from no-op
+trials. Independently check remote content/versions and local recovery-file
+stability. Timing fixtures are not customer or full-pipeline proof. Source rollback
+requires no persisted-data migration. Shared-client transport replacement and
+parallel writes are deferred because they broaden the operational risk.
 
 FEAT-048 supersedes Version 9's shared backend lease for cluster imports.
 Standalone imports acquire local process ownership; nested deployment calls reuse
@@ -7818,6 +7877,14 @@ API and live evidence are reported separately with unresolved limitations explic
 
 #### Implementation Evidence
 
+Version 10 implements the lightweight canonical credential command/cache owner in
+`mk8s_exec.py`, lazy package dispatch and the shared atomic writer. The full CLI
+registers the same command; cold acquisition retains the existing SDK provider
+and concise credential logging. Grafana preflight compares desired canonical
+content with the existing portable content and folder before requesting a second
+conversion. Unequal content keeps the existing conversion and overwrite path.
+README, dashboard guidance and Unreleased notes describe the preserved contract.
+
 Version 9 removes the standalone lease policy override and consumes FEAT-017 v19
 for all cluster imports. Focused Grafana and nested observability tests verify
 the canonical policy and outer-owner reuse; the broader v19 protocol, process
@@ -7879,6 +7946,36 @@ owners run preflight/replay; final verification observes only. README, operation
 guide, changelog, CLI fixture and CI/release API qualification are aligned.
 
 #### Verification Evidence
+
+Version 10 passes focused Grafana, credential-cache, lease, CLI-contract,
+command-coverage and documentation suites. Negative controls reproduce the full
+CLI import on warm credential hits and redundant conversion before the repair.
+Real request/fence boundary tests cover new, unchanged and changed batches;
+cache tests retain permissions, symlinks, binding, expiry, refresh, failure and
+concurrency coverage. Five disposable digest-pinned Grafana 13.2.2 API tests pass,
+including guarded writes, provisioned ownership, schema migration and conflicts.
+An isolated wheel verifies 53 public and one hidden CLI surfaces; installed
+console and module credential entrypoints pass synthetic cache-hit checks.
+Changed-scope Ruff and focused mypy pass. Existing project debt ratchets pass at
+486 of 493 allowed mypy errors and 1,122 of 1,191 allowed implementation
+functions. Independent read-only code/security review finds no remaining blocker.
+
+Three successful paired authorized lab trials use frozen before/after source,
+the same 12-dashboard workload and interpreter, normal bytecode caching and
+explicit datasource mappings. Full-command median elapsed time falls from
+435.787 to 271.721 seconds (37.6%); baseline runs span 431.685-436.337
+seconds and optimized runs span 271.140-303.557 seconds. Each full workflow makes
+55 rather than 67 Grafana HTTP requests: schema dry runs fall from 24 to 12,
+while all other HTTP operation counts remain equal. Every run reports 12 unchanged
+dashboards and preserves config, dashboard JSON and receipt bytes and mtimes.
+Separate before/after API reads confirm identical content, folder, editability,
+datasource references and resource versions. One release-archive download timeout
+before Grafana/lease calls is retained as an excluded failed attempt and retried
+through the normal command. Preliminary instrumentation/setup attempts are not
+part of the comparison. These trials verify repeated imports; live creation,
+changed-dashboard timing, browser and deployment recovery remain separate lanes.
+The feature retains implemented delivery; this revision verifies the scoped
+optimization rather than every broader Grafana/deployment scenario.
 
 Version 8 passes the complete non-integration suite: 6,491 passed, one skipped
 and seven integration tests deselected. Additional focused retry, provenance,

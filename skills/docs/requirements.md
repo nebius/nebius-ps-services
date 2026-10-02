@@ -3099,6 +3099,8 @@ with visible documentation conflicts and a planning default that does not
 silently implement changes or take over canonical specification ownership.
 Project README plans must orient readers, expose the first successful workflow,
 and connect to deeper documentation without becoming a catch-all manual.
+Standalone HTML artifact plans need one offline portability contract, a shared
+visual theme and layouts appropriate to documents, reports and presentations.
 
 #### Acceptance Criteria
 
@@ -3123,7 +3125,8 @@ and connect to deeper documentation without becoming a catch-all manual.
 
 - AC-007: Load focused README guidance when a design creates a project,
   materially changes how it is used, or explicitly includes README design.
-  Keep the existing trigger description and invocation policy unchanged.
+  Preserve the routine-edit trigger boundary and implicit invocation policy;
+  standalone portable HTML design is an additional supported design scope.
 - AC-008: README plans use an adaptable reader-first outline, an early visible
   TOC for substantial documents, explicit prerequisites and minimum setup,
   copyable examples, an observable first result, and links to deeper owners.
@@ -3131,6 +3134,28 @@ and connect to deeper documentation without becoming a catch-all manual.
 - AC-009: Describe current implementation accurately and label proposed
   greenfield or future-feature content as planned. Keep detailed architecture,
   complete references, runbooks and policies with their documentation owners.
+
+- AC-010: Load one focused portable-HTML reference for standalone document,
+  report or presentation design. Keep detailed guidance out of the core skill
+  and retain existing software-design routes and planning authority.
+- AC-011: Require a single HTML deliverable that opens offline through file:
+  without installation, a server, neighboring files or automatic network
+  requests. Embed required assets/data, survive copying/renaming/relocation and
+  keep essential content readable without JavaScript. External citations may
+  require internet only when followed. State must not depend on localStorage.
+- AC-012: Use semantic HTML and the shared warm-neutral theme with configurable
+  semantic color roles. Preserve the approved typography and spacing defaults
+  while distinguishing them from accessibility thresholds.
+- AC-013: Use document, report and presentation profiles with purpose-specific
+  hierarchy, optional interaction and complete printing. Reports identify their
+  snapshot period, generation date, units, sources, definitions and missing data.
+- AC-014: Specify keyboard access, visible focus, safe shortcuts, non-color
+  selection cues, responsive reflow, diagram text equivalents, reduced motion,
+  print completeness and safe handling of embedded data.
+- AC-015: Require all ten artifact acceptance checks: offline direct-file,
+  dependencies, no-JavaScript content, interactions, keyboard, layouts, visuals,
+  print, intended browsers and report data. Include relocation and attempted
+  request checks; report observed evidence separately from proposed checks.
 
 #### Negative Criteria
 
@@ -3144,6 +3169,12 @@ and connect to deeper documentation without becoming a catch-all manual.
 - NC-004: Wording-only and link/TOC-only README maintenance must not become
   new implicit design triggers. A README template must not require empty
   sections, invented commands or unsupported support/license claims.
+- NC-005: Cosmetic HTML edits and implementation-only requests must not become
+  new design triggers. Hosted app/page design does not automatically load the
+  portable-artifact reference. Do not mandate fixed tabs, section counts,
+  inspectors, diagram dimensions, paper sizes or a global character shortcut.
+- NC-006: Static skill definitions or a localhost preview must not be reported
+  as proof of offline artifact behavior, native triggering or output quality.
 
 #### Validation Method
 
@@ -3163,6 +3194,8 @@ non-mutating planning, explicit execution and document-owner handoffs. Verify
 host Plan Mode and read order with actual host context and traces when available.
 Include new-project and changed-usage README plans, routine-edit near misses,
 and conditional reference reads; compare quality with the prior working version.
+Add one portable HTML quality case per profile and trigger near misses. Preserve
+Help short-circuiting and verify that unrelated designs skip the new reference.
 
 <!-- /REQUIREMENT: REQ-038 -->
 
@@ -3217,6 +3250,127 @@ Compare realistic generated-output cases with the prior source when isolated
 native runners are available; report unavailable runtime or quality lanes.
 
 <!-- /REQUIREMENT: REQ-039 -->
+
+<!-- REQUIREMENT: REQ-040 status=active priority=P1 type=feature -->
+### REQ-040: Verify merge destination, queue membership, and result-commit CI
+
+#### User Story
+
+Users of `merge-pr` need independent evidence of where a GitHub PR landed and
+whether its resulting commit passed applicable CI, without confusing a queued
+request, a successful merge, and successful verification.
+
+#### Acceptance Criteria
+
+- AC-001: Resolve the host, base repository, target branch, and guarded head;
+  retain explicit merge intent, current readiness checks, non-admin execution,
+  and the separate Agentic SDLC boundary.
+- AC-002: After authoritative merged state, record GitHub's method-specific
+  resulting SHA and prove it is an ancestor of a freshly observed remote target
+  tip. Normal target advancement is valid; missing or divergent evidence is
+  reported separately from a known successful merge.
+- AC-003: A queued report requires a current authoritative queue entry. Return
+  after verified membership; distinguish removal from never-proven membership,
+  and defer requested branch deletion while queued. Cleanup must reject a
+  head that advances beyond the explicitly expected SHA at deletion time.
+- AC-004: Observe all applicable post-merge CI on the resulting SHA, including
+  check runs, statuses, and Actions provenance. Poll every 30 seconds for up to
+  3600 seconds per invocation; retries and observed CI reruns do not reset the
+  deadline. Missing result metadata has a 60-second settlement bound.
+- AC-005: Report merge, destination verification, and CI separately. CI outcomes
+  include passed, failed, pending, not configured, unverified, and not applicable
+  while queued. Preserve actual conclusions and disclose neutral/skipped checks.
+  No applicable configuration requires affirmative evidence, including external
+  providers; missing access or empty responses alone are not absence proof.
+- AC-006: Fixture-backed quality evaluations cover rewritten commit identities,
+  advancing/divergent targets, missing evidence, queue transitions, deferred
+  deletion, exact-SHA CI, deadlines, absent/delayed CI, and failed API access.
+
+#### Negative Criteria
+
+- NC-001: Never substitute the PR head, test merge commit, queue synthetic SHA,
+  or a newer branch tip for the authoritative resulting SHA.
+- NC-002: Verification failures never authorize repeated merges, requeueing,
+  workflow dispatch/rerun, automatic rollback, or unrequested branch deletion.
+- NC-003: Static and installation checks never imply native behavior or quality
+  evaluation passed. Preserve the existing public flags and explicit invocation.
+
+#### Validation Method
+
+Run strict portable/Codex/Claude structural checks, quality-definition and fixture
+validation, changed-scope Markdown checks, and disposable installation parity.
+
+#### Test Method
+
+Replay controlled API observations through quality cases; preserve the existing
+nine trigger cases and inspect readiness, authorization, and deletion boundaries.
+
+#### Evaluation Method
+
+Compare the candidate with captured working bytes on an isolated authenticated
+runner when available. Report unavailable authentication, model-quality evidence,
+and live GitHub validation separately; no live merge is required for this change.
+
+<!-- /REQUIREMENT: REQ-040 -->
+
+<!-- REQUIREMENT: REQ-041 status=active priority=P1 type=feature -->
+### REQ-041: Update the current feature branch from the remote default
+
+#### User Story
+
+Developers need a small, fast, explicitly invoked skill that merges the latest
+remote default branch into their current local feature branch without switching.
+
+#### Acceptance Criteria
+
+- AC-001: Discover origin's actual default branch, fetch only that branch and
+  merge its frozen commit; preserve current branch identity and existing commits.
+- AC-002: Require a clean ordinary primary checkout, including untracked files
+  and submodule changes; stop for default/detached HEAD, pending Git operations,
+  current-branch linked registrations or applicable active workflow restrictions.
+  For local changes, tell the user to review, stage and commit their work,
+  verify a clean checkout, then
+  rerun the skill; do not stage or commit their work automatically.
+- AC-003: Allow no-op, fast-forward and true merge. Resolve clear conflicts with
+  focused verification; ask about ambiguous intent and preserve pending state.
+- AC-004: Verify both input commits are ancestors and final Git state is clean;
+  distinguish completed updates, conflicts and other failures.
+- AC-005: Keep runtime instruction-only, roughly 120-150 lines, using Git with no
+  execution helper, custom state, GitHub API or new dependency. Routine success
+  uses Git checks; project tests are focused on conflict-resolution edits.
+- AC-006: Include side-effect-free help, native invocation policy, trigger and
+  behavioral evaluations, and catalog/distribution registration.
+- AC-007: Determine worktree association from exact full branch refs in Git
+  linked-worktree registrations, excluding the primary record. Matching locked
+  or prunable records block; unrelated or detached worktrees, container paths,
+  ancestry and worktreeSkill metadata alone do not, including stale metadata on
+  the current branch. Report matching branch/path or failed inspection, and
+  recheck before merging without repairing or deleting ownership state.
+
+#### Negative Criteria
+
+- NC-001: Do not switch branches, merge the feature upstream, push, rebase,
+  stash, reset, bypass hooks/signing, or overwrite ignored files.
+- NC-002: Do not reuse unrelated commit grants or infer runtime quality from
+  static/installation checks. Do not modify coordination owners for this skill.
+
+#### Validation Method
+
+Strict repository Codex/Claude and portable checks, plugin catalogs, focused
+Markdown checks and disposable installation parity.
+
+#### Test Method
+
+Disposable local Git histories exercise success, conflict, dirty/ignored state,
+remote failures, configuration overrides and hooks; no real repository update.
+
+#### Evaluation Method
+
+Canonical trigger CSV and output assertions compare with captured pre-change
+working bytes where an authenticated isolated runner is available. Report static,
+installation, native triggering and quality evidence separately.
+
+<!-- /REQUIREMENT: REQ-041 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

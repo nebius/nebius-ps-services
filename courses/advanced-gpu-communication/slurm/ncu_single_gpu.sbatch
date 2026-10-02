@@ -14,7 +14,7 @@ export COURSE_PROFILE_TOOL=ncu
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab 19_gradient_overlap [Slurm --name=value options] %s [companion options]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s [companion options]\n' "$0"
   printf '\nDiagnose one local Lab 19 backward kernel on one H100.\n'
   printf 'Options: --profile small|large, --seed N, --bucket-mib N N [...], --warmup N.\n'
   printf 'COURSE_PYTHON selects Python; COURSE_PROFILE_KERNEL selects a kernel regex.\n'
@@ -26,7 +26,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-  printf 'ERROR: submit this script through tools/submit_lab.py.\n' >&2
+  printf 'ERROR: submit this script with sbatch.\n' >&2
   exit 2
 fi
 if [[ -n "${NCU_SET+x}" || -n "${NCU_SECTIONS+x}" ]]; then

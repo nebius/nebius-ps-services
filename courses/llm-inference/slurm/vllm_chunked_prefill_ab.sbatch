@@ -15,7 +15,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
   printf '\nRuns three independent, counterbalanced vLLM/AIPerf trials per policy.\n'
 }
 

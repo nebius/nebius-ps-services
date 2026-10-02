@@ -1,0 +1,9 @@
+{
+  "independent_scenarios": [
+    "detached HEAD",
+    "unborn HEAD",
+    "current branch equals live origin default",
+    "active coordinator restriction on the current branch or checkout",
+    "unrelated pre-existing merge"
+  ]
+}

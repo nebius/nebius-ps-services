@@ -4,7 +4,7 @@ Real-engine speculation must preserve the intended target output before a throug
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/33_speculative_engine_client.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Qualify compatible target/draft artifacts, immutable revisions, engine image, and the AIPerf/client environment. This optional live exercise may require more memory than the small mechanics lab. Do not assume arbitrary draft and target models are compatible.
 
@@ -14,26 +14,35 @@ The client submits bounded deterministic requests and hashes returned text witho
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/33_speculative_engine_client.py` sends greedy requests to baseline or speculative engine variants and stores response digests without response text. The launcher compares paired digests across independent restarts before accepting the speculative campaign.
 
-Set all four artifact variables to reviewed identities before submitting. The shell requires nonempty values, and the launcher checks immutable-revision syntax; these checks do not establish artifact compatibility. Inspect launcher help first.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-bash slurm/vllm_speculative_ab.sbatch --help
-python3 tools/submit_lab.py --lab 33_speculative_engine_client slurm/vllm_speculative_ab.sbatch "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" \
+  slurm/vllm_speculative_ab.sbatch \
+  "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 33_speculative_engine_client --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/33_speculative_engine_client/logs/$LAB_JOB_ID.out"
+cat "results/33_speculative_engine_client/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require nonempty responses for each variant and successful launcher pair comparisons across the independent trials. Inspect target/draft identities, variant labels, digests, and benchmark artifacts. A matching short workload is not universal quality equivalence for all prompts or stochastic policies.
 
@@ -45,7 +54,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | --- | --- | --- |
 | Requests | `requests` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot; the two slots select the paired engine variants from the same trial. The publisher requires matching greedy response digests; these panels establish equivalence, not serving throughput. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot; the two slots select the paired engine variants from the same trial. The publisher requires matching greedy response digests; these panels establish equivalence, not serving throughput. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 33_speculative_engine_client \
@@ -58,12 +67,44 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Set all four artifact variables to reviewed identities before submitting. The shell requires nonempty values, and the launcher checks immutable-revision syntax; these checks do not establish artifact compatibility. Inspect launcher help first.
+
+```bash
+bash slurm/vllm_speculative_ab.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/vllm_speculative_ab.sbatch "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Does acceptance reduce target work enough to offset draft execution and verification? Compare actual output lengths, latency, and throughput under the same load. Keep startup memory and initialization separate from steady serving.
 
 Capture a separate diagnostic run:
 
+This diagnostic captures the GPU server while the supplied Python client generates requests. `slurm/capture_server.sh` provides bounded readiness, native `curl` start/stop controls, report paths and process cleanup; read those commands in `slurm/capture_server.sh` in the synced course directory. `@URL@`, `@PORT@` and `@OUTPUT@` receive job-local values. This captures one configuration; retain the full baseline campaign for paired correctness and acceptance timing.
+
 ```bash
-python3 tools/submit_lab.py --lab 33_speculative_engine_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_speculative_ab.sbatch "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \
+  --mem=64G --time=00:15:00 --chdir="$PWD" \
+  bash slurm/capture_server.sh 33_speculative_engine_client \
+  --client "${COURSE_PYTHON:?source the course runtime}" labs/33_speculative_engine_client.py --base-url @URL@ \
+    --model "${CLUSTER_TARGET_MODEL:?set target model}" --target-revision "${CLUSTER_TARGET_REVISION:?set immutable target revision}" \
+    --draft-model "${COURSE_DRAFT_MODEL:?set draft model}" \
+    --draft-revision "${COURSE_DRAFT_REVISION:?set immutable draft revision}" \
+    --variant target-only --output @OUTPUT@ \
+  --server nsys profile --trace=cuda,nvtx,osrt \
+    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \
+    --cuda-graph-trace=node --sample=none --cpuctxsw=none \
+    --discard-environment=true --force-overwrite=false \
+    --capture-range=cudaProfilerApi --capture-range-end=stop \
+    --duration=300 --kill=none --wait=all \
+    --output "results/33_speculative_engine_client/profiles/nsys-%q{COURSE_CAPTURE_ID}" \
+    vllm serve "${CLUSTER_TARGET_MODEL:?set target model}" --revision "${CLUSTER_TARGET_REVISION:?set immutable target revision}" --tokenizer-revision "${CLUSTER_TARGET_REVISION:?set immutable target revision}" \
+    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \
+    --profiler-config.profiler cuda
 ```
 
 The launcher profiles the **GPU server**, while the client measures requests. Open the emitted `.nsys-rep` in Systems; expand CUDA API, GPU kernels, copies, and worker-process rows. The launcher triggers `/start_profile` after server readiness and `/stop_profile` after the request campaign, using the engine’s CUDA profiler API. Match that interval to the client artifact timestamps. Require actual request activity inside the capture; initialization alone is insufficient. Server NVTX availability depends on the pinned engine; use its CUDA kernels and request interval when named phases are absent.

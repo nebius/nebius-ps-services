@@ -1,0 +1,9 @@
+{
+  "branch": "feature/demo",
+  "initial_status": "clean",
+  "ignored_local_file": "build/output.txt",
+  "incoming_tracked_file": "build/output.txt",
+  "merge_exit": 1,
+  "pending_operation": false,
+  "HEAD_changed": false
+}

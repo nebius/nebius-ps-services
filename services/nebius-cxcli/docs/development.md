@@ -53,6 +53,13 @@ credential for offline tests.
 
 ## Quality gates
 
+The CLI composition root supplies dependencies to command modules; those modules
+must not import `cli.py`. The lightweight `mk8s-token` app receives its credential
+provider from the package entrypoint. Only a cache miss loads the full provider,
+while the full CLI binds the same command factory to its existing provider.
+Keep the architecture import check and both cold/warm credential tests together
+when changing this wiring.
+
 | Target | Purpose |
 | --- | --- |
 | `make lint` | Ruff checks |

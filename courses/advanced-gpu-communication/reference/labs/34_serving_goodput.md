@@ -4,7 +4,7 @@ Goodput is the rate of successfully completed requests that also meet declared s
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/34_serving_goodput.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -35,29 +35,41 @@ Keep the existing model, tokenizer, two-worker aggregated layout, round-robin ro
 
 ## Practice
 
-Retain the complete Hugging Face cache snapshot produced by shared environment setup, including
-its repository metadata. The client selects the pinned tokenizer repository
-and revision with `HF_HUB_CACHE` set to that snapshot's cache root and offline
-mode enabled. AIPerf 0.12's offline resolver expects a repository ID rather
-than an absolute tokenizer directory. A custom runtime wrapper must preserve
-`HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` for the client.
+`labs/34_serving_goodput.py` uses AIPerf to compare concurrency at fixed generated-token work and latency SLOs. It verifies controls, request identities, completed streams, server token counts, and outputs and writes latency, throughput, goodput, and workload signatures.
 
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 8
-python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 16
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/34_serving_goodput/logs/%j.out" \
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" \
+  slurm/vendor_job.sbatch \
+  labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 8
 ```
-
-Logs stay under `results/34_serving_goodput/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 ## Check your results
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 34_serving_goodput --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/34_serving_goodput/logs/$LAB_JOB_ID.out"
+cat "results/34_serving_goodput/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 34_serving_goodput \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -74,6 +86,28 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 
 ## Investigate the behavior
 
+### Workload variations
+
+Retain the complete Hugging Face cache snapshot produced by shared environment setup, including
+its repository metadata. The client selects the pinned tokenizer repository
+and revision with `HF_HUB_CACHE` set to that snapshot's cache root and offline
+mode enabled. AIPerf 0.12's offline resolver expects a repository ID rather
+than an absolute tokenizer directory. A custom runtime wrapper must preserve
+`HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` for the client.
+
+Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/34_serving_goodput/logs/%j.out" \
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 8
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/34_serving_goodput/logs/%j.out" \
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 16
+```
+
+Logs stay under `results/34_serving_goodput/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
+
 Read profile_export_aiperf.json together with profile_export.jsonl, profile_export_raw.jsonl and outputs.json. Check `measurement_contract`, `workload_sha256`, requested output length and the actual length arrays. Raw exports and inputs.json stay in the private vendor folder. The raw requests prove which prompts and controls were sent; the final streaming usage proves completed token work. These exports describe the same recorded requests, not independent measurements.
 
 Distinguish successful requests from SLO-passing requests; zero goodput can be a valid result. Repeat the 8/16 pair in reverse order to observe variation, then optionally try concurrency 32 against the same baseline. Explain whether queueing, decode work or the network limits useful capacity. Neither higher concurrency nor a speedup is required for a successful investigation. The 128-request exercise is a small teaching sample, not a production capacity certification. Use this lab’s server capture command below to inspect GPU execution alongside AIPerf measurements.
@@ -82,8 +116,21 @@ Keep diagnostic captures separate from acceptance timings. For distributed work,
 
 Capture a separate diagnostic run:
 
+This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
+
 ```bash
-python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 8 --capture systems
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
+  --chdir="$PWD" --output="results/34_serving_goodput/logs/capture-%j.out" \
+  --error="results/34_serving_goodput/logs/capture-%j.err" \
+  slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir "$MODEL_PATH" --concurrency 8 --capture systems \
+  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
+  --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none \
+  --discard-environment=true --force-overwrite=false --kill=none \
+  --trace-fork-before-exec=true --cuda-graph-trace=node \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  --flush-on-cudaprofilerstop=false --wait=primary \
+  '--output={report}'
 ```
 
 **Nsight Systems evidence:** Capture the owned GPU server and its worker descendants while the client supplies requests. Open server-rank0.nsys-rep and server-rank1.nsys-rep from the private vendor folder. Expand the GPU worker process trees, CUDA streams and NCCL activity during AIPerf requests after model startup. Compare gaps and kernel activity with client TTFT/ITL; GPU utilization is not request latency. Model startup alone is an incomplete serving trace. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.

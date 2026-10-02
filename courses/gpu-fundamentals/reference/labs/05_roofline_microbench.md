@@ -4,7 +4,7 @@ Roofline reasoning starts by counting work and data movement before looking at a
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/05_roofline_microbench.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use one H100 and record its exact variant, precision mode, and environment. Obtain any proposed bandwidth or compute ceiling independently from an appropriate specification or calibrated experiment, not from the result being evaluated.
 
@@ -20,26 +20,35 @@ Given a kernel performing 2 billion useful operations while moving 20 GB across 
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/05_roofline_microbench.py` times a vector operation and BF16 matrix multiplication, reporting estimated bandwidth and arithmetic throughput. It checks finite outputs; counters are needed to establish the actual bottleneck.
 
-Each profile runs one vector case and one GEMM case. Use the larger profile as a second declared workload, not as an automatic fixed-work optimization comparison.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 05_roofline_microbench slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
-python3 tools/submit_lab.py --lab 05_roofline_microbench slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile large
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
+  --error="$PWD/results/05_roofline_microbench/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/05_roofline_microbench.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 05_roofline_microbench --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/05_roofline_microbench/logs/$LAB_JOB_ID.out"
+cat "results/05_roofline_microbench/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Inspect `bandwidth_kernel` and `gemm` distributions and their derived rates. The implementation checks only finite outputs; it does not prove numerical agreement with an independent reference. Add that reference before accepting a modified kernel or publishing an optimization claim.
 
@@ -55,7 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Bandwidth kernel / estimated gib per s | `bandwidth_kernel.estimated_gib_per_s` | `Bps` |
 | Gemm / achieved tflops | `gemm.achieved_tflops` | `FLOPS` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 05_roofline_microbench \
@@ -68,6 +77,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Each profile runs one vector case and one GEMM case. Use the larger profile as a second declared workload, not as an automatic fixed-work optimization comparison.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
+  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
+  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile large
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Calculate `min(compute_ceiling, bandwidth_ceiling * intensity)` with consistent units and an independently chosen ceiling. Explain why measured achieved throughput is compared with this bound rather than used to define it. Distinguish logical bytes from profiler-observed traffic.
 
 Fusion can raise intensity by removing intermediate HBM traffic but may increase registers, reduce occupancy, or limit reuse. Recomputing a cheap value can save bytes; recomputing expensive values can move the kernel toward the compute roof and slow it.
@@ -75,18 +99,37 @@ Fusion can raise intensity by removing intermediate HBM traffic but may increase
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 05_roofline_microbench --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/05_roofline_microbench/logs/capture-%J-%t.out" \
+  --error="results/05_roofline_microbench/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/05_roofline_microbench/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/05_roofline_microbench.py --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-python3 tools/submit_lab.py --lab 05_roofline_microbench --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/05_roofline_microbench/logs/capture-%J-%t.out" \
+  --error="results/05_roofline_microbench/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/05_roofline_microbench/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/05_roofline_microbench.py --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare the bandwidth operation with the GEMM against independently chosen roofline ceilings. Independently calculate the arithmetic intensity needed to cross the ridge point; do not call unlike operations an optimization speedup.
 

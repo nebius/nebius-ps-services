@@ -1,7 +1,7 @@
 # Design
 
-`design` is an implicit, non-SDLC skill for software design before
-implementation. It reads requirements, inspects existing code or greenfield
+`design` is an implicit, non-SDLC skill for software and standalone portable HTML
+design before implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
 `research` when available, routes undecided application-stack and layer
 technology choices through `app-stack`, routes undecided AI subsystem behavior,
@@ -29,6 +29,14 @@ focused guidance for reader orientation, an early TOC, the first successful
 workflow and links to deeper documentation. The outline adapts to the project;
 routine README wording or link/TOC maintenance does not require `design`.
 
+For standalone HTML documents, reports and presentations, it loads
+[portable HTML guidance](references/portable-html-design.md): one offline
+single-file contract, a shared warm-neutral theme and three purpose-specific
+layouts. Plans cover semantic content without JavaScript, optional accessible
+interaction, responsive diagrams, complete printing and explicit browser/data
+acceptance checks. Hosted pages and application interfaces load this reference
+only when a portable artifact is part of the request.
+
 Greenfield can include existing prototype code, but no users or dependent
 consumers must be confirmed before using the refactor exception. A demonstrated
 anti-pattern may be replaced through a prerequisite refactor with one canonical
@@ -42,6 +50,7 @@ making it immutable or declaring a defect correct.
 $design Design this feature against the project's design documents and code.
 $design Design this feature and implement it.
 $design Plan this project's README structure and quick start from its code.
+$design Plan a standalone offline HTML report with findings, evidence and print layout.
 $design --help
 $design -h
 ```
@@ -58,6 +67,8 @@ that scaffold and the scaffold workflow does not call back into design.
 
 - `references/readme-design.md`: conditional README structure, information
   hierarchy, TOC, examples, formatting, documentation boundaries and checks.
+- `references/portable-html-design.md`: shared portability/theme guidance,
+  document/report/presentation profiles and ten artifact acceptance checks.
 - `SKILL.md`: runtime workflow, seven-phase process, boundaries, guardrails, and
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
@@ -72,8 +83,9 @@ that scaffold and the scaffold workflow does not call back into design.
 
 ## Boundaries
 
-- Use `design` when the user wants a concrete software design and
-  implementation-ready plan before coding.
+- Use `design` when the user wants a concrete software or standalone portable
+  HTML design and implementation-ready plan before coding. Cosmetic HTML edits
+  and implementation of an already approved artifact remain implementation work.
 - Accept an evidence-backed handoff from `troubleshoot` when the causal
   mechanism is already proven and the durable remediation changes architecture
   topology, component or service responsibilities or boundaries, a public
@@ -125,6 +137,13 @@ README quality cases cover a small new project and an existing project's changed
 usage, including prerequisites, first success, selective sections and accurate
 current-versus-proposed behavior. Process cases require native traces for
 conditional reference reads and the help short circuit.
+
+Portable HTML cases cover all three layout profiles, the shared theme and
+portability contract, report snapshot/filter semantics and presentation fallback.
+The definitions contain 41 trigger cases (24 positive, 17 negative) and 14
+quality cases. Offline `file://`, no-JavaScript, relocation, request, keyboard,
+responsive and print checks require an actual implemented artifact; these
+planning cases do not establish browser behavior.
 
 Structure and fixture checks are static evidence. Fresh trigger and comparative
 quality runs require native authenticated runners; do not copy real host

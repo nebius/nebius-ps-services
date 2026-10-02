@@ -8,10 +8,10 @@ set -euo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
 if [[ ${1:-} == --help ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab LAB [--nodes=1|2] slurm/fabric.sbatch labs/LAB.py [options]\n'
+  printf 'Usage: sbatch [--nodes=1|2] slurm/fabric.sbatch labs/LAB.py [options]\n'
   exit 0
 fi
-: "${SLURM_JOB_ID:?submit through tools/submit_lab.py}"
+: "${SLURM_JOB_ID:?submit with sbatch}"
 : "${SLURM_JOB_NODELIST:?missing allocation}"
 lab=${1:?provide lab source}; shift
 [[ -f $lab ]] || { printf 'ERROR: lab source missing.\n' >&2; exit 2; }

@@ -9,9 +9,9 @@ model names, prompts, or environment details.
 
 1. Use synthetic or explicitly public prompts, datasets, and models. Do not use
    customer prompts, credentials, proprietary model inputs, or regulated data.
-2. Run `umask 077` in the submitting shell before `sbatch`. The supplied
-   launchers also apply that mask to files created by the job, but the Slurm
-   output file can be opened before the script begins.
+2. Complete the one-time `course_setup.py prepare` step in the shared Lab Guide.
+   Its private parent directories protect scheduler logs even when Slurm opens
+   them before the job body starts.
 3. Keep `results/`, checkpoints, model caches, metrics, server logs, and Slurm
    output in storage that only approved course participants can read.
 4. Do not pass credentials on command lines or enable shell tracing. Remove

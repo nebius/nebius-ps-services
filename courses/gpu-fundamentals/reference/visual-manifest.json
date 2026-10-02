@@ -19,6 +19,15 @@
       "home": "lesson"
     },
     {
+      "path": "reference/diagrams/matrix-multiplication-thread-mapping.svg",
+      "title": "Matrix multiplication: from four outputs to one scheduled warp",
+      "lessons": [
+        1
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
       "path": "reference/diagrams/logical-h100-device-hierarchy.svg",
       "title": "Logical H100 device hierarchy",
       "lessons": [

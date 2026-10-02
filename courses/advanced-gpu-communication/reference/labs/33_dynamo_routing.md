@@ -4,7 +4,7 @@ A key/value cache stores attention state for tokens already processed. When requ
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/33_dynamo_routing.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -21,22 +21,41 @@ Both workers enable `VLLM_BATCH_INVARIANT=1`, select FlashAttention 2 with `atte
 
 ## Practice
 
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+`labs/33_dynamo_routing.py` runs repeated-prefix streaming requests against two TP8 replicas with round-robin or KV-aware routing. It checks complete streams and fixed token counts and writes client measurements, with server profiling separate from acceptance timing.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin
-python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router kv
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" \
+  slurm/vendor_job.sbatch \
+  labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin
 ```
-
-Logs stay under `results/33_dynamo_routing/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 ## Check your results
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 33_dynamo_routing --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/33_dynamo_routing/logs/$LAB_JOB_ID.out"
+cat "results/33_dynamo_routing/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 33_dynamo_routing \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -52,6 +71,21 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router kv
+```
+
+Logs stay under `results/33_dynamo_routing/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
+
 Capture round-robin and KV-aware routing in separate diagnostic jobs. Wait for each capture to finish before submitting the next.
 
 Compare client TTFT distributions with server prefill activity in a separate Systems capture. Inspect router and worker logs for event readiness; a selected router name is not evidence of cache hits. Independently increase concurrency in a new fixed pair and explain whether load balance begins to dominate prefix locality. Report both median and tail latency.
@@ -63,9 +97,21 @@ timestamps with server activity. Latency uses a monotonic clock. A request may
 reach one replica, so do not require matching activity on both workers for every
 individual request.
 
+This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Repeat with `--router kv` to capture the candidate. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
+
 ```bash
-python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin --capture systems
-python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router kv --capture systems
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
+  --chdir="$PWD" --output="results/33_dynamo_routing/logs/capture-%j.out" \
+  --error="results/33_dynamo_routing/logs/capture-%j.err" \
+  slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin --capture systems \
+  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
+  --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none \
+  --discard-environment=true --force-overwrite=false --kill=none \
+  --trace-fork-before-exec=true --cuda-graph-trace=node \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  --flush-on-cudaprofilerstop=false --wait=primary \
+  '--output={report}'
 ```
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.

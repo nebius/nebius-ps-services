@@ -10,7 +10,7 @@ set -o noclobber
 umask 077
 
 if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
-  printf 'Usage: TRTLLM_IMAGE_DIGEST=... MODEL_REPOSITORY=... TRITON_REPOSITORY_PROFILE=... TRITON_MODEL_NAME=... TRITON_MAX_TOKEN_FIELD=... python3 tools/submit_lab.py --lab 30_engine_profile %s\n' "$0"
+  printf 'Usage: TRTLLM_IMAGE_DIGEST=... MODEL_REPOSITORY=... TRITON_REPOSITORY_PROFILE=... TRITON_MODEL_NAME=... TRITON_MAX_TOKEN_FIELD=... sbatch %s\n' "$0"
   printf 'Profiles: llmapi+tensorrt_llm+sampling_param_max_tokens, or inflight_batcher+(ensemble|tensorrt_llm_bls)+max_tokens.\n'
   exit 0
 fi

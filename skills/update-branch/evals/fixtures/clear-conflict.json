@@ -1,0 +1,13 @@
+{
+  "branch": "feature/demo",
+  "start_SHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_SHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "MERGE_HEAD": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "conflict_file": "config.txt",
+  "base": "color=blue\nsize=small\n",
+  "ours": "color=green\nsize=small\n",
+  "theirs": "color=blue\nsize=large\n",
+  "other_changes": [],
+  "focused_check": "accept exactly color=green and size=large; not yet run"
+}

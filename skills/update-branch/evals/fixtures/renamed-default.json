@@ -1,0 +1,8 @@
+{
+  "branch": "feature/demo",
+  "initial_status": "clean",
+  "worktrees": "one primary, no ownership evidence",
+  "cached_origin_HEAD": "main",
+  "live_origin_HEAD": "refs/heads/trunk",
+  "fetch": "not yet run"
+}

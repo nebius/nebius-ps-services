@@ -4,7 +4,7 @@ Deleting a tensor does not necessarily return its memory reservation to the driv
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/12_allocator_lifetime.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use one H100 in a fresh lab process with sufficient free memory. This is an allocation-state exercise, not a speed benchmark. Do not run it inside an important application whose allocator behavior you intend to preserve.
 
@@ -14,30 +14,41 @@ Compare the measured device capacity and site-visible MIG state with the declare
 
 The script snapshots a baseline, allocates three tensors, deletes the middle allocation, and introduces a smaller replacement. It then deletes selected tensors, empties the cache while the first tensor remains live, deletes that final tensor, and empties the cache again. Snapshots distinguish live allocated bytes, allocator-reserved bytes, inactive split bytes, retries, and OOM counts.
 
+![CUDA allocator lifetime and fragmentation](../diagrams/cuda-allocator-lifetime-and-fragmentation.svg)
+
 Given a 12-GiB activation live through backward and a 10-GiB optimizer temporary created before it dies, peak live memory is at least 22 GiB plus other state. Change the schedule so the activation’s last use precedes the temporary. Expected observation: peak falls even if `memory_reserved` remains high, showing why allocator reserve and live capacity require separate interpretation.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/12_allocator_lifetime.py` allocates, deletes, reuses, and releases CUDA tensors while recording allocated and reserved memory. It checks that deletion and cache release preserve live tensors and release the lab's allocations.
 
-Use small first; the larger profile scales allocation sizes. Both runs intentionally manipulate only the allocations and cache of their own process, not cluster configuration.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 12_allocator_lifetime slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile small
-python3 tools/submit_lab.py --lab 12_allocator_lifetime slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile large
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/12_allocator_lifetime/logs/%j.out" \
+  --error="$PWD/results/12_allocator_lifetime/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/12_allocator_lifetime.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 12_allocator_lifetime --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/12_allocator_lifetime/logs/$LAB_JOB_ID.out"
+cat "results/12_allocator_lifetime/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require the lifecycle invariants, including falling allocated bytes after deletion and preservation of the live allocation during `empty_cache`. Compare snapshots by event name. Reserved bytes need not equal allocated bytes at every step.
 
@@ -55,6 +66,8 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 
 Select two successful, equivalent diagnostic runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot; the two slots are independent diagnostic repetitions. Their instrumented durations are not acceptance timings. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 12_allocator_lifetime \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
@@ -66,6 +79,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Use small first; the larger profile scales allocation sizes. Both runs intentionally manipulate only the allocations and cache of their own process, not cluster configuration.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/12_allocator_lifetime/logs/%j.out" \
+  --error="$PWD/results/12_allocator_lifetime/logs/%j.err" slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/12_allocator_lifetime/logs/%j.out" \
+  --error="$PWD/results/12_allocator_lifetime/logs/%j.err" slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile large
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Draw each tensor's lifetime across the snapshots. Which bytes can be reused within the process? Which remain live? Why can a cache-clearing operation lower reservation without reducing the memory needed by the application?
 
 Aggressive reuse and in-place updates complicate correctness. Strategies that reduce fragmentation can increase synchronization or reduce caching efficiency. Recomputing state saves capacity by spending compute; sharding saves per-rank state by spending communication.
@@ -73,7 +101,16 @@ Aggressive reuse and in-place updates complicate correctness. Strategies that re
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 12_allocator_lifetime --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/12_allocator_lifetime/logs/capture-%J-%t.out" \
+  --error="results/12_allocator_lifetime/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/12_allocator_lifetime/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/12_allocator_lifetime.py --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.

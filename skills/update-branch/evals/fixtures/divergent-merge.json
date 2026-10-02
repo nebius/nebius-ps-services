@@ -1,0 +1,17 @@
+{
+  "branch_before": "feature/demo",
+  "branch_after": "feature/demo",
+  "source": "origin/trunk",
+  "start_SHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_SHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "final_SHA": "cccccccccccccccccccccccccccccccccccccccc",
+  "final_parents": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  ],
+  "target_is_ancestor": true,
+  "start_is_ancestor": true,
+  "merge_exit": 0,
+  "status": "clean",
+  "pending_operation": false
+}

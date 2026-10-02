@@ -62,8 +62,8 @@ Progress goes to stderr. Redirected output uses plain stage messages without
 animation; `NO_COLOR` disables colors. Progress does not change timeouts or add
 network requests.
 
-Cluster import shares the cross-workstation Deployment lease with operations
-using the same project backend. Existing dashboard ownership is checked before
+Cluster import acquires local execution ownership for the project backend and
+the selected cluster's Kubernetes operation lease. Existing dashboard ownership is checked before
 datasource discovery and selection, which happen before acquiring mutation leases.
 One datasource inventory serves all selection prompts. The renewable Kubernetes
 authentication setup remains open through selection and is reused after checking
@@ -75,6 +75,13 @@ The checks under the leases remain fresh, including deployment acceptance,
 cluster identity, release ownership and dashboard ownership. The admin Secret
 is read again and the Grafana connection is reopened after selection to account
 for credential rotation or a replaced pod.
+
+Each import still validates desired dashboard schemas with Grafana. When an
+existing dashboard already matches that canonical content and folder, import
+skips converting the existing copy a second time. Kubernetes credential-cache
+hits also avoid loading the full CLI in each credential-helper process. These
+optimizations retain fresh authority checks, datasource revalidation, guarded
+writes, recovery checkpoints and readback; identical imports remain write-free.
 
 To update an existing dashboard, keep its UID and use `--overwrite`. For a
 file-provisioned dashboard, this works only when Grafana identifies its classic
@@ -92,7 +99,8 @@ and readback, including when the content is identical.
 
 Grafana commands use a local process lock for the selected backend. Nested
 configuration and deployment steps share that invocation. The kernel and
-contained-process supervisors own the lock lifetime; no remote lease is created.
+contained-process supervisors own the local lock lifetime; no S3 deployment
+lease is created. Dashboard writes also retain Kubernetes operation coordination.
 
 Terraform owns its S3 state and native lock. Cxcli neither reads nor writes shared
 S3 deployment checkpoints or leases. Obsolete objects are ignored and untouched.

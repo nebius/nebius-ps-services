@@ -40,6 +40,26 @@ source listings, so saving one HTML file preserves offline reading. Downloading
 ZIPs requires the companion files or the website. Soperator remains text-only
 and has no lab downloads.
 
+## Diagram placement
+
+Place each diagram's Markdown image marker immediately after the paragraph,
+list, table or worked example that explains it. A lesson diagram stays inside
+**How it works**; a lab diagram stays inside its manifest-declared guide section.
+The manifest and visual plan declare ownership, not a section-end insertion point.
+
+- Detailed lesson SVG: `![Exact registered title](reference/diagrams/name.svg)`.
+- Detailed lab SVG: `![Exact registered title](../diagrams/name.svg)`.
+- Generated overview: `![Exact registered title](#diagram-N-title-slug)`, using
+  its existing figure ID from the ordered visual plan.
+- Tools workflow: `![A measured optimization loop](#tools-measurement-loop)`.
+
+The builder resolves only registered figures in their owning section, checks
+the title and consumes each marker exactly once. Missing, duplicate, unknown or
+wrong-section markers fail the build. It never appends unplaced figures at the
+end of a section. Secondary mentions use ordinary links to the primary figure.
+Review the surrounding prose and diagram together; source order alone cannot
+establish topic relevance.
+
 ## Course downloads
 
 Each practical course has a **Download results** subsection under **Practical labs**:
@@ -133,7 +153,13 @@ The build and read-only check enforce 104,857,600 bytes per file and
 outputs. Git must be available to inventory tracked and nonignored untracked files;
 planned output bytes replace existing sizes once. Missing inventory, symlinks and
 submodules fail instead of silently undercounting. The report prints total size,
-largest file and remaining capacity. Limits do not trigger automatic splitting or
+largest file and remaining capacity in decimal MB (1 MB = 1,000,000 bytes), with
+two decimal places and thousands separators. The displayed file and site limits
+are 104.86 MB and 1,000.00 MB; checks still compare exact byte counts. Overflow
+diagnostics show the excess with six decimals so even a one-byte overflow is
+visible. Build and check failures, including file, site and archive limits, are
+red on terminal stderr. Redirected streams, `TERM=dumb` and any defined
+`NO_COLOR` remain plain text. Limits do not trigger automatic splitting or
 content deletion. Archive export also enforces the per-file limit.
 Recheck both as evidence grows. Local size and browser validation do not establish
 successful deployment; verify the actual Pages build and deployed revision after

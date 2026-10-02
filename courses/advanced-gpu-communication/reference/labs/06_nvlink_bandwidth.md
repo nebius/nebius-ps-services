@@ -4,7 +4,7 @@ NVLink carries peer GPU traffic; NVSwitch connects the eight GPUs within this wo
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/06_nvlink_bandwidth.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -16,23 +16,35 @@ NVLink carries peer GPU traffic; NVSwitch connects the eight GPUs within this wo
 
 ## Practice
 
-On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+`labs/06_nvlink_bandwidth.py` runs NVIDIA nvbandwidth across all 56 directed GPU peer paths on one eight-GPU node using the selected copy engine. It validates the vendor report and writes bandwidth measurements plus pairwise correctness evidence.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce
-python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine sm
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/06_nvlink_bandwidth/logs/%j.out" \
+  --error="$PWD/results/06_nvlink_bandwidth/logs/%j.err" --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce
 ```
-
-Logs are created before submission under `results/06_nvlink_bandwidth/logs/<job>.out` and `.err`. A submitted job is not a completed result.
 
 ## Check your results
 
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
 Wait for both jobs to complete successfully. Inspect the measured fields and correctness status; a failed check must be resolved before comparing performance.
 
+Record each successful submission's job number. For each job, require `COMPLETED` and exit code `0:0`, then open its own logs and printed result path:
+
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 06_nvlink_bandwidth --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/06_nvlink_bandwidth/logs/$LAB_JOB_ID.out"
+cat "results/06_nvlink_bandwidth/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 | Dashboard panel | Field under `measurements` | Display unit |
 | --- | --- | --- |
@@ -41,6 +53,8 @@ sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
 | Validated directed GPU pairs | `pair_count` | none |
 
 Select the two unprofiled result artifacts. The publisher checks equivalent parameters and allows only the named change. Repeated qualification uses no changed parameter.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 06_nvlink_bandwidth \
@@ -52,12 +66,37 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 
 ## Investigate the behavior
 
+### Workload variations
+
+On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/06_nvlink_bandwidth/logs/%j.out" \
+  --error="$PWD/results/06_nvlink_bandwidth/logs/%j.err" --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/06_nvlink_bandwidth/logs/%j.out" \
+  --error="$PWD/results/06_nvlink_bandwidth/logs/%j.err" --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine sm
+```
+
+Slurm writes job logs under `results/06_nvlink_bandwidth/logs/<job>.out` and `.err`. A submitted job is not a completed result.
+
 Compare the slowest pair and mean bandwidth, then open the private vendor JSON and locate asymmetric pairs in bandwidth_matrix. A CE-versus-SM difference is a mechanism study; decide which resource your application can spare. Independently repeat the same engine three times. Keep buffer size and sample count fixed. H100 inter-node InfiniBand is not nvbandwidth multi-node NVLink/IMEX; this lab intentionally stays within one worker.
 
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --export=ALL,COURSE_PROFILE_TOOL=nsys --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce
+srun --nodes=1 --ntasks=1 --gpus-per-task=8 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/06_nvlink_bandwidth/logs/capture-%J-%t.out" \
+  --error="results/06_nvlink_bandwidth/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/06_nvlink_bandwidth/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_TOOLS:?qualified tools}/fabric/nvbandwidth-source/build/nvbandwidth" --format json \
+  --testcase device_to_device_memcpy_write_ce --bufferSize 64 --testSamples 5
 ```
 
 **Nsight Systems evidence:** Capture the actual vendor executable inside each allocated worker; preserve raw numerical output separately. Open nvbandwidth.nsys-rep beside the private vendor JSON. Compare CUDA GPU memory-copy rows for CE against kernel rows for SM at the same buffer size. NVTX ranges are vendor-owned; no course_measure annotation is promised. Use clean matrix bandwidth for the comparison, not capture timings. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.

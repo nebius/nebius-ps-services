@@ -4,7 +4,7 @@ Different inference servers expose different readiness endpoints and request sch
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/30_engine_profile.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 This lab checks readiness and request schemas using prepared qualified engines. Each launcher owns its loopback server and client in one Slurm allocation. The separately launched AIPerf campaign and paper disaggregation exercise are optional activities; neither changes what the Python readiness probe measures.
 
@@ -48,32 +48,47 @@ The OpenAI launcher starts the prepared vLLM image with the selected cached mode
 
 Given prefill capacity of 200,000 prompt tokens/s, suppose arrivals require 250,000 prompt tokens/s. Decode has enough capacity for the corresponding output workload, but the prefill queue grows; adding decode workers cannot remove that bottleneck. Change the allocation to increase prefill capacity while accounting for KV handoff cost within the TTFT budget. Expected observation: the backlog can drain only if sustained prefill capacity exceeds the offered load and handoff, routing and decode can keep up.
 
-After qualifying both images and the container runner, inspect `bash slurm/aiperf.sbatch --help` and submit the optional campaign with `python3 tools/submit_lab.py --lab 15_streaming_client slurm/aiperf.sbatch`. That Lab 15 campaign owns its server, workload, profiler reports and cleanup independently of this readiness probe. The disaggregation calculation is a paper exercise: the supplied Dynamo preflight checks GPU visibility only; it does not start phase workers or validate KV transfer.
+After qualifying both images and the container runner, inspect `bash slurm/aiperf.sbatch --help` and submit the optional campaign with:
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/aiperf.sbatch
+```
+
+ That Lab 15 campaign owns its server, workload, profiler reports and cleanup independently of this readiness probe. The disaggregation calculation is a paper exercise: the supplied Dynamo preflight checks GPU visibility only; it does not start phase workers or validate KV transfer.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/30_engine_profile.py` probes a prepared OpenAI-compatible or Triton server and sends one bounded generation request. It validates nonempty generated text and records protocol, request duration, and usage without publishing response text.
 
-The two routes below start their respective prepared servers after the required environment variables are set. Wait for one allocation to finish before submitting the other. Both profiles use the same bounded qualification request.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-bash slurm/openai_engine.sbatch --help
-python3 tools/submit_lab.py --lab 30_engine_profile slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
-bash slurm/trtllm_triton.sbatch --help
-python3 tools/submit_lab.py --lab 30_engine_profile slurm/trtllm_triton.sbatch
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/30_engine_profile/logs/%j.out" \
+  --error="$PWD/results/30_engine_profile/logs/%j.err" \
+  slurm/openai_engine.sbatch \
+  Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
-
 ## Check your results
+
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
 For either launcher, wait for the submitted job to complete and inspect that job's results. The inspector prints exact JSON paths and the numeric fields used by this dashboard:
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 30_engine_profile --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/30_engine_profile/logs/$LAB_JOB_ID.out"
+cat "results/30_engine_profile/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require valid generated-response structure and inspect protocol, model identity, request duration, and available usage fields. One bounded request establishes API activation, not a latency distribution, a semantic-quality score, or a benchmark campaign.
 
@@ -98,7 +113,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Elapsed (seconds) | `elapsed_ms` | `s` |
 | Model count | `model_count` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 30_engine_profile \
@@ -110,6 +125,23 @@ Select two successful, equivalent, unprofiled runs in the same profile. For prog
 In Grafana, select the workspace and profile. Require **Correctness of selected results** to equal 1 and **Selected comparison generation** to match publication confirmation. Compare the selected artifact fields and experiment timestamps. This dashboard omits GPU telemetry because this recipe cannot attribute device activity to its result.
 
 ## Investigate the behavior
+
+### Workload variations
+
+The two routes below start their respective prepared servers after the required environment variables are set. Wait for one allocation to finish before submitting the other. Both profiles use the same bounded qualification request.
+
+```bash
+bash slurm/openai_engine.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/30_engine_profile/logs/%j.out" \
+  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
+bash slurm/trtllm_triton.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/30_engine_profile/logs/%j.out" \
+  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/trtllm_triton.sbatch
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which component owns model conversion, repository layout, server readiness, and client measurement? Why can a healthy server reject a request with the wrong token-budget field? Keep these boundaries separate in your diagnosis.
 

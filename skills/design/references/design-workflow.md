@@ -350,6 +350,12 @@ Files Or Areas To Inspect/Modify:
 
 Tests And Validation:
 - ...
+- for standalone HTML, load portable-html-design.md and record the chosen
+  document/report/presentation profile, shared theme, embedded dependencies,
+  semantic no-JavaScript baseline, optional interaction/state and print behavior
+- identify intended browsers/viewports and all ten artifact acceptance checks;
+  report actual offline, relocation, request, keyboard, print and data evidence
+  only after artifact implementation and observation
 
 Docs And Changelog:
 - ...

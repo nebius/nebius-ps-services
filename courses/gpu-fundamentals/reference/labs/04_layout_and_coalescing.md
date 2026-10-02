@@ -4,7 +4,7 @@ Tensor shape does not reveal how neighboring values are arranged in memory. This
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/04_layout_and_coalescing.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Run on one H100 in the Fundamentals environment. A logical index identifies an element; strides map changes in its indices to storage offsets. For a contiguous 2-by-3 matrix, strides [3, 1] mean one row step skips three stored elements and one column step skips one. Transposing swaps its logical axes, producing shape [3, 2] and strides [1, 3] without copying values. Such a view shares the underlying storage. The small and H100 profiles choose different square sizes; neither exposes an arbitrary stride-layout sweep.
 
@@ -28,26 +28,35 @@ For each layout, predict which dimension should be assigned to adjacent lanes.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/04_layout_and_coalescing.py` times a pointwise expression on contiguous, transposed, and repacked tensors. It checks matching results and reports layout details, copy cost, useful bandwidth, and the estimated reuse needed to repay repacking.
 
-Use the supplied cases before introducing a new layout. Keep the complete result, including strides and repack timing, so a future reader can reconstruct the trade-off.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 04_layout_and_coalescing slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
-python3 tools/submit_lab.py --lab 04_layout_and_coalescing slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile large
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/04_layout_and_coalescing.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 04_layout_and_coalescing --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/04_layout_and_coalescing/logs/$LAB_JOB_ID.out"
+cat "results/04_layout_and_coalescing/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require `allclose`, confirmation that the view is strided, and confirmation that the repacked tensor is contiguous. Inspect `timings`, `useful_bandwidth_gib_per_s`, and `repack.break_even_reuses`. The field is an effective-bandwidth estimate based on logical input/output bytes, not measured physical HBM transactions.
 
@@ -67,7 +76,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Timings / strided view / median (seconds) | `timings.strided_view.median_ms` | `s` |
 | Repack / break even reuses | `repack.break_even_reuses` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 04_layout_and_coalescing \
@@ -80,6 +89,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Use the supplied cases before introducing a new layout. Keep the complete result, including strides and repack timing, so a future reader can reconstruct the trade-off.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile large
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Use `copy_cost / (strided_time - packed_time)` only when the denominator is positive. If the packed operation is no faster, there is no finite timing break-even. Explain how repeated reuse changes the application decision.
 
 A shared-memory tile costs loads, stores, address arithmetic, space, and barriers. Caching may already provide enough reuse. `empty_cache()` can return unused cached blocks to the system but is not a routine kernel optimization and can add allocation overhead.
@@ -89,18 +113,37 @@ Repacking improves later access and library eligibility but consumes bandwidth, 
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 04_layout_and_coalescing --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/04_layout_and_coalescing/logs/capture-%J-%t.out" \
+  --error="results/04_layout_and_coalescing/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/04_layout_and_coalescing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/04_layout_and_coalescing.py --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-python3 tools/submit_lab.py --lab 04_layout_and_coalescing --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/04_layout_and_coalescing/logs/capture-%J-%t.out" \
+  --error="results/04_layout_and_coalescing/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/04_layout_and_coalescing/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/04_layout_and_coalescing.py --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare strided and packed operations including the one-time repack cost. Independently calculate the reuse count at which packing pays back; choose packing only if the pipeline reuses the tensor enough times.
 

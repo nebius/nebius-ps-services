@@ -10,7 +10,7 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
   printf '\nRuns one course lab on one full H100. Set COURSE_PYTHON to select Python.\n'
 }
 

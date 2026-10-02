@@ -1,0 +1,9 @@
+{
+  "merge_exit": 0,
+  "branch_before": "feature/demo",
+  "branch_after": "feature/other",
+  "start_is_ancestor": true,
+  "target_is_ancestor": false,
+  "status": "clean",
+  "pending_operation": false
+}

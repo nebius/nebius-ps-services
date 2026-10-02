@@ -113,7 +113,11 @@ def render_lab_course(course: Path, metadata: dict) -> str:
             description=description,
         )
         figures.setdefault(entry["lab"], {}).setdefault(entry["after"], []).append(
-            detailed_diagram_markup(entry)
+            dict(
+                path="../diagrams/" + path.name,
+                title=entry["title"],
+                markup=detailed_diagram_markup(entry),
+            )
         )
     toc = "".join(
         f'<li><a href="#lab-{slug(g["source"].stem)}">{html.escape(g["title"])}</a></li>'
@@ -460,11 +464,13 @@ def render_course(course_name: str) -> str:
         for path in guides
         if path != "GLOSSARY.md"
     )
-    inline_figures: dict[int, dict[str, list[str]]] = {}
-    lab_figures: dict[str, dict[str, list[str]]] = {}
+    inline_figures: dict[int, dict[str, list[dict]]] = {}
+    lab_figures: dict[str, dict[str, list[dict]]] = {}
     labs_by_stem = {guide["source"].stem: guide for guide in authored_labs}
 
-    def place(home: str, lesson: int, after: str, markup: str) -> None:
+    def place(
+        home: str, lesson: int, after: str, path: str, title: str, markup: str
+    ) -> None:
         if home == "lesson":
             if after not in lessons[lesson - 1]:
                 raise ValueError("diagram placement points to a missing lesson field")
@@ -474,15 +480,28 @@ def render_course(course_name: str) -> str:
             if stem not in labs_by_stem or lesson not in labs_by_stem[stem]["lessons"]:
                 raise ValueError("diagram lab home must include its primary lesson")
             destination = lab_figures.setdefault(stem, {})
-        destination.setdefault(after, []).append(markup)
+            if not path.startswith("#"):
+                path = "../diagrams/" + Path(path).name
+        destination.setdefault(after, []).append(
+            dict(path=path, title=title, markup=markup)
+        )
 
     for index, visual in enumerate(visuals, 1):
-        place(visual.home, visual.lesson, visual.after, diagram(visual, index))
+        place(
+            visual.home,
+            visual.lesson,
+            visual.after,
+            f"#diagram-{index}-{slug(visual.title)}",
+            visual.title,
+            diagram(visual, index),
+        )
     for entry in detailed:
         place(
             entry["home"],
             entry["lessons"][0],
             entry["after"],
+            entry["path"],
+            entry["title"],
             detailed_diagram_markup(entry),
         )
     for number in range(1, len(lessons) + 1):

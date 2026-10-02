@@ -169,6 +169,8 @@ def main(req):
         row = rows[0]
         if req["action"] == "cancel" and row["state"] not in (
             "COMPLETED",
+            "BOOT_FAIL",
+            "DEADLINE",
             "FAILED",
             "CANCELLED",
             "TIMEOUT",

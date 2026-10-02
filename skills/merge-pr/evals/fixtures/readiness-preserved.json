@@ -1,0 +1,91 @@
+{
+  "fixture_kind": "synthetic API observations; no live services",
+  "target": {
+    "host": "github.com",
+    "repository": "example/widget",
+    "branch": "release/stable",
+    "pr_number": 42,
+    "pr_url": "https://github.com/example/widget/pull/42",
+    "guarded_head_sha": "1111111111111111111111111111111111111111"
+  },
+  "requested": {
+    "merge_method": "squash",
+    "delete_branch": false
+  },
+  "command": {
+    "issued": false
+  },
+  "clock": {
+    "first_merged_observation": "2026-01-01T12:00:00Z",
+    "now": "2026-01-01T12:01:00Z",
+    "settlement_elapsed_seconds": 5
+  },
+  "pr": {
+    "merged": false,
+    "merged_at": null,
+    "state": "open",
+    "merge_commit_sha": "4444444444444444444444444444444444444444",
+    "head": {
+      "sha": "1111111111111111111111111111111111111111"
+    },
+    "base": {
+      "repo": {
+        "full_name": "example/widget"
+      },
+      "ref": "release/stable"
+    }
+  },
+  "ci_configuration": {
+    "revision": "2222222222222222222222222222222222222222",
+    "visibility": "complete",
+    "external_providers": "affirmatively none configured",
+    "expected": [
+      {
+        "workflow_id": 10,
+        "event": "push",
+        "branch": "release/stable",
+        "check": "test",
+        "app": "github-actions"
+      }
+    ]
+  },
+  "check_runs": [
+    {
+      "id": 101,
+      "name": "test",
+      "app": {
+        "slug": "github-actions"
+      },
+      "head_sha": "2222222222222222222222222222222222222222",
+      "workflow_id": 10,
+      "run_id": 11,
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/example/widget/actions/runs/11"
+    }
+  ],
+  "statuses": [],
+  "actions_runs": [
+    {
+      "id": 11,
+      "workflow_id": 10,
+      "head_sha": "2222222222222222222222222222222222222222",
+      "head_branch": "release/stable",
+      "event": "push",
+      "run_attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/example/widget/actions/runs/11"
+    }
+  ],
+  "phase": "pre-merge readiness",
+  "readiness": {
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "required_checks": "success",
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "previously_reviewed_head": "1111111111111111111111111111111111111111"
+  }
+}

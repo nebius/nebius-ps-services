@@ -4,7 +4,7 @@ Prefill processes input tokens and creates the key/value cache; decode repeatedl
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/32_dynamo_disaggregation.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -35,26 +35,47 @@ copying weights and tokenizer files alone is insufficient.
 
 The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill.
 
+![Keep sixteen GPUs while changing phase placement](../diagrams/dynamo-placement.svg)
+
 Both workers enable `VLLM_BATCH_INVARIANT=1`, select FlashAttention 2 with `attention_config.flash_attn_version=2`, and set `custom_ops=["+rms_norm"]` and `pass_config.fuse_allreduce_rms=false` in the compilation configuration. Explicit RMSNorm selection preserves its batch-invariant CUDA implementation when compilation would otherwise select the native implementation. The pinned runtime can still select nondeterministic Hopper FlashAttention 3 and fused tensor-parallel all-reduce/RMSNorm paths under batch invariance. These explicit settings avoid those paths; compilation and CUDA graphs stay enabled. Keep these settings fixed across layouts, routing policies and concurrency levels, and require the output-equivalence check to pass before comparing performance. This reproducibility mode can change throughput relative to default vLLM execution. Seeded requests alone do not guarantee identical outputs across different batch shapes.
 
 ## Practice
 
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+`labs/32_dynamo_disaggregation.py` runs fixed-length streaming requests against aggregated TP8 replicas or separate TP8 prefill/decode pools. It checks complete streams and output-token counts and writes client measurements; profiled runs retain diagnostic artifacts separately.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated
-python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout disaggregated
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" \
+  slurm/vendor_job.sbatch \
+  labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated
 ```
-
-Logs stay under `results/32_dynamo_disaggregation/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 ## Check your results
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 32_dynamo_disaggregation --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/32_dynamo_disaggregation/logs/$LAB_JOB_ID.out"
+cat "results/32_dynamo_disaggregation/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_dynamo_disaggregation \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -70,6 +91,21 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout disaggregated
+```
+
+Logs stay under `results/32_dynamo_disaggregation/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
+
 Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Wait for each capture to finish before submitting the next.
 
 Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point.
@@ -80,9 +116,21 @@ bounds after warmup. Check clock alignment between the client and both workers
 before comparing epoch timestamps with the server traces. Client latency uses
 a monotonic clock; a clock offset must not be interpreted as a transfer delay.
 
+This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Repeat with `--layout disaggregated` to capture the candidate. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
+
 ```bash
-python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated --capture systems
-python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout disaggregated --capture systems
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
+  --chdir="$PWD" --output="results/32_dynamo_disaggregation/logs/capture-%j.out" \
+  --error="results/32_dynamo_disaggregation/logs/capture-%j.err" \
+  slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated --capture systems \
+  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
+  --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none \
+  --discard-environment=true --force-overwrite=false --kill=none \
+  --trace-fork-before-exec=true --cuda-graph-trace=node \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  --flush-on-cudaprofilerstop=false --wait=primary \
+  '--output={report}'
 ```
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.

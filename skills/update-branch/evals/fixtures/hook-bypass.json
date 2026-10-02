@@ -1,0 +1,6 @@
+{
+  "branch": "feature/demo",
+  "status": "clean",
+  "branch_mergeOptions": "--no-verify",
+  "pre_merge_commit_hook": "would exit 1"
+}

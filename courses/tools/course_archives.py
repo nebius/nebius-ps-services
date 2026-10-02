@@ -119,7 +119,9 @@ def archive_bytes(entries: dict[str, tuple[bytes, int]]) -> bytes:
     content = output.getvalue()
     if len(content) > MAX_FILE_BYTES:
         raise ValueError(
-            f"Results archive exceeds {MAX_FILE_BYTES} bytes: {len(content)}"
+            f"Results archive exceeds {MAX_FILE_BYTES / 1_000_000:,.2f} MB: "
+            f"{len(content) / 1_000_000:,.2f} MB "
+            f"(over by {(len(content) - MAX_FILE_BYTES) / 1_000_000:,.6f} MB)"
         )
     return content
 

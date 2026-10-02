@@ -4,7 +4,7 @@ FP8 execution relies on scaling and quantization state, not simply changing a te
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/22_transformer_engine_fp8.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Qualify an exact compatible Transformer Engine build on the assigned supported GPU before running. This optional dependency is not a core-course completion gate. Its `te.Linear` workload differs from Lab 21's tiny transformer, so their timings are not a matched-model comparison.
 
@@ -27,26 +27,35 @@ The implementation uses `te.autocast` with a delayed-scaling recipe and amax his
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/22_transformer_engine_fp8.py` compares warmed BF16 and Transformer Engine FP8 forward/backward paths. It checks output and gradient errors against declared thresholds and writes timing, incremental memory, and scaling-recipe information.
 
-Inspect the output/gradient threshold options and run the small profile only after environment qualification. Record the exact recipe and installed version with the result.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-"$COURSE_PYTHON" labs/22_transformer_engine_fp8.py --help
-python3 tools/submit_lab.py --lab 22_transformer_engine_fp8 slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/22_transformer_engine_fp8/logs/%j.out" \
+  --error="$PWD/results/22_transformer_engine_fp8/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/22_transformer_engine_fp8.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 22_transformer_engine_fp8 --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/22_transformer_engine_fp8/logs/$LAB_JOB_ID.out"
+cat "results/22_transformer_engine_fp8/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require finite outputs, gradients, and errors for every numerical sample. Default maximum relative L2 errors are 0.2 for outputs and 0.3 for gradients. Check the warmed validation state before and after timing, not only the best sample.
 
@@ -59,7 +68,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Max output relative l2 | `max_output_relative_l2` | `none` |
 | Max gradient relative l2 | `max_gradient_relative_l2` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 22_transformer_engine_fp8 \
@@ -72,12 +81,34 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Inspect the output/gradient threshold options and run the small profile only after environment qualification. Record the exact recipe and installed version with the result.
+
+```bash
+"$COURSE_PYTHON" labs/22_transformer_engine_fp8.py --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/22_transformer_engine_fp8/logs/%j.out" \
+  --error="$PWD/results/22_transformer_engine_fp8/logs/%j.err" slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Explain what an amax history estimates and why early calls can differ from warmed calls. Compare numerical stability, timing, and incremental memory. Why does a short linear-layer experiment not establish transformer training quality?
 
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 22_transformer_engine_fp8 --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/22_transformer_engine_fp8/logs/capture-%J-%t.out" \
+  --error="results/22_transformer_engine_fp8/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/22_transformer_engine_fp8/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/22_transformer_engine_fp8.py --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
@@ -85,10 +116,20 @@ Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_
 The Compute command selects the first matrix kernel inside `bf16_step`, excluding layer and input initialization. It diagnoses the first BF16 warmup pass; use Systems and the warmed numerical checks for FP8 behavior and do not interpret it as an FP8 counter report. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
 
 ```bash
-python3 tools/submit_lab.py --lab 22_transformer_engine_fp8 '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=bf16_step,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/22_transformer_engine_fp8/logs/capture-%J-%t.out" \
+  --error="results/22_transformer_engine_fp8/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include bf16_step/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/22_transformer_engine_fp8/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/22_transformer_engine_fp8.py --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare the BF16 reference with Transformer Engine FP8 under the declared scaling recipe and numerical gate. Independently use measured memory, timing and error to decide whether FP8 is acceptable for this shape; precision changes are an explicit numerical trade-off.
 

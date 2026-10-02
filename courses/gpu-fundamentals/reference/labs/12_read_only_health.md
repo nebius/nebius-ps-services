@@ -4,7 +4,7 @@ A slow result may coincide with thermal, power, error, or sharing conditions tha
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/12_read_only_health.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Run on an allocated H100 with permission to read its management information. Use the [evidence and privacy guide](../evidence-security.md); raw management output can contain identifiers that do not belong in public course reports.
 
@@ -20,26 +20,35 @@ Run Lab 12 in read-only mode, classify only what its MIG and compute-mode fields
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/12_read_only_health.py` runs bounded, read-only GPU management queries and writes health and sharing observations. It checks the expected GPU family without changing clocks, partitions, or device configuration.
 
-Collect the snapshot before or after a benchmark as contextual evidence. This command does not request clock changes, error clearing, partition creation, or administrative recovery.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-"$COURSE_PYTHON" labs/12_read_only_health.py --help
-python3 tools/submit_lab.py --lab 12_read_only_health slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/12_read_only_health/logs/%j.out" \
+  --error="$PWD/results/12_read_only_health/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/12_read_only_health.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 12_read_only_health --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/12_read_only_health/logs/$LAB_JOB_ID.out"
+cat "results/12_read_only_health/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Inspect `snapshot`, `sharing_evidence`, and `configuration_changed`. Require the read-only gate. Unavailable ECC, page-retirement, thermal, or other fields remain missing evidence; they are not zeros and do not certify a healthy device.
 
@@ -58,7 +67,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | --- | --- | --- |
 | Correctness of selected results | `correctness` | Boolean pass |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 12_read_only_health \
@@ -70,6 +79,19 @@ Select two successful, equivalent, unprofiled runs in the same profile. For prog
 In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
 
 ## Investigate the behavior
+
+### Workload variations
+
+Collect the snapshot before or after a benchmark as contextual evidence. This command does not request clock changes, error clearing, partition creation, or administrative recovery.
+
+```bash
+"$COURSE_PYTHON" labs/12_read_only_health.py --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/12_read_only_health/logs/%j.out" \
+  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Define ECC as error detection/correction, Xid as a driver-reported event class, and retired pages as memory removed from service. Ask whether a concerning observation persists across authorized readings and whether it aligns with the benchmark's time interval.
 

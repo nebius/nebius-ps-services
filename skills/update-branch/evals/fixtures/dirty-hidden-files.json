@@ -1,0 +1,10 @@
+{
+  "branch": "feature/demo",
+  "plain_status": "empty",
+  "config": {
+    "status.showUntrackedFiles": "no",
+    "submodule.lib.ignore": "all"
+  },
+  "explicit_status": "?? notes.txt; M lib",
+  "worktrees": "one primary"
+}

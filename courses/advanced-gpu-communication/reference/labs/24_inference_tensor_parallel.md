@@ -4,7 +4,7 @@ Tensor parallelism can split a layer's weights across GPUs, but partial outputs 
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/24_inference_tensor_parallel.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -24,27 +24,35 @@ Run the expert and tensor mechanics in Labs 23–24. Compare batch one with the 
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/24_inference_tensor_parallel.py` runs forward-only column-sharded linear layers with all-gather and row-sharded layers with all-reduce. It checks both against full-weight outputs and writes shard sizes, payload size, and slowest-rank latency samples.
 
-Run the two partition patterns together using the course launcher. Profiles select width 2,048/batch 32 for small and width 8,192/batch 128 for H100. The optional positive `--batch-size` changes input rows while keeping the selected width fixed. Use batch one as a small-message comparison, not as a simulation of a complete autoregressive decode step. Repeat each comparison in at least three independent jobs with distinct output directories under `results/`, where the result inspector searches, and preserve the topology and workload settings.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 24_inference_tensor_parallel slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small
-python3 tools/submit_lab.py --lab 24_inference_tensor_parallel slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile large
-python3 tools/submit_lab.py --lab 24_inference_tensor_parallel slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small --batch-size 1 --output-dir results/tp-batch1-run1
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" \
+  slurm/two_node.sbatch \
+  labs/24_inference_tensor_parallel.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 24_inference_tensor_parallel --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/24_inference_tensor_parallel/logs/$LAB_JOB_ID.out"
+cat "results/24_inference_tensor_parallel/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require finite reference/output values and both reference-agreement flags. Column reconstruction additionally uses `rtol=1e-2, atol=1e-2`; both paths must have relative L2 error below 0.02. The row path changes BF16 reduction order, so cancellation near zero makes a pointwise relative comparison misleading; its explicit recipe uses aggregate relative L2 instead. Inspect `maximum_relative_l2` and `maximum_absolute_error` together rather than treating either as proof of model quality.
 
@@ -63,7 +71,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Logical collective tensor bytes | `logical_collective_tensor_bytes` | `bytes` |
 | Parameter shard bytes per rank | `parameter_shard_bytes_per_rank` | `bytes` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 24_inference_tensor_parallel \
@@ -76,6 +84,24 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run the two partition patterns together using the course launcher. Profiles select width 2,048/batch 32 for small and width 8,192/batch 128 for H100. The optional positive `--batch-size` changes input rows while keeping the selected width fixed. Use batch one as a small-message comparison, not as a simulation of a complete autoregressive decode step. Repeat each comparison in at least three independent jobs with distinct output directories under `results/`, where the result inspector searches, and preserve the topology and workload settings.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile large
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small --batch-size 1 --output-dir results/tp-batch1-run1
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Why does one split concatenate output columns while the other sums partial outputs? Predict what reversing the gathered rank order would do: shape checks would pass, but reference agreement would fail. Which activation dimensions determine communicated bytes? Compare batch one with the default batch at the same width; use sample variability and three independent runs to explain the communication-to-compute ratio. Finally, list the validation-only tensors a deployment could remove and the KV-cache/workspace allocations it would need to add.
 
 Replication uses more weight memory but avoids per-token model-parallel collectives. TP improves fit and sometimes compute scale but adds communication each layer. PP/EP add scheduling and imbalance complexity.
@@ -83,7 +109,17 @@ Replication uses more weight memory but avoids per-token model-parallel collecti
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 24_inference_tensor_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/24_inference_tensor_parallel/logs/capture-%J-%t.out" \
+  --error="results/24_inference_tensor_parallel/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 1 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/24_inference_tensor_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/24_inference_tensor_parallel.py --profile small
 ```
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.

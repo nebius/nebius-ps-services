@@ -11,7 +11,7 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
   printf '\nRuns torchrun with one rank on each of two eight-H100 fabric nodes (bounded mechanics).\n'
   printf 'Set COURSE_TORCHRUN to select the torchrun executable.\n'
 }

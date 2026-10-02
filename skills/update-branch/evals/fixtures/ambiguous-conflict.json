@@ -1,0 +1,12 @@
+{
+  "branch": "feature/demo",
+  "start_SHA": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target_SHA": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "HEAD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "MERGE_HEAD": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "file": "policy.txt",
+  "base": "approval_required=true",
+  "ours": "approval_required=false",
+  "theirs": "approval_required=owner_only",
+  "intent": "no product decision supplied"
+}
