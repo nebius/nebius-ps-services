@@ -15633,6 +15633,7 @@ def test_mk8s_exec_credential_cache_renews_repeatedly_across_token_lifetimes(
 
     def status() -> dict[str, str]:
         return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
+            provider=cli._acquire_mk8s_exec_credential_status,
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15691,6 +15692,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_callers(
 
     def get_status() -> dict[str, str]:
         return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
+            provider=cli._acquire_mk8s_exec_credential_status,
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15737,6 +15739,7 @@ def test_mk8s_exec_credential_cache_uses_still_valid_token_when_refresh_times_ou
     )
 
     observed = mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
+        provider=cli._acquire_mk8s_exec_credential_status,
         project_id="project-456",
         client_name="client-a",
         endpoint=None,
@@ -15786,6 +15789,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_failed_refresh(
 
     def get_status() -> dict[str, str]:
         return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
+            provider=cli._acquire_mk8s_exec_credential_status,
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15837,6 +15841,7 @@ def test_mk8s_exec_credential_cache_does_not_fallback_after_token_expires(
 
     with pytest.raises(TimeoutError, match="transient"):
         mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
+            provider=cli._acquire_mk8s_exec_credential_status,
             project_id="project-456",
             client_name="client-a",
             endpoint=None,

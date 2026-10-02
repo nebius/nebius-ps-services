@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Inject the Kubernetes credential provider from the entrypoints, preserving the
+  CLI dependency boundary and lightweight cache hits without changing token
+  refresh, private-cache checks, or command output.
+
 - Make editable uv tool installation the primary README setup flow, clarify
   Soperator path inputs, order profiling installation before access, and separate
   Helm-chart app upgrades from Grafana with matching navigation.

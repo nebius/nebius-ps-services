@@ -265,7 +265,7 @@ from .infra_render import (
 )
 from .inventory_ops import ssh_jump_access_hints, wireguard_access_command_hints, write_inventory
 from .managed_tools import FLUX_VERSION_ENV, TERRAFORM_VERSION_ENV
-from .mk8s_exec import mk8s_token_command
+from .mk8s_exec import create_mk8s_token_command
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     has_mk8s_gpu_health_checker_app,
@@ -55603,7 +55603,9 @@ def render_command(
         progress_context.close()
 
 
-app.command("mk8s-token", hidden=True)(mk8s_token_command)
+app.command("mk8s-token", hidden=True)(
+    create_mk8s_token_command(lambda **kwargs: _acquire_mk8s_exec_credential_status(**kwargs))
+)
 
 
 @acceptance_test_app.command(

@@ -11,7 +11,7 @@ import json
 import os
 import stat
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,18 +29,21 @@ except ImportError:  # pragma: no cover - non-POSIX runtime fallback
     _fcntl = None
 
 
+CredentialProvider = Callable[..., dict[str, str]]
+
+
 def _acquire_status(
     *,
+    provider: CredentialProvider,
     project_id: str,
     client_name: str,
     endpoint: str | None,
     require_renewable_auth: bool = False,
 ) -> dict[str, str]:
-    from .cli import _acquire_mk8s_exec_credential_status
     from .sdk_auth import concise_refresh_logs
 
     with concise_refresh_logs():
-        return _acquire_mk8s_exec_credential_status(
+        return provider(
             project_id=project_id,
             client_name=client_name,
             endpoint=endpoint,
@@ -194,6 +197,7 @@ def _locked_mk8s_exec_credential_cache(path: Path) -> Iterator[None]:
 
 def _mk8s_exec_credential_status(
     *,
+    provider: CredentialProvider,
     project_id: str,
     client_name: str,
     endpoint: str | None,
@@ -202,6 +206,7 @@ def _mk8s_exec_credential_status(
 ) -> dict[str, str]:
     if cache_file is None:
         return _acquire_status(
+            provider=provider,
             project_id=project_id,
             client_name=client_name,
             endpoint=endpoint,
@@ -238,6 +243,7 @@ def _mk8s_exec_credential_status(
             return cached[0]
         try:
             status = _acquire_status(
+                provider=provider,
                 project_id=project_id,
                 client_name=client_name,
                 endpoint=endpoint,
@@ -289,69 +295,76 @@ def _mk8s_exec_credential_status(
         return status
 
 
-def mk8s_token_command(
-    project_id: Annotated[
-        str | None,
-        typer.Option("--project-id", help="Project ID used to resolve cached runtime auth."),
-    ] = None,
-    client_name: Annotated[
-        str | None,
-        typer.Option("--client-name", help="Client name used to resolve cached runtime auth."),
-    ] = None,
-    endpoint: Annotated[
-        str | None,
-        typer.Option("--endpoint", help="Optional Nebius API endpoint override."),
-    ] = None,
-    cache_file: Annotated[
-        Path | None,
-        typer.Option(
-            "--cache-file",
-            hidden=True,
-            help="Owner-only command-lifetime ExecCredential cache.",
-        ),
-    ] = None,
-    require_renewable_auth: Annotated[
-        bool,
-        typer.Option(
-            "--require-renewable-auth",
-            hidden=True,
-            help="Reject one-shot IAM tokens for long-running exec authentication.",
-        ),
-    ] = False,
-) -> None:
-    """Emit ExecCredential JSON for MK8s kubeconfig exec auth."""
-    try:
-        status = _mk8s_exec_credential_status(
-            project_id=project_id or "",
-            client_name=client_name or "",
-            endpoint=endpoint,
-            cache_file=cache_file,
-            require_renewable_auth=require_renewable_auth,
-        )
-        print(
-            json.dumps(
-                {
-                    "apiVersion": "client.authentication.k8s.io/v1",
-                    "kind": "ExecCredential",
-                    "status": status,
-                }
+def create_mk8s_token_command(provider: CredentialProvider) -> Callable[..., None]:
+    """Bind credential acquisition without importing the CLI composition root."""
+
+    def command(
+        project_id: Annotated[
+            str | None,
+            typer.Option("--project-id", help="Project ID used to resolve cached runtime auth."),
+        ] = None,
+        client_name: Annotated[
+            str | None,
+            typer.Option("--client-name", help="Client name used to resolve cached runtime auth."),
+        ] = None,
+        endpoint: Annotated[
+            str | None,
+            typer.Option("--endpoint", help="Optional Nebius API endpoint override."),
+        ] = None,
+        cache_file: Annotated[
+            Path | None,
+            typer.Option(
+                "--cache-file",
+                hidden=True,
+                help="Owner-only command-lifetime ExecCredential cache.",
+            ),
+        ] = None,
+        require_renewable_auth: Annotated[
+            bool,
+            typer.Option(
+                "--require-renewable-auth",
+                hidden=True,
+                help="Reject one-shot IAM tokens for long-running exec authentication.",
+            ),
+        ] = False,
+    ) -> None:
+        """Emit ExecCredential JSON for MK8s kubeconfig exec auth."""
+        try:
+            status = _mk8s_exec_credential_status(
+                provider=provider,
+                project_id=project_id or "",
+                client_name=client_name or "",
+                endpoint=endpoint,
+                cache_file=cache_file,
+                require_renewable_auth=require_renewable_auth,
             )
-        )
-    except Exception as exc:  # pragma: no cover - CLI surface
-        reason = "timeout" if isinstance(exc, TimeoutError) else "credential-exchange-failed"
-        print(
-            f"ERROR: Unable to create an MK8s exec credential (reason: {reason}).",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=1) from None
+            print(
+                json.dumps(
+                    {
+                        "apiVersion": "client.authentication.k8s.io/v1",
+                        "kind": "ExecCredential",
+                        "status": status,
+                    }
+                )
+            )
+        except Exception as exc:  # pragma: no cover - CLI surface
+            reason = "timeout" if isinstance(exc, TimeoutError) else "credential-exchange-failed"
+            print(
+                f"ERROR: Unable to create an MK8s exec credential (reason: {reason}).",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=1) from None
+
+    return command
 
 
-app = typer.Typer(add_completion=False)
+def create_app(provider: CredentialProvider) -> typer.Typer:
+    """Build the lightweight command group with an entrypoint-owned provider."""
+    app = typer.Typer(add_completion=False)
 
+    @app.callback()
+    def command_group() -> None:
+        """Keep the same subcommand argv shape as the full CLI."""
 
-@app.callback()
-def _command_group() -> None:
-    """Keep the same subcommand argv shape as the full CLI."""
-
-
-app.command("mk8s-token", hidden=True)(mk8s_token_command)
+    app.command("mk8s-token", hidden=True)(create_mk8s_token_command(provider))
+    return app

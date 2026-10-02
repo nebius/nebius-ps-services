@@ -443,6 +443,7 @@ datasource mapping, overwrite rules, and ownership.
 
 Repeated imports avoid redundant conversion of already-canonical dashboards;
 cached Kubernetes authentication avoids loading the full CLI for each request.
+Cache misses retain the existing credential exchange and refresh behavior.
 Ownership checks, version guards, recovery copies and readback still run.
 
 See [observability](docs/observability.md) for routing, authentication, and private

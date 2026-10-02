@@ -18,7 +18,11 @@ from nebius_cxcli import cli, mk8s_exec
 @pytest.mark.parametrize("args", [["--help"], ["--unknown"], ["--project-id"]])
 def test_fast_command_keeps_full_cli_option_contract(args):
     runner = CliRunner()
-    fast = runner.invoke(mk8s_exec.app, ["mk8s-token", *args], prog_name="nebius-cxcli")
+    fast = runner.invoke(
+        mk8s_exec.create_app(entrypoint._acquire_mk8s_credential),
+        ["mk8s-token", *args],
+        prog_name="nebius-cxcli",
+    )
     full = runner.invoke(cli.app, ["mk8s-token", *args], prog_name="nebius-cxcli")
     assert fast.exit_code == full.exit_code
     assert fast.output == full.output
@@ -33,7 +37,7 @@ def test_fast_and_full_credential_errors_are_sanitized(monkeypatch, error):
 
     monkeypatch.setattr(mk8s_exec, "_acquire_status", fail)
     runner = CliRunner()
-    for app in (mk8s_exec.app, cli.app):
+    for app in (mk8s_exec.create_app(entrypoint._acquire_mk8s_credential), cli.app):
         result = runner.invoke(app, ["mk8s-token"])
         assert result.exit_code == 1
         assert result.stdout == ""
@@ -54,10 +58,39 @@ def test_fast_and_full_credential_errors_are_sanitized(monkeypatch, error):
 def test_entrypoint_routes_only_leading_credential_command(monkeypatch, args, expected):
     calls = []
     monkeypatch.setattr(sys, "argv", ["nebius-cxcli", *args])
-    monkeypatch.setattr(mk8s_exec, "app", lambda: calls.append("fast"))
+    monkeypatch.setattr(mk8s_exec, "create_app", lambda _provider: lambda: calls.append("fast"))
     monkeypatch.setattr(cli, "main", lambda: calls.append("full"))
     entrypoint.main()
     assert calls == [expected]
+
+
+def test_cold_entrypoint_uses_injected_provider(monkeypatch, capsys):
+    calls = []
+
+    def acquire(**kwargs):
+        calls.append(kwargs)
+        return {"token": "fixture-token"}
+
+    monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", acquire)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nebius-cxcli", "mk8s-token", "--project-id", "fixture", "--require-renewable-auth"],
+    )
+    with pytest.raises(SystemExit) as result:
+        entrypoint.main()
+    assert result.value.code == 0
+    assert calls == [
+        {
+            "project_id": "fixture",
+            "client_name": "",
+            "endpoint": None,
+            "require_renewable_auth": True,
+        }
+    ]
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["status"] == {"token": "fixture-token"}
+    assert not captured.err
 
 
 @pytest.mark.parametrize("unsafe", ["file-mode", "file-link", "directory-link", "lock-link"])
@@ -86,7 +119,11 @@ def test_credential_cache_rejects_unsafe_files_before_acquisition(tmp_path, monk
     monkeypatch.setattr(mk8s_exec, "_acquire_status", unexpected_acquisition)
     with pytest.raises((RuntimeError, OSError)):
         mk8s_exec._mk8s_exec_credential_status(
-            project_id="fixture", client_name="fixture", endpoint=None, cache_file=cache
+            provider=unexpected_acquisition,
+            project_id="fixture",
+            client_name="fixture",
+            endpoint=None,
+            cache_file=cache,
         )
 
 
