@@ -40,7 +40,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     validate_common_args(args)
-    bucket_mib = bucket_sizes(args.profile, args.bucket_mib)
+    bucket_mib = bucket_sizes(args.workload, args.bucket_mib)
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)

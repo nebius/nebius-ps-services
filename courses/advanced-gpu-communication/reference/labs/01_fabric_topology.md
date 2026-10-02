@@ -49,15 +49,15 @@ A rank is one participating process, and its local rank chooses a GPU on its own
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_fabric_topology/logs/%j.out" \
   --error="$PWD/results/01_fabric_topology/logs/%j.err" \
-  slurm/fabric.sbatch \
-  labs/01_fabric_topology.py --profile small
+  slurm/01_fabric_topology.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/01_fabric_topology/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/01_fabric_topology/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -102,12 +102,12 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_fabric_topology/logs/%j.out" \
-  --error="$PWD/results/01_fabric_topology/logs/%j.err" slurm/fabric.sbatch labs/01_fabric_topology.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/01_fabric_topology/logs/%j.err" slurm/01_fabric_topology.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_fabric_topology/logs/%j.out" \
-  --error="$PWD/results/01_fabric_topology/logs/%j.err" slurm/fabric.sbatch labs/01_fabric_topology.py --profile small
+  --error="$PWD/results/01_fabric_topology/logs/%j.err" slurm/01_fabric_topology.sbatch --workload small
 ```
 
 Slurm writes job logs under `results/01_fabric_topology/logs/<job>.out` and `.err`. A submitted job is not a completed result.
@@ -117,18 +117,12 @@ Inspect ranks, NVLink peers and active IB ports in Grafana, then the exact colle
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/01_fabric_topology/logs/capture-%J-%t.out" \
-  --error="results/01_fabric_topology/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 8 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/01_fabric_topology/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/01_fabric_topology.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_fabric_topology/logs/%j.out" \
+  --error="$PWD/results/01_fabric_topology/logs/%j.err" slurm/01_fabric_topology.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/01_fabric_topology.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Open all rank reports. Expand CUDA streams and the course_measure NVTX range; confirm the tiny all-reduce appears on every participating rank. This is a readiness trace, not a bandwidth benchmark. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

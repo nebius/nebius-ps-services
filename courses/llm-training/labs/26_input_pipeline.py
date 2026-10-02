@@ -73,8 +73,8 @@ def main() -> None:
         raise SystemExit("workers/prefetch must be positive and delay non-negative")
     torch = load_torch()
     environment = require_course_gpu(torch)
-    batch_size = 8 if args.profile == "small" else 32
-    sequence_length = 256 if args.profile == "small" else 2_048
+    batch_size = 8 if args.workload == "small" else 32
+    sequence_length = 256 if args.workload == "small" else 2_048
     sample_count = args.batches * batch_size
 
     def run_case(*, workers: int, prefetch: int | None) -> dict[str, Any]:

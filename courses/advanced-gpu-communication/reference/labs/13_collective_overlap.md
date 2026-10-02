@@ -31,15 +31,15 @@ Construct a critical-path timeline: the asynchronous path needs profiler evidenc
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_collective_overlap/logs/%j.out" \
   --error="$PWD/results/13_collective_overlap/logs/%j.err" \
-  slurm/two_node.sbatch \
-  labs/13_collective_overlap.py --profile small
+  slurm/13_collective_overlap.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/13_collective_overlap/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/13_collective_overlap/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -68,7 +68,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Overlapped median (seconds) | `overlapped_median_ms` | `s` |
 | Serialized to overlap ratio | `serialized_to_overlap_ratio` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 13_collective_overlap \
@@ -86,15 +86,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the paired paths together using the two-node launcher. Repeat the larger profile only after both ranks pass correctness; preserve its changed matrix and message sizes as a separate workload.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_collective_overlap/logs/%j.out" \
-  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/two_node.sbatch labs/13_collective_overlap.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/13_collective_overlap.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_collective_overlap/logs/%j.out" \
-  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/two_node.sbatch labs/13_collective_overlap.py --profile large
+  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/13_collective_overlap.sbatch --workload large
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Draw compute and communication intervals plus the final join. Compare the ideal `max(compute, communication)` intuition with measured completion, remembering shared resources and launch overhead. Use a profiler before asserting that simultaneous execution occurred.
 
@@ -103,18 +103,12 @@ Communication can be hidden only behind independent compute, often while competi
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/13_collective_overlap/logs/capture-%J-%t.out" \
-  --error="results/13_collective_overlap/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/13_collective_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/13_collective_overlap.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_collective_overlap/logs/%j.out" \
+  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/13_collective_overlap.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/13_collective_overlap.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.
 

@@ -74,7 +74,7 @@ def inline(
             target = (links or {}).get(destination, destination)
             text = inline(label, links, source=source)
             local_pages = (
-                {"index.html"}
+                {"index.html", "../gpu-performance-tools/index.html"}
                 | {f"{name}/index.html" for name in COURSES}
                 | {
                     "../lab-guide.html#" + slug(section)

@@ -1,0 +1,29 @@
+{
+  "slug": "gpu-performance-tools",
+  "title": "GPU Performance Tools",
+  "profile": "reference-only",
+  "estimated_guided_hours": 1,
+  "lessons": [
+    {
+      "id": 1,
+      "title": "Choose evidence and read native jobs"
+    },
+    {
+      "id": 2,
+      "title": "Nsight Systems and NVTX regions"
+    },
+    {
+      "id": 3,
+      "title": "Nsight Compute kernel analysis"
+    },
+    {
+      "id": 4,
+      "title": "PyTorch operator profiling"
+    },
+    {
+      "id": 5,
+      "title": "Grafana and VictoriaMetrics"
+    }
+  ],
+  "visual_manifest": "reference/visual-manifest.json"
+}

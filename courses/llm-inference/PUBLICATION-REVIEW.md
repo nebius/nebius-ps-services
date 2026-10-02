@@ -542,3 +542,22 @@ switcher test pass. Current HTML identity and scoped browser evidence are in
 [the Soperator integration validation](../docs/soperator-course-validation.md).
 Earlier GPU publication reviews describe their own artifact revisions; live
 hardware/runtime qualification remains unchanged.
+
+## Build and browser audit — 2026-10-02
+
+Local build/static and browser checks pass for this page. See the
+[complete eight-course build audit](../docs/course-build-validation.md) for
+484 focused tests, all eight native validators, preservation checks, browser
+assertions and the generic skill-checker limitations. This audit preserves
+the existing teaching profile and does not change runtime qualification.
+
+Inspected artifact: `llm-inference/index.html`, SHA-256
+`ec32b8fd5f7e9e45de293644a96cdfd39f8b8b14f753df1435ac2739cd212524`.
+Owned isolated headless Chrome 154.0.8037.93 rendered the complete page at
+1440×1000, 390×1000 and 320×1000 with JavaScript disabled, keyboard navigation,
+local scrollers, doubled-text reflow and zero automatic network requests.
+Visual captures were reviewed. Evidence group `course-build-audit-l57_57x5`,
+`browser-complete/publication-llm-inference-publication-WIDTH/`,
+contains the captures; `browser-complete.json` includes identity and assertion
+results. Final traces were disabled. Owned browser resources were closed.
+No live lab execution or external publication was performed.

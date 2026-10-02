@@ -22,12 +22,12 @@ from .metadata import (
 from .visuals import detailed_diagram_markup, detailed_visuals, diagram, passive_svg
 from .content import (
     course_glossary_markup,
+    diagram_block,
     guide_id,
     guide_markup,
     lab_markup,
     lesson_markup,
     next_steps_markup,
-    performance_tools_markup,
     shared_guide_links,
 )
 from .downloads import course_downloads
@@ -151,7 +151,14 @@ def render_lab_course(course: Path, metadata: dict) -> str:
 
 
 def render_text_course(course: Path, metadata: dict) -> str:
-    title, preamble, lessons = parse_text_course(course / "COURSE.md")
+    title, preamble, lessons = parse_text_course(
+        course / "COURSE.md", metadata["profile"]
+    )
+    figures = (
+        detailed_visuals(course, len(lessons))
+        if metadata["profile"] == "reference-only"
+        else []
+    )
     identities = [
         {"id": n, "title": lesson["title"]} for n, lesson in enumerate(lessons, 1)
     ]
@@ -176,7 +183,24 @@ def render_text_course(course: Path, metadata: dict) -> str:
         lesson_toc.append(f'<li><a href="#{anchor}">{heading}</a></li>')
         sections = "".join(
             f'<div class="{FIELD_CLASSES[field]}"><h3>{field}</h3>'
-            + block(lesson[field], links, heading_offset=0)
+            + (
+                diagram_block(
+                    lesson[field],
+                    [
+                        dict(
+                            path=entry["path"],
+                            title=entry["title"],
+                            markup=detailed_diagram_markup(entry),
+                        )
+                        for entry in figures
+                        if entry["lessons"][0] == number and entry["after"] == field
+                    ],
+                    links,
+                    prefix=f"lesson-{number}-",
+                )
+                if figures
+                else block(lesson[field], links, heading_offset=0)
+            )
             + "</div>"
             for field in lesson
             if field != "title"
@@ -259,9 +283,9 @@ def render_shared_guide() -> str:
         )
         body += f'<section id="{anchor}"><h2>{html.escape(heading)}</h2>{rendered}</section>'
     css = (ROOT / "tools/course.css").read_text(encoding="utf-8")
-    return f"""{page_head(GUIDE_TITLE + ' | Performance Engineering Courses', css)}
+    return f"""{page_head(GUIDE_TITLE + " | Performance Engineering Courses", css)}
 <body class="text-course"><a class="skip-link" href="#main">Skip to guide</a><header><h1>{GUIDE_TITLE}</h1></header>
-<div class="course-layout"><aside><nav aria-label="Lab guide contents">{course_switcher('lab-guide', catalog_metadata())}<details open><summary>Table of contents</summary><ul>{toc}</ul></details></nav></aside><main id="main">{body}{license_footer()}</main></div></body></html>"""
+<div class="course-layout"><aside><nav aria-label="Lab guide contents">{course_switcher("lab-guide", catalog_metadata())}<details open><summary>Table of contents</summary><ul>{toc}</ul></details></nav></aside><main id="main">{body}{license_footer()}</main></div></body></html>"""
 
 
 def render_catalog() -> str:
@@ -272,7 +296,11 @@ def render_catalog() -> str:
     for number, name in enumerate(CATALOG_ENTRIES, 1):
         guide = name == "lab-guide"
         title = html.escape(GUIDE_TITLE if guide else metadata[name]["title"])
-        hours = "Shared guide" if guide else f'{metadata[name]["estimated_guided_hours"]} guided hours'
+        hours = (
+            "Shared guide"
+            if guide
+            else f"{metadata[name]['estimated_guided_hours']} guided hours"
+        )
         eyebrow, introduction, outcomes, tags = CATALOG_COPY[name]
         prerequisite = (
             "Start here · Basic Linux knowledge; no cluster required"
@@ -284,7 +312,7 @@ def render_catalog() -> str:
             else "No previous GPU course required"
             if name == "gpu-fundamentals"
             else "Prerequisite: GPU Fundamentals"
-            if name == "gpu-optimizations"
+            if name in ("gpu-performance-tools", "gpu-optimizations")
             else "Prerequisites: Fundamentals + Optimization"
         )
         outcome_items = "".join(f"<li>{html.escape(item)}</li>" for item in outcomes)
@@ -296,24 +324,38 @@ def render_catalog() -> str:
 <ul class="course-outcomes">{outcome_items}</ul>
 <div class="course-tags" aria-label="Topics">{tag_items}</div>
 <div class="card-bottom"><p class="prerequisite">{prerequisite}</p>
-<a class="course-link" href="{catalog_destination(name)}" aria-label="Read {title}">Read {'guide' if guide else 'course'} <span aria-hidden="true">↗</span></a></div>
+<a class="course-link" href="{catalog_destination(name)}" aria-label="Read {title}">Read {"guide" if guide else "course"} <span aria-hidden="true">↗</span></a></div>
 </article>"""
-    path_labels = {"soperator": "Soperator", "lab-guide": GUIDE_TITLE, "advanced-gpu-communication": "Advanced Labs"}
-    for group_number, (label, description, grid_class, names) in enumerate(CATALOG_GROUPS, 1):
+    path_labels = {
+        "soperator": "Soperator",
+        "lab-guide": GUIDE_TITLE,
+        "advanced-gpu-communication": "Advanced Labs",
+    }
+    for group_number, (label, description, grid_class, names) in enumerate(
+        CATALOG_GROUPS, 1
+    ):
         path_items = []
         for name in names:
             number = CATALOG_ENTRIES.index(name) + 1
-            title = html.escape(path_labels[name] if name in path_labels else metadata[name]["title"])
+            title = html.escape(
+                path_labels[name] if name in path_labels else metadata[name]["title"]
+            )
             purpose = html.escape(CATALOG_COPY[name][0])
-            path_items.append(f'<li value="{number}"><span class="path-step" aria-hidden="true">{number:02d}</span><a href="#{name}">{title}<small>{purpose}</small></a></li>')
-        path_groups.append(f'<p class="path-group-label">{html.escape(label)} · {html.escape(description)}</p><ol class="path-foundations path-group-{grid_class or "advanced"}" start="{CATALOG_ENTRIES.index(names[0]) + 1}">{"".join(path_items)}</ol>')
-        collection_groups.append(f'<div class="collection-label"><span>{group_number:02d} / {html.escape(label)}</span><p>{html.escape(description)}</p></div><div class="course-grid {grid_class}">{"".join(cards[name] for name in names)}</div>')
+            path_items.append(
+                f'<li value="{number}"><span class="path-step" aria-hidden="true">{number:02d}</span><a href="#{name}">{title}<small>{purpose}</small></a></li>'
+            )
+        path_groups.append(
+            f'<p class="path-group-label">{html.escape(label)} · {html.escape(description)}</p><ol class="path-foundations path-group-{grid_class or "advanced"}" start="{CATALOG_ENTRIES.index(names[0]) + 1}">{"".join(path_items)}</ol>'
+        )
+        collection_groups.append(
+            f'<div class="collection-label"><span>{group_number:02d} / {html.escape(label)}</span><p>{html.escape(description)}</p></div><div class="course-grid {grid_class}">{"".join(cards[name] for name in names)}</div>'
+        )
     css = (ROOT / "tools/catalog.css").read_text(encoding="utf-8")
     lab_count = sum(len(item.get("labs", [])) for item in metadata.values())
     return f"""<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Six free Nebius courses, an Advanced Labs collection and a shared Lab Guide: explore Slurm, GPUs, language models and custom kernels.">
+<meta name="description" content="Seven free Nebius courses, an Advanced Labs collection and a shared Lab Guide: explore Slurm, GPUs, language models and custom kernels.">
 <title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
 <style>{css}</style></head>
 <body><a class="skip-link" href="#main">Skip to courses</a>
@@ -326,10 +368,10 @@ def render_catalog() -> str:
 <div class="hero-actions"><a class="button primary" href="soperator/index.html">Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" href="lab-guide.html">Set up and run the labs <span aria-hidden="true">→</span></a></div>
 <p class="platform-note">GPU performance · Linux · Slurm</p></div>
 <aside class="learning-map" id="learning-path" aria-labelledby="path-title">
-<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">8 resources</span></div>
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">9 resources</span></div>
 <h2 id="path-title">A foundation.<br>Then your direction.</h2>
 {"".join(path_groups)}
-<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. The three specializations are independent. Start any of them after the two GPU foundation courses. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
+<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. The three specializations are independent. Start any of them after Fundamentals and Optimization; consult the tools reference as needed. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
 </header>
 <div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES) - 1}</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">{lab_count} practical labs.<br>Free to read.</p></div>
 <section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
@@ -342,7 +384,7 @@ def render_catalog() -> str:
 
 def render_course(course_name: str) -> str:
     course = ROOT / course_name
-    if course_name == "soperator":
+    if course_metadata(course).get("profile") in ("text-only", "reference-only"):
         return render_text_course(course, course_metadata(course))
     if course_name == "advanced-gpu-communication":
         return render_lab_course(course, course_metadata(course))
@@ -393,8 +435,7 @@ def render_course(course_name: str) -> str:
         target = "#" + slug(lesson["title"])
         reference_links[source_anchor] = target
         reference_links["../COURSE.md" + source_anchor] = target
-    primer_html = performance_tools_markup(course, metadata, reference_links)
-    reference_links[metadata["performance_tools"]] = "#using-gpu-performance-tools"
+    primer_html = ""
     reference_links.update(shared_guide_links())
     reference_links.update(
         {
@@ -544,17 +585,15 @@ def render_course(course_name: str) -> str:
         )
         for index, item in lesson_sequence
     )
-    labs_html = (
-        "\n".join(
-            lab_markup(
-                course,
-                guide,
-                lessons,
-                reference_links,
-                lab_figures.get(guide["source"].stem),
-            )
-            for guide in authored_labs
+    labs_html = "\n".join(
+        lab_markup(
+            course,
+            guide,
+            lessons,
+            reference_links,
+            lab_figures.get(guide["source"].stem),
         )
+        for guide in authored_labs
     )
     extensions_html = (
         '<div class="optional-study"><h3>Optional further study</h3><ul>'
@@ -581,7 +620,7 @@ def render_course(course_name: str) -> str:
 <div class="course-layout"><aside>
 <nav id="course-contents" aria-label="Course contents">{course_switcher(course_name, catalog_metadata())}<details open><summary>Table of contents</summary>
 <ul class="section-links"><li><a href="#course-overview">Course overview</a></li><li><a href="#course-contract">How to use this course</a></li></ul>
-<h2>Lessons</h2><ul class="section-links"><li><a href="#using-gpu-performance-tools">Using GPU performance tools</a></li></ul><ol>{lesson_toc}</ol>
+<h2>Lessons</h2><ol>{lesson_toc}</ol>
 <h2>Practice and reference</h2><ul class="section-links"><li><a href="#labs">Practical labs</a><details><summary>Browse labs</summary><ul>{lab_toc}</ul></details></li>
 <li><a href="#supporting-guides">Course guides</a><ul>{guides_toc}</ul></li><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul>
 </details></nav></aside><main id="main">

@@ -34,7 +34,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
     for metadata in ROOT.glob("*/reference/course.json"):
         name = metadata.parent.parent.name
         course(tmp_path, name, **json.loads(metadata.read_text()))
-        if json.loads(metadata.read_text()).get("profile") != "text-only":
+        if json.loads(metadata.read_text()).get("profile") not in ("text-only", "reference-only"):
             expected[name] = len(json.loads(metadata.read_text())["labs"])
     assert sum(expected.values()) == 110
     assert setup.prepare(courses_root=tmp_path) == expected
@@ -45,7 +45,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
     for name in expected:
         metadata = json.loads((tmp_path / name / "reference/course.json").read_text())
         for row in metadata["labs"]:
-            for leaf in ("logs", "profiles"):
+            for leaf in ("logs", "jobs"):
                 path = tmp_path / name / "results" / Path(row["path"]).stem / leaf
                 assert path.stat().st_mode & 0o777 == 0o700
                 assert path.stat().st_uid == os.geteuid()
@@ -58,7 +58,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
         "results",
         "results/01_example",
         "results/01_example/logs",
-        "results/01_example/profiles",
+        "results/01_example/jobs",
     ],
 )
 @pytest.mark.parametrize("defect", ["public", "file", "symlink", "dangling"])

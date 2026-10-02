@@ -96,7 +96,7 @@ def main() -> None:
         "Explain the difference between LLM prefill and decode.",
         "Why should inference benchmarks report latency percentiles?",
     ]
-    copies = 1 if args.profile == "small" else 4
+    copies = 1 if args.workload == "small" else 4
     prompts = [
         f"{prompt} Example request {index}."
         for index, prompt in enumerate(base_prompts * copies, start=1)

@@ -31,7 +31,7 @@ def main() -> None:
     validate_common_args(args)
     global_batch = resolve_int_override(
         args.global_batch,
-        64 if args.profile == "small" else 512,
+        64 if args.workload == "small" else 512,
         option="--global-batch",
     )
     torch = load_torch()
@@ -47,7 +47,7 @@ def main() -> None:
     if global_batch % world_size:
         raise SystemExit("--global-batch must be divisible by the number of ranks")
     local_batch = global_batch // world_size
-    width = 2_048 if args.profile == "small" else 8_192
+    width = 2_048 if args.workload == "small" else 8_192
     model = torch.nn.Sequential(
         torch.nn.Linear(width, width * 2, bias=False),
         torch.nn.GELU(),

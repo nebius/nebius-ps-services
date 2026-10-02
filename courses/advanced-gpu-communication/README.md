@@ -107,7 +107,7 @@ CUDA activity. Its preallocated tensors may produce no allocation events;
 the trace is not a measurement of total GPU memory use.
 
 Lab 10 selects its NCCL Tests variant as the positional argument after
-`slurm/nccl_tests.sbatch`, for example `default` or `socket`.
+`slurm/10_nccl_tests_report.sbatch`, for example `default` or `socket`.
 Its runner sets `NCCL_TESTS_DEVICE=0` only for the benchmark child, matching
 Slurm's one-GPU-per-task visibility. Inherited device overrides are rejected;
 the MPI local rank does not identify a device inside that restricted view.

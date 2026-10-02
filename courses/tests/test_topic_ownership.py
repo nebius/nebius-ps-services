@@ -149,7 +149,7 @@ def test_partition_experiment_common_state_and_rank_agreement(
         monkeypatch.setattr(module, "seed_everything", lambda *_: None)
         monkeypatch.setattr(module, "write_result", lambda *a, **k: records.append(k))
         args = SimpleNamespace(
-            profile="small", seed=17, batch_size=1, warmup=0, iterations=2
+            workload="small", seed=17, batch_size=1, warmup=0, iterations=2
         )
         if peer_ok:
             module.run_experiment(CpuFixture(), args, {}, rank, 2, 0)

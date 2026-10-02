@@ -57,7 +57,7 @@ def main() -> None:
             "Linux CUDA PyTorch environment."
         )
 
-    element_count = 8_000_003 if args.profile == "small" else 64_000_003
+    element_count = 8_000_003 if args.workload == "small" else 64_000_003
     source = torch.randn(element_count, device="cuda", dtype=torch.float32)
     target = torch.empty_like(source)
     reference = source * 1.25

@@ -13,7 +13,7 @@ Each native submission block prepares private log directories before calling `sb
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 
@@ -68,7 +68,7 @@ the job's internal mask cannot protect scheduler output created earlier.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_timing_basics/logs/%j.out" \
-  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/single_gpu.sbatch labs/01_timing_basics.py --profile small
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.sbatch --workload small
 ```
 
 Use the Nsight launchers after freezing the baseline and hypothesis. Distributed transport, scaling and profiling practice now belongs to the advanced course; its setup qualifies the sixteen-H100 fabric.

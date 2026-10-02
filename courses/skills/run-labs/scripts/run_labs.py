@@ -75,7 +75,7 @@ def private_environment(path):
             "COURSE_RUN_ID",
             "COURSE_CAPTURE",
             "COURSE_PROFILE_TOOL",
-            "COURSE_WORKLOAD_PROFILE",
+            "COURSE_WORKLOAD",
         } or name.startswith("SLURM_"):
             raise ValueError("Runtime job/profile variables are controller-owned")
     if not env["target"] or not env["target_id"] or not env["workspace_id"]:
@@ -91,6 +91,8 @@ def claim_path(state, unit):
 
 
 def verify_frozen(state):
+    if state.get("plan", {}).get("execution_contract") != "native-jobs/v1":
+        raise ValueError("Saved execution plan predates native jobs; preserve its evidence and create a new campaign")
     root = Path(state["courses_root"])
     actual = source_identity(root, [u["course"] for u in state["plan"]["units"]])
     if (
@@ -151,7 +153,7 @@ def create(args):
     root = courses_root(args.courses_root)
     recipes = catalog(root)
     chosen = select(recipes, args.course, args.lab, args.all_courses)
-    profiles = ["small", "large"] if args.profile == "both" else [args.profile]
+    profiles = ["small", "large"] if args.workload == "both" else [args.workload]
     env = private_environment(args.environment) if args.environment else None
     plan = freeze(
         root, chosen, recipes, profiles, (env or {}).get("variables", {}), env
@@ -243,7 +245,7 @@ def main():
     run.add_argument(
         "--all-courses", action="store_true", help="All executable labs in six courses"
     )
-    run.add_argument("--profile", choices=("small", "large", "both"), default="both")
+    run.add_argument("--workload", choices=("small", "large", "both"), default="both")
     run.add_argument(
         "--courses-root", type=Path, help="Course checkout; inferred from this skill"
     )

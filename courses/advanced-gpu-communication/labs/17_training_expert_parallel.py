@@ -31,8 +31,8 @@ def main() -> None:
     try:
         if world_size != 2:
             raise SystemExit("This bounded mechanics lab requires exactly two ranks.")
-        hidden = 1_024 if args.profile == "small" else 8_192
-        tokens_per_rank = 32 if args.profile == "small" else 512
+        hidden = 1_024 if args.workload == "small" else 8_192
+        tokens_per_rank = 32 if args.workload == "small" else 512
         learning_rate = 1e-3
         send_counts = [3 * tokens_per_rank // 4, tokens_per_rank // 4]
         receive_counts = [send_counts[rank]] * world_size
@@ -54,7 +54,7 @@ def main() -> None:
             float(rank + 1), device="cuda", dtype=torch.float32, requires_grad=True
         )
         local_experts = 2
-        expert_width = 256 if args.profile == "small" else 1_024
+        expert_width = 256 if args.workload == "small" else 1_024
         grouped_weights = torch.randn(
             (local_experts, hidden, expert_width),
             device="cuda",

@@ -19,15 +19,15 @@ The source initializes sixteen ranks, performs an exact MAX reduction, and recor
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/26_collective_latency/logs/%j.out" \
   --error="$PWD/results/26_collective_latency/logs/%j.err" \
-  slurm/fabric.sbatch \
-  labs/26_collective_latency.py --profile small --algorithm auto
+  slurm/26_collective_latency.sbatch --workload small --algorithm auto
 ```
 
 ## Check your results
+
+Each new job owns `results/26_collective_latency/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/26_collective_latency/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -69,12 +69,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/26_collective_latency/logs/%j.out" \
-  --error="$PWD/results/26_collective_latency/logs/%j.err" slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm auto
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/26_collective_latency/logs/%j.err" slurm/26_collective_latency.sbatch --workload small --algorithm auto
+sbatch --chdir="$PWD" \
   --output="$PWD/results/26_collective_latency/logs/%j.out" \
-  --error="$PWD/results/26_collective_latency/logs/%j.err" slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm Tree
+  --error="$PWD/results/26_collective_latency/logs/%j.err" slurm/26_collective_latency.sbatch --workload small --algorithm Tree
 ```
 
 Logs stay under `results/26_collective_latency/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -82,18 +82,12 @@ Logs stay under `results/26_collective_latency/logs/`. A submission receipt is n
 Select network_all_reduce NVTX ranges and NCCL/CUDA lanes on all sixteen Systems reports. Separate a launch gap from a long collective. Repeat with Ring at the same sizes; explain whether the candidate changes startup cost or the large-message slope. Never conclude that forcing one algorithm is universally better.
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/26_collective_latency/logs/capture-%J-%t.out" \
-  --error="results/26_collective_latency/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 8 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/26_collective_latency/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/26_collective_latency.py --profile small --algorithm auto
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/26_collective_latency/logs/%j.out" \
+  --error="$PWD/results/26_collective_latency/logs/%j.err" slurm/26_collective_latency.nsys.sbatch --workload small --algorithm auto
 ```
+
+The native Systems command is in `slurm/26_collective_latency.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.
 

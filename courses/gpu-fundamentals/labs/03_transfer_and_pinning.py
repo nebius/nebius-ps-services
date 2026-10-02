@@ -50,7 +50,7 @@ def main() -> None:
     validate_common_args(args)
     size_mib = resolve_int_override(
         args.size_mib,
-        64 if args.profile == "small" else 512,
+        64 if args.workload == "small" else 512,
         option="--size-mib",
     )
     torch = load_torch()

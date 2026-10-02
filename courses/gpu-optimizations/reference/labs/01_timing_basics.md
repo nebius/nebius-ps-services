@@ -29,15 +29,15 @@ Given a CPU call returning after 0.05 milliseconds, CUDA events reporting 1.0 mi
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_timing_basics/logs/%j.out" \
   --error="$PWD/results/01_timing_basics/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/01_timing_basics.py --profile small
+  slurm/01_timing_basics.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/01_timing_basics/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/01_timing_basics/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -72,7 +72,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Host with sync median (seconds) | `host_with_sync_median_ms` | `s` |
 | Cuda events / median (seconds) | `cuda_events.median_ms` | `s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_timing_basics \
@@ -90,15 +90,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the small case first, then the larger profile. Compare the included operations and completion waits within each profile; do not attribute a cross-profile change solely to a timer mechanism.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_timing_basics/logs/%j.out" \
-  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/single_gpu.sbatch labs/01_timing_basics.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_timing_basics/logs/%j.out" \
-  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/single_gpu.sbatch labs/01_timing_basics.py --profile large
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.sbatch --workload large
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Draw where each timer begins and ends relative to host enqueue and device completion. Explain why synchronized wall time can exceed event time and why unsynchronized timing can appear implausibly small for large arithmetic work.
 
@@ -109,35 +109,24 @@ CUDA events measure elapsed time between device markers, not a sum of active ker
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/01_timing_basics/logs/capture-%J-%t.out" \
-  --error="results/01_timing_basics/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/01_timing_basics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/01_timing_basics.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_timing_basics/logs/%j.out" \
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/01_timing_basics.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. The launcher selects the first matching kernel inside `course_measure`, which wraps the GEMM in the CUDA-event timing loop. Initialization and the earlier host-timer loops are outside that range. Use Systems to identify the GEMM kernel, then verify the Compute report's kernel, launch geometry and NVTX range before interpreting its counters. Set `COURSE_PROFILE_KERNEL` to its observed name or a matching regular expression when narrowing the selection. This single-kernel capture does not measure either host-timer loop or end-to-end application latency.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/01_timing_basics/logs/capture-%J-%t.out" \
-  --error="results/01_timing_basics/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/01_timing_basics/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/01_timing_basics.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_timing_basics/logs/%j.out" \
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/01_timing_basics.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

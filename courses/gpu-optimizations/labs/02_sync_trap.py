@@ -41,7 +41,7 @@ def main() -> None:
     validate_common_args(args)
     steps = resolve_int_override(
         args.steps,
-        25 if args.profile == "small" else 200,
+        25 if args.workload == "small" else 200,
         option="--steps",
     )
     torch = load_torch()

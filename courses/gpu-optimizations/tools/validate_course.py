@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COURSE_NAMES = (
     "soperator",
     "gpu-fundamentals",
+    "gpu-performance-tools",
     "gpu-optimizations",
     "llm-training",
     "llm-inference",
@@ -54,7 +55,6 @@ LAB_SECTIONS = (
     "Takeaways and next step",
 )
 REQUIRED_FILES = {
-    "reference/performance-tools.md",
     "reference/observability.json",
     "MISSION.md",
     "COURSE.md",
@@ -451,6 +451,7 @@ class Parser(html.parser.HTMLParser):
             pass
         elif tag == "a" and href in {
             "../lab-guide.html",
+            "../gpu-performance-tools/index.html",
             "../lab-guide.html#how-to-set-up-the-lab",
             "../lab-guide.html#how-to-run-the-labs",
             "https://nebius.github.io/nebius-ps-services/courses/lab-guide.html",
@@ -973,8 +974,12 @@ def validate_lab_guides(
         commands = re.findall(r"```bash\n(.*?)\n```", sections["Practice"], re.DOTALL)
         if len(commands) != 1 or not commands[0].startswith("sbatch ") or len(commands[0].replace("\\\n", " ").strip().splitlines()) != 1:
             fail(f"lab {source.name} requires exactly one baseline sbatch")
-        if "COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0" not in commands[0]:
-            fail(f"lab {source.name} baseline must disable external capture")
+        batch = re.search(r"slurm/([0-9]{2}_[a-z0-9_]+(?:\.[a-z0-9_]+)*\.sbatch)", commands[0])
+        if not batch or not (ROOT / "slurm" / batch[1]).is_file():
+            fail(f"lab {source.name} requires an existing explicit baseline job")
+        job_source = (ROOT / "slurm" / batch[1]).read_text()
+        if "export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0" not in job_source:
+            fail(f"lab {source.name} baseline job must disable external capture")
         if re.search(r"for directory|umask|mkdir", sections["Practice"]):
             fail(f"lab {source.name} repeats one-time preparation")
         if f"labs/{source.name}" not in sections["Practice"].split("```", 1)[0]:
@@ -1021,18 +1026,23 @@ def validate_lab_evidence(
         not isinstance(recipe.get("learner_systems_command"), str)
         or " ".join(recipe["learner_systems_command"].replace("\\\n", " ").split()) not in commands
         or (
-            "COURSE_PROFILE_TOOL=nsys" not in command
-            and "--capture systems" not in command
+            ".nsys.sbatch" not in command
         )
     ):
         fail("guide must include the exact worker/server Systems command")
     compute = recipe.get("learner_compute_command")
     if bool(compute) != bool(recipe.get("compute_command")):
         fail("learner Compute recipe disagrees with applicability")
-    if compute and ("ncu " not in compute or " ".join(compute.replace("\\\n", " ").split()) not in commands):
+    if compute and (".ncu.sbatch" not in compute or " ".join(compute.replace("\\\n", " ").split()) not in commands):
         fail("guide must include the exact native Compute command")
-    if command and "nsys profile" not in recipe["learner_systems_command"]:
-        fail("learner Systems recipe must expose native profiler argv")
+    if command:
+        job = ROOT / recipe["jobs"]["nsys"]
+        if not job.is_file() or "nsys profile" not in job.read_text():
+            fail("Systems job must expose native profiler argv")
+    if compute:
+        job = ROOT / recipe["jobs"]["ncu"]
+        if not job.is_file() or "ncu " not in job.read_text():
+            fail("Compute job must expose native profiler argv")
     if systems["reason"] not in guide or systems["view"] not in guide:
         fail("guide must explain Systems applicability and inspection")
     if "compute_companion" in recipe:
@@ -1131,11 +1141,8 @@ def validate_observability_assets(document: str, metadata: dict) -> None:
     for name in ("COURSE.md", "README.md"):
         if (ROOT / name).read_text().splitlines()[0] != "# " + metadata["title"]:
             fail(f"{name} title must match canonical metadata")
-    if (
-        metadata.get("profile") != "labs-only"
-        and metadata.get("performance_tools") != "reference/performance-tools.md"
-    ) or metadata.get("observability") != "reference/observability.json":
-        fail("invalid performance tools metadata")
+    if metadata.get("observability") != "reference/observability.json":
+        fail("invalid observability metadata")
     recipes = json.loads((ROOT / metadata["observability"]).read_text())
     if set(recipes["labs"]) != {Path(row["path"]).stem for row in metadata["labs"]}:
         fail("observability recipes must cover every executable lab")
@@ -1185,39 +1192,6 @@ def validate_observability_assets(document: str, metadata: dict) -> None:
         or '<a href="../lab-guide.html">Lab setup guide</a>' not in introduction[1]
     ):
         fail("course download introduction must separate results and setup labels from their links")
-    if metadata.get("profile") == "labs-only":
-        return
-    primer = re.search(
-        r'<section id="using-gpu-performance-tools".*?</section>', document, re.DOTALL
-    )
-    if not primer or document.index(primer[0]) > document.index('class="lesson"'):
-        fail("performance tools lesson must precede numbered lessons")
-    navigation = re.search(r"<nav\b.*?</nav>", document, re.DOTALL)
-    if (
-        not navigation
-        or navigation[0].count('href="#using-gpu-performance-tools"') != 1
-    ):
-        fail("performance tools lesson must be in navigation")
-    visible = VisibleText()
-    visible.feed(primer[0])
-    rendered = " ".join("".join(visible.parts).split())
-    source = (ROOT / metadata["performance_tools"]).read_text()
-    sections = re.split(r"^## (.+)\n", source, flags=re.M)
-    fields = dict(zip(sections[1::2], sections[2::2], strict=True))
-    if tuple(fields) not in (REQUIRED_LESSON_FIELDS, (*REQUIRED_LESSON_FIELDS, "References")):
-        fail("Performance tools must use the lesson fields without local Where to Go Next or Glossary sections")
-    code_blocks = re.findall(r"```[^\n]*\n(.*?)\n```", source, re.DOTALL)
-    rendered_code = re.findall(
-        r"<pre[^>]*><code>(.*?)</code></pre>", primer[0], re.DOTALL
-    )
-    if code_blocks != [html.unescape(code) for code in rendered_code]:
-        fail("performance tools code differs from source")
-    prose = re.sub(r"```[^\n]*\n.*?\n```", "", source, flags=re.DOTALL)
-    for paragraph in prose_paragraphs(prose):
-        plain = re.sub(r"!?\[([^]]+)\]\([^)]+\)", r"\1", paragraph)
-        plain = re.sub(r"(?m)^#{1,6} ", "", plain).replace("**", "").replace("`", "")
-        if " ".join(plain.split()) not in rendered:
-            fail("performance tools lesson differs from source")
 
 
 def validate_shared_setup_link(document: str, metadata: dict) -> None:
@@ -1692,7 +1666,6 @@ def main() -> None:
         "estimated_guided_hours",
         "labs",
         "extensions",
-        "performance_tools",
         "observability",
         "advanced_lessons",
         "external_labs",

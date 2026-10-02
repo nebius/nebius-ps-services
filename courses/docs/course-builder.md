@@ -1,7 +1,7 @@
 # Building and publishing the course website
 
 The site remains static HTML generated with Python's standard library. There is
-no JavaScript application, package installation or server-side runtime. All seven
+no JavaScript application, package installation or server-side runtime. All eight
 courses keep their existing content, layout and styling.
 
 ## Authoring architecture
@@ -38,7 +38,9 @@ Keep authoring CSS in the shared files and course-owned diagrams with their
 course. The generated pages embed CSS, teaching images, diagrams and complete
 source listings, so saving one HTML file preserves offline reading. Downloading
 ZIPs requires the companion files or the website. Soperator remains text-only
-and has no lab downloads.
+and has no lab downloads. GPU Performance Tools is a reference-only course with
+contextual diagrams and no exercises or result archives. The build produces ten
+HTML pages: eight courses, the catalog and the shared Lab Guide.
 
 ## Diagram placement
 
@@ -74,7 +76,7 @@ introductory dashboard reminder. Lab-specific dashboard pointers remain beside
 their owning lab.
 
 The sole download is the results ZIP. It contains all dashboards, including
-environment readiness, and both workload profiles:
+environment readiness, and both workload sizes:
 
 ```text
 COURSE-lab-results.zip
@@ -135,7 +137,11 @@ The supported Markdown subset includes headings, paragraphs, flat lists,
 tables, fenced code, inline code, bold and declared links. Nested lists and
 single emphasis fail instead of silently losing structure. Intentional
 plain-text links are explicitly scoped to their owning source in `markdown.py`;
-new unknown destinations fail. All authored SVGs share one passive policy.
+new unknown destinations fail. Duplicate lesson fields and prose outside a
+lesson field fail before output replacement; headings and field labels inside
+fenced examples remain literal code. All authored SVGs share one passive policy.
+Both reading-course validators also reject automatic external CSS/SVG resources,
+refreshes, forms and link tracking.
 
 ## GitHub Pages size and publication
 

@@ -37,7 +37,7 @@ load credential-bearing environment content only into process memory, never
 into `variables`, campaign state, logs or shell examples. Typical prerequisites
 are qualified Python/torchrun, immutable container digests and runner, pinned
 model paths/revisions, NCCL Tests/MPI, HCA pairs, and CUDA build directories.
-CUDA binaries must match this source and the new `--profile small|large`
+CUDA binaries must match this source and the new `--workload small|large`
 interface. A source build through the existing build launcher is allowed;
 installing compilers, services or shared README setup is outside this skill.
 

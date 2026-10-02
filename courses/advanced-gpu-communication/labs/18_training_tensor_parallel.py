@@ -43,8 +43,8 @@ def main() -> None:
     rank, world_size, local_rank = init_nccl(torch)
     try:
         device = f"cuda:{local_rank}"
-        width = 2_048 if args.profile == "small" else 8_192
-        batch = 32 if args.profile == "small" else 128
+        width = 2_048 if args.workload == "small" else 8_192
+        batch = 32 if args.workload == "small" else 128
         learning_rate = 1e-2
         if width % world_size:
             raise SystemExit("The hidden width must be divisible by the rank count.")

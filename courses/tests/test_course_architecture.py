@@ -12,7 +12,7 @@ import course_archives as archives
 from course_builder import build, markdown, visuals
 
 
-@pytest.mark.parametrize("name", [name for name in build.COURSES if name != "soperator"])
+@pytest.mark.parametrize("name", [name for name in build.COURSES if name not in ("soperator", "gpu-performance-tools")])
 def test_practical_downloads_offer_results_and_setup_without_kit(name):
     import re
 

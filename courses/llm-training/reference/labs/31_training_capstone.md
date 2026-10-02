@@ -27,7 +27,7 @@ The source creates matched inputs, weights, and bias, verifies one full baseline
 
 The supplied baseline computes `inputs @ weight + bias`; the candidate expresses the same biased product with `torch.addmm`. Both then apply GELU, compute mean-squared loss, backpropagate and update weight and bias with SGD. Shape, data, dtype, initial parameters and update count stay fixed. Across three fresh seeded processes, alternate which path runs first and retain every timing and memory result. A shorter forward path can still lose over the complete update, so an unfavorable or mixed result remains valid evidence.
 
-Use separate unprofiled runs of `slurm/capstone_three_trials.sbatch` for three fresh-process trials with alternating variant order. Derive the FLOP count before interpreting utilization: fixed inputs require no gradient, so forward XW and weight-gradient X.T @ dY cost 4 × tokens × width² FLOPs together. There is no input-gradient GEMM. Bias, GELU, loss and optimizer work remain outside this matmul-only numerator, but inside full-step timing. This lower-bound estimate is not full-transformer model FLOPs utilization (MFU); an input requiring gradients would need a third GEMM.
+Use separate unprofiled runs of `slurm/31_training_capstone.trials.sbatch` for three fresh-process trials with alternating variant order. Derive the FLOP count before interpreting utilization: fixed inputs require no gradient, so forward XW and weight-gradient X.T @ dY cost 4 × tokens × width² FLOPs together. There is no input-gradient GEMM. Bias, GELU, loss and optimizer work remain outside this matmul-only numerator, but inside full-step timing. This lower-bound estimate is not full-transformer model FLOPs utilization (MFU); an input requiring gradients would need a third GEMM.
 
 ## Practice
 
@@ -36,15 +36,16 @@ Use separate unprofiled runs of `slurm/capstone_three_trials.sbatch` for three f
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/31_training_capstone/logs/%j.out" \
   --error="$PWD/results/31_training_capstone/logs/%j.err" \
-  slurm/capstone_three_trials.sbatch \
-  --profile small
+  slurm/31_training_capstone.trials.sbatch \
+  --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/31_training_capstone/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/31_training_capstone/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -90,7 +91,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Candidate tokens per second | `candidate_tokens_per_second` | `tokens/s` |
 
 Complete each three-trial group for acceptance. For repeated publication, run
-the complete launcher twice in the same profile, retaining all six clean child
+the complete launcher twice in the same workload preset, retaining all six clean child
 records and both validated aggregates. Pair corresponding children with the
 same seed and variant order: 17 with 17, 18 with 18, and 19 with 19. Publish each
 pair separately and review its generation before selecting the next pair.
@@ -119,12 +120,12 @@ Use the campaign launcher for the required three independent processes. Supply a
 
 ```bash
 "$COURSE_PYTHON" labs/31_training_capstone.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/31_training_capstone/logs/%j.out" \
-  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/31_training_capstone.trials.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Does the candidate help at the complete-step boundary, not just one operator? Explain the profiler-observed mechanism and any order sensitivity. Identify which omitted arithmetic makes the reported FLOP numerator a lower-bound accounting convention.
 
@@ -133,35 +134,24 @@ A slower step may be accepted if it enables the required batch or removes OOM ri
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/31_training_capstone/logs/capture-%J-%t.out" \
-  --error="results/31_training_capstone/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/31_training_capstone/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/31_training_capstone.py --profile small --variant-order baseline-first
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/31_training_capstone/logs/%j.out" \
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/31_training_capstone.nsys.sbatch --workload small --variant-order baseline-first
 ```
+
+The native Systems command is in `slurm/31_training_capstone.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/31_training_capstone/logs/capture-%J-%t.out" \
-  --error="results/31_training_capstone/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/31_training_capstone/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/31_training_capstone.py --profile small --variant-order baseline-first
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/31_training_capstone/logs/%j.out" \
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/31_training_capstone.ncu.sbatch --workload small --variant-order baseline-first
 ```
+
+The native Compute command is in `slurm/31_training_capstone.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

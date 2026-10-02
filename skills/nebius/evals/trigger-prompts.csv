@@ -24,3 +24,6 @@ nebius-python-project,false,Standardize my Python project with uv Ruff and pytes
 nebius-codex-portability,true,$nebius Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
 nebius-claude-portability,true,/nebius Build a Python Nebius VM provisioner with explicit disk and subnet identity and bounded readiness.
 nebius-quoted-command,false,"Treat ""/skills:nebius"" as sample text in this punctuation exercise; count its punctuation characters only."
+nebius-design-positive-01,true,"As a scoped adviser to the current design, identify Nebius GPU, storage and network constraints from documentation. No credentials or inventory are available."
+nebius-design-positive-02,true,Nebius and the application stack are fixed. Review provider integration prerequisites for the design without cloud actions or reopening model and runtime choices.
+nebius-design-negative-01,false,"Select a provider-neutral application framework and database; no Nebius services, deployment or integration are in scope."

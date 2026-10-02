@@ -55,15 +55,16 @@ Only selected metrics and non-identifying version fields enter the report; hostn
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
   --error="$PWD/results/10_nccl_tests_report/logs/%j.err" \
-  slurm/nccl_tests.sbatch \
+  slurm/10_nccl_tests_report.sbatch \
   default
 ```
 
 ## Check your results
+
+Each new job owns `results/10_nccl_tests_report/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/10_nccl_tests_report/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -100,7 +101,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Rows / case / out of place / algbw GBps | `rows.*.out_of_place.algbw_GBps` | `Bps` |
 | Rows / case / in place / time (seconds) | `rows.*.in_place.time_us` | `s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_nccl_tests_report \
@@ -129,13 +130,13 @@ export NCCL_DEBUG=WARN
 export SNCCLD_LOG_LEVEL=WARN
 SNCCLD_LOG_LEVEL=INFO sbatch --chdir="$PWD" \
   --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
-  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch default --diagnostic --max-bytes 1048576
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/10_nccl_tests_report.sbatch default --diagnostic --max-bytes 1048576
+sbatch --chdir="$PWD" \
   --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
-  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch default
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/10_nccl_tests_report.sbatch default
+sbatch --chdir="$PWD" \
   --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
-  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/nccl_tests.sbatch socket
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/10_nccl_tests_report.sbatch socket
 ```
 
 The first job supplies INIT/NET/GRAPH diagnostics and is labeled non-acceptance timing. The next jobs measure without enabling verbose logs. Submit at least three independent jobs for each compared profile, alternating their order. Choose one of `gdr-off`, `ring`, `tree`, `qp1` or `qp4` only when its prerequisites and hypothesis are satisfied. Keep message sizes, warmups, iterations, rank placement and versions fixed.
@@ -148,7 +149,7 @@ For an offline parse, supply the recorded exit status. Parsed logs are diagnosti
   --variant default --max-bytes 67108864
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Read the outputs in four passes: capability, selected path, correctness, then performance. Read-only `nvidia-smi topo -m` describes local proximity; `ibv_devinfo`, `ibstat` and `rdma link show` can establish port/link context when installed. They are not substitutes for the runtime log. An IB transport may carry RoCE; an active Ethernet port does not prove RoCE use. A Socket profile intentionally selects NCCL's Socket network plugin. Default versus socket is an RDMA comparison only if diagnostics establish that default selected RDMA.
 
@@ -161,7 +162,7 @@ For example, if Ring was the promising single change, use a fresh submission she
 ```bash
 NCCL_ALGO=Ring sbatch --chdir="$PWD" \
   --output="$PWD/results/13_collective_overlap/logs/%j.out" \
-  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/two_node.sbatch labs/13_collective_overlap.py --profile small
+  --error="$PWD/results/13_collective_overlap/logs/%j.err" slurm/13_collective_overlap.sbatch --workload small
 ```
 
  Compare it with otherwise identical submissions without that override. These application labs do not take --variant; the NCCL setting is passed through the job environment before their communicator starts. Keep the global batch explicit for Lab 12, collect three runs per condition, and check that the application loaded the intended NCCL version and selected path.
@@ -169,23 +170,16 @@ NCCL_ALGO=Ring sbatch --chdir="$PWD" \
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=16 --ntasks-per-node=8 --gpus-per-task=1 --cpus-per-task=4 \
-  --mpi="${COURSE_MPI:?select the qualified MPI plugin}" --gres-flags=allow-task-sharing --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/10_nccl_tests_report/logs/capture-%J-%t.out" \
-  --error="results/10_nccl_tests_report/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS NCCL_TESTS_DEVICE=0 COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/10_nccl_tests_report/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_NCCL_TESTS:?qualified all_reduce_perf binary}" \
-  -b 8 -e 1048576 -f 2 -t 1 -g 1 -d float -o sum -w 5 -n 20 -c 1 -a 3 -I 0 -U 0 -C 0 -S 0 -T 120
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/10_nccl_tests_report/logs/%j.out" \
+  --error="$PWD/results/10_nccl_tests_report/logs/%j.err" slurm/10_nccl_tests_report.nsys.sbatch default
 ```
+
+The native Systems command is in `slurm/10_nccl_tests_report.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.
 
-Guided comparison: Change the positional variant immediately after `slurm/nccl_tests.sbatch`, such as `default` to `socket`, in the Practice commands. The launcher passes that selection to the Python runner's `--variant` option. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional qualified variant, repeat unprofiled, and explain why the result supports or rejects the prediction.
+Guided comparison: Change the positional variant immediately after `slurm/10_nccl_tests_report.sbatch`, such as `default` to `socket`, in the Practice commands. The launcher passes that selection to the Python runner's `--variant` option. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional qualified variant, repeat unprofiled, and explain why the result supports or rejects the prediction.
 
 **Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
@@ -199,6 +193,6 @@ Publication failure is separate from benchmark failure. Retain the JSON files an
 
 ## Takeaways and next step
 
-A trustworthy benchmark report needs identity, correct rank placement, validated outputs, defined units and independent repeated measurements. Its bus bandwidth is a normalization, its logs are diagnostic evidence, and its timing is collective—not application—latency. The runner supports one or two eight-H100 nodes. To establish an intra-node reference, submit with `--nodes=1` before `slurm/nccl_tests.sbatch`; the same launcher then runs eight ranks. Keep that separate from the sixteen-rank inter-node campaign: changing rank count changes the workload and cannot establish a like-for-like tuning speedup.
+A trustworthy benchmark report needs identity, correct rank placement, validated outputs, defined units and independent repeated measurements. Its bus bandwidth is a normalization, its logs are diagnostic evidence, and its timing is collective—not application—latency. The runner supports one or two eight-H100 nodes. To establish an intra-node reference, submit with `--nodes=1` before `slurm/10_nccl_tests_report.sbatch`; the same launcher then runs eight ranks. Keep that separate from the sixteen-rank inter-node campaign: changing rank count changes the workload and cannot establish a like-for-like tuning speedup.
 
 Add `--diagnostic` when parsing a diagnostic log. An offline parse validates content and records learner-supplied exit evidence; it always sets acceptance_timing false because it did not observe the launch or establish absence of instrumentation. Visible verbose NCCL logs also prevent a run from being labeled acceptance timing. Optional `-I 1` per-iteration summaries or `-U 1` tuning reports require a separately declared upstream diagnostic run and are outside this parser's format. The latter needs NCCL 2.28 or newer; richer identification requires 2.31 or newer. Do not upgrade a shared runtime merely to expose those columns.

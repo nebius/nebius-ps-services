@@ -6,6 +6,21 @@ project folder.
 
 ## [Unreleased]
 
+- Audit all eight course publications: reject silently overwritten lesson fields,
+  preserve fenced examples, strengthen passive-resource checks for reading
+  courses, and align build/navigation documentation with the current catalog.
+
+- Align native course execution: remove an unsupported distributed capture flag,
+  retain semantic workload metadata, mark internal PyTorch profiling as diagnostic,
+  stream historical report copies and clarify collection's exact-job scope.
+- Replace GPU course execution/profiling wrappers with explicit per-lab native
+  Slurm jobs and NVIDIA commands. Rename workload size to `--workload`, isolate
+  new outputs by job ID, preserve existing evidence and add verified copy-only
+  historical organization. Align run-labs recipes, recovery and exact-job collection.
+- Add the five-lesson GPU Performance Tools reference course after Fundamentals,
+  centralizing Slurm/Nsight flags, NVTX, PyTorch profiler and Grafana/VictoriaMetrics
+  explanations without adding practical labs.
+
 - Display course publication sizes and limits in decimal MB, retaining exact-byte
   enforcement and showing precise overflow amounts. Highlight build/check
   failures, including exceeded file, site and archive limits, in red on terminals;

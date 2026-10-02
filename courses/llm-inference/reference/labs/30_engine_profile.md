@@ -48,12 +48,12 @@ The OpenAI launcher starts the prepared vLLM image with the selected cached mode
 
 Given prefill capacity of 200,000 prompt tokens/s, suppose arrivals require 250,000 prompt tokens/s. Decode has enough capacity for the corresponding output workload, but the prefill queue grows; adding decode workers cannot remove that bottleneck. Change the allocation to increase prefill capacity while accounting for KV handoff cost within the TTFT budget. Expected observation: the backlog can drain only if sustained prefill capacity exceeds the offered load and handoff, routing and decode can keep up.
 
-After qualifying both images and the container runner, inspect `bash slurm/aiperf.sbatch --help` and submit the optional campaign with:
+After qualifying both images and the container runner, inspect `bash slurm/15_streaming_client.aiperf.sbatch --help` and submit the optional campaign with:
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/15_streaming_client/logs/%j.out" \
-  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/aiperf.sbatch
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/15_streaming_client.aiperf.sbatch
 ```
 
  That Lab 15 campaign owns its server, workload, profiler reports and cleanup independently of this readiness probe. The disaggregation calculation is a paper exercise: the supplied Dynamo preflight checks GPU visibility only; it does not start phase workers or validate KV transfer.
@@ -65,15 +65,16 @@ sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/30_engine_profile/logs/%j.out" \
   --error="$PWD/results/30_engine_profile/logs/%j.err" \
-  slurm/openai_engine.sbatch \
+  slurm/30_engine_profile.sbatch \
   Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
 ```
 
 ## Check your results
+
+Each new job owns `results/30_engine_profile/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/30_engine_profile/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -113,7 +114,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Elapsed (seconds) | `elapsed_ms` | `s` |
 | Model count | `model_count` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 30_engine_profile \
@@ -131,17 +132,17 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 The two routes below start their respective prepared servers after the required environment variables are set. Wait for one allocation to finish before submitting the other. Both profiles use the same bounded qualification request.
 
 ```bash
-bash slurm/openai_engine.sbatch --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+bash slurm/30_engine_profile.sbatch --help
+sbatch --chdir="$PWD" \
   --output="$PWD/results/30_engine_profile/logs/%j.out" \
-  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
-bash slurm/trtllm_triton.sbatch --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/30_engine_profile.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775
+bash slurm/30_engine_profile.trtllm.sbatch --help
+sbatch --chdir="$PWD" \
   --output="$PWD/results/30_engine_profile/logs/%j.out" \
-  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/trtllm_triton.sbatch
+  --error="$PWD/results/30_engine_profile/logs/%j.err" slurm/30_engine_profile.trtllm.sbatch
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which component owns model conversion, repository layout, server readiness, and client measurement? Why can a healthy server reject a request with the wrong token-budget field? Keep these boundaries separate in your diagnosis.
 

@@ -78,11 +78,11 @@ def run_experiment(
         raise SystemExit("This bounded mechanics lab requires exactly two ranks.")
     device = f"cuda:{local_rank}"
     seed_everything(torch, args.seed)
-    width = 2_048 if args.profile == "small" else 8_192
+    width = 2_048 if args.workload == "small" else 8_192
     batch = (
         args.batch_size
         if args.batch_size is not None
-        else (32 if args.profile == "small" else 128)
+        else (32 if args.workload == "small" else 128)
     )
     inputs = torch.empty((batch, width), device=device, dtype=torch.bfloat16)
     weight = torch.empty((width, width), device=device, dtype=torch.bfloat16)

@@ -10,7 +10,7 @@ Each native submission block prepares private log directories before calling `sb
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Runtime preparation
 
@@ -113,7 +113,7 @@ it is never acceptance evidence. Required acceptance includes CUTLASS
 compilation and CTest; profiler and timing evidence remain separate.
 
 The simple lab executables accept no arguments for the full profile, or
-`--profile small` for the small profile. Run `--help` or `-h` alone for usage. Unknown
+`--workload small` for the small profile. Run `--help` or `-h` alone for usage. Unknown
 or extra arguments are rejected before CUDA activation, so a misspelled small
 flag cannot silently launch the full workload. Labs 08 and 12 additionally
 validate their documented work-count and variant-order options. The shared
@@ -129,7 +129,7 @@ The sanitizer launcher takes an explicit allow-listed tool, for example
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose"
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sanitizer.sbatch racecheck
 ```
 
 Use `memcheck`,

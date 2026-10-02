@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from native_job_fixtures import prepare_job, local_commands
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,11 +62,13 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             break
     else:
         pytest.fail("No local port available for engine fixture")
+    prepare_job(course, "llm-inference", "30_engine_profile")
+    commands = local_commands(course)
     env = {
-        "PATH": os.defpath,
+        "PATH": commands["PATH"],
         "SLURM_JOB_ID": str(port - 20000),
         "COURSE_RUN_ID": "123456789abc",
-        "COURSE_WORKLOAD_PROFILE": "large",
+        "COURSE_WORKLOAD": "large",
         "COURSE_PYTHON": sys.executable,
         "COURSE_CONTAINER_RUNNER": str(runner),
         "VLLM_IMAGE_DIGEST": "docker://example.invalid/vllm@sha256:" + "a" * 64,
@@ -75,7 +78,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     result = subprocess.run(
         [
             "bash",
-            str(ROOT / "llm-inference/slurm/openai_engine.sbatch"),
+            str(ROOT / "llm-inference/slurm/30_engine_profile.sbatch"),
             "test/model",
             "b" * 40,
         ],
@@ -90,7 +93,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     assert argv[argv.index("--host") + 1] == "127.0.0.1"
     for flag in ["--revision", "--tokenizer-revision"]:
         assert argv[argv.index(flag) + 1] == "b" * 40
-    outputs = list((course / "results").glob("*.json"))
+    outputs = list((course / "results").rglob("*.json"))
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before becoming ready" in result.stderr
@@ -126,8 +129,8 @@ def test_engine_recipe_uses_owned_launcher():
     assert set(variants) == {"openai", "openai-repeat", "triton", "triton-repeat"}
     assert variants["openai"] == variants["openai-repeat"]
     assert variants["triton"] == variants["triton-repeat"]
-    assert variants["openai"][4] == "slurm/openai_engine.sbatch"
-    assert variants["triton"][4] == "slurm/trtllm_triton.sbatch"
+    assert variants["openai"][1] == "slurm/30_engine_profile.sbatch"
+    assert variants["triton"][1] == "slurm/30_engine_profile.trtllm.sbatch"
     assert recipe["comparisons"] == [["openai", "openai-repeat"], ["triton", "triton-repeat"]]
 
 
@@ -139,6 +142,8 @@ def test_triton_launcher_initializes_mpi_and_owns_server(mode, tmp_path):
     repository = tmp_path / "model repository" / "tensorrt_llm"
     repository.mkdir(parents=True)
     (repository / "config.pbtxt").write_text('name: "tensorrt_llm"\n')
+    prepare_job(course, "llm-inference", "30_engine_profile")
+    commands = local_commands(course)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     srun = bin_dir / "srun"
@@ -193,13 +198,13 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     else:
         pytest.fail("No local port available for Triton fixture")
     result = subprocess.run(
-        ["bash", str(ROOT / "llm-inference/slurm/trtllm_triton.sbatch")],
+        ["bash", str(ROOT / "llm-inference/slurm/30_engine_profile.trtllm.sbatch")],
         cwd=course,
         env={
-            "PATH": str(bin_dir) + os.pathsep + os.defpath,
+            "PATH": str(bin_dir) + os.pathsep + commands["PATH"],
             "SLURM_JOB_ID": str(port - 20000),
             "COURSE_RUN_ID": "123456789abc",
-            "COURSE_WORKLOAD_PROFILE": "large",
+            "COURSE_WORKLOAD": "large",
             "COURSE_PYTHON": sys.executable,
             "COURSE_CONTAINER_RUNNER": str(runner),
             "TRTLLM_IMAGE_DIGEST": "docker://example.invalid/triton@sha256:" + "a" * 64,
@@ -220,9 +225,9 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     assert "--model-repository=" + str(repository.parent) in argv
     for service in ["http", "grpc", "metrics"]:
         assert "--" + service + "-address=127.0.0.1" in argv
-    log = course / "results/30_engine_profile/logs/trtllm-triton-run-123456789abc.log"
+    log = course / f"results/30_engine_profile/jobs/{port - 20000}/logs/trtllm-triton-run-123456789abc.log"
     assert "fixture MPI startup" in log.read_text()
-    outputs = list((course / "results").glob("*.json"))
+    outputs = list((course / "results").rglob("*.json"))
     if mode == "startup-failure":
         assert result.returncode != 0
         assert "exited before readiness" in result.stderr
@@ -246,9 +251,11 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 
 def test_openai_launcher_rejects_occupied_port_before_startup(tmp_path):
+    commands = local_commands(tmp_path)
     (tmp_path / "labs").symlink_to(
         ROOT / "llm-inference/labs", target_is_directory=True
     )
+    prepare_job(tmp_path, "llm-inference", "30_engine_profile")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -266,10 +273,10 @@ def test_openai_launcher_rejects_occupied_port_before_startup(tmp_path):
                 pytest.fail("No fixture port available")
         try:
             result = subprocess.run(
-                ["bash", str(ROOT / "llm-inference/slurm/openai_engine.sbatch")],
+                ["bash", str(ROOT / "llm-inference/slurm/30_engine_profile.sbatch")],
                 cwd=tmp_path,
                 env={
-                    "PATH": os.defpath,
+                    "PATH": commands["PATH"],
                     "SLURM_JOB_ID": str(port - 20000),
                     "COURSE_PYTHON": sys.executable,
                     "COURSE_RUN_ID": "123456789abc",

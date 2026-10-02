@@ -81,7 +81,7 @@ def main() -> None:
             "Engine environment compatible with the pinned PyTorch/CUDA stack."
         ) from exc
 
-    rows, hidden = (1_024, 1_024) if args.profile == "small" else (4_096, 4_096)
+    rows, hidden = (1_024, 1_024) if args.workload == "small" else (4_096, 4_096)
     layer = te.Linear(
         hidden,
         hidden,

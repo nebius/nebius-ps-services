@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COURSES = (
     "soperator",
     "gpu-fundamentals",
+    "gpu-performance-tools",
     "gpu-optimizations",
     "llm-training",
     "llm-inference",
@@ -29,7 +30,7 @@ CATALOG_GROUPS = (
         "GPU foundations",
         "Take these in order",
         "foundations",
-        ("gpu-fundamentals", "gpu-optimizations"),
+        ("gpu-fundamentals", "gpu-performance-tools", "gpu-optimizations"),
     ),
     (
         "Specializations",
@@ -69,6 +70,12 @@ LICENSE_PATH = ROOT.parent / "LICENSE"
 
 
 CATALOG_COPY = {
+    "gpu-performance-tools": (
+        "Understand the evidence",
+        "A concise reference for native Slurm jobs, NVIDIA Nsight, PyTorch profiler and Grafana metrics.",
+        ("Read profiler commands and flags", "Distinguish timelines, counters and operator summaries", "Follow metrics from collection to dashboard queries"),
+        ("Nsight", "PyTorch", "Reference · No labs"),
+    ),
     "lab-guide": (
         "Prepare once, then run the labs",
         "Set up the shared lab environment, run course experiments, and inspect measurements and profiles in Grafana and NVIDIA Nsight.",

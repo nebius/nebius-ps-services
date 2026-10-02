@@ -6,7 +6,7 @@ The website introduces six courses, an Advanced Labs collection, and one shared
 Lab Guide, with a suggested reading order and direct links to every resource.
 
 Start with [Soperator](soperator/index.html), use the [Lab Guide](lab-guide.html)
-to prepare for practice, then study [GPU Fundamentals](gpu-fundamentals/index.html)
+to prepare for practice, then study [GPU Fundamentals](gpu-fundamentals/index.html) → [GPU Performance Tools](gpu-performance-tools/index.html)
 and [GPU Performance Optimization](gpu-optimizations/index.html). Continue with
 [LLM Training](llm-training/index.html), [LLM Inference](llm-inference/index.html),
 or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
@@ -249,7 +249,7 @@ not compile an extension or prove profiler, container or fabric readiness.
 cd "$HOME/courses/gpu-fundamentals"
 source "$HOME/courses/.runtime/gpu-fundamentals.sh"
 srun --nodes=1 --ntasks=1 --gres=gpu:1 \
-  "$COURSE_PYTHON" labs/10_compatibility_stack.py --profile small
+  "$COURSE_PYTHON" labs/10_compatibility_stack.py --workload small
 ```
 
 A successful operation and passing correctness fields establish basic GPU execution
@@ -278,9 +278,9 @@ the selected runtime. The baseline explicitly disables external capture, includi
 any profiling settings left in the login environment.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
-  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/01_cpu_gpu_crossover.sbatch --workload small
 ```
 
 Submission means accepted, not completed. Record the printed job number, check
@@ -300,6 +300,23 @@ Continue only after `COMPLETED` with exit code `0:0`. Check `lab_id`,
 `experiment.slurm_job_id`, `correctness`, profile and instrumentation fields.
 Reading JSON does not validate it. Multi-result launchers print several originals
 and aggregates; retain all records required by that lab.
+
+### Keep existing results
+
+New jobs write to `results/LAB/jobs/JOB_ID/`, with scheduler logs under
+`results/LAB/logs/`. Existing results, reports, screenshots and published bundles
+remain unchanged. To organize attributable older runtime files, run this from
+the course directory:
+
+```bash
+python3 tools/course_setup.py organize-history --course-root "$PWD"
+```
+
+It creates verified copies under `results/history/`, leaves every original in
+place, reports files whose lab/job cannot be established, and refuses conflicting
+copies. History is never selected as evidence of a fresh run.
+Reports are copied and hashed in chunks. JSON metadata inspection is limited to
+8 MiB; larger files need filename-based attribution or remain unresolved.
 
 ### Publish a measured comparison
 

@@ -300,7 +300,7 @@ def test_capstone_rejects_invalid_shared_contract(
 )
 def test_cuda_capstone_validates_each_trial(case, tmp_path):
     source = (
-        ROOT / "custom-cuda-kernels/slurm/capstone_three_trials.sbatch"
+        ROOT / "custom-cuda-kernels/slurm/12_capstone.trials.sbatch"
     ).read_text()
     program = source.split('-v executable_sha256="${executable_sha256}" \'', 1)[
         1
@@ -363,9 +363,9 @@ def test_cuda_capstone_validates_each_trial(case, tmp_path):
 @pytest.mark.parametrize(
     "launcher,model,revision",
     (
-        ("aiperf.sbatch", "model", "revision"),
-        ("vllm_chunked_prefill_ab.sbatch", "model", "revision"),
-        ("vllm_speculative_ab.sbatch", "target_model", "target_revision"),
+        ("15_streaming_client.aiperf.sbatch", "model", "revision"),
+        ("34_policy_equivalence_client.sbatch", "model", "revision"),
+        ("33_speculative_engine_client.sbatch", "target_model", "target_revision"),
     ),
 )
 def test_aiperf_uses_server_tokenizer_revision(launcher, model, revision):

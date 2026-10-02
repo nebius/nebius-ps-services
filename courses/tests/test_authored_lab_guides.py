@@ -1,6 +1,11 @@
 """Lab titles, teaching narrative, execution guidance and lesson links agree."""
 
-from course_builder import config as cb_config, content as cb_content, markdown as cb_markdown, metadata as cb_metadata
+from course_builder import (
+    config as cb_config,
+    content as cb_content,
+    markdown as cb_markdown,
+    metadata as cb_metadata,
+)
 import ast
 import html
 import importlib.util
@@ -64,7 +69,8 @@ def test_lab_narrative_and_identity_survive_rendering(course):
     )
     references = {
         name: "#" + cb_content.guide_id(name)
-        for name in cb_config.COMMON_GUIDES + cb_config.SUPPORTING_GUIDES.get(course, ())
+        for name in cb_config.COMMON_GUIDES
+        + cb_config.SUPPORTING_GUIDES.get(course, ())
     }
     references.update(
         {
@@ -116,6 +122,10 @@ def test_lab_narrative_and_identity_survive_rendering(course):
 def fixture_course(tmp_path):
     (tmp_path / "reference/grafana").mkdir(parents=True, exist_ok=True)
     (tmp_path / "reference/grafana/01_example.json").write_text("{}")
+    (tmp_path / "slurm").mkdir()
+    (tmp_path / "slurm/01_example.sbatch").write_text(
+        "#!/bin/bash\nexport COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0\n"
+    )
     (tmp_path / "labs").mkdir()
     (tmp_path / "labs/01_example.py").write_text('"""Example."""\n')
     (tmp_path / "reference/labs").mkdir(parents=True)
@@ -126,7 +136,7 @@ def fixture_course(tmp_path):
     for section in SECTIONS:
         body += f"## {section}\n\n{paragraph}\n\n"
         if section == "Practice":
-            body += "`labs/01_example.py` demonstrates the example operation.\n\n```bash\nsbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 slurm/single_gpu.sbatch labs/01_example.py --help\n```\n\n"
+            body += "`labs/01_example.py` demonstrates the example operation.\n\n```bash\nsbatch slurm/01_example.sbatch --workload small\n```\n\n"
     path = tmp_path / "reference/labs/01_example.md"
     path.write_text(body)
     metadata = {

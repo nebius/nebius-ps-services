@@ -152,5 +152,38 @@ Exercise both profiles, exact diagnostic flags, memory scoping, precedence, inpu
 Verify source and installed parity, then independently inspect the actual allocation and native report contents during execution.
 
 <!-- /REQUIREMENT: REQ-005 -->
+<!-- REQUIREMENT: REQ-006 status=satisfied priority=P1 type=feature -->
+### REQ-006: Native course jobs and exact-job evidence ownership
+
+#### User Story
+
+An operator executes the same readable native Slurm jobs that students inspect, while retaining durable campaign recovery and independently verified evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Run uses --workload small|large|both, defaults to both and freezes COURSE_WORKLOAD. Preserve serialized profile fields and reject the retired workload CLI without aliases.
+- AC-002: Reviewed recipes select explicit course-owned per-lab batch files. Dispatch uses native sbatch with private scheduler directories, parsable job identity and existing write-ahead reconciliation; it does not call Python submission or profiler wrappers.
+- AC-003: Freeze native-jobs/v1 and reject incompatible saved execution plans. Preserve historical inspection and owned cancellation without rewriting old evidence.
+- AC-004: Collect and clean only exact dispatched job directories and their scheduler logs. Validate remote paths before copying, verify hashes, retain failed evidence and never adopt historical or unrelated output.
+- AC-005: Keep dependency ordering, resource constraints, distributed/server evidence cardinality, independent verification, publication/browser gates and source/installed parity.
+
+#### Negative Criteria
+
+- NC-001: No whole-results-tree deletion, compatibility execution branch, automatic reuse of historical captures or loss of recovery safeguards.
+
+#### Validation Method
+
+Inspect recipe ownership, dispatch identity, saved-plan admission, private paths and canonical/installed parity.
+
+#### Test Method
+
+Use native scheduler/profiler doubles and campaign regression tests for argv boundaries, workload expansion, dispatch recovery, report counts, pre-copy admission and exact completed-job cleanup.
+
+#### Evaluation Method
+
+Keep source and local fixture evidence distinct from live target qualification and browser-reviewed publication.
+
+<!-- /REQUIREMENT: REQ-006 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

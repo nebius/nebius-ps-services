@@ -19,15 +19,15 @@ The coordinator starts one owned ib_read_lat endpoint on each worker. The client
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
   --error="$PWD/results/27_rdma_latency/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
+  slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
 ```
 
 ## Check your results
+
+Each new job owns `results/27_rdma_latency/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/27_rdma_latency/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -68,12 +68,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
-  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
-  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
 ```
 
 Logs stay under `results/27_rdma_latency/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.

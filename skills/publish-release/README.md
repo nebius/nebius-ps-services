@@ -1,66 +1,103 @@
 # Publish Release
 
-`publish-release` publishes application/package artifacts to GitHub Releases
-end to end from the current project folder. It can still set up release assets,
-but its primary job is to execute a release and return a completion report.
+Publish a GitHub Release with one invocation. The skill commits current work,
+pushes and merges its PR through repository protections, tags the verified merged
+commit, and verifies the resulting release and assets.
 
-## What It Does
+## Quick start
 
-- Collects or derives project, package, tag, branch, and workflow inputs.
-- Reuses a clean current feature branch for release prep, or creates and pushes
-  `release/<tag>` when prep starts from the clean synced default branch.
-- Uses `create-pr` and `merge-pr` for the release-prep PR path.
-- Tags only from a clean synced default branch.
-- Creates the annotated tag locally, verifies the package runtime version
-  against it when configured, and pushes only after the version matches.
-- Waits for the tag-triggered GitHub Release workflow when requested.
-- Verifies the GitHub Release and expected assets.
-
-## Architecture
+Run from the application project with Git/GitHub CLI authentication and the
+installed `create-pr`, `commit`, `merge-pr` and Worktree guard owners available:
 
 ```text
-Application project
-  |
-  +--> setup assets when missing or requested
-  +--> skill-owned publish-release-doer.sh
-  +--> create-pr -> merge-pr
-  `--> tag-triggered release workflow
-        |
-        v
-GitHub Release with assets
+$publish-release --tag 1.2.3
 ```
 
-## Workflow
+Or invoke `$publish-release` and answer the version question when no unambiguous
+prepared version exists. Complete publication and waiting are the defaults.
+The invocation includes all reviewed and validated current repository changes,
+including sibling project changes, through repository-root staging.
 
-1. Resolve release inputs and normalize the release tag.
-2. Run setup mode only when requested or required assets are missing.
-3. Prep on the clean current feature branch, or create `release/<tag>` from the
-   clean synced default branch.
-4. Create and merge the release-prep PR in complete mode.
-5. Publish the tag from the default branch.
-6. Wait for the workflow and verify the GitHub Release assets.
-7. Return the final report.
+The skill reuses your feature branch. Starting on the default branch creates a
+release branch before committing. It creates missing release setup assets when
+needed. GitHub Actions builds and uploads artifacts from the tagged commit.
 
-## Core Concepts
+## Approval and resume
 
-- Doer mode does not depend on a project-local `publish-release.sh`, but the
-  setup template is a maintained runnable helper and should keep the same
-  `--mode prep|publish|verify` contract as the skill-owned doer.
-- The default branch is the release source of truth for tagging. Prep may reuse
-  a clean feature branch that contains current default-branch history; it must
-  never create a nested release branch from that feature branch.
-- Prep from the default branch creates `release/<tag>` before changing the
-  changelog, so release changes still reach the default branch through a PR.
-- Package import name and asset glob are inputs, not hardcoded skill knowledge.
-- A runtime mismatch removes the exact unpushed local tag; an ambiguous push
-  failure retains the local tag for identity inspection before retry.
-- Secret values stay in GitHub secrets or local auth state, not in skill
-  sources.
-- Human-required approvals and failing checks are blockers.
+When GitHub requires approval, the skill shows the PR or workflow link and waits
+up to 10 minutes, checking every 15 seconds. An eligible reviewer must approve on
+GitHub. The same invocation then refreshes readiness and continues automatically.
+Partial environment approvals do not restart the timer. Repository protections
+remain effective.
+
+After timeout or interruption:
+
+```text
+$publish-release --resume
+$publish-release --resume --tag 1.2.3
+```
+
+A tag disambiguates multiple unfinished releases. Resume verifies GitHub state,
+keeps completed work, and starts a fresh waiting attempt. It works across agent
+sessions without replaying old commit grants. Timeouts leave the PR/workflow
+intact; no local background publisher is left running.
+
+Checks, merge queue and release execution have separate one-hour wait limits.
+Failures, conflicting identities and missing assets produce precise blockers.
+A queued PR, pushed tag or draft release is not a completed publication.
+
+## Workflow and ownership
+
+```text
+publish-release
+  -> prepare release content
+  -> create-pr: review, validate, commit all work, synchronize, push, PR
+  -> wait for checks / eligible approval
+  -> merge-pr: protected merge, resulting commit and CI verification
+  -> isolated clone: annotated tag, runtime check, record exact object, push
+  -> tag workflow: build and publish assets
+  -> download / version / digest verification -> Published + release URL
+```
+
+The release uses the exact verified merge result, even if the default branch
+advances afterward. An isolated clone leaves your working checkout and local tag
+namespace intact. A private checkpoint stores progress and exact tag metadata;
+it supplies no commit, merge or approval authority.
+
+## Configuration and partial operations
+
+Use `--project-dir`, `--tag-prefix`, package/import/build metadata and the existing
+workflow to identify the target. The default merge method is squash unless the
+repository requires a merge queue. Branches are retained by default.
+
+`--mode setup` prepares reusable assets; `--mode prep` ends at the pushed PR;
+`--mode publish` continues an existing merged release. `--no-wait` returns a
+pending checkpoint when work remains. See `SKILL.md` for the complete public
+interface and [orchestration](references/orchestration.md) for private calls.
+
+The runnable shell template now exposes content preparation, local tag creation,
+exact-object push and wheel verification. It does not commit or publish branches;
+those effects belong to the skill's canonical create-pr transaction. Existing
+project copies require explicit regeneration to adopt this contract.
+
+## Validation
+
+```bash
+python3 -B -m unittest discover -s publish-release/scripts -p 'test*.py'
+bash -n publish-release/scripts/publish-release-doer.sh
+shellcheck publish-release/scripts/publish-release-doer.sh
+```
+
+Run from the skills catalog directory. Tests use disposable local Git remotes,
+fake GitHub responses and a virtual clock. They do not publish a real release.
+Native invocation and live publication evidence must be verified separately.
 
 ## Files
 
-- `SKILL.md`: Runtime workflow, inputs, guardrails, and output contract.
-- `scripts/publish-release-doer.sh`: Local prep/publish/verify primitives.
-- `assets/`: Optional setup templates for changelog, helper, and workflow.
-- `agents/openai.yaml`: UI metadata.
+- `SKILL.md`: public workflow, authority, waiting and completion contract.
+- `references/orchestration.md`: owner handoffs, exact helper calls and recovery.
+- `scripts/release_session.py`: GitHub observation, deadlines and release recovery.
+- `scripts/release_checkpoint.py`: private atomic checkpoints and locking.
+- `scripts/publish-release-doer.sh`: deterministic release primitives.
+- `assets/`: changelog, aligned runnable helper and release-workflow templates.
+- `scripts/test*.py`, `evals/`: executable and agent-evaluation coverage.

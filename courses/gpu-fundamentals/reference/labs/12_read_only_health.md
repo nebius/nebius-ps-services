@@ -25,15 +25,15 @@ Run Lab 12 in read-only mode, classify only what its MIG and compute-mode fields
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/12_read_only_health/logs/%j.out" \
   --error="$PWD/results/12_read_only_health/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/12_read_only_health.py --profile small
+  slurm/12_read_only_health.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/12_read_only_health/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/12_read_only_health/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -67,7 +67,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | --- | --- | --- |
 | Correctness of selected results | `correctness` | Boolean pass |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 12_read_only_health \
@@ -86,12 +86,12 @@ Collect the snapshot before or after a benchmark as contextual evidence. This co
 
 ```bash
 "$COURSE_PYTHON" labs/12_read_only_health.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/12_read_only_health/logs/%j.out" \
-  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
+  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/12_read_only_health.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Define ECC as error detection/correction, Xid as a driver-reported event class, and retired pages as memory removed from service. Ask whether a concerning observation persists across authorized readings and whether it aligns with the benchmark's time interval.
 

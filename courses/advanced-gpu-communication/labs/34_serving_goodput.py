@@ -374,7 +374,7 @@ def main():
     tokenizer_args, client_environment = aiperf_tokenizer_config(args.model_dir)
     folder = private_folder(args, "34_serving_goodput")
     output = folder / "aiperf"
-    output_tokens = 32 if args.profile == "small" else 128
+    output_tokens = 32 if args.workload == "small" else 128
     with service(args, folder) as (url, processes):
         command = [
             binary,
@@ -395,7 +395,7 @@ def main():
             "--dataset-sampling-strategy",
             "sequential",
             "--synthetic-input-tokens-mean",
-            "256" if args.profile == "small" else "2048",
+            "256" if args.workload == "small" else "2048",
             "--synthetic-input-tokens-stddev",
             "0",
             "--output-tokens-mean",

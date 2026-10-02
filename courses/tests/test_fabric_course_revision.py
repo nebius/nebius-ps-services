@@ -17,49 +17,8 @@ def project(tmp_path):
     return tmp_path
 
 
-def test_submission_creates_private_logs_before_scheduler_runs(tmp_path):
-    root = project(tmp_path)
-    command = load("submit_lab").submission(
-        root,
-        "01_example",
-        [
-            "--export=ALL,COURSE_PROFILE_TOOL=nsys",
-            "slurm/single_gpu.sbatch",
-            "labs/01_example.py",
-            "--label",
-            "space; literal",
-        ],
-    )
-    logs = root / "results/01_example/logs"
-    assert logs.is_dir() and logs.stat().st_mode & 0o777 == 0o700
-    assert command[1:4] == [
-        f"--chdir={root}",
-        f"--output={logs}/%j.out",
-        f"--error={logs}/%j.err",
-    ]
-    assert command[-1] == "space; literal"
-    assert command[-4] == str(root / "slurm/single_gpu.sbatch")
 
 
-@pytest.mark.parametrize(
-    "defect", ["identity", "log-override", "source", "symlink", "public"]
-)
-def test_unsafe_submission_fails_before_sbatch(tmp_path, defect):
-    root = project(tmp_path)
-    lab, argv = "01_example", ["slurm/single_gpu.sbatch", "labs/01_example.py"]
-    if defect == "identity":
-        lab = "../../elsewhere"
-    elif defect == "log-override":
-        argv.insert(0, "--output=/tmp/elsewhere")
-    elif defect == "source":
-        argv[-1] = "labs/02_other.py"
-    elif defect == "symlink":
-        (root / "results").symlink_to(root / "reference", target_is_directory=True)
-    else:
-        (root / "results").mkdir()
-        (root / "results").chmod(0o755)
-    with pytest.raises(ValueError):
-        load("submit_lab").submission(root, lab, argv)
 
 
 def hardware():
@@ -249,7 +208,7 @@ def test_all_distributed_recipes_are_in_advanced_route():
         ]
         assert all(recipe["kind"] != "distributed" for recipe in recipes.values())
         assert not (root / "slurm/two_node.sbatch").exists()
-        assert not (root / "slurm/fabric.sbatch").exists()
+        assert not (root / "slurm/01_fabric_topology.sbatch").exists()
     advanced = ROOT / "advanced-gpu-communication"
     metadata = json.loads((advanced / "reference/course.json").read_text())
     recipes = json.loads((advanced / "reference/observability.json").read_text())[
@@ -258,5 +217,5 @@ def test_all_distributed_recipes_are_in_advanced_route():
     assert {Path(row["path"]).stem for row in metadata["labs"]} == set(recipes) - {
         "environment_readiness"
     }
-    source = (advanced / "slurm/fabric.sbatch").read_text()
+    source = (advanced / "slurm/01_fabric_topology.sbatch").read_text()
     assert source.index("export COURSE_RUN_ID") < source.index("--nproc-per-node=8")

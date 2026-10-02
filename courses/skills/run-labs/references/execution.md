@@ -5,6 +5,28 @@ instruction. Continue until status is complete or a real blocker is identified.
 Do not return to the user merely because the next stage requires agent tools.
 The state controller is intentionally separate from native GUI reasoning.
 
+Every execution stage submits the same explicit per-lab `.sbatch` file shown to
+students. Normal jobs run the lab directly; `.nsys.sbatch` and `.ncu.sbatch` place
+the native NVIDIA command at the GPU process. The selected job owns its profiler
+flags and filters. `--workload small|large` selects problem size; it does not enable
+profiling. The skill accepts `--workload both` to schedule both sizes.
+
+Fresh plans use `execution_contract: native-jobs/v1`. Status and cancellation can
+inspect earlier campaigns, but execution refuses an older plan: retain its evidence
+and create a new campaign. Do not translate or replay saved wrapper argv.
+
+Submission prepares private scheduler directories before calling `sbatch` with
+an explicit working directory and log paths. Each fresh job exclusively creates
+`results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`. Requeue is disabled;
+retries require a new job ID. Collection admits only those producing job IDs and
+their exact scheduler logs, verifies checksums, and preserves all required originals.
+After successful publication, cleanup removes only those verified job directories
+and logs. It never deletes a whole results tree or historical evidence.
+
+Existing result JSON fields and metric labels named `profile` remain unchanged;
+they describe workload size in the stored evidence. The old CLI `--profile` and
+`COURSE_WORKLOAD_PROFILE` environment variable are unsupported.
+
 Optimization Lab 15's Compute recipe selects `uniform_tail_probe` in
 `tail_measure`: the first measured grid, excluding input initialization,
 warmup, compilation and validation launches. Keep the other grids and concurrent
@@ -162,8 +184,9 @@ is declared.
 Record `run-labs-verification/v1` with frozen `source_sha256` and `jobs` mapping
 exact job numbers to `{ "passed": true, "checks": [...] }`. Checks must name
 actual independent observations; attach detailed private proof files. Then
-`collect` copies all raw `results/` files from the owned workspace with remote
-SHA256 and size inventory, excluding caches and unrelated course paths.
+`collect` copies only the dispatched jobs' `results/LAB/jobs/JOB_ID/` trees and
+their `results/LAB/logs/JOB_ID.out` and `.err` scheduler logs, with remote SHA256
+and size inventory. Historical files and other jobs remain in the workspace.
 Do not proceed if local and remote bytes differ.
 
 The browser stage is described separately. Export is another `advance`: it
@@ -218,7 +241,7 @@ After a proven tool/environment failure is repaired:
 
    ```text
    python3 <skill>/scripts/run_labs.py run --lab COURSE:LAB \
-     --profile small|large --environment PRIVATE_JSON
+     --workload small|large --environment PRIVATE_JSON
    ```
 
    Replace `small|large` with that one failed profile, not both. Reuse the accepted

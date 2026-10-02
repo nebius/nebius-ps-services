@@ -2937,7 +2937,7 @@ remain separate; no speedup, publication or target-runtime claim is made.
 
 <!-- /FEATURE: FEAT-021 -->
 
-<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=13 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=14 -->
 ### FEAT-022: Branch-published Nebius learning website
 
 #### Requirements Covered
@@ -2949,6 +2949,13 @@ remain separate; no speedup, publication or target-runtime claim is made.
 Seven self-contained course pages, the README-derived shared guide, the catalog and repository welcome page exist. The repository is Apache-2.0 licensed and has no course-specific license. This revision changes local reading navigation without altering Pages settings.
 
 #### Design Details
+
+Current build-audit restoration: retain the eight-course registry and explicit
+FEAT-040 profile exceptions. Reject duplicate or unowned lesson prose before
+rendering, and preserve fenced example syntax. Reading validators reuse the
+canonical CSS resource policy and reject automatic external resources and
+tracking. Keep the existing shell build/check sequence, shared presentation and
+per-file atomic output replacement. No runtime or publication contract changes.
 
 Publication-report presentation revision: Display summary sizes, limits and headroom in decimal MB with two decimals and thousands separators; display overflow excesses with six decimals. Retain the exact byte-valued report fields, configured caps, inventory, failure precedence and before-write enforcement. The Python publication helper owns reusable formatting and its course-template copy stays identical. Keep the course archive assembler independently loadable by the evidence exporter while matching the same MB diagnostic convention. Route caught builder failures through the existing red stderr reporter, including direct build and --check invocations; retain stream-specific TTY detection, TERM=dumb and defined NO_COLOR suppression, style resets and existing exit codes. Bash remains orchestration-only. Update help, maintainer build guidance and the repository changelog; learner README and generated outputs need no changes. Validate sample/zero summaries, one-byte boundaries, file/site/archive errors, terminal and redirected stderr, no-write failures, wrapper behavior and template parity. This presentation revision is implemented and locally verified; the broader website feature retains its existing delivery state. Parsing Python output in Bash or changing limit arithmetic was rejected as unnecessary coupling.
 
@@ -3036,6 +3043,11 @@ The authoring wrapper is complete when executable, documented and independently 
 
 #### Implementation Evidence
 
+Build-audit restoration: implemented fail-fast lesson parsing and fenced-source
+preservation, strengthened both reading validators and aligned the eight-course
+maintainer guidance. Added 26 targeted regression cases. All ten HTML pages and
+six result ZIPs rebuild to their unchanged task-start bytes.
+
 Publication-report presentation revision: implemented decimal-MB formatting in the shared publication helper and byte-identical reusable course-template copy, builder summary and standalone archive error. Exact integer limits and before-write failures are unchanged. Caught builder failures now use the existing red stderr reporter; wrapper help, maintainer guidance and changelog are aligned. No generated content changed.
 
 Introduction cleanup: implemented the standalone Explore the courses link and Browse the courses catalog label with unchanged destinations. Removed the maintainer link, lab-kit/build comments and repeated reading-format paragraph from the canonical README and regenerated guide; removed the unused renderer link mapping and aligned existing tests. Prior evidence below describes completed revisions.
@@ -3066,6 +3078,17 @@ Earlier feature-delivery evidence follows for provenance.
 Implemented the catalog renderer and embedded stylesheet, root welcome page and .nojekyll, course switchers, complete embedded Apache license and attribution, canonical metadata slugs, scoped navigation validation, publication regression tests and authoring documentation.
 
 #### Verification Evidence
+
+Build audit on 2026-10-02: 484 focused tests, all eight native validators,
+HTML/archive and helper parity, scoped lint and independent code/security review
+pass. Thirty isolated headless Chrome 154.0.8037.93 cases pass across all ten
+pages at 1440, 390 and 320 pixels, including keyboard local scrolling and 200%
+root/body text reflow. Visual samples cover every page. See
+`docs/course-build-validation.md` and course publication reviews for artifact
+identities, browser evidence and the installed generic checker incompatibilities.
+All 16 generated hashes and existing evidence are unchanged. This establishes
+the bounded local build/rendering repair; broader website delivery remains
+implemented because no external deployment or live target was verified.
 
 Publication-report presentation revision: 73 focused checks pass (66 publication/wrapper/stale-catalog regressions, one exporter bundle regression and six reusable-template tests). Real pseudo-terminals cover file/site/archive errors in build and --check, independent stdout/stderr redirection, TERM=dumb, empty/nonempty NO_COLOR, style resets and exit status. Sample/zero-headroom summaries, exact caps, one-byte excesses, no-write failures and helper parity pass. Full read-only HTML/ZIP freshness passes, and all 15 generated artifacts retain their task-start hashes. Isolated Python confirms the archive assembler remains independently loadable. Scoped Ruff lint/format, Bash syntax, ShellCheck, configured Markdown lint and whitespace checks pass. Independent code/security review found no blocking issue. This verifies local console behavior only; no live publication occurred.
 
@@ -5284,6 +5307,83 @@ PyTorch 2.13.0 and Prometheus client 0.22.1 rather than the 2.14.0 and 0.23.1
 validation pins; it does not qualify the pinned dependency set or live GPU stack.
 
 <!-- /FEATURE: FEAT-039 -->
+
+<!-- FEATURE: FEAT-040 reqs=REQ-001,REQ-002,REQ-017,REQ-021,REQ-022,REQ-024 status=ready delivery=verified priority=P1 version=3 -->
+### FEAT-040: Explicit native jobs and a shared GPU performance tools course
+
+#### Requirements Covered
+
+- REQ-001: Eight packages and nine reading resources in the revised sequence.
+- REQ-002: Reference-only exception without weakening practical or Soperator contracts.
+- REQ-017: Native profiling with preserved diagnostic and evidence safeguards.
+- REQ-021: Shared native campaign execution and source-owned skill parity.
+- REQ-022: Command-first shared guidance without execution wrappers.
+- REQ-024: Workload naming, evidence preservation and shared tool reference.
+
+#### Context Evidence
+
+At implementation intake, the 110 lab recipes dispatched through submit_lab and many workloads through profile_lab; native learner commands already expose reviewed profiler options. Distributed/vendor and server coordinators also contained execution wrappers. The repository contains published evidence but no local runtime results directories at implementation intake.
+
+#### Design Details
+
+Use explicit lab.sbatch, lab.nsys.sbatch and supported lab.ncu.sbatch files with visible native commands, preserving resource topology and required experiment coordinators. Native sbatch --parsable replaces the submission helper in run-labs under its existing write-ahead intent and reconciliation lifecycle. Rename the workload CLI and environment without aliases; retain serialized profile fields. Fresh job directories are private and exclusive; disable requeue and reject restart attempts. Use a 900-second diagnostic watchdog with 15-second termination grace, isolated reports, exact native report validation and acknowledged server control. CUDA conversion consumes completed raw output, executable identity and timestamps without launching the workload.
+
+Per-job output is `results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`; scheduler logs are prepared before submission. Exact dispatch identity controls collection; history is excluded. A setup organization action verifies copy-only attribution and checksums without modifying originals. Published evidence remains byte-identical.
+
+Add gpu-performance-tools with profile reference-only, five reading lessons, contextual passive diagrams and no labs/exercises. Move duplicated performance-tools primers, link to one flag reference per tool, and show exporter/Pushgateway to VMAgent to VictoriaMetrics plus Grafana datasource queries. Keep Soperator text-only. Lab 08 distinguishes profiler modes and post-warmup NVTX selection. Source-owned run-labs and its installed copy change together. This design supersedes FEAT-039's retention of generic execution/submission wrappers and FEAT-036's embedded per-course primer placement; their historical verification records remain provenance.
+
+#### Selected Option
+
+Readable native per-lab jobs with retained campaign orchestration and one shared tools reference.
+
+#### Alternatives Considered
+
+A generic Python dispatcher hides commands; removing experiment coordinators loses lifecycle guarantees; rewriting old evidence destroys provenance.
+
+#### Implementation Boundaries
+
+Course sources, launchers, helpers, metadata, validators, canonical and installed run-labs, project docs and derived HTML. No live jobs, external publication, dependency upgrades or Git actions.
+
+#### Test-First Success Criteria
+
+- TDD-001: Both workload sizes retain their behavior and old selectors fail clearly.
+- TDD-002: Native execution preserves topology, failure/cleanup controls and exact-job evidence.
+- TDD-003: Every original evidence hash remains unchanged, including archives.
+- TDD-004: Reference course has five lessons and no labs/exercises; all used profiler flags are explained.
+
+#### Validation Plan
+
+Focused functional scheduler/profiler doubles, schema/evidence tests, shell/Python checks, all course validators, helper/installed parity and generated-page checks. Review desktop/mobile pages. Keep live GPU qualification separate.
+
+#### Test Plan
+
+Cover duplicate/restarted jobs, unsafe output paths, timeout/signals, missing reports, server acknowledgement, rank/cardinality, historical collisions and source/installed skill drift.
+
+#### Evaluation Plan
+
+Verify that learner commands and campaigns select the same native jobs, and that captures never replace clean timing evidence.
+
+#### Rollout And Rollback
+
+Inventory evidence before edits, migrate all callers before retiring wrappers, rebuild derived pages without changing archives, and organize only attributed runtime copies. Revert only task-owned source changes if needed.
+
+#### Done Definition
+
+The approved workflow is implemented, locally validated and aligned; original evidence hashes are unchanged and unverified live behavior is explicit.
+
+#### Implementation Evidence
+
+All 110 practical labs now use explicit native batch jobs; 288 batch files include baseline, supported diagnostic/experiment modes and the native tooling preflight. Generic submission, profiling and server-capture wrappers were retired after migrating learner commands and campaign recipes. Workload selectors, private exclusive job outputs, exact-job collection/cleanup and copy-only historical organization are implemented. The five-lesson GPU Performance Tools reference, contextual figures, Lab 08 measurement-region explanation, course navigation, source-owned run-labs and installed payload are aligned. Serialized evidence fields and all existing published paths remain unchanged.
+
+Alignment also removes an unsupported distributed capture argument, preserves semantic workload parameters in serialized evidence, and marks embedded PyTorch profiling accurately. Historical reports are copied and hashed in bounded chunks; JSON attribution reads are limited to 8 MiB and bound to copied-content hashes. Larger unattributed files remain unresolved. Collection instructions and distributed trace paths/process identities match their actual producers.
+
+#### Verification Evidence
+
+Local verification passes 2150 tests, all six practical and two reading course validators, generated HTML parity, shared helper and installed skill parity, Ruff on changed Python, Markdown lint and syntax/ShellCheck on all 288 batch files. Native scheduler/profiler doubles cover workload routing, unsafe paths, output collisions, restarts, report completeness, distributed rank coverage, server control/shutdown/export, failure propagation and scoped cleanup. Historical organization tests verify original preservation, checksums and collision rejection. All 2,872 original evidence files, including six archives, remain byte-identical. The new reference page was inspected at desktop, 390px and 320px mobile widths with five lessons/figures and no horizontal overflow. Bounded source review found no remaining material defect. No live Slurm/GPU/NVIDIA job, monitoring deployment or published evidence replacement was performed; fixture proof does not establish live runtime qualification.
+
+A subsequent changed-scope alignment passes 2165 tests, all eight course validators, generated publication checks, changed Python/Markdown lint, all 288 shell syntax/ShellCheck checks, and CLI/helper/installed parity. New negative controls prove unsupported parser arguments, semantic field drift, incorrect diagnostic classification, whole-report reads and metadata changes during copying are rejected or corrected. Independent final source review found no remaining material defect in the repaired paths. Original evidence hashes still match; live target qualification remains unperformed.
+
+<!-- /FEATURE: FEAT-040 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

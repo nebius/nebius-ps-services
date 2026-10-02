@@ -38,7 +38,7 @@ __global__ void bias_relu(float* matrix, const float* bias, int rows, int column
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 09_library_epilogue [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 09_library_epilogue [--workload small|large]\n"; return 0; }
   try {
     validate_simple_arguments(argc, argv);
     require_course_gpu();

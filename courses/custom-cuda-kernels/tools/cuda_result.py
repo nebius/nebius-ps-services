@@ -10,8 +10,6 @@ import math
 import os
 import re
 import secrets
-import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,14 +20,14 @@ from course_evidence import atomic_result, gpu_family  # noqa: E402
 
 
 def workload_profile(arguments):
-    if "--profile" not in arguments:
+    if "--workload" not in arguments:
         return "large"
-    index = arguments.index("--profile")
-    if arguments.count("--profile") != 1 or index + 1 >= len(arguments):
-        raise ValueError("Provide one --profile small|large")
+    index = arguments.index("--workload")
+    if arguments.count("--workload") != 1 or index + 1 >= len(arguments):
+        raise ValueError("Provide one --workload small|large")
     profile = arguments[index + 1]
     if profile not in ("small", "large"):
-        raise ValueError("--profile must be small or large")
+        raise ValueError("--workload must be small or large")
     return profile
 
 
@@ -145,74 +143,28 @@ def parse_report(text, lab):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--started", type=float, required=True)
+    parser.add_argument("--ended", type=float, required=True)
     parser.add_argument("executable", type=Path)
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     lab = args.executable.stem
-    if any(v in ("--help", "-h") for v in args.arguments):
-        raise SystemExit(subprocess.call([str(args.executable), *args.arguments]))
     inventory = json.loads((ROOT / "reference/observability.json").read_text())["labs"]
-    if lab not in inventory:
-        parser.error("Executable is not a course lab")
-    if not os.environ.get("SLURM_JOB_ID"):
-        parser.error("Run inside the Slurm allocation")
+    if lab not in inventory or not os.environ.get("SLURM_JOB_ID"):
+        parser.error("Require a course executable inside its Slurm allocation")
     image = os.environ.get("CUDA_IMAGE_DIGEST", "")
     if "@sha256:" not in image:
         parser.error("Record the pinned CUDA runtime image")
-    os.umask(0o077)
-    started = time.time()
-    run_id = secrets.token_hex(6)
-    log = ROOT / "results" / f"{lab}-run-{run_id}.log"
-    log.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # stdout stays bounded; it contains only course-owned scalar diagnostic output.
-    command = [
-        sys.executable,
-        str(ROOT / "tools/profile_lab.py"),
-        "--lab",
-        lab,
-        "--",
-        str(args.executable),
-        *args.arguments,
-    ]
-    with log.open("x") as stream:
-        process = subprocess.Popen(
-            command, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True
-        )
-
-        def stop(signum, _frame):
-            if process.poll() is None:
-                os.killpg(process.pid, signum)
-
-        previous = {
-            sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)
-        }
-        try:
-            while process.poll() is None:
-                if log.stat().st_size > 16 * 1024 * 1024:
-                    stop(signal.SIGTERM, None)
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        stop(signal.SIGKILL, None)
-                        process.wait()
-                    raise SystemExit("CUDA report exceeded its bounded size")
-                try:
-                    process.wait(timeout=0.1)
-                except subprocess.TimeoutExpired:
-                    pass
-            status = process.returncode
-        finally:
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
-    if status:
-        raise SystemExit(
-            f"CUDA run failed ({status}); inspect {log}. No successful artifact was published."
-        )
-    if log.stat().st_size > 16 * 1024 * 1024:
-        raise SystemExit("CUDA report exceeded its bounded size")
+    if not 0 < args.started <= args.ended <= time.time() + 1:
+        parser.error("Require the actual successful execution window")
+    log = args.input
+    if log.is_symlink() or not log.is_file() or log.stat().st_size > 16 * 1024 * 1024:
+        parser.error("Require a regular bounded successful CUDA stdout report")
     report_text = log.read_text()
     measurements = parse_report(report_text, lab)
-    print(report_text, end="")
+    started = args.started
+    run_id = secrets.token_hex(6)
     parameters = {
         "work_iterations": None,
         "implementation_sha256": hashlib.sha256(
@@ -240,14 +192,14 @@ def main():
         "correctness": {"program_completed_checks": True},
         "experiment": {
             "started_unix_seconds": started,
-            "ended_unix_seconds": time.time(),
+            "ended_unix_seconds": args.ended,
             "slurm_job_id": int(os.environ["SLURM_JOB_ID"]),
             "rank": int(os.environ.get("SLURM_PROCID", "0")),
             "instrumented": os.environ.get("COURSE_PROFILE_TOOL", "none") != "none",
             "parameters": parameters,
         },
     }
-    target = log.with_suffix(".json")
+    target = Path(os.environ["COURSE_RESULTS_DIR"]) / f"{lab}-run-{run_id}.json"
     atomic_result(target, json.dumps(result, indent=2) + "\n")
     print(f"Completed CUDA result: {target}")
 

@@ -29,13 +29,14 @@ claims. These controls do not replace the exact paired-digest check.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
-  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/vllm_chunked_prefill_ab.sbatch
+  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.sbatch
 ```
 
 ## Check your results
+
+Each new job owns `results/34_policy_equivalence_client/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/34_policy_equivalence_client/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -67,7 +68,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | --- | --- | --- |
 | Correctness of selected results | `correctness` | Boolean pass |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot; the two slots select the paired engine variants from the same trial. The publisher requires matching greedy response digests; these panels establish equivalence, not serving throughput. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot; the two slots select the paired engine variants from the same trial. The publisher requires matching greedy response digests; these panels establish equivalence, not serving throughput. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 34_policy_equivalence_client \
@@ -85,37 +86,27 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the chunking comparison. This campaign uses the helper to check paired greedy-output equivalence.
 
 ```bash
-bash slurm/vllm_chunked_prefill_ab.sbatch --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+bash slurm/34_policy_equivalence_client.sbatch --help
+sbatch --chdir="$PWD" \
   --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
-  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/vllm_chunked_prefill_ab.sbatch
+  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.sbatch
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Why must prompt content, tokenization, output budget, seed, and sampling policy remain fixed? Which settings should change in a chunking experiment, and which in a prefix-cache experiment? Separate correctness probes from load-generator measurements.
 
 Capture a separate diagnostic run:
 
-This diagnostic captures the GPU server while the supplied Python client generates requests. `slurm/capture_server.sh` provides bounded readiness, native `curl` start/stop controls, report paths and process cleanup; read those commands in `slurm/capture_server.sh` in the synced course directory. `@URL@`, `@PORT@` and `@OUTPUT@` receive job-local values. This captures one configuration; retain the full baseline campaign for paired correctness and acceptance timing.
+This diagnostic profiles the GPU server that receives the client requests. Read `slurm/34_policy_equivalence_client.nsys.sbatch` for the native Nsight command, readiness check, acknowledged start/stop controls and process cleanup. The job waits for report export before checking its results. Keep these diagnostic runs separate from normal timing runs.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \
-  --mem=64G --time=00:15:00 --chdir="$PWD" \
-  bash slurm/capture_server.sh 34_policy_equivalence_client \
-  --client "${COURSE_PYTHON:?source the course runtime}" labs/34_policy_equivalence_client.py --base-url @URL@ \
-    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ --workload chunked-prefill --variant disabled \
-  --server nsys profile --trace=cuda,nvtx,osrt \
-    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \
-    --cuda-graph-trace=node --sample=none --cpuctxsw=none \
-    --discard-environment=true --force-overwrite=false \
-    --capture-range=cudaProfilerApi --capture-range-end=stop \
-    --duration=300 --kill=none --wait=all \
-    --output "results/34_policy_equivalence_client/profiles/nsys-%q{COURSE_CAPTURE_ID}" \
-    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
-    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \
-    --profiler-config.profiler cuda --no-enable-chunked-prefill
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
+  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.nsys.sbatch
 ```
+
+The native Systems command is in `slurm/34_policy_equivalence_client.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 The launcher profiles the **GPU server**, while the client measures requests. Open the emitted `.nsys-rep` in Systems; expand CUDA API, GPU kernels, copies, and worker-process rows. The launcher triggers `/start_profile` after server readiness and `/stop_profile` after the request campaign, using the engine’s CUDA profiler API. Match that interval to the client artifact timestamps. Require actual request activity inside the capture; initialization alone is insufficient. Server NVTX availability depends on the pinned engine; use its CUDA kernels and request interval when named phases are absent.
 

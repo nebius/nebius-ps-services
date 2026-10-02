@@ -18,16 +18,25 @@ Use this reference for tag-driven GitHub Releases that publish built artifacts.
 
 ## Local helper alignment
 
-If the project also ships `publish-release.sh`, keep it aligned with the workflow:
+The source-owned publish-release skill uses one invocation with resumable owner
+handoffs. Keep newly generated helpers aligned with that contract:
 
-- `--prep` should require a strictly clean worktree, including untracked files.
-- `--prep` updates only `CHANGELOG.md`, commits it, and should auto-set `origin/<branch>` as upstream on the first push from a new local release branch.
-- `--prep` should fail before editing anything if the target tag already exists locally or on `origin`.
-- `--prep` should preserve a blank line before the next `##` release heading when it rewrites `CHANGELOG.md`.
-- `--publish` should only create and push the annotated tag.
-- `--publish` should verify the tagged source checkout resolves the package runtime version to the exact tag version before the push, and that check should not depend on `setuptools-scm` being installed in the release shell.
-- `--publish` should fail fast if `CHANGELOG.md` does not already contain the tag heading, or if that release section exists but is empty.
-- The helper should enforce the release branch policy unless the user explicitly overrides it.
+- Content preparation updates only the selected changelog on the already
+  selected feature branch; it preserves existing dirty work and the index.
+- create-pr owns complete reviewed repository staging, commits, synchronization,
+  branch pushes and PR creation/reuse. Do not add raw helper commits.
+- The exact verified merged commit must belong to remote default-branch history;
+  it need not remain the newest default-branch commit. Verify in an isolated clone.
+- Create the local annotated tag, check SCM runtime version, checkpoint the exact
+  object, then push that object. Never move or overwrite an existing remote tag.
+- Missing/empty release notes and conflicting tags fail before publication.
+- Resume rechecks exact PR/tag/workflow identities and verifies downloaded assets.
+  Existing release existence alone is not evidence that its assets are complete.
+- Approval gates remain on GitHub, with visible 600-second waits and resumable
+  timeouts. No admin bypass or implicit rerun/re-upload.
+
+Existing project helper examples below have their own interfaces; migrating them
+requires explicit scope. Do not silently rewrite project copies during skill work.
 
 ## Repo examples
 

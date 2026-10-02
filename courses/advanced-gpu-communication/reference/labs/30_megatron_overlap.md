@@ -29,9 +29,9 @@ Select the prepared Bridge runtime before submission and create one reference wi
 ```bash
 export COURSE_PYTHON="$COURSE_BRIDGE_PYTHON"
 export COURSE_TORCHRUN="$COURSE_BRIDGE_TORCHRUN"
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/30_megatron_overlap/logs/%j.out" \
-  --error="$PWD/results/30_megatron_overlap/logs/%j.err" slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --reference-only
+  --error="$PWD/results/30_megatron_overlap/logs/%j.err" slurm/30_megatron_overlap.sbatch --workload small --reference-only
 ```
 
 Logs stay under `results/30_megatron_overlap/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -47,15 +47,15 @@ The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction,
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/30_megatron_overlap/logs/%j.out" \
   --error="$PWD/results/30_megatron_overlap/logs/%j.err" \
-  slurm/fabric.sbatch \
-  labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
+  slurm/30_megatron_overlap.sbatch --workload small --overlap off --reference "$TRAINING_REFERENCE"
 ```
 
 ## Check your results
+
+Each new job owns `results/30_megatron_overlap/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/30_megatron_overlap/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -97,7 +97,7 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Run the candidate after the baseline passes, preserving the same reference weights and profile.
 
 ```bash
-sbatch labs/30_megatron_overlap.py --profile small --overlap on --reference "$TRAINING_REFERENCE"
+sbatch labs/30_megatron_overlap.py --workload small --overlap on --reference "$TRAINING_REFERENCE"
 ```
 
 Capture overlap off and on in separate diagnostic jobs, using the same reference for both. Wait for each capture to finish before submitting the next.
@@ -105,18 +105,12 @@ Capture overlap off and on in separate diagnostic jobs, using the same reference
 Check exported statistics for every rank, then open representative reports from each worker in Systems and select bridge_training_step. Load large reports in small groups and close them between comparisons. Locate backward compute, gradient collectives and the final exposed communication tail. An overlap flag does not prove useful overlap: check whether concurrent communication slowed compute. Independently repeat the same experiment with the large-profile sequence length and report when exposed communication matters.
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/30_megatron_overlap/logs/capture-%J-%t.out" \
-  --error="results/30_megatron_overlap/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 8 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/30_megatron_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/30_megatron_overlap/logs/%j.out" \
+  --error="$PWD/results/30_megatron_overlap/logs/%j.err" slurm/30_megatron_overlap.nsys.sbatch --workload small --overlap off --reference "$TRAINING_REFERENCE"
 ```
+
+The native Systems command is in `slurm/30_megatron_overlap.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.
 

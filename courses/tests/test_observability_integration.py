@@ -114,89 +114,9 @@ def test_invalid_acceptance_comparisons_fail(defect):
 def test_clean_callable_has_no_annotation_wrapper(monkeypatch):
     module = load("course_evidence")
     monkeypatch.delenv("COURSE_CAPTURE", raising=False)
-    fn = lambda: 4
+    def fn():
+        return 4
     assert module.annotated_operation(fn, "course_measure") is fn
-
-
-def test_capture_is_bounded_and_disables_clock_changes(tmp_path):
-    module = load("profile_lab")
-    command = module.capture_command(
-        "ncu", ["python3", "lab.py"], tmp_path / "capture", "course_measure", "vector"
-    )
-    assert command[command.index("--launch-count") + 1] == "1"
-    assert command[command.index("--clock-control") + 1] == "none"
-    assert command[command.index("--nvtx-include") + 1] == "course_measure/"
-
-
-@pytest.mark.parametrize(
-    "lab,region,kernel",
-    [
-        ("07_profile_workload", "projection", ".*"),
-        ("15_tail_load_balance", "tail_measure", "uniform_tail_probe"),
-        ("19_h2d_pipeline", "consume_batch", ".*"),
-        ("20_d2h_pipeline", "produce_output", ".*(gemm|nvjet).*"),
-    ],
-)
-def test_compute_command_selects_workload_region(
-    tmp_path, monkeypatch, lab, region, kernel
-):
-    import json
-    import shlex
-    from types import SimpleNamespace
-
-    module = load("profile_lab")
-    inventory = json.loads(
-        (ROOT / "gpu-optimizations/reference/observability.json").read_text()
-    )
-    recipe = inventory["labs"][lab]
-    command = shlex.split(recipe["compute_command"])
-    export = next(arg for arg in command if arg.startswith("--export="))
-    environment = dict(item.split("=", 1) for item in export.split(",")[1:])
-    assert environment["COURSE_PROFILE_RANGE"] == region
-    monkeypatch.delenv("COURSE_PROFILE_KERNEL", raising=False)
-    for name, value in environment.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("SLURM_JOB_ID", "41")
-    monkeypatch.setenv("RANK", "0")
-    monkeypatch.setattr(module, "ROOT", tmp_path)
-    (tmp_path / "reference").mkdir()
-    (tmp_path / "reference/observability.json").write_text(json.dumps(inventory))
-    lab_index = command.index(f"labs/{lab}.py")
-    monkeypatch.setattr(
-        module.sys,
-        "argv",
-        [
-            "profile_lab.py",
-            "--lab",
-            lab,
-            "--",
-            "python3",
-            *command[lab_index:],
-        ],
-    )
-    monkeypatch.setattr(module.shutil, "which", lambda name: "/prepared/" + name)
-    observed = []
-
-    def launch(argv, **kwargs):
-        observed.append(argv)
-        assert kwargs["env"]["COURSE_CAPTURE"] == "1"
-        Path(argv[argv.index("--export") + 1]).with_suffix(".ncu-rep").write_bytes(
-            b"test report"
-        )
-        return SimpleNamespace(wait=lambda **kwargs: 0)
-
-    monkeypatch.setattr(module.subprocess, "Popen", launch)
-    with pytest.raises(SystemExit) as stopped:
-        module.main()
-    assert stopped.value.code == 0
-    assert len(observed) == 1
-    captured = observed[0]
-    assert captured[captured.index("--nvtx-include") + 1] == region + "/"
-    assert captured[captured.index("--kernel-name") + 1] == "regex:" + kernel
-    assert captured[captured.index("--launch-count") + 1] == "1"
-    assert captured[captured.index("--clock-control") + 1] == "none"
-    if lab == "07_profile_workload":
-        assert "--external-only" in captured and "--export-trace" not in captured
 
 
 def test_prefill_decode_workload_study_accepts_declared_token_change():
@@ -370,7 +290,9 @@ def test_result_units_do_not_format_case_labels_or_metadata():
 
 
 @pytest.mark.parametrize("defect", [None, "value", "case", "default"])
-def test_dashboard_validator_checks_value_units_separately_from_labels(defect):
+def test_dashboard_validator_checks_value_units_separately_from_labels(
+    defect, monkeypatch
+):
     import json
 
     course = "gpu-fundamentals"
@@ -390,6 +312,7 @@ def test_dashboard_validator_checks_value_units_separately_from_labels(defect):
                     if prop["id"] == "unit":
                         prop["value"] = "bytes"
     validator = load("validate_course_template")
+    monkeypatch.setattr(validator, "ROOT", ROOT / course)
     guide = (ROOT / course / "reference/labs" / (lab + ".md")).read_text()
     if defect:
         with pytest.raises(SystemExit, match="measurement panel or unit"):
@@ -424,3 +347,13 @@ def test_context_legends_identify_nodes_and_local_gpu_indices():
                     elif "DCGM_FI_DEV_" in target["expr"]:
                         assert target["legendFormat"] == "{{Hostname}} GPU {{gpu}}"
             assert len(node_targets) == 2
+
+
+@pytest.mark.parametrize("workload", ["small", "large", "prefix-cache", "chunked-prefill"])
+def test_workload_parameter_preserves_its_original_serialized_meaning(workload):
+    from argparse import Namespace
+
+    evidence = load("course_evidence")
+    evidence.begin_experiment(Namespace(workload=workload))
+    expected_key = "profile" if workload in ("small", "large") else "workload"
+    assert evidence.PARAMETERS == {expected_key: workload}

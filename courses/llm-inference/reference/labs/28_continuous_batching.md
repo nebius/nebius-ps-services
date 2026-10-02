@@ -25,15 +25,15 @@ The fixture has fixed arrivals and 256 abstract work units per service quantum. 
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/28_continuous_batching/logs/%j.out" \
   --error="$PWD/results/28_continuous_batching/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/28_continuous_batching.py --profile small
+  slurm/28_continuous_batching.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/28_continuous_batching/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/28_continuous_batching/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -64,7 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Chunked 64 / median first token latency quanta | `chunked_64.median_first_token_latency_quanta` | `none` |
 | Chunked 256 control / median first token latency quanta | `chunked_256_control.median_first_token_latency_quanta` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 28_continuous_batching \
@@ -82,12 +82,12 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 Run the fixed-arrival fixture before editing policies. All policies must complete the same declared work; simulator time is reported in quanta, not milliseconds.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/28_continuous_batching/logs/%j.out" \
-  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/28_continuous_batching.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Locate an arrival during a long full-prefill dispatch and calculate its waiting time. How does chunking change the next admission opportunity? Explain which conclusions depend on the model's equal unit-cost assumption.
 
@@ -105,7 +105,7 @@ Publication failure is separate from benchmark failure. Retain the JSON files an
 
 ## Takeaways and next step
 
-Scheduling changes who waits as well as aggregate progress. After engine qualification, run `slurm/vllm_chunked_prefill_ab.sbatch` for independent streaming/AIPerf trials and Lab 34's paired output checks; only those runs support live-service claims.
+Scheduling changes who waits as well as aggregate progress. After engine qualification, run `slurm/34_policy_equivalence_client.sbatch` for independent streaming/AIPerf trials and Lab 34's paired output checks; only those runs support live-service claims.
 
 Hold arrivals fixed and report completions, failures, queue growth, and service-level goodput.
 

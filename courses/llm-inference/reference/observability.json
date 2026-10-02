@@ -40,9 +40,9 @@
       "question": "Identify which keys/values are newly computed at a continuation step and which are reused. Explain why longer histories increase attention reads even when the earlier projections are cached.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/08_kv_cache.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 08_kv_cache slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 08_kv_cache --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
-      "compute_command": "python3 tools/submit_lab.py --lab 08_kv_cache --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small",
+      "baseline_command": "sbatch slurm/08_kv_cache.sbatch --workload small",
+      "systems_command": "sbatch slurm/08_kv_cache.nsys.sbatch --workload small",
+      "compute_command": "sbatch slurm/08_kv_cache.ncu.sbatch --workload small",
       "tuning_control": "Compare recomputation with cached decode for identical prompt and generated tokens",
       "evidence_views": [
         "Selected comparison generation",
@@ -66,8 +66,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/08_kv_cache/logs/capture-%J-%t.out\" \\\n  --error=\"results/08_kv_cache/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/08_kv_cache/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/08_kv_cache.py --profile small",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/08_kv_cache/logs/capture-%J-%t.out\" \\\n  --error=\"results/08_kv_cache/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/08_kv_cache/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/08_kv_cache.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/08_kv_cache/logs/%j.out\" \\\n  --error=\"$PWD/results/08_kv_cache/logs/%j.err\" slurm/08_kv_cache.nsys.sbatch --workload small",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/08_kv_cache/logs/%j.out\" \\\n  --error=\"$PWD/results/08_kv_cache/logs/%j.err\" slurm/08_kv_cache.ncu.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/08_kv_cache.sbatch",
+        "nsys": "slurm/08_kv_cache.nsys.sbatch",
+        "ncu": "slurm/08_kv_cache.ncu.sbatch"
+      }
     },
     "09_hf_prefill_decode": {
       "lab": "09_hf_prefill_decode",
@@ -118,9 +123,9 @@
       "question": "Draw which token is input to each pass and which token is sampled from its output. Why is the last generated token not necessarily already represented in the returned cache when generation stops?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/09_hf_prefill_decode.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
-      "systems_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
-      "compute_command": "python3 tools/submit_lab.py --lab 09_hf_prefill_decode '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=model_forward,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
+      "baseline_command": "sbatch slurm/09_hf_prefill_decode.sbatch --workload small --new-tokens 1",
+      "systems_command": "sbatch slurm/09_hf_prefill_decode.nsys.sbatch --workload small --new-tokens 1",
+      "compute_command": "sbatch slurm/09_hf_prefill_decode.ncu.sbatch --workload small --new-tokens 1",
       "tuning_control": "`--new-tokens`",
       "evidence_views": [
         "Selected comparison generation",
@@ -166,8 +171,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/09_hf_prefill_decode/logs/capture-%J-%t.out\" \\\n  --error=\"results/09_hf_prefill_decode/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/09_hf_prefill_decode/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/09_hf_prefill_decode.py --profile small --new-tokens 1",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/09_hf_prefill_decode/logs/capture-%J-%t.out\" \\\n  --error=\"results/09_hf_prefill_decode/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include model_forward/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/09_hf_prefill_decode/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/09_hf_prefill_decode.py --profile small --new-tokens 1"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/09_hf_prefill_decode/logs/%j.out\" \\\n  --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.nsys.sbatch --workload small --new-tokens 1",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/09_hf_prefill_decode/logs/%j.out\" \\\n  --error=\"$PWD/results/09_hf_prefill_decode/logs/%j.err\" slurm/09_hf_prefill_decode.ncu.sbatch --workload small --new-tokens 1",
+      "jobs": {
+        "run": "slurm/09_hf_prefill_decode.sbatch",
+        "nsys": "slurm/09_hf_prefill_decode.nsys.sbatch",
+        "ncu": "slurm/09_hf_prefill_decode.ncu.sbatch"
+      }
     },
     "10_vllm_offline": {
       "lab": "10_vllm_offline",
@@ -218,9 +228,9 @@
       "question": "Why can actual output length be less than the maximum token budget? Explain why comparing runs with different stopping behavior can change throughput without improving the engine. Which startup costs are excluded from this measurement?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/10_vllm_offline.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 10_vllm_offline slurm/vllm_offline.sbatch --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 10_vllm_offline --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_offline.sbatch --profile small --in-process",
-      "compute_command": "python3 tools/submit_lab.py --lab 10_vllm_offline '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=vllm_generate,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/vllm_offline.sbatch --profile small --in-process",
+      "baseline_command": "sbatch slurm/10_vllm_offline.sbatch --workload small",
+      "systems_command": "sbatch slurm/10_vllm_offline.nsys.sbatch --workload small --in-process",
+      "compute_command": "sbatch slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
       "tuning_control": "`--enforce-eager`",
       "evidence_views": [
         "Selected comparison generation",
@@ -247,8 +257,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate vllm_generate after warmup and follow its host submissions into GPU streams. Inspect generation kernels and copies, then test the named tuning control with separate unprofiled runs."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/10_vllm_offline/logs/capture-%J-%t.out\" \\\n  --error=\"results/10_vllm_offline/logs/capture-%J-%t.err\" \\\n  \"${COURSE_CONTAINER_RUNNER:?select the qualified runner}\" \"${VLLM_IMAGE_DIGEST:?select the qualified image}\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/10_vllm_offline/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  python3 labs/10_vllm_offline.py --profile small --in-process",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/10_vllm_offline/logs/capture-%J-%t.out\" \\\n  --error=\"results/10_vllm_offline/logs/capture-%J-%t.err\" \\\n  \"${COURSE_CONTAINER_RUNNER:?select the qualified runner}\" \"${VLLM_IMAGE_DIGEST:?select the qualified image}\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include vllm_generate/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/10_vllm_offline/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  python3 labs/10_vllm_offline.py --profile small --in-process"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_vllm_offline/logs/%j.out\" \\\n  --error=\"$PWD/results/10_vllm_offline/logs/%j.err\" slurm/10_vllm_offline.nsys.sbatch --workload small --in-process",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_vllm_offline/logs/%j.out\" \\\n  --error=\"$PWD/results/10_vllm_offline/logs/%j.err\" slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
+      "jobs": {
+        "run": "slurm/10_vllm_offline.sbatch",
+        "nsys": "slurm/10_vllm_offline.nsys.sbatch",
+        "ncu": "slurm/10_vllm_offline.ncu.sbatch"
+      }
     },
     "11_serving_client": {
       "lab": "11_serving_client",
@@ -300,8 +315,8 @@
       "question": "As concurrency grows, does aggregate throughput improve while individual completion latency worsens? Distinguish actual generated tokens from requested maximum tokens. Explain why request throughput alone is misleading when output lengths differ.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/11_serving_client.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 11_serving_client slurm/vllm_benchmark.sbatch",
-      "systems_command": "python3 tools/submit_lab.py --lab 11_serving_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_benchmark.sbatch",
+      "baseline_command": "sbatch slurm/11_serving_client.sbatch",
+      "systems_command": "sbatch slurm/11_serving_client.nsys.sbatch",
       "compute_command": null,
       "tuning_control": "`--concurrency`",
       "evidence_views": [
@@ -325,7 +340,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \\\n  --mem=64G --time=00:15:00 --chdir=\"$PWD\" \\\n  bash slurm/capture_server.sh 11_serving_client \\\n  --client \"${COURSE_PYTHON:?source the course runtime}\" labs/11_serving_client.py --base-url @URL@ \\\n    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ \\\n  --server nsys profile --trace=cuda,nvtx,osrt \\\n    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \\\n    --cuda-graph-trace=node --sample=none --cpuctxsw=none \\\n    --discard-environment=true --force-overwrite=false \\\n    --capture-range=cudaProfilerApi --capture-range-end=stop \\\n    --duration=300 --kill=none --wait=all \\\n    --output \"results/11_serving_client/profiles/nsys-%q{COURSE_CAPTURE_ID}\" \\\n    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \\\n    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \\\n    --profiler-config.profiler cuda"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/11_serving_client/logs/%j.out\" \\\n  --error=\"$PWD/results/11_serving_client/logs/%j.err\" slurm/11_serving_client.nsys.sbatch",
+      "jobs": {
+        "run": "slurm/11_serving_client.sbatch",
+        "nsys": "slurm/11_serving_client.nsys.sbatch"
+      }
     },
     "15_streaming_client": {
       "lab": "15_streaming_client",
@@ -386,8 +405,8 @@
       "question": "Draw request start, first content, later chunks, and completion. Why can one received chunk contain several tokens generated during the preceding gap? Compare these observations with server metrics without assuming their clocks and boundaries are identical.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/15_streaming_client.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch",
-      "systems_command": "python3 tools/submit_lab.py --lab 15_streaming_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_streaming_benchmark.sbatch",
+      "baseline_command": "sbatch slurm/15_streaming_client.sbatch",
+      "systems_command": "sbatch slurm/15_streaming_client.nsys.sbatch",
       "compute_command": null,
       "tuning_control": "`CONCURRENCY` (third positional streaming-launcher argument)",
       "evidence_views": [
@@ -411,7 +430,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \\\n  --mem=64G --time=00:15:00 --chdir=\"$PWD\" \\\n  bash slurm/capture_server.sh 15_streaming_client \\\n  --client \"${COURSE_PYTHON:?source the course runtime}\" labs/15_streaming_client.py --base-url @URL@ \\\n    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ \\\n  --server nsys profile --trace=cuda,nvtx,osrt \\\n    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \\\n    --cuda-graph-trace=node --sample=none --cpuctxsw=none \\\n    --discard-environment=true --force-overwrite=false \\\n    --capture-range=cudaProfilerApi --capture-range-end=stop \\\n    --duration=300 --kill=none --wait=all \\\n    --output \"results/15_streaming_client/profiles/nsys-%q{COURSE_CAPTURE_ID}\" \\\n    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \\\n    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \\\n    --profiler-config.profiler cuda"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/15_streaming_client/logs/%j.out\" \\\n  --error=\"$PWD/results/15_streaming_client/logs/%j.err\" slurm/15_streaming_client.nsys.sbatch",
+      "jobs": {
+        "run": "slurm/15_streaming_client.sbatch",
+        "nsys": "slurm/15_streaming_client.nsys.sbatch"
+      }
     },
     "16_model_artifact_audit": {
       "lab": "16_model_artifact_audit",
@@ -469,7 +492,7 @@
       "question": "Which fields affect memory capacity, attention layout, and tokenization? Explain why identical prompt text with a different tokenizer or chat template is not necessarily identical model input.",
       "interpretation": "This CPU-side artifact audit examines configuration and tensor metadata without running model inference. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/16_model_artifact_audit.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 16_model_artifact_audit slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small",
+      "baseline_command": "sbatch slurm/16_model_artifact_audit.sbatch --workload small",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
@@ -491,7 +514,10 @@
         "reason": "This CPU-side artifact audit examines configuration and tensor metadata without running model inference.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/16_model_artifact_audit.sbatch"
+      }
     },
     "17_sampling_semantics": {
       "lab": "17_sampling_semantics",
@@ -542,9 +568,9 @@
       "question": "For candidate probabilities 0.6, 0.3, and 0.1, explain which survive top-k of two and a nucleus threshold of 0.8. Why can shorter sampled output make a run finish earlier without improving per-token execution?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/17_sampling_semantics.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
-      "systems_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
-      "compute_command": "python3 tools/submit_lab.py --lab 17_sampling_semantics '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=generation,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
+      "baseline_command": "sbatch slurm/17_sampling_semantics.sbatch --workload small --max-new-tokens 32",
+      "systems_command": "sbatch slurm/17_sampling_semantics.nsys.sbatch --workload small --max-new-tokens 32",
+      "compute_command": "sbatch slurm/17_sampling_semantics.ncu.sbatch --workload small --max-new-tokens 32",
       "tuning_control": "`--max-new-tokens`",
       "evidence_views": [
         "Selected comparison generation",
@@ -567,8 +593,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/17_sampling_semantics/logs/capture-%J-%t.out\" \\\n  --error=\"results/17_sampling_semantics/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/17_sampling_semantics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/17_sampling_semantics.py --profile small --max-new-tokens 32",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/17_sampling_semantics/logs/capture-%J-%t.out\" \\\n  --error=\"results/17_sampling_semantics/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include generation/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/17_sampling_semantics/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/17_sampling_semantics.py --profile small --max-new-tokens 32"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/17_sampling_semantics/logs/%j.out\" \\\n  --error=\"$PWD/results/17_sampling_semantics/logs/%j.err\" slurm/17_sampling_semantics.nsys.sbatch --workload small --max-new-tokens 32",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/17_sampling_semantics/logs/%j.out\" \\\n  --error=\"$PWD/results/17_sampling_semantics/logs/%j.err\" slurm/17_sampling_semantics.ncu.sbatch --workload small --max-new-tokens 32",
+      "jobs": {
+        "run": "slurm/17_sampling_semantics.sbatch",
+        "nsys": "slurm/17_sampling_semantics.nsys.sbatch",
+        "ncu": "slurm/17_sampling_semantics.ncu.sbatch"
+      }
     },
     "18_padding_bucketing": {
       "lab": "18_padding_bucketing",
@@ -626,9 +657,9 @@
       "question": "Calculate the padding fraction before and after grouping. Which prompt determines each bucket's rectangle width? Explain the trade-off between finer buckets, extra launches, and smaller matrix batches.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/18_padding_bucketing.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
-      "compute_command": "python3 tools/submit_lab.py --lab 18_padding_bucketing --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small",
+      "baseline_command": "sbatch slurm/18_padding_bucketing.sbatch --workload small",
+      "systems_command": "sbatch slurm/18_padding_bucketing.nsys.sbatch --workload small",
+      "compute_command": "sbatch slurm/18_padding_bucketing.ncu.sbatch --workload small",
       "tuning_control": "Compare unbucketed and length-bucketed prompts with the same true tokens",
       "evidence_views": [
         "Selected comparison generation",
@@ -654,8 +685,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/18_padding_bucketing/logs/capture-%J-%t.out\" \\\n  --error=\"results/18_padding_bucketing/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/18_padding_bucketing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/18_padding_bucketing.py --profile small",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/18_padding_bucketing/logs/capture-%J-%t.out\" \\\n  --error=\"results/18_padding_bucketing/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/18_padding_bucketing/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/18_padding_bucketing.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/18_padding_bucketing/logs/%j.out\" \\\n  --error=\"$PWD/results/18_padding_bucketing/logs/%j.err\" slurm/18_padding_bucketing.nsys.sbatch --workload small",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/18_padding_bucketing/logs/%j.out\" \\\n  --error=\"$PWD/results/18_padding_bucketing/logs/%j.err\" slurm/18_padding_bucketing.ncu.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/18_padding_bucketing.sbatch",
+        "nsys": "slurm/18_padding_bucketing.nsys.sbatch",
+        "ncu": "slurm/18_padding_bucketing.ncu.sbatch"
+      }
     },
     "20_prefix_cache_client": {
       "lab": "20_prefix_cache_client",
@@ -706,8 +742,8 @@
       "question": "Which exact token prefix is shared, and where does a near-match diverge? Explain why model/tokenizer identity and cache policy must be fixed. Distinguish shorter prompt work from genuinely reused computation.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/20_prefix_cache_client.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 20_prefix_cache_client slurm/vllm_prefix_cache.sbatch",
-      "systems_command": "python3 tools/submit_lab.py --lab 20_prefix_cache_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_prefix_cache.sbatch",
+      "baseline_command": "sbatch slurm/20_prefix_cache_client.sbatch",
+      "systems_command": "sbatch slurm/20_prefix_cache_client.nsys.sbatch",
       "compute_command": null,
       "tuning_control": "server prefix caching disabled/enabled",
       "evidence_views": [
@@ -738,7 +774,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \\\n  --mem=64G --time=00:15:00 --chdir=\"$PWD\" \\\n  bash slurm/capture_server.sh 20_prefix_cache_client \\\n  --client \"${COURSE_PYTHON:?source the course runtime}\" labs/20_prefix_cache_client.py --base-url @URL@ \\\n    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ --variant enabled \\\n  --server nsys profile --trace=cuda,nvtx,osrt \\\n    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \\\n    --cuda-graph-trace=node --sample=none --cpuctxsw=none \\\n    --discard-environment=true --force-overwrite=false \\\n    --capture-range=cudaProfilerApi --capture-range-end=stop \\\n    --duration=300 --kill=none --wait=all \\\n    --output \"results/20_prefix_cache_client/profiles/nsys-%q{COURSE_CAPTURE_ID}\" \\\n    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \\\n    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \\\n    --profiler-config.profiler cuda --enable-prefix-caching"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/20_prefix_cache_client/logs/%j.out\" \\\n  --error=\"$PWD/results/20_prefix_cache_client/logs/%j.err\" slurm/20_prefix_cache_client.nsys.sbatch",
+      "jobs": {
+        "run": "slurm/20_prefix_cache_client.sbatch",
+        "nsys": "slurm/20_prefix_cache_client.nsys.sbatch"
+      }
     },
     "23_speculative_decoding": {
       "lab": "23_speculative_decoding",
@@ -798,9 +838,9 @@
       "question": "Work through one partially accepted proposal and identify the first token that must be discarded. Why can a longer draft increase wasted work? Compare saved target calls with measured total duration rather than equating the two.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/23_speculative_decoding.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
-      "systems_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
-      "compute_command": "python3 tools/submit_lab.py --lab 23_speculative_decoding '--export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=target_only,COURSE_PROFILE_KERNEL=.*(gemm|gemv|nvjet).*' slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
+      "baseline_command": "sbatch slurm/23_speculative_decoding.sbatch --workload small --draft-length 4 --max-new-tokens 32",
+      "systems_command": "sbatch slurm/23_speculative_decoding.nsys.sbatch --workload small --draft-length 4 --max-new-tokens 32",
+      "compute_command": "sbatch slurm/23_speculative_decoding.ncu.sbatch --workload small --draft-length 4 --max-new-tokens 32",
       "tuning_control": "`--draft-length`",
       "evidence_views": [
         "Selected comparison generation",
@@ -826,8 +866,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate lab_workload and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/23_speculative_decoding/logs/capture-%J-%t.out\" \\\n  --error=\"results/23_speculative_decoding/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/23_speculative_decoding/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/23_speculative_decoding/logs/capture-%J-%t.out\" \\\n  --error=\"results/23_speculative_decoding/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include target_only/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/23_speculative_decoding/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/23_speculative_decoding.py --profile small --draft-length 4 --max-new-tokens 32"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/23_speculative_decoding/logs/%j.out\" \\\n  --error=\"$PWD/results/23_speculative_decoding/logs/%j.err\" slurm/23_speculative_decoding.nsys.sbatch --workload small --draft-length 4 --max-new-tokens 32",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/23_speculative_decoding/logs/%j.out\" \\\n  --error=\"$PWD/results/23_speculative_decoding/logs/%j.err\" slurm/23_speculative_decoding.ncu.sbatch --workload small --draft-length 4 --max-new-tokens 32",
+      "jobs": {
+        "run": "slurm/23_speculative_decoding.sbatch",
+        "nsys": "slurm/23_speculative_decoding.nsys.sbatch",
+        "ncu": "slurm/23_speculative_decoding.ncu.sbatch"
+      }
     },
     "24_sdpa_attention": {
       "lab": "24_sdpa_attention",
@@ -876,9 +921,9 @@
       "question": "Estimate the size of the explicit score matrix and compare it with observed incremental memory. Why might avoiding that matrix matter more for prefill than for a one-query decode step? Explain why backend names require profiler evidence.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/24_sdpa_attention.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small --external-only",
-      "compute_command": "python3 tools/submit_lab.py --lab 24_sdpa_attention --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small --external-only",
+      "baseline_command": "sbatch slurm/24_sdpa_attention.sbatch --workload small",
+      "systems_command": "sbatch slurm/24_sdpa_attention.nsys.sbatch --workload small --external-only",
+      "compute_command": "sbatch slurm/24_sdpa_attention.ncu.sbatch --workload small --external-only",
       "tuning_control": "Compare explicit attention and fused SDPA separately for prefill and decode",
       "evidence_views": [
         "Selected comparison generation",
@@ -905,8 +950,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/24_sdpa_attention/logs/capture-%J-%t.out\" \\\n  --error=\"results/24_sdpa_attention/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/24_sdpa_attention/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/24_sdpa_attention.py --profile small --external-only",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/24_sdpa_attention/logs/capture-%J-%t.out\" \\\n  --error=\"results/24_sdpa_attention/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/24_sdpa_attention/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/24_sdpa_attention.py --profile small --external-only"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/24_sdpa_attention/logs/%j.out\" \\\n  --error=\"$PWD/results/24_sdpa_attention/logs/%j.err\" slurm/24_sdpa_attention.nsys.sbatch --workload small --external-only",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/24_sdpa_attention/logs/%j.out\" \\\n  --error=\"$PWD/results/24_sdpa_attention/logs/%j.err\" slurm/24_sdpa_attention.ncu.sbatch --workload small --external-only",
+      "jobs": {
+        "run": "slurm/24_sdpa_attention.sbatch",
+        "nsys": "slurm/24_sdpa_attention.nsys.sbatch",
+        "ncu": "slurm/24_sdpa_attention.ncu.sbatch"
+      }
     },
     "25_workload_metrics": {
       "lab": "25_workload_metrics",
@@ -948,9 +998,9 @@
       "question": "Which operation grows with input length and which with iteration count? Why can batching improve matrix efficiency while increasing latency per completed batch? Contrast these simplified costs with real attention and cache growth omitted here.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Concurrency here means synthetic batch rows, not HTTP request concurrency.",
       "dashboard": "reference/grafana/25_workload_metrics.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 25_workload_metrics slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
-      "systems_command": "python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
-      "compute_command": "python3 tools/submit_lab.py --lab 25_workload_metrics --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small --concurrency 1",
+      "baseline_command": "sbatch slurm/25_workload_metrics.sbatch --workload small --concurrency 1",
+      "systems_command": "sbatch slurm/25_workload_metrics.nsys.sbatch --workload small --concurrency 1",
+      "compute_command": "sbatch slurm/25_workload_metrics.ncu.sbatch --workload small --concurrency 1",
       "tuning_control": "`--concurrency`",
       "evidence_views": [
         "Selected comparison generation",
@@ -975,8 +1025,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/25_workload_metrics/logs/capture-%J-%t.out\" \\\n  --error=\"results/25_workload_metrics/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/25_workload_metrics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/25_workload_metrics.py --profile small --concurrency 1",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/25_workload_metrics/logs/capture-%J-%t.out\" \\\n  --error=\"results/25_workload_metrics/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/25_workload_metrics/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/25_workload_metrics.py --profile small --concurrency 1"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/25_workload_metrics/logs/%j.out\" \\\n  --error=\"$PWD/results/25_workload_metrics/logs/%j.err\" slurm/25_workload_metrics.nsys.sbatch --workload small --concurrency 1",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/25_workload_metrics/logs/%j.out\" \\\n  --error=\"$PWD/results/25_workload_metrics/logs/%j.err\" slurm/25_workload_metrics.ncu.sbatch --workload small --concurrency 1",
+      "jobs": {
+        "run": "slurm/25_workload_metrics.sbatch",
+        "nsys": "slurm/25_workload_metrics.nsys.sbatch",
+        "ncu": "slurm/25_workload_metrics.ncu.sbatch"
+      }
     },
     "26_kv_capacity": {
       "lab": "26_kv_capacity",
@@ -1037,7 +1092,7 @@
       "question": "Explain why doubling context doubles ideal KV bytes and why reducing KV heads can lower storage without reducing query-head count. Which terms must be adjusted for quantized KV and its scale metadata?",
       "interpretation": "This capacity worksheet calculates bytes and token limits; it does not allocate a GPU KV cache. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/26_kv_capacity.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 26_kv_capacity slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small --sequence 4096 --concurrency 8",
+      "baseline_command": "sbatch slurm/26_kv_capacity.sbatch --workload small --sequence 4096 --concurrency 8",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "`--sequence`, `--concurrency`",
@@ -1061,7 +1116,10 @@
         "reason": "This capacity worksheet calculates bytes and token limits; it does not allocate a GPU KV cache.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/26_kv_capacity.sbatch"
+      }
     },
     "27_paged_kv": {
       "lab": "27_paged_kv",
@@ -1113,7 +1171,7 @@
       "question": "Why can a request's logical pages map to nonadjacent physical IDs? Calculate unused slots in the final page. Explain why growth must reserve capacity before updating the request length.",
       "interpretation": "This CPU page-allocation simulation measures model state, not GPU memory traffic. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/27_paged_kv.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 27_paged_kv slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small --block-tokens 16 --total-blocks 4",
+      "baseline_command": "sbatch slurm/27_paged_kv.sbatch --workload small --block-tokens 16 --total-blocks 4",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "`--block-tokens`, `--total-blocks`",
@@ -1135,7 +1193,10 @@
         "reason": "This CPU page-allocation simulation measures model state, not GPU memory traffic.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/27_paged_kv.sbatch"
+      }
     },
     "28_continuous_batching": {
       "lab": "28_continuous_batching",
@@ -1175,7 +1236,7 @@
       "question": "Locate an arrival during a long full-prefill dispatch and calculate its waiting time. How does chunking change the next admission opportunity? Explain which conclusions depend on the model's equal unit-cost assumption.",
       "interpretation": "This discrete CPU scheduling model has no GPU server or CUDA kernels. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/28_continuous_batching.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 28_continuous_batching slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small",
+      "baseline_command": "sbatch slurm/28_continuous_batching.sbatch --workload small",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "Compare full-prefill and chunked scheduling on the same arrivals and token work",
@@ -1201,7 +1262,10 @@
         "reason": "This discrete CPU scheduling model has no GPU server or CUDA kernels.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/28_continuous_batching.sbatch"
+      }
     },
     "29_quantization": {
       "lab": "29_quantization",
@@ -1259,9 +1323,9 @@
       "question": "Calculate the ideal payload reduction, then add scales and reconstructed buffers. Why can dequantize-then-compute be slower than the BF16 baseline? Which supported engine kernel would be necessary to test a true low-precision execution benefit?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/29_quantization.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 29_quantization slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
-      "compute_command": "python3 tools/submit_lab.py --lab 29_quantization --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/29_quantization.py --profile small",
+      "baseline_command": "sbatch slurm/29_quantization.sbatch --workload small",
+      "systems_command": "sbatch slurm/29_quantization.nsys.sbatch --workload small",
+      "compute_command": "sbatch slurm/29_quantization.ncu.sbatch --workload small",
       "tuning_control": "Compare BF16 with dequantize-then-compute at fixed shape",
       "evidence_views": [
         "Selected comparison generation",
@@ -1284,8 +1348,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/29_quantization/logs/capture-%J-%t.out\" \\\n  --error=\"results/29_quantization/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/29_quantization/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/29_quantization.py --profile small",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/29_quantization/logs/capture-%J-%t.out\" \\\n  --error=\"results/29_quantization/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/29_quantization/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/29_quantization.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/29_quantization/logs/%j.out\" \\\n  --error=\"$PWD/results/29_quantization/logs/%j.err\" slurm/29_quantization.nsys.sbatch --workload small",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/29_quantization/logs/%j.out\" \\\n  --error=\"$PWD/results/29_quantization/logs/%j.err\" slurm/29_quantization.ncu.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/29_quantization.sbatch",
+        "nsys": "slurm/29_quantization.nsys.sbatch",
+        "ncu": "slurm/29_quantization.ncu.sbatch"
+      }
     },
     "30_engine_profile": {
       "lab": "30_engine_profile",
@@ -1316,7 +1385,7 @@
       "question": "Which component owns model conversion, repository layout, server readiness, and client measurement? Why can a healthy server reject a request with the wrong token-budget field? Keep these boundaries separate in your diagnosis.",
       "interpretation": "The HTTP client probes readiness and request schemas. These launchers own server startup and cleanup but do not start a GPU capture; profiling the client cannot capture server kernels. Use the owned serving experiments for GPU traces. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/30_engine_profile.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 30_engine_profile slurm/openai_engine.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775",
+      "baseline_command": "sbatch slurm/30_engine_profile.sbatch Qwen/Qwen2.5-0.5B-Instruct 7ae557604adf67be50417f59c2c2f167def9a775",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
@@ -1336,7 +1405,10 @@
         "reason": "The HTTP client probes readiness and request schemas. These launchers own server startup and cleanup but do not start a GPU capture; profiling the client cannot capture server kernels. Use the owned serving experiments for GPU traces.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/30_engine_profile.sbatch"
+      }
     },
     "32_inference_capstone": {
       "lab": "32_inference_capstone",
@@ -1394,9 +1466,9 @@
       "question": "Does the measured memory difference match the materialized score-matrix explanation? Does the timing conclusion survive order reversal? Explain how a large attention-kernel improvement could have a smaller end-to-end service impact.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/32_inference_capstone.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 32_inference_capstone slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
-      "systems_command": "python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
-      "compute_command": "python3 tools/submit_lab.py --lab 32_inference_capstone --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/32_inference_capstone.py --profile small --variant-order baseline-first",
+      "baseline_command": "sbatch slurm/32_inference_capstone.sbatch --workload small --variant-order baseline-first",
+      "systems_command": "sbatch slurm/32_inference_capstone.nsys.sbatch --workload small --variant-order baseline-first",
+      "compute_command": "sbatch slurm/32_inference_capstone.ncu.sbatch --workload small --variant-order baseline-first",
       "tuning_control": "Compare materialized attention with SDPA across all three trials",
       "evidence_views": [
         "Selected comparison generation",
@@ -1423,8 +1495,13 @@
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/32_inference_capstone/logs/capture-%J-%t.out\" \\\n  --error=\"results/32_inference_capstone/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/32_inference_capstone/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/32_inference_capstone.py --profile small --variant-order baseline-first",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/32_inference_capstone/logs/capture-%J-%t.out\" \\\n  --error=\"results/32_inference_capstone/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --target-processes all --nvtx --nvtx-include course_measure/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/32_inference_capstone/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/32_inference_capstone.py --profile small --variant-order baseline-first"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_inference_capstone/logs/%j.out\" \\\n  --error=\"$PWD/results/32_inference_capstone/logs/%j.err\" slurm/32_inference_capstone.nsys.sbatch --workload small --variant-order baseline-first",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_inference_capstone/logs/%j.out\" \\\n  --error=\"$PWD/results/32_inference_capstone/logs/%j.err\" slurm/32_inference_capstone.ncu.sbatch --workload small --variant-order baseline-first",
+      "jobs": {
+        "run": "slurm/32_inference_capstone.sbatch",
+        "nsys": "slurm/32_inference_capstone.nsys.sbatch",
+        "ncu": "slurm/32_inference_capstone.ncu.sbatch"
+      }
     },
     "33_speculative_engine_client": {
       "lab": "33_speculative_engine_client",
@@ -1448,8 +1525,8 @@
       "question": "Does acceptance reduce target work enough to offset draft execution and verification? Compare actual output lengths, latency, and throughput under the same load. Keep startup memory and initialization separate from steady serving.",
       "interpretation": "This helper records response equivalence. Performance evidence belongs to the separately collected campaign results; no latency or throughput is inferred from response digests.",
       "dashboard": "reference/grafana/33_speculative_engine_client.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 33_speculative_engine_client slurm/vllm_speculative_ab.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
-      "systems_command": "python3 tools/submit_lab.py --lab 33_speculative_engine_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_speculative_ab.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "baseline_command": "sbatch slurm/33_speculative_engine_client.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "systems_command": "sbatch slurm/33_speculative_engine_client.nsys.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
       "compute_command": null,
       "tuning_control": "Compare the real serving engine with speculation disabled/enabled using identical prompts and bounded greedy responses",
       "evidence_views": [
@@ -1469,7 +1546,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity with the matching unprofiled AIPerf exports. Use this lab's Grafana panels to check paired greedy-equivalence evidence."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \\\n  --mem=64G --time=00:15:00 --chdir=\"$PWD\" \\\n  bash slurm/capture_server.sh 33_speculative_engine_client \\\n  --client \"${COURSE_PYTHON:?source the course runtime}\" labs/33_speculative_engine_client.py --base-url @URL@ \\\n    --model \"${CLUSTER_TARGET_MODEL:?set target model}\" --target-revision \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \\\n    --draft-model \"${COURSE_DRAFT_MODEL:?set draft model}\" \\\n    --draft-revision \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\" \\\n    --variant target-only --output @OUTPUT@ \\\n  --server nsys profile --trace=cuda,nvtx,osrt \\\n    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \\\n    --cuda-graph-trace=node --sample=none --cpuctxsw=none \\\n    --discard-environment=true --force-overwrite=false \\\n    --capture-range=cudaProfilerApi --capture-range-end=stop \\\n    --duration=300 --kill=none --wait=all \\\n    --output \"results/33_speculative_engine_client/profiles/nsys-%q{COURSE_CAPTURE_ID}\" \\\n    vllm serve \"${CLUSTER_TARGET_MODEL:?set target model}\" --revision \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" --tokenizer-revision \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \\\n    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \\\n    --profiler-config.profiler cuda"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_speculative_engine_client/logs/%j.out\" \\\n  --error=\"$PWD/results/33_speculative_engine_client/logs/%j.err\" slurm/33_speculative_engine_client.nsys.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "jobs": {
+        "run": "slurm/33_speculative_engine_client.sbatch",
+        "nsys": "slurm/33_speculative_engine_client.nsys.sbatch"
+      }
     },
     "34_policy_equivalence_client": {
       "lab": "34_policy_equivalence_client",
@@ -1483,8 +1564,8 @@
       "question": "Why must prompt content, tokenization, output budget, seed, and sampling policy remain fixed? Which settings should change in a chunking experiment, and which in a prefix-cache experiment? Separate correctness probes from load-generator measurements.",
       "interpretation": "This helper records response equivalence. Performance evidence belongs to the separately collected campaign results; no latency or throughput is inferred from response digests.",
       "dashboard": "reference/grafana/34_policy_equivalence_client.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 34_policy_equivalence_client slurm/vllm_chunked_prefill_ab.sbatch",
-      "systems_command": "python3 tools/submit_lab.py --lab 34_policy_equivalence_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_chunked_prefill_ab.sbatch",
+      "baseline_command": "sbatch slurm/34_policy_equivalence_client.sbatch",
+      "systems_command": "sbatch slurm/34_policy_equivalence_client.nsys.sbatch",
       "compute_command": null,
       "tuning_control": "Compare chunked prefill disabled/enabled using the same prompt/output budgets and paired greedy outputs",
       "evidence_views": [
@@ -1503,7 +1584,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity with the matching unprofiled AIPerf exports. Use this lab's Grafana panels to check paired greedy-equivalence evidence."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \\\n  --mem=64G --time=00:15:00 --chdir=\"$PWD\" \\\n  bash slurm/capture_server.sh 34_policy_equivalence_client \\\n  --client \"${COURSE_PYTHON:?source the course runtime}\" labs/34_policy_equivalence_client.py --base-url @URL@ \\\n    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ --workload chunked-prefill --variant disabled \\\n  --server nsys profile --trace=cuda,nvtx,osrt \\\n    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \\\n    --cuda-graph-trace=node --sample=none --cpuctxsw=none \\\n    --discard-environment=true --force-overwrite=false \\\n    --capture-range=cudaProfilerApi --capture-range-end=stop \\\n    --duration=300 --kill=none --wait=all \\\n    --output \"results/34_policy_equivalence_client/profiles/nsys-%q{COURSE_CAPTURE_ID}\" \\\n    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \\\n    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \\\n    --profiler-config.profiler cuda --no-enable-chunked-prefill"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/34_policy_equivalence_client/logs/%j.out\" \\\n  --error=\"$PWD/results/34_policy_equivalence_client/logs/%j.err\" slurm/34_policy_equivalence_client.nsys.sbatch",
+      "jobs": {
+        "run": "slurm/34_policy_equivalence_client.sbatch",
+        "nsys": "slurm/34_policy_equivalence_client.nsys.sbatch"
+      }
     },
     "35_inference_basics": {
       "lab": "35_inference_basics",
@@ -1515,8 +1600,8 @@
       "question": "Follow `steps`: which row was read, which token was chosen, and which input the next forward receives. Explain why changing the output budget changes work without improving a kernel. As a source-edit extension, change one score and predict the resulting sequence; keep the original run as the reference. How would sampling differ from greedy choice? Why does this table fail to model attention over a long prompt? Distinguish those missing mechanisms from the feedback loop it does demonstrate.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/35_inference_basics.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 35_inference_basics slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda",
-      "systems_command": "python3 tools/submit_lab.py --lab 35_inference_basics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda",
+      "baseline_command": "sbatch slurm/35_inference_basics.sbatch --device cpu --workload small",
+      "systems_command": "sbatch slurm/35_inference_basics.nsys.sbatch --device cuda",
       "compute_command": null,
       "tuning_control": "Trace greedy selection and the next autoregressive input",
       "evidence_views": [
@@ -1534,7 +1619,11 @@
         "view": "For --device cuda only, expand lab_workload and CUDA API/GPU rows. Locate embedding, softmax/argmax and host reads in each token step. Correlate them with the generated-token record; this bigram exercise does not measure transformer serving performance. CPU mode has no GPU profiling."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/35_inference_basics/logs/capture-%J-%t.out\" \\\n  --error=\"results/35_inference_basics/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/35_inference_basics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/35_inference_basics.py --device cuda"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/35_inference_basics/logs/%j.out\" \\\n  --error=\"$PWD/results/35_inference_basics/logs/%j.err\" slurm/35_inference_basics.nsys.sbatch --device cuda",
+      "jobs": {
+        "run": "slurm/35_inference_basics.sbatch",
+        "nsys": "slurm/35_inference_basics.nsys.sbatch"
+      }
     },
     "36_kv_tiering": {
       "lab": "36_kv_tiering",
@@ -1609,7 +1698,7 @@
       "question": "Does TTL expire before the next reuse even when capacity is ample? Does increasing storage capacity help a low-reuse workload? Can a storage hit be rejected as too costly? After a modeled restart, only prefixes previously demoted to storage survive; exclusive tiers are not a persistent backup of every device entry. Explain why changing identity prevents reuse while a mere capacity change does not.",
       "interpretation": "This CPU retention model simulates cache placement without transferring GPU data or running inference. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/36_kv_tiering.json",
-      "baseline_command": "python labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 0",
+      "baseline_command": "sbatch slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 0",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "`--host-prefixes`, `--storage-prefixes`, `--ttl-ms`, `--storage-gbps`, `--gap-ms`, `--restart-at`, `--revision-change-at`",
@@ -1631,7 +1720,10 @@
         "reason": "This CPU retention model simulates cache placement without transferring GPU data or running inference.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": false
+      "gpu_telemetry": false,
+      "jobs": {
+        "run": "slurm/36_kv_tiering.sbatch"
+      }
     }
   },
   "setup": {

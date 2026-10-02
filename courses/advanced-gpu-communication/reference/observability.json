@@ -49,8 +49,8 @@
       "question": "Inspect ranks, NVLink peers and active IB ports in Grafana, then the exact collective sum in JSON. Require the cluster owner to check Fabric Manager and NVSwitch health separately: NVLink labels alone do not prove switch health or GPUDirect RDMA. Repeat qualification before and after an owner-approved repair; readiness is a pass/fail result, not a speedup.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/01_fabric_topology.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 01_fabric_topology slurm/fabric.sbatch labs/01_fabric_topology.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 01_fabric_topology --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/01_fabric_topology.py --profile small",
+      "baseline_command": "sbatch slurm/01_fabric_topology.sbatch --workload small",
+      "systems_command": "sbatch slurm/01_fabric_topology.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Repeat hardware qualification and compare readiness evidence",
       "evidence_views": [
@@ -72,7 +72,11 @@
         "view": "Open all rank reports. Expand CUDA streams and the course_measure NVTX range; confirm the tiny all-reduce appears on every participating rank. This is a readiness trace, not a bandwidth benchmark."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/01_fabric_topology/logs/capture-%J-%t.out\" \\\n  --error=\"results/01_fabric_topology/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/01_fabric_topology/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/01_fabric_topology.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/01_fabric_topology/logs/%j.out\" \\\n  --error=\"$PWD/results/01_fabric_topology/logs/%j.err\" slurm/01_fabric_topology.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/01_fabric_topology.sbatch",
+        "nsys": "slurm/01_fabric_topology.nsys.sbatch"
+      }
     },
     "02_collective_readiness": {
       "lab": "02_collective_readiness",
@@ -84,8 +88,8 @@
       "question": "Draw one process-to-device arrow on each node and one communication edge between them. Explain why successful local CUDA execution does not prove that NCCL can communicate across the inter-node network.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/02_collective_readiness.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 02_collective_readiness slurm/two_node.sbatch labs/02_collective_readiness.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 02_collective_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/02_collective_readiness.py --profile small",
+      "baseline_command": "sbatch slurm/02_collective_readiness.sbatch --workload small",
+      "systems_command": "sbatch slurm/02_collective_readiness.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -105,7 +109,11 @@
         "view": "Open both rank reports. Expand CUDA API, CUDA GPU and NCCL rows inside lab_workload; correlate the readiness all-reduce on the two hosts. A passing sum is correctness evidence, not throughput evidence."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/02_collective_readiness/logs/capture-%J-%t.out\" \\\n  --error=\"results/02_collective_readiness/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/02_collective_readiness/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/02_collective_readiness.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/02_collective_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/02_collective_readiness/logs/%j.err\" slurm/02_collective_readiness.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/02_collective_readiness.sbatch",
+        "nsys": "slurm/02_collective_readiness.nsys.sbatch"
+      }
     },
     "03_training_readiness": {
       "lab": "03_training_readiness",
@@ -136,8 +144,8 @@
       "question": "Draw the rank/device mapping and explain why each node uses local rank zero. Which later failures could still occur after this check passes, such as model memory exhaustion or mismatched collective order?",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/03_training_readiness.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 03_training_readiness slurm/training_two_rank.sbatch labs/03_training_readiness.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 03_training_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/03_training_readiness.py --profile small",
+      "baseline_command": "sbatch slurm/03_training_readiness.sbatch --workload small",
+      "systems_command": "sbatch slurm/03_training_readiness.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -160,7 +168,11 @@
         "view": "Open both rank reports. Inspect lab_workload, CUDA streams and NCCL activity for the readiness all-reduce; require both ranks to participate before interpreting later training traces."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/03_training_readiness/logs/capture-%J-%t.out\" \\\n  --error=\"results/03_training_readiness/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/03_training_readiness/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/03_training_readiness.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/03_training_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/03_training_readiness/logs/%j.err\" slurm/03_training_readiness.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/03_training_readiness.sbatch",
+        "nsys": "slurm/03_training_readiness.nsys.sbatch"
+      }
     },
     "04_inference_readiness": {
       "lab": "04_inference_readiness",
@@ -191,8 +203,8 @@
       "question": "Draw the two worker/device pairs and explain why local rank is zero on each node. Name the additional initialization boundaries that a real distributed engine introduces beyond this communication group.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/04_inference_readiness.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 04_inference_readiness slurm/two_node.sbatch labs/04_inference_readiness.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 04_inference_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/04_inference_readiness.py --profile small",
+      "baseline_command": "sbatch slurm/04_inference_readiness.sbatch --workload small",
+      "systems_command": "sbatch slurm/04_inference_readiness.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -215,7 +227,11 @@
         "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL all-reduce; this probe establishes collective readiness, not serving latency."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/04_inference_readiness/logs/capture-%J-%t.out\" \\\n  --error=\"results/04_inference_readiness/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/04_inference_readiness/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/04_inference_readiness.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/04_inference_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/04_inference_readiness/logs/%j.err\" slurm/04_inference_readiness.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/04_inference_readiness.sbatch",
+        "nsys": "slurm/04_inference_readiness.nsys.sbatch"
+      }
     },
     "05_transport_readiness": {
       "lab": "05_transport_readiness",
@@ -227,8 +243,8 @@
       "question": "Write the invariants that must remain fixed in a later comparison: device variant, rank count, global work, dtype, environment and timed operations. Which of these would invalidate a direct baseline/candidate ratio if changed?",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/05_transport_readiness.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 05_transport_readiness slurm/two_node.sbatch labs/05_transport_readiness.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 05_transport_readiness --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/05_transport_readiness.py --profile small",
+      "baseline_command": "sbatch slurm/05_transport_readiness.sbatch --workload small",
+      "systems_command": "sbatch slurm/05_transport_readiness.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -248,7 +264,11 @@
         "view": "Open both rank reports. Inspect lab_workload and the CUDA/NCCL collective. Confirm placement separately from the trace; kernel duration alone does not identify the network transport."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/05_transport_readiness/logs/capture-%J-%t.out\" \\\n  --error=\"results/05_transport_readiness/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/05_transport_readiness/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/05_transport_readiness.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/05_transport_readiness/logs/%j.out\" \\\n  --error=\"$PWD/results/05_transport_readiness/logs/%j.err\" slurm/05_transport_readiness.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/05_transport_readiness.sbatch",
+        "nsys": "slurm/05_transport_readiness.nsys.sbatch"
+      }
     },
     "06_nvlink_bandwidth": {
       "lab": "06_nvlink_bandwidth",
@@ -299,8 +319,8 @@
       "question": "Compare the slowest pair and mean bandwidth, then open the private vendor JSON and locate asymmetric pairs in bandwidth_matrix. A CE-versus-SM difference is a mechanism study; decide which resource your application can spare. Independently repeat the same engine three times. Keep buffer size and sample count fixed. H100 inter-node InfiniBand is not nvbandwidth multi-node NVLink/IMEX; this lab intentionally stays within one worker.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/06_nvlink_bandwidth.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce",
-      "systems_command": "python3 tools/submit_lab.py --lab 06_nvlink_bandwidth --export=ALL,COURSE_PROFILE_TOOL=nsys --nodes=1 slurm/fabric_tools.sbatch labs/06_nvlink_bandwidth.py --profile small --engine ce",
+      "baseline_command": "sbatch --nodes=1 slurm/06_nvlink_bandwidth.sbatch --workload small --engine ce",
+      "systems_command": "sbatch --nodes=1 slurm/06_nvlink_bandwidth.nsys.sbatch --workload small --engine ce",
       "compute_command": null,
       "tuning_control": "`--engine`",
       "evidence_views": [
@@ -321,7 +341,11 @@
         "view": "Open nvbandwidth.nsys-rep beside the private vendor JSON. Compare CUDA GPU memory-copy rows for CE against kernel rows for SM at the same buffer size. NVTX ranges are vendor-owned; no course_measure annotation is promised. Use clean matrix bandwidth for the comparison, not capture timings."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=8 --cpus-per-task=16 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/06_nvlink_bandwidth/logs/capture-%J-%t.out\" \\\n  --error=\"results/06_nvlink_bandwidth/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/06_nvlink_bandwidth/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_TOOLS:?qualified tools}/fabric/nvbandwidth-source/build/nvbandwidth\" --format json \\\n  --testcase device_to_device_memcpy_write_ce --bufferSize 64 --testSamples 5"
+      "learner_systems_command": "sbatch --nodes=1 --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/06_nvlink_bandwidth/logs/%j.out\" \\\n  --error=\"$PWD/results/06_nvlink_bandwidth/logs/%j.err\" slurm/06_nvlink_bandwidth.nsys.sbatch --workload small --engine ce",
+      "jobs": {
+        "run": "slurm/06_nvlink_bandwidth.sbatch",
+        "nsys": "slurm/06_nvlink_bandwidth.nsys.sbatch"
+      }
     },
     "07_rdma_bandwidth": {
       "lab": "07_rdma_bandwidth",
@@ -355,7 +379,7 @@
       "question": "Require both endpoint logs to say VALIDATION: PASSED with nonzero chunks and bytes, and both JSON reports to identify IB/RC and CUDA device 0 for the candidate. Bidirectional Gbit/s is aggregate traffic in both directions, not one-way GB/s. After the host/GPU comparison, hold GPU memory fixed and independently change --tx-depth from 128 to 64; publish the two printed result paths; the publisher detects the single changed parameter. Match NIC/GPU locality from nvidia-smi topo -m and ibdev2netdev before testing. NET/IB alone is insufficient evidence of GPUDirect. Registration failure is a failed prerequisite, not evidence that host memory is faster.",
       "interpretation": "This verbs benchmark measures NIC DMA into host or GPU memory. CUDA tracing cannot establish RDMA wire bandwidth; use validated perftest throughput and topology evidence. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/07_rdma_bandwidth.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 07_rdma_bandwidth slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory host --server-device \"${SERVER_HCA:?qualified mlx5 device}\" --client-device \"${CLIENT_HCA:?qualified mlx5 device}\"",
+      "baseline_command": "sbatch slurm/07_rdma_bandwidth.sbatch --workload small --memory host --server-device \"${SERVER_HCA:?qualified mlx5 device}\" --client-device \"${CLIENT_HCA:?qualified mlx5 device}\"",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "`--memory`",
@@ -375,7 +399,10 @@
         "reason": "This verbs benchmark measures NIC DMA into host or GPU memory. CUDA tracing cannot establish RDMA wire bandwidth; use validated perftest throughput and topology evidence.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "jobs": {
+        "run": "slurm/07_rdma_bandwidth.sbatch"
+      }
     },
     "08_distributed_collectives": {
       "lab": "08_distributed_collectives",
@@ -408,8 +435,8 @@
       "question": "Explain why small messages can be dominated by startup latency and why larger messages may expose transfer cost. Draw the operation's dependencies and distinguish application payload from the bytes moved by a particular collective algorithm.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/08_distributed_collectives.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 08_distributed_collectives slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4",
-      "systems_command": "python3 tools/submit_lab.py --lab 08_distributed_collectives --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4",
+      "baseline_command": "sbatch slurm/08_distributed_collectives.sbatch --workload small --payload-mib 4",
+      "systems_command": "sbatch slurm/08_distributed_collectives.nsys.sbatch --workload small --payload-mib 4",
       "compute_command": null,
       "tuning_control": "`--payload-mib`",
       "evidence_views": [
@@ -438,7 +465,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/08_distributed_collectives/logs/capture-%J-%t.out\" \\\n  --error=\"results/08_distributed_collectives/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/08_distributed_collectives/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/08_distributed_collectives.py --profile small --payload-mib 4"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/08_distributed_collectives/logs/%j.out\" \\\n  --error=\"$PWD/results/08_distributed_collectives/logs/%j.err\" slurm/08_distributed_collectives.nsys.sbatch --workload small --payload-mib 4",
+      "jobs": {
+        "run": "slurm/08_distributed_collectives.sbatch",
+        "nsys": "slurm/08_distributed_collectives.nsys.sbatch"
+      }
     },
     "09_nccl_transport_sweep": {
       "lab": "09_nccl_transport_sweep",
@@ -480,8 +511,8 @@
       "question": "Build a small worksheet for three representative sizes: 8 KiB, 1 MiB and 64 MiB. For each, retain all three independent run medians and their range, then compare the median of those run medians between profiles. Do not pool every within-job sample and call them independent runs. Explain whether the effect is limited to small-message latency, large-message transfer, or neither.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/09_nccl_transport_sweep.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 09_nccl_transport_sweep slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576",
-      "systems_command": "python3 tools/submit_lab.py --lab 09_nccl_transport_sweep --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576",
+      "baseline_command": "sbatch slurm/09_nccl_transport_sweep.sbatch --max-bytes 1048576",
+      "systems_command": "sbatch slurm/09_nccl_transport_sweep.nsys.sbatch --max-bytes 1048576",
       "compute_command": null,
       "tuning_control": "`--variant`",
       "evidence_views": [
@@ -509,7 +540,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/09_nccl_transport_sweep/logs/capture-%J-%t.out\" \\\n  --error=\"results/09_nccl_transport_sweep/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/09_nccl_transport_sweep/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/09_nccl_transport_sweep.py --max-bytes 1048576"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/09_nccl_transport_sweep/logs/%j.out\" \\\n  --error=\"$PWD/results/09_nccl_transport_sweep/logs/%j.err\" slurm/09_nccl_transport_sweep.nsys.sbatch --max-bytes 1048576",
+      "jobs": {
+        "run": "slurm/09_nccl_transport_sweep.sbatch",
+        "nsys": "slurm/09_nccl_transport_sweep.nsys.sbatch"
+      }
     },
     "10_nccl_tests_report": {
       "lab": "10_nccl_tests_report",
@@ -551,8 +586,8 @@
       "question": "Read the outputs in four passes: capability, selected path, correctness, then performance. Read-only `nvidia-smi topo -m` describes local proximity; `ibv_devinfo`, `ibstat` and `rdma link show` can establish port/link context when installed. They are not substitutes for the runtime log. An IB transport may carry RoCE; an active Ethernet port does not prove RoCE use. A Socket profile intentionally selects NCCL's Socket network plugin. Default versus socket is an RDMA comparison only if diagnostics establish that default selected RDMA.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/10_nccl_tests_report.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 10_nccl_tests_report slurm/nccl_tests.sbatch default",
-      "systems_command": "python3 tools/submit_lab.py --lab 10_nccl_tests_report --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/nccl_tests.sbatch default",
+      "baseline_command": "sbatch slurm/10_nccl_tests_report.sbatch default",
+      "systems_command": "sbatch slurm/10_nccl_tests_report.nsys.sbatch default",
       "compute_command": null,
       "tuning_control": "`--variant`",
       "evidence_views": [
@@ -582,7 +617,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=16 --ntasks-per-node=8 --gpus-per-task=1 --cpus-per-task=4 \\\n  --mpi=\"${COURSE_MPI:?select the qualified MPI plugin}\" --gres-flags=allow-task-sharing --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/10_nccl_tests_report/logs/capture-%J-%t.out\" \\\n  --error=\"results/10_nccl_tests_report/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS NCCL_TESTS_DEVICE=0 COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/10_nccl_tests_report/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_NCCL_TESTS:?qualified all_reduce_perf binary}\" \\\n  -b 8 -e 1048576 -f 2 -t 1 -g 1 -d float -o sum -w 5 -n 20 -c 1 -a 3 -I 0 -U 0 -C 0 -S 0 -T 120"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_nccl_tests_report/logs/%j.out\" \\\n  --error=\"$PWD/results/10_nccl_tests_report/logs/%j.err\" slurm/10_nccl_tests_report.nsys.sbatch default",
+      "jobs": {
+        "run": "slurm/10_nccl_tests_report.sbatch",
+        "nsys": "slurm/10_nccl_tests_report.nsys.sbatch"
+      }
     },
     "11_collective_layout": {
       "lab": "11_collective_layout",
@@ -615,8 +654,8 @@
       "question": "In Systems, align rank reports using the same collective sequence and the local_reduce, leader_all_reduce and local_broadcast NVTX ranges. Compare the inter-node tail and waiting nonleaders with flat_all_reduce. Grafana Collective duration is the median of each iteration\u2019s slowest-rank time; Useful payload rate is bytes divided by that time, not NCCL normalized bus bandwidth. Independently run the same comparison with --nodes=1 to isolate local overhead, keeping those results in a separate eight-rank comparison.",
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/11_collective_layout.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 11_collective_layout slurm/fabric.sbatch labs/11_collective_layout.py --profile small --layout flat",
-      "systems_command": "python3 tools/submit_lab.py --lab 11_collective_layout --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/11_collective_layout.py --profile small --layout flat",
+      "baseline_command": "sbatch slurm/11_collective_layout.sbatch --workload small --layout flat",
+      "systems_command": "sbatch slurm/11_collective_layout.nsys.sbatch --workload small --layout flat",
       "compute_command": null,
       "tuning_control": "`--layout`",
       "evidence_views": [
@@ -636,7 +675,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/11_collective_layout/logs/capture-%J-%t.out\" \\\n  --error=\"results/11_collective_layout/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/11_collective_layout/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/11_collective_layout.py --profile small --layout flat"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/11_collective_layout/logs/%j.out\" \\\n  --error=\"$PWD/results/11_collective_layout/logs/%j.err\" slurm/11_collective_layout.nsys.sbatch --workload small --layout flat",
+      "jobs": {
+        "run": "slurm/11_collective_layout.sbatch",
+        "nsys": "slurm/11_collective_layout.nsys.sbatch"
+      }
     },
     "12_distributed_scaling": {
       "lab": "12_distributed_scaling",
@@ -678,8 +721,8 @@
       "question": "Compute speedup as one-rank time divided by two-rank time, then divide by two for efficiency. Explain how communication and reduced local batch size can each limit the result.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/12_distributed_scaling.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 12_distributed_scaling slurm/single_gpu.sbatch labs/12_distributed_scaling.py --profile small --global-batch 64",
-      "systems_command": "python3 tools/submit_lab.py --lab 12_distributed_scaling --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/12_distributed_scaling.py --profile small --global-batch 64",
+      "baseline_command": "sbatch slurm/12_distributed_scaling.sbatch --workload small --global-batch 64",
+      "systems_command": "sbatch slurm/12_distributed_scaling.nsys.sbatch --workload small --global-batch 64",
       "compute_command": null,
       "tuning_control": "one versus two ranks at the same global batch",
       "evidence_views": [
@@ -703,7 +746,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/12_distributed_scaling/logs/capture-%J-%t.out\" \\\n  --error=\"results/12_distributed_scaling/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/12_distributed_scaling/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/12_distributed_scaling.py --profile small --global-batch 64"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/12_distributed_scaling/logs/%j.out\" \\\n  --error=\"$PWD/results/12_distributed_scaling/logs/%j.err\" slurm/12_distributed_scaling.nsys.sbatch --workload small --global-batch 64",
+      "jobs": {
+        "run": "slurm/12_distributed_scaling.sbatch",
+        "nsys": "slurm/12_distributed_scaling.nsys.sbatch"
+      }
     },
     "13_collective_overlap": {
       "lab": "13_collective_overlap",
@@ -743,8 +790,8 @@
       "question": "Draw compute and communication intervals plus the final join. Compare the ideal `max(compute, communication)` intuition with measured completion, remembering shared resources and launch overhead. Use a profiler before asserting that simultaneous execution occurred.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/13_collective_overlap.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 13_collective_overlap slurm/two_node.sbatch labs/13_collective_overlap.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 13_collective_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/13_collective_overlap.py --profile small",
+      "baseline_command": "sbatch slurm/13_collective_overlap.sbatch --workload small",
+      "systems_command": "sbatch slurm/13_collective_overlap.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Compare serialized communication plus compute with asynchronous overlap at fixed payload and matrix size",
       "evidence_views": [
@@ -769,7 +816,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/13_collective_overlap/logs/capture-%J-%t.out\" \\\n  --error=\"results/13_collective_overlap/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/13_collective_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/13_collective_overlap.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/13_collective_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/13_collective_overlap/logs/%j.err\" slurm/13_collective_overlap.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/13_collective_overlap.sbatch",
+        "nsys": "slurm/13_collective_overlap.nsys.sbatch"
+      }
     },
     "14_distributed_profiling": {
       "lab": "14_distributed_profiling",
@@ -802,8 +853,8 @@
       "question": "In Systems, select communication, independent_compute and wait_for_collective ranges and inspect CUDA/NCCL lanes on every rank. Is reduced waiting real overlap or a slower GEMM sharing resources? For framework attribution, make a separate --torch-trace run: open each rank JSON in a local Chrome trace viewer, inspect training_like_step, aten::mm, c10d collectives, CUDA activity and allocated memory. Shapes and memory collection add overhead. Do not compare those timings with clean runs or capture PyTorch and Systems simultaneously. Independently try the same fixed-shape comparison on one node; do not mix eight- and sixteen-rank slots.",
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/14_distributed_profiling.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 14_distributed_profiling slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off",
-      "systems_command": "python3 tools/submit_lab.py --lab 14_distributed_profiling --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off",
+      "baseline_command": "sbatch slurm/14_distributed_profiling.sbatch --workload small --overlap off",
+      "systems_command": "sbatch slurm/14_distributed_profiling.nsys.sbatch --workload small --overlap off",
       "compute_command": null,
       "tuning_control": "`--overlap`",
       "evidence_views": [
@@ -823,7 +874,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/14_distributed_profiling/logs/capture-%J-%t.out\" \\\n  --error=\"results/14_distributed_profiling/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/14_distributed_profiling/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/14_distributed_profiling.py --profile small --overlap off"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/14_distributed_profiling/logs/%j.out\" \\\n  --error=\"$PWD/results/14_distributed_profiling/logs/%j.err\" slurm/14_distributed_profiling.nsys.sbatch --workload small --overlap off",
+      "jobs": {
+        "run": "slurm/14_distributed_profiling.sbatch",
+        "nsys": "slurm/14_distributed_profiling.nsys.sbatch"
+      }
     },
     "15_ddp_train": {
       "lab": "15_ddp_train",
@@ -874,8 +929,8 @@
       "question": "Map local examples to the global objective. For the default averaged-gradient behavior, explain why each rank must scale a summed loss by world size divided by global valid-token count when valid counts differ.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/15_ddp_train.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 15_ddp_train slurm/training_two_rank.sbatch labs/15_ddp_train.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 15_ddp_train --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/15_ddp_train.py --profile small",
+      "baseline_command": "sbatch slurm/15_ddp_train.sbatch --workload small",
+      "systems_command": "sbatch slurm/15_ddp_train.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
@@ -909,7 +964,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/15_ddp_train/logs/capture-%J-%t.out\" \\\n  --error=\"results/15_ddp_train/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/15_ddp_train/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/15_ddp_train.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/15_ddp_train/logs/%j.out\" \\\n  --error=\"$PWD/results/15_ddp_train/logs/%j.err\" slurm/15_ddp_train.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/15_ddp_train.sbatch",
+        "nsys": "slurm/15_ddp_train.nsys.sbatch"
+      }
     },
     "16_fsdp2_train": {
       "lab": "16_fsdp2_train",
@@ -951,8 +1010,8 @@
       "question": "Draw persistent shards separately from temporarily gathered parameters. Which memory survives between steps? Which communication is needed before forward and during backward? Explain why small models can become slower when communication overhead dominates.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/16_fsdp2_train.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 16_fsdp2_train slurm/training_two_rank.sbatch labs/16_fsdp2_train.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 16_fsdp2_train --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/16_fsdp2_train.py --profile small",
+      "baseline_command": "sbatch slurm/16_fsdp2_train.sbatch --workload small",
+      "systems_command": "sbatch slurm/16_fsdp2_train.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "`--zero-grad-fill`",
       "evidence_views": [
@@ -984,7 +1043,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/16_fsdp2_train/logs/capture-%J-%t.out\" \\\n  --error=\"results/16_fsdp2_train/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/16_fsdp2_train/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/16_fsdp2_train.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/16_fsdp2_train/logs/%j.out\" \\\n  --error=\"$PWD/results/16_fsdp2_train/logs/%j.err\" slurm/16_fsdp2_train.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/16_fsdp2_train.sbatch",
+        "nsys": "slurm/16_fsdp2_train.nsys.sbatch"
+      }
     },
     "17_training_expert_parallel": {
       "lab": "17_training_expert_parallel",
@@ -1033,8 +1096,8 @@
       "question": "Trace one token's outward and return routes. Why must its gradient follow the inverse mapping? Compare the busiest expert's token count with the mean across experts, and account for extra padding before interpreting grouped-operation performance.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/17_training_expert_parallel.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 17_training_expert_parallel slurm/training_two_rank.sbatch labs/17_training_expert_parallel.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 17_training_expert_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/17_training_expert_parallel.py --profile small",
+      "baseline_command": "sbatch slurm/17_training_expert_parallel.sbatch --workload small",
+      "systems_command": "sbatch slurm/17_training_expert_parallel.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Compare per-expert token load with the slowest-rank completion",
       "evidence_views": [
@@ -1062,7 +1125,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/17_training_expert_parallel/logs/capture-%J-%t.out\" \\\n  --error=\"results/17_training_expert_parallel/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/17_training_expert_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/17_training_expert_parallel.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/17_training_expert_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/17_training_expert_parallel/logs/%j.err\" slurm/17_training_expert_parallel.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/17_training_expert_parallel.sbatch",
+        "nsys": "slurm/17_training_expert_parallel.nsys.sbatch"
+      }
     },
     "18_training_tensor_parallel": {
       "lab": "18_training_tensor_parallel",
@@ -1102,8 +1169,8 @@
       "question": "Write the shapes of X, each weight shard, local Y, and dX. Why are input-gradient contributions summed for a column split? Which communication moves from backward to forward when the partition orientation changes?",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/18_training_tensor_parallel.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 18_training_tensor_parallel slurm/training_two_rank.sbatch labs/18_training_tensor_parallel.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 18_training_tensor_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/18_training_tensor_parallel.py --profile small",
+      "baseline_command": "sbatch slurm/18_training_tensor_parallel.sbatch --workload small",
+      "systems_command": "sbatch slurm/18_training_tensor_parallel.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Compare the sharded linear result and input gradient with the replicated reference",
       "evidence_views": [
@@ -1129,7 +1196,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/18_training_tensor_parallel/logs/capture-%J-%t.out\" \\\n  --error=\"results/18_training_tensor_parallel/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/18_training_tensor_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/18_training_tensor_parallel.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/18_training_tensor_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/18_training_tensor_parallel/logs/%j.err\" slurm/18_training_tensor_parallel.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/18_training_tensor_parallel.sbatch",
+        "nsys": "slurm/18_training_tensor_parallel.nsys.sbatch"
+      }
     },
     "19_gradient_overlap": {
       "lab": "19_gradient_overlap",
@@ -1171,9 +1242,9 @@
       "question": "Why may gradient readiness reverse forward construction order? Draw the first communication that can begin and the final exposed tail. Explain how bucket size trades collective startup overhead against earlier readiness.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/19_gradient_overlap.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap slurm/training_two_rank.sbatch labs/19_gradient_overlap.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/19_gradient_overlap.py --profile small",
-      "compute_command": "python3 tools/submit_lab.py --lab 19_gradient_overlap slurm/ncu_single_gpu.sbatch --profile small --bucket-mib 8 24",
+      "baseline_command": "sbatch slurm/19_gradient_overlap.sbatch --workload small",
+      "systems_command": "sbatch slurm/19_gradient_overlap.nsys.sbatch --workload small",
+      "compute_command": "sbatch slurm/19_gradient_overlap.ncu.sbatch --workload small --bucket-mib 8 24",
       "tuning_control": "`--bucket-mib`",
       "evidence_views": [
         "Selected comparison generation",
@@ -1197,8 +1268,13 @@
         "path": "labs/gradient_overlap_compute.py",
         "nvtx_range": "gradient_backward"
       },
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/19_gradient_overlap/logs/capture-%J-%t.out\" \\\n  --error=\"results/19_gradient_overlap/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/19_gradient_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/19_gradient_overlap.py --profile small",
-      "learner_compute_command": "srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/19_gradient_overlap/logs/capture-%J-%t.out\" \\\n  --error=\"results/19_gradient_overlap/logs/capture-%J-%t.err\" \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \\\n  ncu --config-file off --nvtx-push-pop-scope process --replay-mode kernel --kill no --target-processes all --nvtx --nvtx-include gradient_backward/ \\\n  --kernel-name-base demangled --rename-kernels off \\\n  --kernel-name \"regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}\" \\\n  --launch-count 1 --set basic --section SpeedOfLight \\\n  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \\\n  --export \"results/19_gradient_overlap/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/gradient_overlap_compute.py --profile small --bucket-mib 8 24"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/19_gradient_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.nsys.sbatch --workload small",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/19_gradient_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/19_gradient_overlap/logs/%j.err\" slurm/19_gradient_overlap.ncu.sbatch --workload small --bucket-mib 8 24",
+      "jobs": {
+        "run": "slurm/19_gradient_overlap.sbatch",
+        "nsys": "slurm/19_gradient_overlap.nsys.sbatch",
+        "ncu": "slurm/19_gradient_overlap.ncu.sbatch"
+      }
     },
     "20_parallelism_mechanics": {
       "lab": "20_parallelism_mechanics",
@@ -1247,8 +1323,8 @@
       "question": "Draw the forward and backward arrows between pipeline stages. Why must the second stage treat the received activation as differentiable? For context partitioning, explain why normalizing each local sum by local size would change the intended global gradient.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/20_parallelism_mechanics.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 20_parallelism_mechanics slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 20_parallelism_mechanics --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small",
+      "baseline_command": "sbatch slurm/20_parallelism_mechanics.sbatch --workload small",
+      "systems_command": "sbatch slurm/20_parallelism_mechanics.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Verify the recorded readiness/correctness contract and inspect its matching dashboard fields",
       "evidence_views": [
@@ -1270,7 +1346,11 @@
         "view": "Open both rank reports. Expand lab_workload, CUDA streams and NCCL send/receive/all-gather rows. Identify pipeline bubbles and context exchange, then check the numerical-equivalence panels before proposing an overlap change."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/20_parallelism_mechanics/logs/capture-%J-%t.out\" \\\n  --error=\"results/20_parallelism_mechanics/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/20_parallelism_mechanics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/20_parallelism_mechanics.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/20_parallelism_mechanics/logs/%j.out\" \\\n  --error=\"$PWD/results/20_parallelism_mechanics/logs/%j.err\" slurm/20_parallelism_mechanics.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/20_parallelism_mechanics.sbatch",
+        "nsys": "slurm/20_parallelism_mechanics.nsys.sbatch"
+      }
     },
     "21_ddp_buckets": {
       "lab": "21_ddp_buckets",
@@ -1304,8 +1384,8 @@
       "question": "Do post-warm-up buckets differ from startup buckets? Does a smaller cap produce earlier communication or simply more collective overhead? Can conversion or low-rank factor work outweigh reduced transfer? PowerSGD may leave small tensors uncompressed; do not compute wire bandwidth from the raw bucket ledger. A faster configuration with growing numerical drift is a candidate for further evaluation, not an accepted optimization.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/21_ddp_buckets.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 21_ddp_buckets slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1",
-      "systems_command": "python3 tools/submit_lab.py --lab 21_ddp_buckets --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1",
+      "baseline_command": "sbatch slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1",
+      "systems_command": "sbatch slurm/21_ddp_buckets.nsys.sbatch --hook allreduce --bucket-cap-mb 1",
       "compute_command": null,
       "tuning_control": "`--bucket-cap-mb`, `--hook`",
       "evidence_views": [
@@ -1325,7 +1405,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/21_ddp_buckets/logs/capture-%J-%t.out\" \\\n  --error=\"results/21_ddp_buckets/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/21_ddp_buckets/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/21_ddp_buckets/logs/%j.out\" \\\n  --error=\"$PWD/results/21_ddp_buckets/logs/%j.err\" slurm/21_ddp_buckets.nsys.sbatch --hook allreduce --bucket-cap-mb 1",
+      "jobs": {
+        "run": "slurm/21_ddp_buckets.sbatch",
+        "nsys": "slurm/21_ddp_buckets.nsys.sbatch"
+      }
     },
     "22_fabric_training": {
       "lab": "22_fabric_training",
@@ -1376,8 +1460,8 @@
       "question": "Use Systems forward, backward and optimizer ranges to count launch gaps and locate the final gradient synchronization. Grafana compares useful samples/s, slowest-rank step time, peak allocated memory and global mean loss. The tiny MLP isolates update and communication mechanics; it is not a production LLM throughput estimate. Each timed replay includes model reset, identically in both variants. Peak memory includes reference buffers. Independently test microbatch 2, then explain whether larger kernels repaid memory cost. A separate --nodes=1 campaign tests strong scaling with the same global batch; never change node count inside a microbatch comparison.",
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/22_fabric_training.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 22_fabric_training slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1",
-      "systems_command": "python3 tools/submit_lab.py --lab 22_fabric_training --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/22_fabric_training.py --profile small --microbatch 1",
+      "baseline_command": "sbatch slurm/22_fabric_training.sbatch --workload small --microbatch 1",
+      "systems_command": "sbatch slurm/22_fabric_training.nsys.sbatch --workload small --microbatch 1",
       "compute_command": null,
       "tuning_control": "`--microbatch`",
       "evidence_views": [
@@ -1399,7 +1483,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/22_fabric_training/logs/capture-%J-%t.out\" \\\n  --error=\"results/22_fabric_training/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/22_fabric_training/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/22_fabric_training.py --profile small --microbatch 1"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/22_fabric_training/logs/%j.out\" \\\n  --error=\"$PWD/results/22_fabric_training/logs/%j.err\" slurm/22_fabric_training.nsys.sbatch --workload small --microbatch 1",
+      "jobs": {
+        "run": "slurm/22_fabric_training.sbatch",
+        "nsys": "slurm/22_fabric_training.nsys.sbatch"
+      }
     },
     "23_inference_expert_parallel": {
       "lab": "23_inference_expert_parallel",
@@ -1439,8 +1527,8 @@
       "question": "Trace one token through dispatch, expert execution, and return permutation. Which expert determines the longest local workload? Explain why balanced token counts can still hide unequal expert computation costs.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/23_inference_expert_parallel.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 23_inference_expert_parallel slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 23_inference_expert_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile small",
+      "baseline_command": "sbatch slurm/23_inference_expert_parallel.sbatch --workload small",
+      "systems_command": "sbatch slurm/23_inference_expert_parallel.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "Follow dispatch, expert computation, and return permutation on both ranks",
       "evidence_views": [
@@ -1461,7 +1549,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/23_inference_expert_parallel/logs/capture-%J-%t.out\" \\\n  --error=\"results/23_inference_expert_parallel/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/23_inference_expert_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/23_inference_expert_parallel.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/23_inference_expert_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/23_inference_expert_parallel/logs/%j.err\" slurm/23_inference_expert_parallel.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/23_inference_expert_parallel.sbatch",
+        "nsys": "slurm/23_inference_expert_parallel.nsys.sbatch"
+      }
     },
     "24_inference_tensor_parallel": {
       "lab": "24_inference_tensor_parallel",
@@ -1512,8 +1604,8 @@
       "question": "Why does one split concatenate output columns while the other sums partial outputs? Predict what reversing the gathered rank order would do: shape checks would pass, but reference agreement would fail. Which activation dimensions determine communicated bytes? Compare batch one with the default batch at the same width; use sample variability and three independent runs to explain the communication-to-compute ratio. Finally, list the validation-only tensors a deployment could remove and the KV-cache/workspace allocations it would need to add.",
       "interpretation": "Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work.",
       "dashboard": "reference/grafana/24_inference_tensor_parallel.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 24_inference_tensor_parallel slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small",
-      "systems_command": "python3 tools/submit_lab.py --lab 24_inference_tensor_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small",
+      "baseline_command": "sbatch slurm/24_inference_tensor_parallel.sbatch --workload small",
+      "systems_command": "sbatch slurm/24_inference_tensor_parallel.nsys.sbatch --workload small",
       "compute_command": null,
       "tuning_control": "`--batch-size`",
       "evidence_views": [
@@ -1539,7 +1631,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/24_inference_tensor_parallel/logs/capture-%J-%t.out\" \\\n  --error=\"results/24_inference_tensor_parallel/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 1 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/24_inference_tensor_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/24_inference_tensor_parallel.py --profile small"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/24_inference_tensor_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/24_inference_tensor_parallel/logs/%j.err\" slurm/24_inference_tensor_parallel.nsys.sbatch --workload small",
+      "jobs": {
+        "run": "slurm/24_inference_tensor_parallel.sbatch",
+        "nsys": "slurm/24_inference_tensor_parallel.nsys.sbatch"
+      }
     },
     "25_fabric_inference": {
       "lab": "25_fabric_inference",
@@ -1581,8 +1677,8 @@
       "question": "In Systems, compare decode_projection with decode_all_reduce across ranks. Explain why tensor parallelism can lose on a small model even while splitting its weights. Grafana\u2019s token rate counts each global request once, not once per rank. Peak allocated memory includes correctness reference buffers and is not a model-capacity bound. Independently repeat with the large workload profile as a separate comparison. Continue with Labs 32\u201334 for measured client latency and real server traces.",
       "interpretation": "Keep useful work fixed. Measured summaries establish duration; job-window GPU telemetry is correlation without exclusive attribution.",
       "dashboard": "reference/grafana/25_fabric_inference.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 25_fabric_inference slurm/fabric.sbatch labs/25_fabric_inference.py --profile small --placement replicated",
-      "systems_command": "python3 tools/submit_lab.py --lab 25_fabric_inference --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/25_fabric_inference.py --profile small --placement replicated",
+      "baseline_command": "sbatch slurm/25_fabric_inference.sbatch --workload small --placement replicated",
+      "systems_command": "sbatch slurm/25_fabric_inference.nsys.sbatch --workload small --placement replicated",
       "compute_command": null,
       "tuning_control": "`--placement`",
       "evidence_views": [
@@ -1603,7 +1699,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/25_fabric_inference/logs/capture-%J-%t.out\" \\\n  --error=\"results/25_fabric_inference/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/25_fabric_inference/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/25_fabric_inference.py --profile small --placement replicated"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/25_fabric_inference/logs/%j.out\" \\\n  --error=\"$PWD/results/25_fabric_inference/logs/%j.err\" slurm/25_fabric_inference.nsys.sbatch --workload small --placement replicated",
+      "jobs": {
+        "run": "slurm/25_fabric_inference.sbatch",
+        "nsys": "slurm/25_fabric_inference.nsys.sbatch"
+      }
     },
     "26_collective_latency": {
       "lab": "26_collective_latency",
@@ -1645,8 +1745,8 @@
       "question": "Select network_all_reduce NVTX ranges and NCCL/CUDA lanes on all sixteen Systems reports. Separate a launch gap from a long collective. Repeat with Ring at the same sizes; explain whether the candidate changes startup cost or the large-message slope. Never conclude that forcing one algorithm is universally better.",
       "interpretation": "The source initializes sixteen ranks, performs an exact MAX reduction, and records the slowest completed rank for every sample. Cases contain 4, 4096 and 1048576 bytes. Useful GB/s divides payload bytes by elapsed seconds; it is not a physical InfiniBand link counter or NCCL bus bandwidth. Auto can already select Tree, so equal results are meaningful.",
       "dashboard": "reference/grafana/26_collective_latency.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 26_collective_latency slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm auto",
-      "systems_command": "python3 tools/submit_lab.py --lab 26_collective_latency --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/26_collective_latency.py --profile small --algorithm auto",
+      "baseline_command": "sbatch slurm/26_collective_latency.sbatch --workload small --algorithm auto",
+      "systems_command": "sbatch slurm/26_collective_latency.nsys.sbatch --workload small --algorithm auto",
       "compute_command": null,
       "tuning_control": "algorithm",
       "evidence_views": [
@@ -1669,7 +1769,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/26_collective_latency/logs/capture-%J-%t.out\" \\\n  --error=\"results/26_collective_latency/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/26_collective_latency/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/26_collective_latency.py --profile small --algorithm auto"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/26_collective_latency/logs/%j.out\" \\\n  --error=\"$PWD/results/26_collective_latency/logs/%j.err\" slurm/26_collective_latency.nsys.sbatch --workload small --algorithm auto",
+      "jobs": {
+        "run": "slurm/26_collective_latency.sbatch",
+        "nsys": "slurm/26_collective_latency.nsys.sbatch"
+      }
     },
     "27_rdma_latency": {
       "lab": "27_rdma_latency",
@@ -1702,7 +1806,7 @@
       "question": "Read both private endpoint logs and the vendor JSON transport fields. Compare the p99 tail with the median: a lower median can coexist with worse variability. Repeat the same GPU-memory comparison using cuda-peermem only when available. CUDA kernel replay is inapplicable to this network completion measurement; use vendor evidence and job-window Grafana context.",
       "interpretation": "This verbs benchmark measures NIC completion latency. It is not a CUDA-kernel workload; use perftest latency and the checked host/GPU registration mode. Missing metrics remain unknown; sampled telemetry is context, not a timing measurement.",
       "dashboard": "reference/grafana/27_rdma_latency.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 27_rdma_latency slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device \"$SERVER_HCA\" --client-device \"$CLIENT_HCA\" --memory host",
+      "baseline_command": "sbatch slurm/27_rdma_latency.sbatch --workload small --server-device \"$SERVER_HCA\" --client-device \"$CLIENT_HCA\" --memory host",
       "systems_command": null,
       "compute_command": null,
       "tuning_control": "memory",
@@ -1724,7 +1828,10 @@
         "reason": "This verbs benchmark measures NIC completion latency. It is not a CUDA-kernel workload; use perftest latency and the checked host/GPU registration mode.",
         "view": "Inspect the measured or modeled fields in this lab's dashboard; retain the artifact and its stated scope."
       },
-      "gpu_telemetry": true
+      "gpu_telemetry": true,
+      "jobs": {
+        "run": "slurm/27_rdma_latency.sbatch"
+      }
     },
     "28_nic_selection": {
       "lab": "28_nic_selection",
@@ -1757,8 +1864,8 @@
       "question": "Match each global rank to its worker and inspect NET/IB transport, selected HCA and GDR evidence in the logs. In Systems inspect the network_all_reduce range and stragglers. Try another observed HCA in a separate comparison; keep both baseline and candidate HCA arguments identical within that pair. Explain GPU-to-NIC locality before interpreting a throughput difference.",
       "interpretation": "The single policy sets an exact NCCL_IB_HCA match for each node. The all policy leaves adapter selection automatic; it does not assert that every adapter is active. NCCL INIT, NET and GRAPH logs provide selected-path evidence. A faster run or an environment variable alone cannot prove GPUDirect RDMA. Correlate logs with the topology and completed collective results.",
       "dashboard": "reference/grafana/28_nic_selection.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 28_nic_selection slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
-      "systems_command": "python3 tools/submit_lab.py --lab 28_nic_selection --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "baseline_command": "sbatch slurm/28_nic_selection.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "systems_command": "sbatch slurm/28_nic_selection.nsys.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
       "compute_command": null,
       "tuning_control": "hca_policy",
       "evidence_views": [
@@ -1780,7 +1887,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/28_nic_selection/logs/capture-%J-%t.out\" \\\n  --error=\"results/28_nic_selection/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/28_nic_selection/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/28_nic_selection.py --profile small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/28_nic_selection/logs/%j.out\" \\\n  --error=\"$PWD/results/28_nic_selection/logs/%j.err\" slurm/28_nic_selection.nsys.sbatch --workload small --server-hca \"$SERVER_HCA\" --client-hca \"$CLIENT_HCA\" --hca-policy all",
+      "jobs": {
+        "run": "slurm/28_nic_selection.sbatch",
+        "nsys": "slurm/28_nic_selection.nsys.sbatch"
+      }
     },
     "29_nixl_transfer": {
       "lab": "29_nixl_transfer",
@@ -1822,8 +1933,8 @@
       "question": "Inspect preparation_us, post_us, transfer_us and transfer_p99_us in the authoritative artifact. A faster transfer phase can be offset by thread scheduling or registration costs. Repeat the fixed comparison with the large workload; never compare different payload sizes as an optimization. These vendor phases and GPU/node telemetry are the evidence; CUDA-kernel replay is inapplicable to this UCX transfer.",
       "interpretation": "Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement.",
       "dashboard": "reference/grafana/29_nixl_transfer.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 29_nixl_transfer slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off",
-      "systems_command": "python3 tools/submit_lab.py --lab 29_nixl_transfer --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off",
+      "baseline_command": "sbatch slurm/29_nixl_transfer.sbatch --workload small --progress-thread off",
+      "systems_command": "sbatch slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off",
       "compute_command": null,
       "tuning_control": "progress_thread",
       "evidence_views": [
@@ -1847,7 +1958,11 @@
         "view": "Open rank0.nsys-rep and rank1.nsys-rep beside the private vendor output. Inspect UCX, CUDA API and OS runtime rows around buffer preparation and progress. GPU payload DMA may have no CUDA kernel event; use clean NIXL transfer_us and bandwidth for the network result. No course NVTX range is emitted by the vendor executable."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \\\n  --chdir=\"$PWD\" --output=\"results/29_nixl_transfer/logs/capture-%j.out\" \\\n  --error=\"results/29_nixl_transfer/logs/capture-%j.err\" \\\n  slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off \\\n  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \\\n  --trace=cuda,nvtx,osrt,ucx \\\n  --cuda-trace-scope=process-tree --sample=none \\\n  --discard-environment=true --force-overwrite=false --kill=none \\\n  --cpuctxsw=none --duration=300 --wait=all \\\n  '--output={report}'"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/29_nixl_transfer/logs/%j.out\" \\\n  --error=\"$PWD/results/29_nixl_transfer/logs/%j.err\" slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off",
+      "jobs": {
+        "run": "slurm/29_nixl_transfer.sbatch",
+        "nsys": "slurm/29_nixl_transfer.nsys.sbatch"
+      }
     },
     "30_megatron_overlap": {
       "lab": "30_megatron_overlap",
@@ -1889,8 +2004,8 @@
       "question": "Capture overlap off and on in separate diagnostic jobs, using the same reference for both. Check exported statistics for every rank, then open representative reports from each worker in Systems and select bridge_training_step. Load large reports in small groups and close them between comparisons. Locate backward compute, gradient collectives and the final exposed communication tail. An overlap flag does not prove useful overlap: check whether concurrent communication slowed compute. Independently repeat the same experiment with the large-profile sequence length and report when exposed communication matters.",
       "interpretation": "The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction, fixed global batch and fixed sequence length. Parameter-gather overlap stays disabled. TensorBoard iteration-time is measured in seconds and includes the vendor training loop. The callback checks skipped steps, finite loss and full final weights; a reference mismatch blocks comparison. Synthetic tokens establish execution equivalence, not model quality or production scaling.",
       "dashboard": "reference/grafana/30_megatron_overlap.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 30_megatron_overlap slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference \"$TRAINING_REFERENCE\"",
-      "systems_command": "python3 tools/submit_lab.py --lab 30_megatron_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "baseline_command": "sbatch slurm/30_megatron_overlap.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "systems_command": "sbatch slurm/30_megatron_overlap.nsys.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
       "compute_command": null,
       "tuning_control": "overlap",
       "evidence_views": [
@@ -1914,7 +2029,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/30_megatron_overlap/logs/capture-%J-%t.out\" \\\n  --error=\"results/30_megatron_overlap/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/30_megatron_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/30_megatron_overlap.py --profile small --overlap off --reference \"$TRAINING_REFERENCE\""
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/30_megatron_overlap/logs/%j.out\" \\\n  --error=\"$PWD/results/30_megatron_overlap/logs/%j.err\" slurm/30_megatron_overlap.nsys.sbatch --workload small --overlap off --reference \"$TRAINING_REFERENCE\"",
+      "jobs": {
+        "run": "slurm/30_megatron_overlap.sbatch",
+        "nsys": "slurm/30_megatron_overlap.nsys.sbatch"
+      }
     },
     "31_context_parallel": {
       "lab": "31_context_parallel",
@@ -1956,8 +2075,8 @@
       "question": "Capture flat and hierarchical layouts in separate diagnostic jobs, using the same reference for both. In Systems correlate attention and communication lanes across ranks0\u20137 and8\u201315. Verify rank placement rather than assuming [8,2] names a physical topology. Compare the exposed cross-node tail for the two layouts. Independently vary workload profile in a new matched campaign; explain why additional hierarchy overhead may hurt a short sequence.",
       "interpretation": "Both configurations retain sixteen context ranks, the same tokens, model, global batch and optimizer. The hierarchical layout uses a2a+p2p with sizes [8,2]; the flat layout uses p2p. Eight query groups support the inner split, and sequence lengths divide the context partition. Keep torchrun node-contiguous rank order. Compare final parameters to the flat reference before accepting the measured step distribution.",
       "dashboard": "reference/grafana/31_context_parallel.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 31_context_parallel slurm/fabric.sbatch labs/31_context_parallel.py --profile small --layout flat --reference \"$CONTEXT_REFERENCE\"",
-      "systems_command": "python3 tools/submit_lab.py --lab 31_context_parallel --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/31_context_parallel.py --profile small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "baseline_command": "sbatch slurm/31_context_parallel.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "systems_command": "sbatch slurm/31_context_parallel.nsys.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
       "compute_command": null,
       "tuning_control": "layout",
       "evidence_views": [
@@ -1981,7 +2100,11 @@
         "view": "Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \\\n  --chdir=\"$PWD\" --output=\"results/31_context_parallel/logs/capture-%J-%t.out\" \\\n  --error=\"results/31_context_parallel/logs/capture-%J-%t.err\" \\\n  bash slurm/capture_ranks.sh 8 \\\n  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \\\n  nsys profile --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \\\n  --discard-environment=true --force-overwrite=false \\\n  --duration=300 --kill=none --wait=all \\\n  --output \"results/31_context_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p\" \\\n  \"${COURSE_PYTHON:?source the course runtime}\" labs/31_context_parallel.py --profile small --layout flat --reference \"$CONTEXT_REFERENCE\""
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/31_context_parallel/logs/%j.out\" \\\n  --error=\"$PWD/results/31_context_parallel/logs/%j.err\" slurm/31_context_parallel.nsys.sbatch --workload small --layout flat --reference \"$CONTEXT_REFERENCE\"",
+      "jobs": {
+        "run": "slurm/31_context_parallel.sbatch",
+        "nsys": "slurm/31_context_parallel.nsys.sbatch"
+      }
     },
     "32_dynamo_disaggregation": {
       "lab": "32_dynamo_disaggregation",
@@ -2023,8 +2146,8 @@
       "question": "Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point.",
       "interpretation": "The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill.",
       "dashboard": "reference/grafana/32_dynamo_disaggregation.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir \"$MODEL_PATH\" --layout aggregated",
-      "systems_command": "python3 tools/submit_lab.py --lab 32_dynamo_disaggregation slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
+      "baseline_command": "sbatch slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated",
+      "systems_command": "sbatch slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
       "compute_command": null,
       "tuning_control": "layout",
       "evidence_views": [
@@ -2051,7 +2174,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \\\n  --chdir=\"$PWD\" --output=\"results/32_dynamo_disaggregation/logs/capture-%j.out\" \\\n  --error=\"results/32_dynamo_disaggregation/logs/capture-%j.err\" \\\n  slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems \\\n  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \\\n  --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none \\\n  --discard-environment=true --force-overwrite=false --kill=none \\\n  --trace-fork-before-exec=true --cuda-graph-trace=node \\\n  --capture-range=cudaProfilerApi --capture-range-end=stop \\\n  --flush-on-cudaprofilerstop=false --wait=primary \\\n  '--output={report}'"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_dynamo_disaggregation/logs/%j.out\" \\\n  --error=\"$PWD/results/32_dynamo_disaggregation/logs/%j.err\" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
+      "jobs": {
+        "run": "slurm/32_dynamo_disaggregation.sbatch",
+        "nsys": "slurm/32_dynamo_disaggregation.nsys.sbatch"
+      }
     },
     "33_dynamo_routing": {
       "lab": "33_dynamo_routing",
@@ -2093,8 +2220,8 @@
       "question": "Capture round-robin and KV-aware routing in separate diagnostic jobs. Compare client TTFT distributions with server prefill activity in a separate Systems capture. Inspect router and worker logs for event readiness; a selected router name is not evidence of cache hits. Independently increase concurrency in a new fixed pair and explain whether load balance begins to dominate prefix locality. Report both median and tail latency.",
       "interpretation": "The serving runner enables prefix caching and publishes KV events from each worker. Four deterministic prefix families create reuse opportunities; each run warms its own fresh deployment before timing. KV-aware routing balances cache reuse and load, so lower TTFT is not guaranteed. Complete output and signature checks prevent a failed or changed response stream from becoming an apparent improvement.",
       "dashboard": "reference/grafana/33_dynamo_routing.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir \"$MODEL_PATH\" --router round-robin",
-      "systems_command": "python3 tools/submit_lab.py --lab 33_dynamo_routing slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
+      "baseline_command": "sbatch slurm/33_dynamo_routing.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin",
+      "systems_command": "sbatch slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
       "compute_command": null,
       "tuning_control": "router",
       "evidence_views": [
@@ -2121,7 +2248,11 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \\\n  --chdir=\"$PWD\" --output=\"results/33_dynamo_routing/logs/capture-%j.out\" \\\n  --error=\"results/33_dynamo_routing/logs/capture-%j.err\" \\\n  slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems \\\n  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \\\n  --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none \\\n  --discard-environment=true --force-overwrite=false --kill=none \\\n  --trace-fork-before-exec=true --cuda-graph-trace=node \\\n  --capture-range=cudaProfilerApi --capture-range-end=stop \\\n  --flush-on-cudaprofilerstop=false --wait=primary \\\n  '--output={report}'"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_dynamo_routing/logs/%j.out\" \\\n  --error=\"$PWD/results/33_dynamo_routing/logs/%j.err\" slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
+      "jobs": {
+        "run": "slurm/33_dynamo_routing.sbatch",
+        "nsys": "slurm/33_dynamo_routing.nsys.sbatch"
+      }
     },
     "34_serving_goodput": {
       "lab": "34_serving_goodput",
@@ -2172,8 +2303,8 @@
       "question": "Read profile_export_aiperf.json together with profile_export.jsonl, profile_export_raw.jsonl and outputs.json. Distinguish successful requests from SLO-passing requests; zero goodput can be a valid result. Independently try concurrency 32 against the same baseline and explain whether queueing, decode work or the network limits useful capacity. Use this lab\u2019s separate server capture to inspect GPU execution alongside AIPerf measurements.",
       "interpretation": "Compare identical transmitted requests and server-verified generated-token work. Different response text is allowed; output signatures are diagnostic. Fixed completion counts include reasoning tokens. Missing usage or failed requests invalidate the comparison, while zero goodput and either performance direction are valid. Use separate server captures for diagnosis; sampled telemetry does not prove a latency mechanism.",
       "dashboard": "reference/grafana/34_serving_goodput.json",
-      "baseline_command": "python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir \"$MODEL_PATH\" --concurrency 8",
-      "systems_command": "python3 tools/submit_lab.py --lab 34_serving_goodput slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
+      "baseline_command": "sbatch slurm/34_serving_goodput.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8",
+      "systems_command": "sbatch slurm/34_serving_goodput.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
       "compute_command": null,
       "tuning_control": "concurrency",
       "evidence_views": [
@@ -2204,7 +2335,11 @@
         "view": "Open server-rank0.nsys-rep and server-rank1.nsys-rep from the private vendor folder. Expand the GPU worker process trees, CUDA streams and NCCL activity during AIPerf requests after model startup. Compare gaps and kernel activity with client TTFT/ITL; GPU utilization is not request latency. Model startup alone is an incomplete serving trace."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \\\n  --chdir=\"$PWD\" --output=\"results/34_serving_goodput/logs/capture-%j.out\" \\\n  --error=\"results/34_serving_goodput/logs/capture-%j.err\" \\\n  slurm/vendor_job.sbatch labs/34_serving_goodput.py --profile small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems \\\n  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \\\n  --trace=cuda,nvtx,osrt,nccl \\\n  --cuda-trace-scope=process-tree --sample=none \\\n  --discard-environment=true --force-overwrite=false --kill=none \\\n  --trace-fork-before-exec=true --cuda-graph-trace=node \\\n  --capture-range=cudaProfilerApi --capture-range-end=stop \\\n  --flush-on-cudaprofilerstop=false --wait=primary \\\n  '--output={report}'"
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/34_serving_goodput/logs/%j.out\" \\\n  --error=\"$PWD/results/34_serving_goodput/logs/%j.err\" slurm/34_serving_goodput.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
+      "jobs": {
+        "run": "slurm/34_serving_goodput.sbatch",
+        "nsys": "slurm/34_serving_goodput.nsys.sbatch"
+      }
     }
   },
   "setup": {

@@ -8,7 +8,7 @@ import subprocess
 from course_evidence import allocation_gpu_family
 from common import add_common_args, validate_common_args, write_result
 from fabric_tools import PINS, nvbandwidth_result, qualified_binary
-from vendor_capture import worker_command
+from vendor_capture import add_worker_prefix, validate_worker_prefix, worker_command
 
 
 def main():
@@ -16,14 +16,16 @@ def main():
     add_common_args(parser)
     parser.add_argument("--engine", choices=("ce", "sm"), default="ce")
     parser.set_defaults(warmup=0)
+    add_worker_prefix(parser)
     args = parser.parse_args()
+    validate_worker_prefix(args, ucx=False)
     validate_common_args(args)
     if args.warmup != 0:
         parser.error("nvbandwidth owns warm-up; leave --warmup 0")
     if os.environ.get("SLURM_JOB_NUM_NODES") != "1":
         parser.error("Use --nodes=1 with fabric_tools.sbatch")
     binary = qualified_binary("nvbandwidth")
-    size = 64 if args.profile == "small" else 512
+    size = 64 if args.workload == "small" else 512
     testcase = "device_to_device_memcpy_write_" + args.engine
     folder = args.output_dir / "06_nvlink_bandwidth" / ("vendor-" + args.run_id)
     folder.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -45,6 +47,7 @@ def main():
                 str(args.iterations),
             ],
             folder / "nvbandwidth.json",
+            prefix=args.worker_prefix,
         ),
     ]
     with (

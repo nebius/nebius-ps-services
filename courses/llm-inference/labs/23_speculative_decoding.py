@@ -40,7 +40,7 @@ def main() -> None:
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
-    vocab_size, hidden = (2_048, 512) if args.profile == "small" else (8_192, 2_048)
+    vocab_size, hidden = (2_048, 512) if args.workload == "small" else (8_192, 2_048)
 
     class TargetTransition(torch.nn.Module):
         def __init__(self) -> None:

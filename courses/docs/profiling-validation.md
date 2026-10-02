@@ -2,7 +2,7 @@
 
 ## Completed H200 campaign: 2026-09-25
 
-All 110 practical labs completed both workload profiles, producing **220 verified exports** across the six practical courses. Soperator remains a text-only course. The final all-catalog audit found no missing profiles and checked export inventories and hashes, exact ZIP contents, completed controller stages, original verification results and receipts for the visually reviewed headless-browser screenshots.
+All 110 practical labs completed both workload sizes, producing **220 verified exports** across the six practical courses. Soperator remains a text-only course. The final all-catalog audit found no missing profiles and checked export inventories and hashes, exact ZIP contents, completed controller stages, original verification results and receipts for the visually reviewed headless-browser screenshots.
 
 | Course | Labs | Verified profiles | Results |
 | --- | ---: | ---: | --- |
@@ -175,7 +175,7 @@ qualify a report that has not yet been collected and inspected.
 With runtime imports and JIT compilation available, the reference training job
 reached data-loader construction and the pinned Bridge runtime rejected its
 unset loader type. Both lab recipes now explicitly select the sequential
-`single` loader. Four regression cases cover both workload profiles and both
+`single` loader. Four regression cases cover both workload sizes and both
 communication experiments, including identical dataset settings across each
 comparison. A fresh sixteen-rank reference and the first overlap-off/on smoke
 pair each complete all twenty-five training steps without skipped or non-finite

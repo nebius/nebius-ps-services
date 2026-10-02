@@ -156,7 +156,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     rank, world_size, _ = init_nccl(torch)
-    width = 64 if args.profile == "small" else 512
+    width = 64 if args.workload == "small" else 512
     try:
         pipeline = pipeline_mechanics(torch, rank, width)
         context = context_mechanics(torch, rank, world_size, width)

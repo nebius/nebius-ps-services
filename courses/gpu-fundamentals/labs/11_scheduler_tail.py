@@ -93,7 +93,7 @@ def main() -> None:
     grouped_lanes = lane_work_model([20] * 32 + [4] * 32)
     num_warps = 16
     threads = num_warps * 32
-    work = 256 if args.profile == "small" else 2_048
+    work = 256 if args.workload == "small" else 2_048
     probe_output = torch.empty(1, device="cuda", dtype=torch.float32)
     compiled = tail_probe[(1,)](probe_output, work=work, num_warps=num_warps)
     torch.cuda.synchronize()

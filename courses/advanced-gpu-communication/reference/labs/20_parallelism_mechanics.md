@@ -21,15 +21,15 @@ The pipeline example sends the first linear layer's activation to rank one, comp
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/20_parallelism_mechanics/logs/%j.out" \
   --error="$PWD/results/20_parallelism_mechanics/logs/%j.err" \
-  slurm/training_two_rank.sbatch \
-  labs/20_parallelism_mechanics.py --profile small
+  slurm/20_parallelism_mechanics.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/20_parallelism_mechanics/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/20_parallelism_mechanics/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -57,7 +57,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Pipeline parallel / activation send bytes | `pipeline_parallel.activation_send_bytes` | `bytes` |
 | Context parallel / sequence fraction per rank | `context_parallel.sequence_fraction_per_rank` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 20_parallelism_mechanics \
@@ -76,30 +76,24 @@ Run the paired mechanics through the two-node launcher. The output is primarily 
 
 ```bash
 "$COURSE_PYTHON" labs/20_parallelism_mechanics.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/20_parallelism_mechanics/logs/%j.out" \
-  --error="$PWD/results/20_parallelism_mechanics/logs/%j.err" slurm/training_two_rank.sbatch labs/20_parallelism_mechanics.py --profile small
+  --error="$PWD/results/20_parallelism_mechanics/logs/%j.err" slurm/20_parallelism_mechanics.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Draw the forward and backward arrows between pipeline stages. Why must the second stage treat the received activation as differentiable? For context partitioning, explain why normalizing each local sum by local size would change the intended global gradient.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/20_parallelism_mechanics/logs/capture-%J-%t.out" \
-  --error="results/20_parallelism_mechanics/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/20_parallelism_mechanics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/20_parallelism_mechanics.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/20_parallelism_mechanics/logs/%j.out" \
+  --error="$PWD/results/20_parallelism_mechanics/logs/%j.err" slurm/20_parallelism_mechanics.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/20_parallelism_mechanics.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Open both rank reports. Expand lab_workload, CUDA streams and NCCL send/receive/all-gather rows. Identify pipeline bubbles and context exchange, then check the numerical-equivalence panels before proposing an overlap change. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

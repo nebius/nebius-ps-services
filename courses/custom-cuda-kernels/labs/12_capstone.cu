@@ -16,13 +16,13 @@ __global__ void fused_candidate(const float* input, float* output, std::size_t c
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 12_capstone [--profile small|large] --variant-order baseline-first|candidate-first\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 12_capstone [--workload small|large] --variant-order baseline-first|candidate-first\n"; return 0; }
   try {
     bool small = false, profile_seen = false;
     std::string variant_order;
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
-      if (argument == "--profile") small = parse_small_profile(argc, argv, index, profile_seen);
+      if (argument == "--workload") small = parse_small_profile(argc, argv, index, profile_seen);
       else if (argument == "--variant-order" && index + 1 < argc) variant_order = argv[++index];
       else throw std::runtime_error("unsupported or incomplete argument: " + argument);
     }

@@ -641,7 +641,7 @@ def course_labs(root):
             os.close(reference_fd)
         if not isinstance(metadata, dict):
             raise TypeError("Course metadata must be an object")
-        if metadata.get("profile") == "text-only":
+        if metadata.get("profile") in ("text-only", "reference-only"):
             return []
         labs = metadata.get("labs")
         if not isinstance(labs, list) or not labs:
@@ -693,7 +693,7 @@ def prepare(courses_root=None, course_root=None):
                 for name in (
                     f"results/{lab}",
                     f"results/{lab}/logs",
-                    f"results/{lab}/profiles",
+                    f"results/{lab}/jobs",
                 )
             ),
         ]
@@ -748,6 +748,123 @@ def monitoring(args):
     )
 
 
+def history_digest(source, destination=None):
+    """Hash a report with bounded memory, optionally writing its verified copy."""
+    digest = hashlib.sha256()
+    with source.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+            if destination is not None:
+                destination.write(chunk)
+    return digest.hexdigest()
+
+
+def organize_history(course_root):
+    """Copy attributable runtime history; never move or modify original evidence."""
+    root = Path(course_root).absolute()
+    labs = set(course_labs(root))
+    results = root / "results"
+    if not results.exists():
+        return {"copied": [], "unresolved": []}
+    os.close(open_directory(results))
+    entries, unresolved = [], []
+    for source in sorted(results.rglob("*")):
+        relative = source.relative_to(results)
+        if any(part in {"history", "jobs"} for part in relative.parts):
+            continue
+        if source.is_symlink():
+            raise ValueError("Historical evidence must not contain symlinks")
+        if not source.is_file():
+            continue
+        lab = relative.parts[0] if relative.parts[0] in labs else None
+        job = None
+        metadata_digest = None
+        # Attribution never needs to load a native report into memory. Large
+        # JSON files use filename identity or remain unresolved, like binaries.
+        metadata_limit = 8 * 1024 * 1024
+        if source.suffix == ".json" and source.stat().st_size <= metadata_limit:
+            try:
+                with source.open("rb") as stream:
+                    content = stream.read(metadata_limit + 1)
+                if len(content) > metadata_limit:
+                    raise ValueError("Historical metadata grew beyond its limit")
+                metadata_digest = hashlib.sha256(content).hexdigest()
+                data = json.loads(content)
+                if isinstance(data, dict):
+                    identity = data.get("lab_id", data.get("lab"))
+                    if identity in labs:
+                        lab = identity
+                    job = data.get("experiment", {}).get("slurm_job_id")
+            except (ValueError, AttributeError):
+                pass
+        if job is None:
+            match = re.fullmatch(
+                r"([1-9][0-9]*)\.(?:out|err)", source.name
+            ) or re.match(r"job-([1-9][0-9]*)-", source.name)
+            if match:
+                job = int(match[1])
+        if lab not in labs or type(job) is not int or job < 1:
+            unresolved.append(relative.as_posix())
+            continue
+        destination = results / "history" / lab / str(job) / relative
+        current = results
+        for part in destination.parent.relative_to(results).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("History destination must not follow symlinks")
+            current.mkdir(mode=0o700, exist_ok=True)
+            private_directory(current.stat(), current)
+        if destination.is_symlink():
+            raise ValueError("History destination must not follow symlinks")
+        if destination.exists():
+            sha = history_digest(source)
+            if not destination.is_file() or history_digest(destination) != sha:
+                raise ValueError("Historical copy collision; originals were preserved")
+        else:
+            with os.fdopen(
+                os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+            ) as stream:
+                sha = history_digest(source, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+        if (
+            (metadata_digest is not None and sha != metadata_digest)
+            or history_digest(source) != sha
+            or history_digest(destination) != sha
+        ):
+            raise ValueError(
+                "Evidence changed during organization; inspect copies without removing originals"
+            )
+        entries.append(
+            {
+                "source": relative.as_posix(),
+                "copy": destination.relative_to(results).as_posix(),
+                "sha256": sha,
+            }
+        )
+    manifest = {
+        "schema": "course-history/v1",
+        "copied": entries,
+        "unresolved": unresolved,
+    }
+    if entries:
+        content = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+        target = (
+            results
+            / "history"
+            / ("organization-" + hashlib.sha256(content).hexdigest()[:16] + ".json")
+        )
+        if target.exists():
+            if target.is_symlink() or target.read_bytes() != content:
+                raise ValueError("Historical organization manifest collision")
+        else:
+            with os.fdopen(
+                os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+            ) as stream:
+                stream.write(content)
+    return manifest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
@@ -770,10 +887,24 @@ def main():
     remote.add_argument("--context", required=True)
     remote.add_argument("--output-dir", type=Path, required=True)
     remote.add_argument("--workspace", required=True)
+    history = actions.add_parser(
+        "organize-history",
+        help="Copy attributed historical runtime results, preserving all originals.",
+    )
+    history.add_argument("--course-root", type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
     if args.action == "monitoring":
         monitoring(args)
+        return
+    if args.action == "organize-history":
+        try:
+            result = organize_history(args.course_root)
+        except (OSError, ValueError, TypeError) as exc:
+            parser.error(f"Historical organization failed: {exc}")
+        print(
+            f"Verified copies: {len(result['copied'])}; unresolved files left in place: {len(result['unresolved'])}. Originals preserved."
+        )
         return
     try:
         counts = prepare(args.courses_root, args.course_root)

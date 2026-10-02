@@ -31,8 +31,8 @@ def main() -> None:
     seed_everything(torch, args.seed)
     rank, world_size, local_rank = init_nccl(torch)
     device = f"cuda:{local_rank}"
-    matrix_size = 2_048 if args.profile == "small" else 4_096
-    collective_mib = 64 if args.profile == "small" else 512
+    matrix_size = 2_048 if args.workload == "small" else 4_096
+    collective_mib = 64 if args.workload == "small" else 512
     element_count = collective_mib * 2**20 // 2
     collective = torch.empty(element_count, device=device, dtype=torch.bfloat16)
     left = torch.randn((matrix_size, matrix_size), device=device, dtype=torch.bfloat16)

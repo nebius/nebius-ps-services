@@ -27,15 +27,15 @@ Run Lab 08 to sweep 0, 8, 32 and 128 FMAs per element for serial and pipelined v
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
   --error="$PWD/results/08_async_pipeline/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
+  slurm/08_async_pipeline.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/08_async_pipeline/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/08_async_pipeline/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -68,7 +68,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Cases / case / pipelined median (seconds) | `cases.*.pipelined_median_ms` | `s` |
 | Cases / case / work iterations | `cases.*.work_iterations` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 08_async_pipeline \
@@ -86,18 +86,18 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 The default sweep uses 0, 8, 32, and 128 FMAs per element. Isolate a point with `--work-iterations` when profiling or checking synchronization; valid values are 0 through 1024.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small --work-iterations 32
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch synccheck --workload small --work-iterations 32
+sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small --work-iterations 32
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch racecheck --workload small --work-iterations 32
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which interval can hide the next copy, and when must the consumer wait? Why might the zero-compute case gain nothing? Explain how double buffering increases shared storage and can affect a future multi-block implementation.
 
@@ -106,37 +106,24 @@ More stages hide longer latency but consume shared memory/registers and lengthen
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/08_async_pipeline/logs/capture-%J-%t.out" \
-  --error="results/08_async_pipeline/logs/capture-%J-%t.err" \
-  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/08_async_pipeline/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/08_async_pipeline.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/08_async_pipeline/logs/capture-%J-%t.out" \
-  --error="results/08_async_pipeline/logs/capture-%J-%t.err" \
-  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/08_async_pipeline/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/08_async_pipeline.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
@@ -145,7 +132,7 @@ Guided comparison: Compare serial staging with the two-stage pipeline at each fi
 For the source experiment, rebuild with the same image and build directory, then repeat the original run and capture commands:
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
   --error="$PWD/results/08_async_pipeline/logs/%j.err" --wait slurm/build_and_test.sbatch
 export COURSE_BUILD_DIR="${COMPLETED_BUILD_DIRECTORY:?completed build/run-JOB_ID directory}"

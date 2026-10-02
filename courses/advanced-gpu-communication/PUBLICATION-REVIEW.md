@@ -524,3 +524,22 @@ The final `index.html` SHA-256 is
 The private artifact group `advanced-course-20260918` contains `browser-final.json`, screenshots and traces. Playwright owned and closed its browser resources. The complete [validation report](../docs/advanced-course-validation.md) records assertions, earlier findings, fixes, artifact identities and evidence limits.
 
 Canonical prose and commands were reviewed against the implementations and official NVIDIA source interfaces. Training throughput, collective/link bandwidth, request latency and goodput remain distinct quantities. Illustrative calculations are labeled; no measured performance or speedup is invented. Raw traces, host identities, addresses and model outputs remain private runtime artifacts.
+
+## Build and browser audit — 2026-10-02
+
+Local build/static and browser checks pass for this page. See the
+[complete eight-course build audit](../docs/course-build-validation.md) for
+484 focused tests, all eight native validators, preservation checks, browser
+assertions and the generic skill-checker limitations. This audit preserves
+the existing teaching profile and does not change runtime qualification.
+
+Inspected artifact: `advanced-gpu-communication/index.html`, SHA-256
+`abbf94aa377c8b4e9edfb2de21e24235c42ca60e1db7d5fe180b47ec893b34ad`.
+Owned isolated headless Chrome 154.0.8037.93 rendered the complete page at
+1440×1000, 390×1000 and 320×1000 with JavaScript disabled, keyboard navigation,
+local scrollers, doubled-text reflow and zero automatic network requests.
+Visual captures were reviewed. Evidence group `course-build-audit-l57_57x5`,
+`browser-complete/publication-advanced-gpu-communication-publication-WIDTH/`,
+contains the captures; `browser-complete.json` includes identity and assertion
+results. Final traces were disabled. Owned browser resources were closed.
+No live lab execution or external publication was performed.

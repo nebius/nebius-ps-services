@@ -23,7 +23,7 @@ def main():
     torch, rank, world, _local, env = initialize(args.seed)
     try:
         requests, width, tokens = (
-            (32, 512, 8) if args.profile == "small" else (128, 4096, 32)
+            (32, 512, 8) if args.workload == "small" else (128, 4096, 32)
         )
         # Educational recurrent projection, not a complete language model or service.
         prompts = torch.randn(requests, width, device="cuda") * 0.01

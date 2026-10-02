@@ -21,15 +21,15 @@ The source builds deterministic token routing, exchanges tokens according to spl
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/23_inference_expert_parallel/logs/%j.out" \
   --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" \
-  slurm/two_node.sbatch \
-  labs/23_inference_expert_parallel.py --profile small
+  slurm/23_inference_expert_parallel.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/23_inference_expert_parallel/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/23_inference_expert_parallel/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -56,7 +56,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Expert load max to mean | `expert_load_max_to_mean` | `none` |
 | Toy expert parameter fraction per rank | `toy_expert_parameter_fraction_per_rank` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 23_inference_expert_parallel \
@@ -74,33 +74,27 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the paired ranks through the supplied launcher. Record workload size and topology with each timing so a changed routing case is not mistaken for a fixed-work engine optimization.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/23_inference_expert_parallel/logs/%j.out" \
-  --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" slurm/23_inference_expert_parallel.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/23_inference_expert_parallel/logs/%j.out" \
-  --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" slurm/two_node.sbatch labs/23_inference_expert_parallel.py --profile large
+  --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" slurm/23_inference_expert_parallel.sbatch --workload large
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Trace one token through dispatch, expert execution, and return permutation. Which expert determines the longest local workload? Explain why balanced token counts can still hide unequal expert computation costs.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/23_inference_expert_parallel/logs/capture-%J-%t.out" \
-  --error="results/23_inference_expert_parallel/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/23_inference_expert_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/23_inference_expert_parallel.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/23_inference_expert_parallel/logs/%j.out" \
+  --error="$PWD/results/23_inference_expert_parallel/logs/%j.err" slurm/23_inference_expert_parallel.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/23_inference_expert_parallel.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.
 

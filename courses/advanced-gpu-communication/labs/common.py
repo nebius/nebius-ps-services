@@ -24,11 +24,11 @@ from course_evidence import (
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--profile", choices=("small", "large"), default=os.environ.get("COURSE_WORKLOAD_PROFILE", "small"))
+    parser.add_argument("--workload", choices=("small", "large"), default=os.environ.get("COURSE_WORKLOAD", "small"))
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get("COURSE_RESULTS_DIR", "results")))
 
 
 def validate_common_args(args: argparse.Namespace) -> None:
@@ -151,7 +151,7 @@ def write_result(
     payload = {
         "schema": "gpu-course-result/v1",
         "lab_id": lab_id,
-        "profile": args.profile,
+        "profile": args.workload,
         "run_id": run_id,
         "seed": args.seed,
         "environment": environment,

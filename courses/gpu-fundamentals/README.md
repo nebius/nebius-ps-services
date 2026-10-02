@@ -21,7 +21,7 @@ when one thread can own one output and why optimized kernels can use different
 mappings. The output panel labels x across columns and y down rows, and connects
 the coordinate pair `(x, y)` to row-first matrix indexing `C[y, x]` for this kernel.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Its four landscape diagrams read from left to right: Systems and NVTX timelines, Compute counters leading to an investigation, and Grafana results beside sampled telemetry. A short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Its four landscape diagrams read from left to right: Systems and NVTX timelines, Compute counters leading to an investigation, and Grafana results beside sampled telemetry. A short PyTorch example explains NVTX markers and ranges. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 
@@ -70,10 +70,10 @@ comparison. Confirm that each job succeeds before continuing.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_compatibility_stack/logs/%j.out" \
-  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
+  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/10_compatibility_stack.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
-  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/01_cpu_gpu_crossover.sbatch --workload small
 ```
 
 ## At Lesson 12

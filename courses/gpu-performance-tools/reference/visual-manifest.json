@@ -1,0 +1,49 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/tools-measurement-loop.svg",
+      "title": "A measured optimization loop",
+      "lessons": [
+        1
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tools-systems-timeline.svg",
+      "title": "Follow CPU work, copies and a GPU kernel",
+      "lessons": [
+        2
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tools-nvtx-ranges.svg",
+      "title": "Relate NVTX markers and ranges to GPU completion",
+      "lessons": [
+        2
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tools-compute-report.svg",
+      "title": "Read a kernel report as evidence for a hypothesis",
+      "lessons": [
+        3
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tools-grafana-panels.svg",
+      "title": "Separate selected benchmark results from sampled telemetry",
+      "lessons": [
+        5
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    }
+  ]
+}

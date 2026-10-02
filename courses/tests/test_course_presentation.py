@@ -137,16 +137,16 @@ def test_generated_launch_recipes_use_owned_runtime_and_actual_build_directory()
     None
 ):
     samples = {
-        "advanced-gpu-communication/labs/02_collective_readiness.py": "slurm/two_node.sbatch",
-        "advanced-gpu-communication/labs/05_transport_readiness.py": "slurm/two_node.sbatch",
-        "advanced-gpu-communication/labs/03_training_readiness.py": "slurm/training_two_rank.sbatch",
-        "advanced-gpu-communication/labs/04_inference_readiness.py": "slurm/two_node.sbatch",
-        "advanced-gpu-communication/labs/08_distributed_collectives.py": "slurm/two_node.sbatch",
-        "advanced-gpu-communication/labs/12_distributed_scaling.py": "slurm/two_node.sbatch",
-        "llm-inference/labs/11_serving_client.py": "slurm/vllm_benchmark.sbatch",
-        "llm-inference/labs/15_streaming_client.py": "slurm/vllm_streaming_benchmark.sbatch",
-        "llm-inference/labs/34_policy_equivalence_client.py": "slurm/vllm_chunked_prefill_ab.sbatch",
-        "custom-cuda-kernels/labs/03_tiled_transpose.cu": "${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose",
+        "advanced-gpu-communication/labs/02_collective_readiness.py": "slurm/02_collective_readiness.sbatch",
+        "advanced-gpu-communication/labs/05_transport_readiness.py": "slurm/05_transport_readiness.sbatch",
+        "advanced-gpu-communication/labs/03_training_readiness.py": "slurm/03_training_readiness.sbatch",
+        "advanced-gpu-communication/labs/04_inference_readiness.py": "slurm/04_inference_readiness.sbatch",
+        "advanced-gpu-communication/labs/08_distributed_collectives.py": "slurm/08_distributed_collectives.sbatch",
+        "advanced-gpu-communication/labs/12_distributed_scaling.py": "slurm/12_distributed_scaling.sbatch",
+        "llm-inference/labs/11_serving_client.py": "slurm/11_serving_client.sbatch",
+        "llm-inference/labs/15_streaming_client.py": "slurm/15_streaming_client.sbatch",
+        "llm-inference/labs/34_policy_equivalence_client.py": "slurm/34_policy_equivalence_client.sbatch",
+        "custom-cuda-kernels/labs/03_tiled_transpose.cu": "slurm/03_tiled_transpose.sbatch",
     }
     for source, expected in samples.items():
         path = ROOT / source

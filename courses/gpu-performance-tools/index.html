@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU Performance Tools</title><link rel="icon" href="data:,"><style>:root {
+  color-scheme: light;
+  --ink: #24343d;
+  --muted: #52626b;
+  --paper: #f7f9f7;
+  --card: #ffffff;
+  --line: #dbe5e1;
+  --blue: #245880;
+  --teal: #206757;
+  --amber: #86500e;
+  --blue-wash: #eef5fc;
+  --mint-wash: #eef8f2;
+  --amber-wash: #fff7e7;
+  --reading-width: 88ch;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+a { color: var(--blue); text-underline-offset: .18em; overflow-wrap: anywhere; }
+a:hover { color: var(--teal); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; }
+.skip-link { position: absolute; top: .5rem; left: 1rem; transform: translateY(-180%); padding: .5rem; background: white; z-index: 10; }
+.skip-link:focus { transform: none; }
+header { padding: 3rem max(5vw, 1.25rem) 2.5rem; text-align: center; background: linear-gradient(115deg, var(--mint-wash), var(--blue-wash)); border-bottom: 1px solid var(--line); }
+h1 { max-width: 1000px; margin: 0 auto; font-size: clamp(2.1rem, 4.2vw, 3.3rem); line-height: 1.18; letter-spacing: -.035em; text-wrap: balance; }
+.guided-hours { margin: 1rem 0 0; color: var(--muted); font-size: .95rem; }
+.course-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.5rem; max-width: 1800px; margin: auto; padding: 2rem 1.5rem 5rem; }
+aside, main { min-width: 0; }
+nav { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; font-size: .87rem; line-height: 1.5; padding: 1.15rem; background: var(--card); border: 1px solid var(--line); border-radius: 14px; scrollbar-gutter: stable; }
+nav h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .07em; margin: 1.6rem 0 .6rem; }
+nav ol, nav ul { padding-left: 1.2rem; }
+nav li { margin: .25rem 0; }
+nav li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+nav .section-links { list-style: none; padding: 0; }
+nav .section-links ul { list-style: disc; }
+nav summary { font-weight: 650; }
+nav a { display: inline-block; padding: .3rem .2rem; border-radius: 5px; text-decoration: none; }
+nav a:hover { text-decoration: underline; background: var(--mint-wash); }
+nav > details li > a { display: inline; }
+section, article, figure { scroll-margin-top: 1.5rem; }
+h2 { font-size: clamp(1.6rem, 2.6vw, 2.1rem); line-height: 1.25; letter-spacing: -.025em; margin: 0 0 1.1rem; }
+h3 { font-size: 1.25rem; line-height: 1.35; margin-top: 1.8rem; }
+h4 { font-size: 1.1rem; }
+h5 { font-size: 1rem; }
+h6 { font-size: .95rem; }
+h4, h5, h6 { line-height: 1.4; margin-top: 1.6rem; }
+p { margin: .7rem 0 1rem; }
+main > section { margin: 0 0 2rem; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 2rem clamp(1.3rem, 3vw, 2.5rem); box-shadow: 0 3px 14px #24343d04; }
+main p, .lesson > div, .lesson > details, .supporting-guide > ul, .supporting-guide > ol { max-width: var(--reading-width); }
+main > section:target, article:target, figure:target { border-color: var(--teal); }
+.performance-tools { overflow-wrap: anywhere; }
+.performance-workflow { margin: 1rem 0; }
+.lesson > div, .lesson > details { margin: 1.15rem 0; }
+.lesson > .how-it-works { max-width: none; }
+.how-it-works > ul, .how-it-works > ol { max-width: var(--reading-width); }
+.lesson > div > h3, .tools-field > h3 { margin: 0 0 .7rem; color: var(--ink); font-size: 1.25rem; }
+.tools-field { margin: 1.15rem 0; }
+.next-steps-list { padding-left: 1.5rem; }
+.next-steps-list > li { margin: 1.5rem 0; padding-left: .25rem; }
+.next-steps-list > li > h3 { margin: 0 0 .7rem; }
+#guide-glossary > dl { max-width: var(--reading-width); }
+#official-references > ol { list-style-type: decimal; padding-left: 1.5rem; }
+#official-references li { margin: .6rem 0; }
+dt { margin-top: .75rem; font-weight: 650; overflow-wrap: anywhere; }
+dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
+.lesson .lesson-outcome { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.lesson .warning { border-color: var(--amber); background: var(--amber-wash); }
+.lesson .lesson-visuals { padding-top: .5rem; border-top: 1px solid var(--line); }
+summary { cursor: pointer; }
+details > summary { padding: .35rem 0; }
+code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--blue-wash); border-radius: 3px; padding: .1em .3em; overflow-wrap: anywhere; }
+pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; }
+pre code { padding: 0; background: none; overflow-wrap: normal; }
+.table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 14em; overflow-wrap: normal; }
+th { background: var(--blue-wash); font-weight: 650; }
+tbody tr:last-child td { border-bottom: 0; }
+.course-contract { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.course-contract > div { border-top: 3px solid var(--teal); padding: .4rem .4rem 0; }
+.course-contract h3 { margin-top: .5rem; }
+.lab, .supporting-guide { padding: 1.4rem 0; border-top: 1px solid var(--line); }
+.lab h3, .supporting-guide > h3 { margin-top: .5rem; }
+.lab-guide { display: block; }
+.lab-guide-section { margin: 1.5rem 0; }
+.lab-guide-section h4 { font-size: 1.1rem; color: var(--teal); margin-bottom: .5rem; }
+.practice-links, .lab-lessons { border-left: 3px solid var(--teal); padding-left: 1rem; }
+.lab-scope { display: inline-block; margin-top: 0; padding: .1rem .6rem; border-radius: 20px; color: var(--teal); background: var(--mint-wash); font-size: .85rem; }
+.lab-source { margin-top: 1.2rem; border: 1px solid var(--line); padding: .65rem 1rem; border-radius: 8px; }
+.lab-source > summary { color: var(--blue); overflow-wrap: anywhere; }
+.setup-guide, .route-heading, .lesson h2, .lab h3 { overflow-wrap: anywhere; }
+.optional-study { margin-top: 1.5rem; padding-top: .25rem; border-top: 1px solid var(--line); }
+figure { margin: 1.5rem 0 2rem; padding: .75rem; border: 1px solid var(--line); border-radius: 10px; background: white; min-width: 0; width: 100%; }
+.guide-image { max-width: 640px; margin-inline: auto; }
+.guide-image img { display: block; width: 100%; height: auto; }
+svg { display: block; width: 100%; max-width: 100%; height: auto; font: 18px Arial, Helvetica, sans-serif; color: var(--ink); fill: var(--ink); }
+svg .diagram-label { font-size: 15px; }
+svg .diagram-small { font-size: 13px; }
+.overview-diagram svg rect, .overview-diagram svg .diagram-shape { fill: var(--blue-wash); stroke: var(--blue); stroke-width: 2; }
+.overview-diagram svg .arrows { stroke: var(--teal); stroke-width: 3; }
+.overview-diagram svg .axes, .overview-diagram svg .timeline { stroke: var(--blue); stroke-width: 3; }
+.overview-diagram svg .roofline { fill: none; stroke: var(--amber); stroke-width: 5; }
+.overview-diagram svg .diagram-note { font-size: 15px; fill: var(--muted); }
+.overview-diagram svg .exposed { fill: var(--amber-wash); stroke: var(--amber); }
+figcaption { padding: .8rem .4rem .25rem; font-size: .92rem; color: var(--muted); }
+footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--muted); font-size: .9rem; }
+.catalog-navigation { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 1rem; }
+.catalog-home { font-weight: 650; }
+.course-switcher { margin-top: .5rem; }
+.course-switcher ul { list-style: none; padding: 0; }
+.course-switcher li { margin-top: .5rem; }
+.course-switcher [aria-current="page"] { display: block; padding: .4rem; border-left: 3px solid var(--teal); background: var(--mint-wash); font-weight: 650; }
+.current-label { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer details { margin-top: .8rem; }
+.license-footer summary { font-size: .875rem; }
+.license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .875rem/1.65 system-ui, sans-serif; }
+@media (max-width: 950px) {
+  .course-layout { grid-template-columns: 1fr; padding: 1rem 1rem 3rem; gap: 1.5rem; }
+  nav { position: static; max-height: none; }
+  nav > details > ol { columns: 2; column-gap: 2rem; }
+  nav li { break-inside: avoid; }
+}
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  header { padding: 2.3rem 1.2rem 2rem; }
+  .course-layout { padding: 1rem .65rem 3rem; }
+  main > section { padding: 1.2rem 1rem; }
+  nav > details > ol { columns: 1; }
+  .course-contract { grid-template-columns: 1fr; }
+  h2 { font-size: 1.6rem; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+  body { background: white; font-size: 11pt; }
+  .course-layout { display: block; padding: 0; }
+  aside, .skip-link { display: none; }
+  header { padding: 1rem; }
+  main > section { border: 0; padding: 0; box-shadow: none; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+</style></head>
+<body class="text-course"><a class="skip-link" href="#main">Skip to course</a>
+<header><h1>GPU Performance Tools</h1><p class="guided-hours">Estimated guided hours: 1</p></header>
+<div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents"><div class="catalog-navigation">
+<a class="catalog-home" href="../index.html">← Course catalog</a>
+<details class="course-switcher"><summary>Courses and guide</summary>
+<ul><li><a href="../soperator/index.html">Soperator: A Nebius Slurm cluster running on Kubernetes</a></li><li><a href="../lab-guide.html">Lab Guide</a></li><li><a href="../gpu-fundamentals/index.html">GPU Fundamentals</a></li><li><span aria-current="page" data-course="gpu-performance-tools">GPU Performance Tools<span class="current-label">Current course</span></span></li><li><a href="../gpu-optimizations/index.html">GPU Performance Optimization</a></li><li><a href="../llm-training/index.html">LLM Training</a></li><li><a href="../llm-inference/index.html">LLM Inference</a></li><li><a href="../custom-cuda-kernels/index.html">Custom CUDA Kernels for GPU Optimization</a></li><li><a href="../advanced-gpu-communication/index.html">Advanced Labs: Multi-GPUs Multi-Nodes communication optimization</a></li></ul></details></div><details open><summary>Table of contents</summary>
+<ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Lessons</h2><ol><li><a href="#lesson-1-choose-evidence-and-read-native-jobs">Choose evidence and read native jobs</a></li><li><a href="#lesson-2-nsight-systems-and-nvtx-regions">Nsight Systems and NVTX regions</a></li><li><a href="#lesson-3-nsight-compute-kernel-analysis">Nsight Compute kernel analysis</a></li><li><a href="#lesson-4-pytorch-operator-profiling">PyTorch operator profiling</a></li><li><a href="#lesson-5-grafana-and-victoriametrics">Grafana and VictoriaMetrics</a></li></ol>
+<h2>Reference and further reading</h2><ul class="section-links"><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul></details></nav></aside>
+<main id="main"><section id="course-overview"><h2>Course overview</h2><p>A short reference for understanding the native commands used by the practical GPU courses. Read GPU Fundamentals first. This course has no labs or exercises; use the lab-specific commands in the practical courses. The figures are teaching schematics with synthetic values, not recorded measurements.</p></section>
+<section class="lesson" id="lesson-1-choose-evidence-and-read-native-jobs"><h2>1. Choose evidence and read native jobs</h2><div class="lesson-outcome"><h3>Objective</h3><p>Separate workload size, profiling and performance measurement; explain the native Slurm process flow.</p></div><div class="how-it-works"><h3>How it works</h3><p>A profiler records application activity while a workload runs. Instrumentation and kernel replay can change execution time. Establish a correct, unprofiled baseline first. Use a separate capture to investigate a particular question, then repeat the original unprofiled measurement to judge a change.</p><figure class="detail-diagram" id="detail-tools-measurement-loop" data-after="How it works" data-diagram-source="reference/diagrams/tools-measurement-loop.svg">
+<svg viewBox="0 0 320 210" style="max-width: 380px; margin-inline: auto" role="img" aria-labelledby="tools-title tools-desc"><title id="tools-title">A measured optimization loop</title><desc id="tools-desc">Measure an unprofiled baseline; inspect with Systems, Compute and Grafana; change one variable; measure again and check correctness before keeping it.</desc><rect x="5" y="5" width="310" height="200" rx="10" fill="#edf3f7"/><g fill="#172b3a" font-size="15"><text x="20" y="35">Measure → inspect → predict</text><text x="20" y="70">↓ Change one variable</text><text x="20" y="105">↓ Measure again → check correctness</text><text x="20" y="140">↓ Explain the result</text></g><text x="20" y="170" fill="#172b3a" font-size="13">Profiler runs explain.</text><text x="20" y="190" fill="#172b3a" font-size="13">Unprofiled runs establish the outcome.</text></svg>
+<figcaption><strong>A measured optimization loop</strong><p>Measure an unprofiled baseline; inspect with Systems, Compute and Grafana; change one variable; measure again and check correctness before keeping it.</p></figcaption></figure><p><code>--workload small|large</code> selects problem size. It does not turn profiling on. The normal <code>.sbatch</code> job runs the workload; the <code>.nsys.sbatch</code> and supported <code>.ncu.sbatch</code> jobs show the native diagnostic commands. PyTorch profiler labs are explicitly diagnostic even when no external tool is attached.</p><p><code>sbatch</code> submits a job and requests an allocation. The <code>#SBATCH</code> lines at the top of the file describe its resources. <code>srun</code> starts a job step using that allocation. One <code>srun python labs/example.py ...</code> starts one Python program per task, not all Python files mentioned by the surrounding documentation. Separate <code>srun</code> commands create separate steps; use sequential commands or explicit concurrent steps when an experiment needs several programs.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Slurm or shell option</th><th scope="col">Meaning in these courses</th></tr></thead><tbody><tr><td><code>--chdir=&quot;$PWD&quot;</code></td><td>Start the job in the directory from which you submit; relative lab and result paths resolve there.</td></tr><tr><td><code>--nodes</code>, <code>--ntasks</code>, <code>--ntasks-per-node</code></td><td>Allocate nodes and processes; distributed jobs state their layout explicitly.</td></tr><tr><td><code>--gpus-per-node</code></td><td>Allocate that many GPUs on each node for the job.</td></tr><tr><td><code>--gpus-per-task</code></td><td>Assign GPUs to each launched task; a partition name alone does not allocate a GPU.</td></tr><tr><td><code>--cpus-per-task</code>, <code>--mem</code>, <code>--time</code></td><td>CPU, memory and wall-clock limits for the job or step.</td></tr><tr><td><code>--kill-on-bad-exit=1</code></td><td>End sibling tasks when one task fails.</td></tr><tr><td><code>--no-requeue</code></td><td>Do not restart the same job automatically; a retry needs a fresh job ID.</td></tr><tr><td><code>--output</code>, <code>--error</code></td><td>Scheduler stdout/stderr files. <code>%j</code> expands to the job ID; <code>%J</code> includes the step and <code>%t</code> identifies the task. Parent directories must exist before submission.</td></tr><tr><td><code>--parsable</code></td><td>Return the job ID in a machine-readable form for campaign orchestration.</td></tr><tr><td><code>--</code></td><td>End a command&#x27;s options when that command supports the convention. It does not mean “run another script.” Everything following belongs to that command&#x27;s positional arguments.</td></tr><tr><td><code>&quot;$@&quot;</code></td><td>Forward the current script&#x27;s remaining arguments as separate, quoted arguments.</td></tr></tbody></table></div><p>Job requests and step requests have different scopes. A simple one-task step can inherit task counts, but explicit <code>srun --ntasks=1 --gpus-per-task=1</code> states exactly what that step launches and how its GPU is assigned. Multi-step jobs need that distinction. Shell variables in <code>#SBATCH</code> directives are not expanded; use submission options for values such as <code>$PWD</code>.</p><p>New output is <code>results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}</code>. Scheduler logs remain <code>results/LAB/logs/JOB_ID.out</code> and <code>.err</code>. The shared setup prepares the parent directories; the job creates its own private directory exclusively. Existing files are never selected by “newest file” rules.</p><p>Diagnostic commands use <code>timeout --signal=TERM --kill-after=15s 900s</code>: send TERM after 900 seconds, then KILL after 15 more seconds if needed. This bounds the process lifetime. The profiler&#x27;s capture duration controls collection, not the whole application&#x27;s lifetime. Keep the Slurm wall limit as an additional bound.</p></div><div class="mental-model"><h3>Mental model</h3><p>A normal job measures an outcome; a diagnostic job helps explain it. Each job owns its evidence.</p></div></section><section class="lesson" id="lesson-2-nsight-systems-and-nvtx-regions"><h2>2. Nsight Systems and NVTX regions</h2><div class="lesson-outcome"><h3>Objective</h3><p>Read a timeline and understand named regions, capture boundaries and each Systems flag.</p></div><div class="how-it-works"><h3>How it works</h3><p><strong>Nsight Systems</strong> records a timeline: CPU activity, CUDA calls, memory copies, GPU kernels and communication. Each row represents one kind of activity; its position along the time axis tells you when it happened. CUDA is the software interface the CPU uses to submit GPU work. A kernel is a function that executes on the GPU. NVTX supplies application labels, explained below.</p><p>Consider one request that prepares input on the CPU, copies it to the GPU, runs a kernel and brings the answer back. In the example, the CPU prepares data from 0 to 2 milliseconds (ms). The input copy occupies 2–3 ms, the kernel 3–6 ms and the output copy 6–7 ms. The kernel takes 3 ms, while the whole request takes 7 ms. Making the kernel twice as fast would reduce this modeled request to 5.5 ms if all other costs stayed unchanged; it would not halve the request&#x27;s total time.</p><figure class="detail-diagram" id="detail-tools-systems-timeline" data-after="How it works" data-diagram-source="reference/diagrams/tools-systems-timeline.svg">
+<svg viewBox="0 0 600 392" role="img" aria-labelledby="tools-systems-timeline-title tools-systems-timeline-desc">
+<title id="tools-systems-timeline-title">A kernel is only part of a request</title>
+<desc id="tools-systems-timeline-desc">Read left to right in milliseconds. Rows separate CPU activity from GPU work and copies. The synthetic request contains 2 ms of preparation, 1 ms of input copy, 3 ms of kernel execution and 1 ms of output copy. In and Out label the input and output copies. The arrow connects a brief host launch to its GPU kernel; it does not measure duration.</desc>
+<rect x="1" y="1" width="598" height="390" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">Nsight Systems</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Synthetic serial request · time →</text>
+<text x="96" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">0</text>
+<line x1="96" y1="126" x2="96" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="164" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">1</text>
+<line x1="164" y1="126" x2="164" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="232" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">2</text>
+<line x1="232" y1="126" x2="232" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="300" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">3</text>
+<line x1="300" y1="126" x2="300" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="368" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">4</text>
+<line x1="368" y1="126" x2="368" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="436" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">5</text>
+<line x1="436" y1="126" x2="436" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="504" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">6</text>
+<line x1="504" y1="126" x2="504" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="572" y="120" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">7</text>
+<line x1="572" y1="126" x2="572" y2="317" stroke="#b8c6ce" stroke-width="1" stroke-dasharray="3 5"/>
+<text x="572" y="153" font-size="18" text-anchor="end" fill="#52626b" font-weight="400">ms</text>
+<text x="20" y="205" font-size="20" text-anchor="start" fill="#245880" font-weight="700">CPU</text>
+<text x="20" y="291" font-size="20" text-anchor="start" fill="#206757" font-weight="700">GPU</text>
+<rect x="96" y="163" width="136" height="78" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/>
+<text x="164" y="194" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">Prepare</text>
+<text x="164" y="222" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">input</text>
+<rect x="300" y="163" width="272" height="78" rx="8" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/>
+<text x="436" y="194" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">Wait for</text>
+<text x="436" y="222" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">the result</text>
+<rect x="244" y="181" width="18" height="31" rx="3" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/>
+<text x="249" y="160" font-size="18" text-anchor="middle" fill="#86500e" font-weight="400">Launch</text>
+<line x1="263" y1="214" x2="301" y2="264" stroke="#245880" stroke-width="2"/>
+<polygon points="301.0,264.0 294.6,261.1 300.0,257.1" fill="#245880"/>
+<rect x="232" y="263" width="68" height="54" rx="5" fill="#f0f7f5" stroke="#8db2a9" stroke-width="1.5"/>
+<text x="266" y="297" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">In</text>
+<rect x="300" y="263" width="204" height="54" rx="5" fill="#dbeee7" stroke="#206757" stroke-width="1.5"/>
+<text x="402" y="297" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Kernel</text>
+<rect x="504" y="263" width="68" height="54" rx="5" fill="#f0f7f5" stroke="#8db2a9" stroke-width="1.5"/>
+<text x="538" y="297" font-size="22" text-anchor="middle" fill="#24343d" font-weight="400">Out</text>
+<rect x="20" y="339" width="560" height="38" rx="8" fill="#eef5f7"/>
+<text x="300" y="363" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">3 ms kernel · 7 ms whole request</text>
+</g>
+</svg>
+<figcaption><strong>Follow CPU work, copies and a GPU kernel</strong><p>Read left to right in milliseconds. Rows separate CPU activity from GPU work and copies. The synthetic request contains 2 ms of preparation, 1 ms of input copy, 3 ms of kernel execution and 1 ms of output copy. In and Out label the input and output copies. The arrow connects a brief host launch to its GPU kernel; it does not measure duration.</p></figcaption></figure><p>Read the timeline from left to right, following the millisecond scale. The upper row shows CPU activity; the lower row shows GPU kernels and copies (<code>In</code> for the input copy and <code>Out</code> for the output copy). Each box spans its activity&#x27;s interval. The diagonal arrow links the brief host launch to the kernel it submits; the arrow is a relationship, not a duration. The CPU can submit the kernel while the input copy is still running, but the kernel shown here waits for that copy to finish. A host launch is a short submission, not the whole GPU execution. In Systems, select the request interval, expand the CUDA API and GPU rows, and follow the launch&#x27;s correlation to its kernel. A long CPU interval may be executing, submitting work or waiting: inspect its calls before assigning a cause. Overlapping GPU activities can establish concurrency; their dependencies and the end-to-end result determine whether the overlap helps. The GPU operations in this example are deliberately serialized: the copies and kernel do not overlap.</p><p>The Systems job contains a command shaped like this; its actual application, report path and resource request are lab-specific:</p><pre tabindex="0"><code>nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output &quot;$REPORT_PREFIX&quot; python labs/example.py --workload small</code></pre><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Systems option</th><th scope="col">Meaning and selected behavior</th></tr></thead><tbody><tr><td><code>profile</code></td><td>Launch the application and collect a report.</td></tr><tr><td><code>--trace=cuda,nvtx,osrt</code></td><td>Collect CUDA activity, application annotations and OS-runtime calls. Selected communication jobs also enable <code>nccl</code> or <code>ucx</code> to inspect those libraries.</td></tr><tr><td><code>--cuda-trace-scope=process-tree</code></td><td>Include CUDA activity from the launched process tree.</td></tr><tr><td><code>--sample=none</code></td><td>Disable CPU instruction-pointer sampling; CUDA and NVTX tracing remain enabled.</td></tr><tr><td><code>--cpuctxsw=none</code></td><td>Disable CPU context-switch tracing to reduce unrelated data and overhead.</td></tr><tr><td><code>--discard-environment=true</code></td><td>Exclude environment variables from the report; it does not clear the application&#x27;s environment.</td></tr><tr><td><code>--force-overwrite=false</code></td><td>Refuse to overwrite an existing report.</td></tr><tr><td><code>--duration=300</code></td><td>Bound trace collection to 300 seconds. A report may be incomplete if the interesting work occurs later.</td></tr><tr><td><code>--kill=none</code></td><td>Do not kill the application just because collection ends.</td></tr><tr><td><code>--wait=all</code></td><td>Wait for the application and its children, including reparented children.</td></tr><tr><td><code>--wait=primary</code></td><td>Used only by controlled long-lived server experiments; wait for the primary launched process while the coordinator owns service cleanup.</td></tr><tr><td><code>--output</code></td><td>Report prefix; Systems appends <code>.nsys-rep</code>. <code>%p</code> expands to the process ID and <code>%q{NAME}</code> to an environment variable, isolating jobs, steps and workers.</td></tr><tr><td><code>--trace-fork-before-exec=true</code></td><td>Include activity between fork and exec in the server process tree.</td></tr><tr><td><code>--cuda-graph-trace=node</code></td><td>Trace individual CUDA Graph nodes; this adds detail and overhead.</td></tr><tr><td><code>--capture-range=cudaProfilerApi</code></td><td>Begin capture when the application calls the CUDA profiler API.</td></tr><tr><td><code>--capture-range-end=stop</code></td><td>Stop collection when that API-controlled range ends.</td></tr><tr><td><code>--flush-on-cudaprofilerstop=false</code></td><td>Server-specific control: defer flushing until the controlled shutdown rather than flushing at each stop call.</td></tr></tbody></table></div><p><code>env -u DEBUGINFOD_URLS</code> removes the remote debug-symbol server setting for this command, avoiding external symbol-download waits. The native server jobs use acknowledged <code>POST /start_profile</code> and <code>/stop_profile</code> requests. vLLM&#x27;s <code>--profiler-config.profiler cuda</code> selects CUDA profiler API control; it is an application option, not an Nsight option. The job checks for a nonempty native report after shutdown.</p><p>Open the <code>.nsys-rep</code> in Nsight Systems and correlate NVTX, CUDA API, kernel, copy and communication rows. <code>nsys stats REPORT.nsys-rep</code> prints native summaries; summaries alone do not establish where host work overlaps GPU execution.</p><p>A <strong>measurement region</strong> is the part of the application chosen for observation. NVIDIA&#x27;s NVTX ranges provide explicit names for such regions, but naming a range does not automatically start a timer or limit every capture. Systems can display it; Compute can select kernels launched within it. Place <code>course_measure</code> after warmup and use completion-aware timing separately.</p><p><strong>NVTX (NVIDIA Tools Extension Library)</strong> is NVIDIA&#x27;s annotation API: function calls that attach your own names to application activity. A <strong>marker</strong> labels one instant, such as “input ready.” A <strong>range</strong> labels an interval between a beginning and an end, such as “submit the forward pass.” Nested ranges show that smaller operations belong to a larger step. Nsight Systems displays these annotations alongside CUDA activity; Nsight Compute can use a named range to select kernels launched inside it. NVTX supplies context to these tools, rather than collecting GPU counters itself.</p><p>This short example uses PyTorch&#x27;s NVTX interface, already used in the course labs. It requires a CUDA-enabled PyTorch runtime and GPU. It is an illustrative diagnostic snippet, not a benchmark or a new lab command. The input is already in GPU memory before the annotated calculation begins.</p><pre tabindex="0"><code>import torch
+from torch.cuda import nvtx
+
+x = torch.randn(1024, 1024, device=&quot;cuda&quot;)
+torch.cuda.synchronize()  # Finish input creation before this example.
+nvtx.mark(&quot;input_ready&quot;)
+
+with nvtx.range(&quot;step&quot;):
+    with nvtx.range(&quot;square&quot;):
+        y = x * x
+    nvtx.mark(&quot;square_submitted&quot;)
+    with nvtx.range(&quot;reduce&quot;):
+        total = y.sum()
+    with nvtx.range(&quot;wait_for_result&quot;):
+        torch.cuda.synchronize()
+
+nvtx.mark(&quot;result_ready&quot;)</code></pre><p>The <code>with</code> blocks open and close ranges, including when Python raises an exception. <code>nvtx.mark(...)</code> records a point without opening a range. The <code>square</code> and <code>reduce</code> ranges surround CPU calls that submit GPU work. They can end before their kernels finish. The explicit <code>torch.cuda.synchronize()</code> in <code>wait_for_result</code> makes the CPU wait; NVTX itself does not. The final marker therefore follows GPU completion in a successful run. The scalar <code>total</code> still lives in GPU memory: waiting has not copied it to the CPU.</p><figure class="detail-diagram" id="detail-tools-nvtx-ranges" data-after="How it works" data-diagram-source="reference/diagrams/tools-nvtx-ranges.svg">
+<svg viewBox="0 0 600 455" role="img" aria-labelledby="tools-nvtx-ranges-title tools-nvtx-ranges-desc">
+<title id="tools-nvtx-ranges-title">Names identify submission and completion</title>
+<desc id="tools-nvtx-ranges-desc">Read left to right. Diamonds mark instants; boxes span intervals. The CPU ranges square, reduce and wait_for_result are nested inside step. GPU work can continue after its submission range ends. Blue dashed arrows link submissions to kernels; the amber arrow links GPU completion to the explicit wait returning before result_ready. Positions and widths are schematic, not measured durations.</desc>
+<rect x="1" y="1" width="598" height="453" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">NVTX annotations</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Schematic order · time →</text>
+<text x="24" y="115" font-size="18" text-anchor="start" fill="#245880" font-weight="400">input_ready</text>
+<text x="576" y="115" font-size="18" text-anchor="end" fill="#245880" font-weight="400">result_ready</text>
+<text x="210" y="151" font-size="18" text-anchor="middle" fill="#245880" font-weight="400">square_submitted</text>
+<polygon points="84,170 91,177 84,184 77,177" fill="#245880"/>
+<line x1="84" y1="124" x2="84" y2="168" stroke="#245880" stroke-width="2"/>
+<polygon points="210,170 217,177 210,184 203,177" fill="#245880"/>
+<line x1="210" y1="157" x2="210" y2="168" stroke="#245880" stroke-width="2"/>
+<polygon points="566,170 573,177 566,184 559,177" fill="#245880"/>
+<line x1="566" y1="124" x2="566" y2="168" stroke="#245880" stroke-width="2"/>
+<text x="20" y="229" font-size="20" text-anchor="start" fill="#245880" font-weight="700">CPU</text>
+<rect x="85" y="195" width="467" height="105" rx="8" fill="#f6f8fa" stroke="#aabcc6" stroke-width="1.5"/>
+<text x="99" y="222" font-size="22" text-anchor="start" fill="#24343d" font-weight="700">step</text>
+<rect x="95" y="237" width="102" height="49" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/>
+<text x="146" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">square</text>
+<rect x="219" y="237" width="102" height="49" rx="8" fill="#eef5fc" stroke="#245880" stroke-width="1.5"/>
+<text x="270" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">reduce</text>
+<rect x="341" y="237" width="200" height="49" rx="8" fill="#fff7e7" stroke="#86500e" stroke-width="1.5"/>
+<text x="441" y="268" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">wait_for_result</text>
+<text x="20" y="363" font-size="20" text-anchor="start" fill="#206757" font-weight="700">GPU</text>
+<rect x="127" y="338" width="171" height="51" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/>
+<text x="212" y="371" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">Square</text>
+<rect x="318" y="338" width="167" height="51" rx="8" fill="#eef8f2" stroke="#206757" stroke-width="1.5"/>
+<text x="402" y="371" font-size="20" text-anchor="middle" fill="#24343d" font-weight="400">Reduce</text>
+<line x1="139" y1="287" x2="151" y2="336" stroke="#245880" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="151.0,336.0 146.3,330.8 152.8,329.2" fill="#245880"/>
+<line x1="265" y1="287" x2="330" y2="336" stroke="#245880" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="330.0,336.0 323.1,335.0 327.1,329.6" fill="#245880"/>
+<line x1="487" y1="340" x2="535" y2="287" stroke="#86500e" stroke-width="2" stroke-dasharray="4 4"/>
+<polygon points="535.0,287.0 533.4,293.8 528.4,289.3" fill="#86500e"/>
+<rect x="20" y="404" width="560" height="36" rx="8" fill="#eef5f7"/>
+<text x="300" y="427" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">NVTX labels; synchronize() waits</text>
+</g>
+</svg>
+<figcaption><strong>Relate NVTX markers and ranges to GPU completion</strong><p>Read left to right. Diamonds mark instants; boxes span intervals. The CPU ranges square, reduce and wait_for_result are nested inside step. GPU work can continue after its submission range ends. Blue dashed arrows link submissions to kernels; the amber arrow links GPU completion to the explicit wait returning before result_ready. Positions and widths are schematic, not measured durations.</p></figcaption></figure><p>Read this schematic from left to right. Diamonds mark instants, while boxes span intervals; their widths show relative order, not measured durations. The upper row contains the CPU&#x27;s <code>step</code> range and its nested ranges; the lower row shows the submitted GPU kernels. The blue dashed arrows connect submission to execution. The amber dashed arrow connects GPU completion to the explicit wait returning. The <code>square_submitted</code> marker appears before the square kernel finishes, while <code>result_ready</code> follows the wait and the end of <code>step</code>.</p><p>Here are the practical capabilities illustrated by those names:</p><ul><li><strong>Find an event:</strong> search for <code>input_ready</code> or <code>result_ready</code> in Systems to locate a request boundary. A marker has no duration; it is not a timer.</li><li><strong>Group work:</strong> expand <code>step</code> to see its nested <code>square</code>, <code>reduce</code> and <code>wait_for_result</code> ranges. This connects a high-level operation to the code that submitted it.</li><li><strong>Explain waiting:</strong> compare <code>square_submitted</code> with the correlated GPU kernel and <code>wait_for_result</code>. A short submission range followed by a long wait shows why a quick Python call does not prove a quick GPU result.</li><li><strong>Focus a capture:</strong> use <code>square</code> as the NVTX range for a Compute capture to select the multiplication kernels launched there and exclude the <code>reduce</code> launches. For these push/pop ranges, the Compute selector is <code>--nvtx --nvtx-include &#x27;square/&#x27;</code>; the trailing slash denotes a push/pop range. Combine it with the lab&#x27;s kernel-name and launch-count controls when a range launches multiple kernels. The selector filters profiling; it does not change the calculation.</li></ul><p>A range&#x27;s CPU duration is not automatically its GPU execution time. Use the correlated GPU activity or CUDA events for device timing. The supplied course capture path also labels phases such as <code>course_warmup</code>, <code>course_measure</code> and the complete <code>lab_workload</code>; Fundamentals Lab 01 adds <code>h2d_inputs</code>, <code>gpu_expression</code> and <code>d2h_output</code> for its transfer-inclusive diagnostic run. Shared course annotations are enabled for capture, keeping their wrappers out of clean acceptance timings.</p></div><div class="mental-model"><h3>Mental model</h3><p>NVTX gives application context. Systems shows time and relationships; annotation alone does not synchronize CUDA.</p></div></section><section class="lesson" id="lesson-3-nsight-compute-kernel-analysis"><h2>3. Nsight Compute kernel analysis</h2><div class="lesson-outcome"><h3>Objective</h3><p>Select a representative measured kernel and understand replay, counter sections and each Compute flag.</p></div><div class="how-it-works"><h3>How it works</h3><p><strong>Nsight Compute</strong> gathers hardware counters for selected GPU kernels. A counter describes work done by hardware, such as bytes moved or instructions executed. The tool often replays a kernel to collect groups of counters, so its capture is a diagnostic experiment with additional overhead.</p><p>Suppose Systems identifies a vector-add kernel as the main GPU cost. Open its Compute report and inspect <strong>Speed Of Light</strong> for throughput relative to the device&#x27;s supported peak rates, <strong>Memory Workload Analysis</strong> for memory traffic and cache behavior, and <strong>Occupancy</strong> for resident warps. A warp is a group of GPU threads; occupancy is the fraction of the SM&#x27;s supported resident warps that are active. An SM is the hardware unit that schedules those warps.</p><figure class="detail-diagram" id="detail-tools-compute-report" data-after="How it works" data-diagram-source="reference/diagrams/tools-compute-report.svg">
+<svg viewBox="0 0 600 410" role="img" aria-labelledby="tools-compute-report-title tools-compute-report-desc">
+<title id="tools-compute-report-title">Counters guide the next experiment</title>
+<desc id="tools-compute-report-desc">Read the selected kernel counters on the left, then the investigation on the right. The arrow means evidence informs a hypothesis, not proof of a bottleneck. Memory and compute throughput use their respective peak rates; achieved occupancy uses supported resident warps. The three percentages do not add to 100%.</desc>
+<rect x="1" y="1" width="598" height="408" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">Nsight Compute</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Synthetic vector-add report</text>
+<rect x="20" y="100" width="272" height="255" rx="8" fill="#f6f8fa" stroke="#c9d5dc" stroke-width="1.5"/>
+<text x="34" y="131" font-size="22" text-anchor="start" fill="#24343d" font-weight="700">Kernel counters</text>
+<text x="34" y="170" font-size="20" text-anchor="start" fill="#24343d" font-weight="400">Memory</text>
+<text x="275" y="170" font-size="28" text-anchor="end" fill="#206757" font-weight="700">80%</text>
+<rect x="35" y="182" width="240" height="15" rx="4" fill="#dfe7eb" stroke="none"/>
+<rect x="36" y="183" width="190.4" height="13" rx="3" fill="#206757" stroke="#206757" stroke-width="1.5"/>
+<text x="34" y="239" font-size="20" text-anchor="start" fill="#24343d" font-weight="400">Compute</text>
+<text x="275" y="239" font-size="28" text-anchor="end" fill="#245880" font-weight="700">20%</text>
+<rect x="35" y="251" width="240" height="15" rx="4" fill="#dfe7eb" stroke="none"/>
+<rect x="36" y="252" width="47.6" height="13" rx="3" fill="#245880" stroke="#245880" stroke-width="1.5"/>
+<text x="34" y="308" font-size="20" text-anchor="start" fill="#24343d" font-weight="400">Occupancy</text>
+<text x="275" y="308" font-size="28" text-anchor="end" fill="#86500e" font-weight="700">50%</text>
+<rect x="35" y="320" width="240" height="15" rx="4" fill="#dfe7eb" stroke="none"/>
+<rect x="36" y="321" width="119.0" height="13" rx="3" fill="#86500e" stroke="#86500e" stroke-width="1.5"/>
+<line x1="299" y1="222" x2="330" y2="222" stroke="#245880" stroke-width="2"/>
+<polygon points="330.0,222.0 323.9,225.4 323.9,218.6" fill="#245880"/>
+<rect x="340" y="100" width="240" height="255" rx="8" fill="#eef8f2" stroke="#9ac0ad" stroke-width="1.5"/>
+<text x="355" y="132" font-size="22" text-anchor="start" fill="#24343d" font-weight="700">Investigate</text>
+<text x="355" y="174" font-size="22" text-anchor="start" fill="#24343d" font-weight="400">Memory traffic</text>
+<text x="355" y="207" font-size="22" text-anchor="start" fill="#24343d" font-weight="400">may limit this</text>
+<text x="355" y="240" font-size="22" text-anchor="start" fill="#24343d" font-weight="400">kernel. Check</text>
+<text x="355" y="273" font-size="22" text-anchor="start" fill="#24343d" font-weight="400">bytes and</text>
+<text x="355" y="306" font-size="22" text-anchor="start" fill="#24343d" font-weight="400">access patterns.</text>
+<rect x="20" y="365" width="560" height="32" rx="8" fill="#eef5f7"/>
+<text x="300" y="390" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Change one control → test unprofiled</text>
+</g>
+</svg>
+<figcaption><strong>Read a kernel report as evidence for a hypothesis</strong><p>Read the selected kernel counters on the left, then the investigation on the right. The arrow means evidence informs a hypothesis, not proof of a bottleneck. Memory and compute throughput use their respective peak rates; achieved occupancy uses supported resident warps. The three percentages do not add to 100%.</p></figcaption></figure><p>Read from the counters on the left to the investigation on the right. The synthetic report shows memory throughput at 80% of peak, compute throughput at 20%, and achieved occupancy at 50%. These are three different ratios; they do not add to 100%. The arrow means that the counters inform a hypothesis. The first two suggest investigating memory traffic before adding arithmetic parallelism. Check the actual bytes, access pattern and workload size before declaring a memory bottleneck. Occupancy alone does not establish performance: increasing it may leave memory traffic unchanged. Change one relevant control and repeat the unprofiled benchmark to test the prediction. Missing counter permission means evidence is unavailable, not that a counter is zero. Use the lab&#x27;s supported single-kernel capture; never replay a whole distributed collective or live serving workload as an ordinary kernel experiment.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Compute option</th><th scope="col">Meaning and selected behavior</th></tr></thead><tbody><tr><td><code>--target-processes all</code></td><td>Include supported child processes of the launched workload.</td></tr><tr><td><code>--nvtx</code></td><td>Enable NVTX-based filtering.</td></tr><tr><td><code>--nvtx-include course_measure/</code></td><td>Select kernels launched inside this push/pop range; the trailing slash denotes a push/pop range.</td></tr><tr><td><code>--kernel-name-base demangled</code></td><td>Match readable C++ kernel names.</td></tr><tr><td><code>--rename-kernels off</code></td><td>Keep the recorded kernel names rather than applying rename rules.</td></tr><tr><td><code>--kernel-name &quot;regex:PATTERN&quot;</code></td><td>Select the measured kernel identified in Systems. Set <code>COURSE_PROFILE_KERNEL</code> to that pattern before submitting the Compute job.</td></tr><tr><td><code>--launch-count 1</code></td><td>Collect one matching launch, reducing replay cost. Warmup belongs outside the selected range.</td></tr><tr><td><code>--set basic</code></td><td>Start with the basic collection set.</td></tr><tr><td><code>--section SpeedOfLight</code></td><td>Add throughput relative to hardware limits.</td></tr><tr><td><code>--section MemoryWorkloadAnalysis</code></td><td>Add memory traffic and cache evidence.</td></tr><tr><td><code>--section Occupancy</code></td><td>Add warp-residency and limiting-resource evidence.</td></tr><tr><td><code>--clock-control none</code></td><td>Do not ask Compute to lock GPU clocks; record the actual run conditions.</td></tr><tr><td><code>--force-overwrite false</code></td><td>Refuse to overwrite existing reports.</td></tr><tr><td><code>--export</code></td><td>Save the <code>.ncu-rep</code> report with a unique job/step/process prefix.</td></tr><tr><td><code>--config-file off</code></td><td>The local distributed-lab companion ignores user configuration files for reproducible selection.</td></tr><tr><td><code>--nvtx-push-pop-scope process</code></td><td>Interpret the companion&#x27;s push/pop range in process scope.</td></tr><tr><td><code>--replay-mode kernel</code></td><td>Replay the selected kernel to gather required counter groups.</td></tr><tr><td><code>--kill no</code></td><td>Do not terminate the application merely after collecting the selected launches.</td></tr><tr><td><code>--import</code></td><td>Read an existing report without running the workload again.</td></tr></tbody></table></div><p>Open <code>.ncu-rep</code> in Nsight Compute, or use <code>ncu --import REPORT.ncu-rep</code>. Collection can require several passes and alter cache/device state. Kernel timings in the report and application wall time during replay do not replace an unprofiled benchmark. The course does not replay distributed collectives or a live server; the supported distributed example uses a separate single-process companion.</p></div><div class="mental-model"><h3>Mental model</h3><p>Counters test a kernel hypothesis. Validate its performance impact in a separate unprofiled run.</p></div></section><section class="lesson" id="lesson-4-pytorch-operator-profiling"><h2>4. PyTorch operator profiling</h2><div class="lesson-outcome"><h3>Objective</h3><p>Relate framework operators to device work while keeping profiler overhead out of timing claims.</p></div><div class="how-it-works"><h3>How it works</h3><p><strong>PyTorch profiler</strong> connects framework operators to CPU activity and CUDA work. Use it when a question starts at the tensor/operator level: which operation launches work, which shapes matter, and which operators account for device activity? Systems supplies the wider process timeline; Compute supplies selected kernel counters.</p><pre tabindex="0"><code>with torch.profiler.profile(
+    activities=[torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA],
+    record_shapes=True,
+) as profiler:
+    for _ in range(measured_steps):
+        output = model(inputs)
+        profiler.step()
+print(profiler.key_averages().table(sort_by=&quot;self_cuda_time_total&quot;, row_limit=10))</code></pre><p>This is an explanatory fragment: create inputs and perform warmup before entering the context. Fundamentals Lab 08 supplies the complete runnable program.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">PyTorch setting or method</th><th scope="col">Meaning</th></tr></thead><tbody><tr><td><code>activities</code></td><td>Select CPU operator events and CUDA activity. CUDA collection requires a supported CUDA runtime.</td></tr><tr><td><code>record_shapes=True</code></td><td>Record input shapes for operator analysis; adds overhead and can affect tensor lifetimes.</td></tr><tr><td><code>step()</code></td><td>Advance the profiler&#x27;s logical step, including any configured schedule.</td></tr><tr><td><code>key_averages()</code></td><td>Aggregate repeated operator events. Aggregation loses the ordering visible in a timeline.</td></tr><tr><td><code>table(sort_by=..., row_limit=10)</code></td><td>Sort the summary and show ten rows; a self-time column excludes nested child time.</td></tr><tr><td><code>export_chrome_trace(PATH)</code></td><td>Export a trace for a compatible timeline viewer; choose a new job-owned path.</td></tr></tbody></table></div><p>Lab 08&#x27;s normal job is a PyTorch diagnostic. Its external Systems/Compute jobs pass <code>--external-only</code>, disabling the embedded profiler so two profilers do not contend. All three produce diagnostic evidence. Use a separate normal timing lab for performance comparisons; an aggregated operator table is not an end-to-end latency measurement.</p></div><div class="mental-model"><h3>Mental model</h3><p>An operator summary explains framework work; a timeline preserves order, and neither removes profiling overhead.</p></div></section><section class="lesson" id="lesson-5-grafana-and-victoriametrics"><h2>5. Grafana and VictoriaMetrics</h2><div class="lesson-outcome"><h3>Objective</h3><p>Trace metrics from collection to query and interpret benchmark values alongside sampled telemetry.</p></div><div class="how-it-works"><h3>How it works</h3><p><strong>Grafana</strong> queries a data source and arranges the results into panels, such as a number, table or time-series graph. In these courses, completed benchmark summaries and sampled GPU/node telemetry reach the metrics data source by different paths. The result JSON file remains the authoritative experiment record. Grafana helps you compare the selected results and inspect the conditions around them.</p><p>Select the course and lab dashboard, persistent workspace, workload size, GPU identifier and experiment time interval. Keep <code>small</code> and <code>large</code> as separate workloads. In this synthetic example, baseline and candidate both pass correctness and use equivalent inputs; their median durations are 8 ms and 6 ms. The candidate&#x27;s duration is 25% lower: <code>(8 - 6) / 8</code>. Repeated unprofiled runs and their variation determine whether that difference is dependable.</p><figure class="detail-diagram" id="detail-tools-grafana-panels" data-after="How it works" data-diagram-source="reference/diagrams/tools-grafana-panels.svg">
+<svg viewBox="0 0 600 390" role="img" aria-labelledby="tools-grafana-panels-title tools-grafana-panels-desc">
+<title id="tools-grafana-panels-title">Benchmark summaries and telemetry answer different questions</title>
+<desc id="tools-grafana-panels-desc">Read the selected benchmark pair on the left and sampled GPU utilization on the right. The synthetic medians are 8 ms and 6 ms, with passing correctness. Dots are telemetry samples, not kernel timestamps; sample spacing is illustrative. The time picker changes only the telemetry interval. A new validated publication replaces the selected pair.</desc>
+<rect x="1" y="1" width="598" height="388" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<line x1="24" y1="91" x2="576" y2="91" stroke="#dce5e9" stroke-width="1"/>
+<text x="24" y="40" font-size="32" text-anchor="start" fill="#24343d" font-weight="700">Grafana dashboard</text>
+<text x="24" y="75" font-size="20" text-anchor="start" fill="#52626b" font-weight="400">Synthetic comparison · same workload</text>
+<text x="152" y="118" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Selected results</text>
+<text x="449" y="118" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Device context</text>
+<rect x="20" y="140" width="128" height="143" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<rect x="160" y="140" width="128" height="143" rx="8" fill="#eef8f2" stroke="#9ac0ad" stroke-width="1.5"/>
+<text x="84" y="175" font-size="18" text-anchor="middle" fill="#245880" font-weight="700">Baseline</text>
+<text x="84" y="225" font-size="44" text-anchor="middle" fill="#245880" font-weight="700">8 ms</text>
+<text x="84" y="261" font-size="18" text-anchor="middle" fill="#24343d" font-weight="400">Pass</text>
+<text x="224" y="175" font-size="18" text-anchor="middle" fill="#206757" font-weight="700">Candidate</text>
+<text x="224" y="225" font-size="44" text-anchor="middle" fill="#206757" font-weight="700">6 ms</text>
+<text x="224" y="261" font-size="18" text-anchor="middle" fill="#24343d" font-weight="400">Pass</text>
+<text x="154" y="318" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">25% lower duration</text>
+<rect x="308" y="140" width="272" height="195" rx="8" fill="#f6f8fa" stroke="#c9d5dc" stroke-width="1.5"/>
+<text x="326" y="170" font-size="20" text-anchor="start" fill="#24343d" font-weight="700">Utilization (%)</text>
+<line x1="361" y1="196" x2="361" y2="288" stroke="#52626b" stroke-width="2"/>
+<line x1="361" y1="288" x2="563" y2="288" stroke="#52626b" stroke-width="2"/>
+<text x="351" y="208" font-size="16" text-anchor="end" fill="#52626b" font-weight="400">100</text>
+<text x="351" y="292" font-size="16" text-anchor="end" fill="#52626b" font-weight="400">0</text>
+<polyline points="372,276 408,248 445,207 482,220 520,269 555,279" fill="none" stroke="#206757" stroke-width="2"/>
+<circle cx="372" cy="276" r="4" fill="#206757"/>
+<circle cx="408" cy="248" r="4" fill="#206757"/>
+<circle cx="445" cy="207" r="4" fill="#206757"/>
+<circle cx="482" cy="220" r="4" fill="#206757"/>
+<circle cx="520" cy="269" r="4" fill="#206757"/>
+<circle cx="555" cy="279" r="4" fill="#206757"/>
+<text x="461" y="318" font-size="18" text-anchor="middle" fill="#52626b" font-weight="400">Time →</text>
+<rect x="20" y="347" width="560" height="30" rx="8" fill="#eef5f7"/>
+<text x="300" y="369" font-size="20" text-anchor="middle" fill="#24343d" font-weight="600">Time picker changes telemetry, not results</text>
+</g>
+</svg>
+<figcaption><strong>Separate selected benchmark results from sampled telemetry</strong><p>Read the selected benchmark pair on the left and sampled GPU utilization on the right. The synthetic medians are 8 ms and 6 ms, with passing correctness. Dots are telemetry samples, not kernel timestamps; sample spacing is illustrative. The time picker changes only the telemetry interval. A new validated publication replaces the selected pair.</p></figcaption></figure><p>The panels on the left show the selected completed pair; both pass correctness. The graph on the right shows GPU utilization sampled over time, with earlier samples on the left and later samples on the right. Its dots are observations, not individual kernels. Placing the views side by side helps compare outcomes with device conditions; it does not establish that one caused the other. A brief kernel may run between samples, so an empty or low-utilization interval cannot replace the benchmark timer or the Systems trace. Summary panels retain the selected pair independently of the time picker; changing the interval changes the telemetry view, not which results occupy the baseline and candidate slots. Those slots change only when a new validated pair is explicitly published. Activity on a shared GPU is correlation until you establish which workload caused it.</p><p>The deployment&#x27;s collection and query paths have different jobs:</p><pre tabindex="0"><code>GPU/node exporters -------------------+
+                                      +-&gt; VMAgent -&gt; VictoriaMetrics
+Result JSON -&gt; publisher -&gt; Pushgateway+
+
+Grafana -&gt; datasource -&gt; VictoriaMetrics query API -&gt; panels</code></pre><p>DCGM and node exporters expose sampled GPU/node telemetry. The course publisher validates selected result JSON and exposes benchmark gauges through Pushgateway. VMAgent scrapes those endpoints and writes the samples to VictoriaMetrics. Grafana does not scrape the GPUs or collect those results itself.</p><p>The existing Grafana datasource uses the Prometheus type and points at VictoriaMetrics&#x27; Prometheus-compatible API. The dashboard&#x27;s symbolic <code>course-soperator-metrics</code> datasource is mapped during import to the discovered datasource. Keep its backend URL and credentials in the deployment&#x27;s protected configuration. The shared Lab Guide owns discovery and setup; this lesson does not install or modify infrastructure.</p><p>In Grafana Explore, select that datasource, choose the exact workspace and workload, and query a published result:</p><pre tabindex="0"><code>course_lab_resident_duration_seconds{
+  course=&quot;gpu-fundamentals&quot;, lab=&quot;01_cpu_gpu_crossover&quot;,
+  workspace=&quot;YOUR_WORKSPACE&quot;, profile=&quot;small&quot;, slot=&quot;baseline&quot;
+} @ now()</code></pre><p><code>profile</code> is the existing stored workload label; the runnable CLI is <code>--workload</code>. Result schemas and metric labels remain unchanged. <code>slot</code> selects the explicitly published baseline or candidate, not whichever job finished most recently. Inspect <code>case</code> labels when a lab contains several tensor sizes. Duration gauges use seconds, even when source JSON reports milliseconds.</p><p>For sampled utilization, use the discovered GPU label names and exact worker/GPU identity in the course dashboard:</p><pre tabindex="0"><code>DCGM_FI_DEV_GPU_UTIL{Hostname=&quot;YOUR_WORKER&quot;,gpu=&quot;0&quot;}</code></pre><p>This metric is a percentage. Select the experiment&#x27;s UTC start/end interval, check scrape resolution, and verify which workload owned the device. Missing samples are unknown, not zero. A datasource connection alone does not prove that the correct exporter, job, labels or result generation reached storage.</p></div><div class="mental-model"><h3>Mental model</h3><p>Exporters and publishers produce observations; VMAgent forwards them, VictoriaMetrics stores them, and Grafana queries them.</p></div></section><section id="next-steps"><h2>Where to Go Next</h2><div data-source="NEXT-STEPS.md"><p>Return to a practical course with one concrete performance question.</p><ul class="next-steps-list"><li><h3>Apply the references</h3><p>Read the lab&#x27;s native batch job, record its workload and interpret the corresponding Systems, Compute or PyTorch view. Use the shared Lab Guide for environment preparation and evidence publication.</p></li><li><h3>Study collection details</h3><p>The official references describe additional tracing domains, replay modes and datasource queries. Add an option only when it answers the question under investigation and record its overhead.</p></li></ul></div></section><section id="guide-glossary" data-source="GLOSSARY.md"><h2>Glossary</h2><dl><dt>Capture</dt><dd>A diagnostic recording of application activity or hardware counters.</dd><dt>Datasource</dt><dd>Grafana&#x27;s configured connection for querying a backend.</dd><dt>Measurement region</dt><dd>The application phase chosen for observation, often named with an NVTX range.</dd><dt>NVTX</dt><dd>NVIDIA&#x27;s annotation API for named markers and ranges.</dd><dt>Replay</dt><dd>Repeated execution used by a profiler to collect counter groups.</dd><dt>Workload</dt><dd>The problem size and input configuration selected for a run.</dd></dl></section><section id="official-references"><h2>Official references</h2><ol><li id="reference-1"><a href="https://slurm.schedmd.com/sbatch.html">Slurm sbatch</a></li><li id="reference-2"><a href="https://slurm.schedmd.com/srun.html">Slurm srun</a></li><li id="reference-3"><a href="https://docs.nvidia.com/nsight-systems/UserGuide/index.html">Nsight Systems User Guide</a></li><li id="reference-4"><a href="https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html">Nsight Compute CLI</a></li><li id="reference-5"><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html">Nsight Compute Profiling Guide</a></li><li id="reference-6"><a href="https://nvidia.github.io/NVTX/">NVIDIA NVTX</a></li><li id="reference-7"><a href="https://docs.pytorch.org/tutorials/beginner/profiler.html">PyTorch profiler</a></li><li id="reference-8"><a href="https://grafana.com/docs/grafana/latest/datasources/prometheus/">Grafana Prometheus datasource</a></li><li id="reference-9"><a href="https://docs.victoriametrics.com/victoriametrics/integrations/grafana/">VictoriaMetrics Grafana integration</a></li><li id="reference-10"><a href="https://docs.victoriametrics.com/victoriametrics/vmagent/">VMAgent collection and forwarding</a></li></ol></section><footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text" tabindex="0">                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      &quot;License&quot; shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      &quot;Licensor&quot; shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      &quot;Legal Entity&quot; shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      &quot;control&quot; means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      &quot;You&quot; (or &quot;Your&quot;) shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      &quot;Source&quot; form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      &quot;Object&quot; form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      &quot;Work&quot; shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      &quot;Derivative Works&quot; shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      &quot;Contribution&quot; shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, &quot;submitted&quot;
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as &quot;Not a Contribution.&quot;
+
+      &quot;Contributor&quot; shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a &quot;NOTICE&quot; text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an &quot;AS IS&quot; BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets &quot;[]&quot;
+      replaced with your own identifying information. (Don&#x27;t include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same &quot;printed page&quot; as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre></details>
+</footer></main></div></body></html>

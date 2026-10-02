@@ -34,8 +34,8 @@ Keep these supported tools and their consumers:
 
 | Tools | Responsibility |
 | --- | --- |
-| `submit_lab.py`, `inspect_results.py` | Maintainer campaign submissions, receipts and machine-readable inspection. Learners use native `sbatch`, `sacct` and `cat`. |
-| `profile_lab.py`, `server_capture.py`, `managed_profilers.py` | Maintainer capture automation and installed profiler qualification. Learner recipes show native profiling and controls. |
+| Native per-lab batch jobs, `inspect_results.py` | Learners and campaigns submit the same explicit jobs with `sbatch`; inspection reads exact-job results. |
+| Native diagnostic batch jobs, `managed_profilers.py` | Visible profiler commands and installed profiler qualification; workload coordinators retain distributed/server lifecycle control. |
 | `publish_results.py`, `course_evidence.py`, `cuda_result.py` | Validated result contracts, diagnostic labeling and selected-pair publication. |
 | `readiness.py`, `verify_monitoring.py`, `fabric_guard.py`, `install_fabric_tools.py` | Runtime/domain qualification and reproducible tool builds. |
 | Builders, validators and `sync_course_tools.py` | Source-owned publication and standalone-copy parity. |
@@ -66,14 +66,14 @@ its stable `slug` identifies the course even if a downloaded folder is renamed.
 Catalog introductions and learning outcomes live in the renderer, while
 `tools/catalog.css` owns the catalog's embedded styles. Edit these sources
 instead of generated HTML. A selected-course build also refreshes the shared guide and catalog;
-rebuild all seven pages when shared metadata, navigation, styles or licensing
+rebuild all eight course pages when shared metadata, navigation, styles or licensing
 changes. `--check` always checks the shared guide and catalog as well as the selected courses.
 
-The reader-facing order is Soperator, Lab Guide, GPU Fundamentals, GPU Performance
+The reader-facing order is Soperator, Lab Guide, GPU Fundamentals, GPU Performance Tools, GPU Performance
 Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs.
 `course_builder.config.CATALOG_GROUPS` owns the presentation groups and derives
-the eight-entry sequence used by cards, the learning path, and every course/guide
-menu. `COURSES` remains the seven real course packages; never add the README-derived
+the nine-entry sequence used by cards, the learning path, and every course/guide
+menu. `COURSES` remains the eight real course packages; never add the README-derived
 guide to that build registry. Its generated title is Lab Guide, and it has no
 invented guided hours. Each menu has one current-page marker and a separate
 catalog backlink. Display order does not change course prerequisites.
@@ -122,7 +122,7 @@ synchronize remote files or publish the website.
 
 Run the offline validation commands below before committing generated HTML.
 Once Pages is enabled, reviewed changes to `main` publish those committed files.
-Confirm the deployment succeeded and the root, catalog, shared guide and seven course URLs
+Confirm the deployment succeeded and the root, catalog, shared guide and eight course URLs
 serve the intended revision before declaring a publication complete. See
 [GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 for the branch deployment settings.
@@ -132,7 +132,7 @@ To preview from a local checkout, serve the repository root with
 
 ## Educational approach
 
-All seven learner pages use `tools/course.css`: the course title is H1, major
+All eight learner pages use `tools/course.css`: the course title is H1, major
 sections are H2, lesson fields and guide titles are H3, and nested concepts
 are H4. Keep **Glossary** in its own top-level section with a definition list.
 Use numbered **Official references** and one complete bullet per **Where to Go

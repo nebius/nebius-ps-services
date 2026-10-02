@@ -21,7 +21,7 @@ __global__ void fused_residual_rmsnorm(const float* input, const float* residual
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 11_residual_rmsnorm [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 11_residual_rmsnorm [--workload small|large]\n"; return 0; }
   try {
     const int rows = static_cast<int>(problem_size(argc, argv, 17, 4096));
     require_course_gpu();

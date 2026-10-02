@@ -86,7 +86,7 @@ def main() -> None:
         .eval()
     )
     base = "Explain why equivalent GPU benchmarks preserve token counts."
-    repeats = (1, 4, 12, 32) if args.profile == "small" else (8, 32, 96, 192)
+    repeats = (1, 4, 12, 32) if args.workload == "small" else (8, 32, 96, 192)
     prompts = [" ".join([base] * repeat) for repeat in repeats]
     lengths = [
         len(tokenizer(prompt, add_special_tokens=True).input_ids) for prompt in prompts

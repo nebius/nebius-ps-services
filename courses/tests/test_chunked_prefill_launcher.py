@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from native_job_fixtures import prepare_job, local_commands
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +22,8 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
     course = tmp_path / "course with spaces"
     (course / "labs").mkdir(parents=True)
     (course / "labs/34_policy_equivalence_client.py").touch()
+    prepare_job(course, "llm-inference", "34_policy_equivalence_client")
+    commands = local_commands(course)
     record = course / "server-arguments.jsonl"
     clients = course / "client-arguments.jsonl"
     runner = course / "container-runner"
@@ -63,6 +66,7 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
         path.chmod(0o755)
     environment = {
         **os.environ,
+        "PATH": commands["PATH"],
         "SLURM_JOB_ID": "41",
         "COURSE_RUN_ID": "0123456789ab",
         "COURSE_PYTHON": str(python),
@@ -81,7 +85,7 @@ def test_chunked_execution_is_fixed_and_quality_gates_measurement(
     environment["SERVER_READY_WRITE_FD"] = str(ready_write)
     try:
         completed = subprocess.run(
-            ["bash", str(ROOT / "llm-inference/slurm/vllm_chunked_prefill_ab.sbatch")],
+            ["bash", str(ROOT / "llm-inference/slurm/34_policy_equivalence_client.sbatch")],
             cwd=course,
             env=environment,
             pass_fds=(ready_read, ready_write),

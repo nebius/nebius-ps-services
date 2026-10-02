@@ -25,8 +25,8 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 2_048 if args.profile == "small" else 8_192
-    batch = 32 if args.profile == "small" else 128
+    width = 2_048 if args.workload == "small" else 8_192
+    batch = 32 if args.workload == "small" else 128
     static_input = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
 

@@ -84,7 +84,7 @@ def main() -> None:
     if triton is None or uniform_tail_probe is None:
         raise SystemExit("This lab requires the environment's PyTorch Triton compiler.")
     seed_everything(torch, args.seed)
-    base = 256 if args.profile == "small" else 1_024
+    base = 256 if args.workload == "small" else 1_024
     balanced_widths = [base] * 8
     skewed_widths = [3 * base // 2] + [7 * base // 8] * 7
 
@@ -166,7 +166,7 @@ def main() -> None:
     properties = torch.cuda.get_device_properties(0)
     num_warps = 16
     threads = num_warps * 32
-    tail_work = 256 if args.profile == "small" else 2_048
+    tail_work = 256 if args.workload == "small" else 2_048
     compiled = uniform_tail_probe[(1,)](
         torch.empty(1, device="cuda"), work=tail_work, num_warps=num_warps
     )

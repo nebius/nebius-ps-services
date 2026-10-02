@@ -28,7 +28,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    size = 2_048 if args.profile == "small" else 8_192
+    size = 2_048 if args.workload == "small" else 8_192
     device_a = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
     device_b = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
 

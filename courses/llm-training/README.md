@@ -10,7 +10,7 @@ Each native submission block prepares private log directories before calling `sb
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 
@@ -59,7 +59,7 @@ Begin with Lesson 1 and [Lab 32’s CPU learning exercise](reference/labs/32_lea
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_tiny_transformer_train/logs/%j.out" \
-  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/01_tiny_transformer_train.sbatch --workload small
 ```
 
 Transformer Engine is optional and must match the installed PyTorch/CUDA ABI.
@@ -67,7 +67,7 @@ Follow [Lab 22 runtime qualification](reference/labs/22_transformer_engine_fp8.m
 to check its build and FP8 runtime compiler before the full experiment.
 Training and inference-serving dependencies are intentionally not combined.
 
-The final optimization decision uses `slurm/capstone_three_trials.sbatch`.
+The final optimization decision uses `slurm/31_training_capstone.trials.sbatch`.
 It launches three fresh Python processes with distinct seeds, alternates
 baseline/candidate order, validates every result, and writes one scoped
 aggregate keep/reject record for the learner's causal report.

@@ -14,17 +14,14 @@ COURSES = (
     "advanced-gpu-communication",
 )
 TOOLS = (
-    "submit_lab",
     "fabric_guard",
     "install_fabric_tools",
     "publish_results",
     "inspect_results",
-    "profile_lab",
     "managed_profilers",
     "course_setup",
     "verify_monitoring",
     "readiness",
-    "server_capture",
 )
 
 

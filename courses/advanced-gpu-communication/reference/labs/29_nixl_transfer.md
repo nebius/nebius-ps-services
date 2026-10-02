@@ -24,15 +24,15 @@ The pairwise scatter-gather benchmark uses UCX, GPU memory at both endpoints, WR
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
   --error="$PWD/results/29_nixl_transfer/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/29_nixl_transfer.py --profile small --progress-thread off
+  slurm/29_nixl_transfer.sbatch --workload small --progress-thread off
 ```
 
 ## Check your results
+
+Each new job owns `results/29_nixl_transfer/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/29_nixl_transfer/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -80,12 +80,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
-  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.sbatch --workload small --progress-thread off
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
-  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread on
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.sbatch --workload small --progress-thread on
 ```
 
 Logs stay under `results/29_nixl_transfer/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -99,17 +99,12 @@ Capture a separate diagnostic run:
 This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
-  --chdir="$PWD" --output="results/29_nixl_transfer/logs/capture-%j.out" \
-  --error="results/29_nixl_transfer/logs/capture-%j.err" \
-  slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off \
-  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
-  --trace=cuda,nvtx,osrt,ucx \
-  --cuda-trace-scope=process-tree --sample=none \
-  --discard-environment=true --force-overwrite=false --kill=none \
-  --cpuctxsw=none --duration=300 --wait=all \
-  '--output={report}'
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off
 ```
+
+The native Systems command is in `slurm/29_nixl_transfer.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture the actual vendor executable inside each allocated worker; preserve raw numerical output separately. Open rank0.nsys-rep and rank1.nsys-rep beside the private vendor output. Inspect UCX, CUDA API and OS runtime rows around buffer preparation and progress. GPU payload DMA may have no CUDA kernel event; use clean NIXL transfer_us and bandwidth for the network result. No course NVTX range is emitted by the vendor executable. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

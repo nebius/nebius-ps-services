@@ -17,7 +17,7 @@ Complete the one-time directory preparation in the shared Lab Guide before submi
    to the CMake build, required CUTLASS Lab 09, SM90 binaries, and CTest.
 3. Submit Lab 13 and confirm one full non-MIG H100 at compute capability 9.0.
 4. Run Labs 01–09 and 11–12 through the one-node launcher.
-5. Run `slurm/sanitizer.sbatch memcheck EXECUTABLE` for every required binary;
+5. Run the matching `slurm/LAB.sanitizer.sbatch memcheck` job for every required binary;
    submit the same launcher with `racecheck`, `initcheck`, or `synccheck` where
    the lab uses the relevant behavior.
 6. Use Nsight Systems to locate the path, then Nsight Compute on one selected
@@ -47,37 +47,37 @@ After that job completes the CMake build and passes CTest, use its privately rec
 export COURSE_BUILD_DIR='build/run-REPLACE_WITH_BUILD_JOB_ID'
 sbatch --chdir="$PWD" \
   --output="$PWD/results/13_h100_preflight/logs/%j.out" \
-  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/13_h100_preflight"
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/13_h100_preflight.sbatch
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_vector_add/logs/%j.out" \
-  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add" --profile small
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/01_vector_add.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/02_fused_elementwise/logs/%j.out" \
-  --error="$PWD/results/02_fused_elementwise/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/02_fused_elementwise" --profile small
+  --error="$PWD/results/02_fused_elementwise/logs/%j.err" slurm/02_fused_elementwise.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/04_reduction/logs/%j.out" \
-  --error="$PWD/results/04_reduction/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/04_reduction" --profile small
+  --error="$PWD/results/04_reduction/logs/%j.err" slurm/04_reduction.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/06_divergence_tail/logs/%j.out" \
-  --error="$PWD/results/06_divergence_tail/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/06_divergence_tail" --profile small
+  --error="$PWD/results/06_divergence_tail/logs/%j.err" slurm/06_divergence_tail.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/07_resource_sweep/logs/%j.out" \
-  --error="$PWD/results/07_resource_sweep/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/07_resource_sweep" --profile small
+  --error="$PWD/results/07_resource_sweep/logs/%j.err" slurm/07_resource_sweep.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_library_epilogue/logs/%j.out" \
-  --error="$PWD/results/09_library_epilogue/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/09_library_epilogue" --profile small
+  --error="$PWD/results/09_library_epilogue/logs/%j.err" slurm/09_library_epilogue.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
-  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/11_residual_rmsnorm.sbatch --workload small
 ```
 
 Every kernel must agree with its reference for the declared shapes and
@@ -100,28 +100,28 @@ one example kernel; repeat the applicable sanitizer for every required binary.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sanitizer.sbatch memcheck --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sanitizer.sbatch racecheck --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch synccheck --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch memcheck --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch racecheck --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/nsys_single_gpu.sbatch results/transpose-systems "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.nsys.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/ncu_single_gpu.sbatch results/transpose-kernel "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.ncu.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/12_capstone/logs/%j.out" \
-  --error="$PWD/results/12_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch "${COURSE_BUILD_DIR}/12_capstone" --profile small
+  --error="$PWD/results/12_capstone/logs/%j.err" slurm/12_capstone.trials.sbatch --workload small
 ```
 
 Require zero relevant sanitizer errors. A missing profiler or counter

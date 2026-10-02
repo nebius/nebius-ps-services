@@ -35,7 +35,7 @@ Use explicit or natural-language requests to run course labs. Codex uses
 
 ```text
 $run-labs run (--lab COURSE:LAB ... | --course COURSE ... | --all-courses)
-              [--profile small|large|both] [--courses-root PATH]
+              [--workload small|large|both] [--courses-root PATH]
               [--environment PRIVATE_JSON] [--dry-run]
 $run-labs status CAMPAIGN_DIRECTORY
 $run-labs resume CAMPAIGN_DIRECTORY
@@ -49,7 +49,7 @@ $run-labs --help
   lab selectors; the union is deduplicated.
 - `--all-courses`: all six practical courses; mutually exclusive with narrower
   selectors. Environment readiness and external duplicate links are excluded.
-- `--profile`: `both` by default, or only `small` or `large`. These are workload
+- `--workload`: `both` by default, or only `small` or `large`. These are workload
   presets, independent of GPU model. Qualification/modeling labs and the fixed
   server workloads named in recipe notes may have equal effective parameters;
   record that accurately. See [execution.md](references/execution.md).
@@ -64,6 +64,10 @@ $run-labs --help
 - `cancel`: reconcile and cancel only this campaign's exact owned jobs; preserve
   prior published results and failed evidence, then release its claims.
 - `-h`, `--help`: show help. No additional public flags.
+
+The execution contract and per-job paths are documented in
+[execution.md](references/execution.md). Native job files are authoritative;
+there is no Python submission or profiling wrapper between the job and its workload.
 
 ## Workflow
 

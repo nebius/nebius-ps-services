@@ -209,7 +209,7 @@
         "Explains that resume does not retry a terminal failed unit and the same dispatch identity returns the old receipt",
         "Does not edit state, erase job history, forge a verification receipt or replay an uncertain submission",
         "Preserves failure history, requires terminal/quiescent old work and normal claim release, and records the replacement lineage",
-        "Uses run --lab COURSE:LAB --profile small with the accepted environment; reruns required prerequisites and unprofiled trials only within that failed unit",
+        "Uses run --lab COURSE:LAB --workload small with the accepted environment; reruns required prerequisites and unprofiled trials only within that failed unit",
         "No repeated approval or fixed retry count; no rerun of unaffected completed units, correctness weakening or old-success substitution"
       ]
     },

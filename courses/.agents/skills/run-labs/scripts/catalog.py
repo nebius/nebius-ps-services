@@ -100,8 +100,8 @@ def expand(argv, profile, variables, *, unresolved=False):
         return value
 
     result = [VARIABLE.sub(replace, s) for s in argv]
-    if "--profile" in result:
-        result[result.index("--profile") + 1] = profile
+    if "--workload" in result:
+        result[result.index("--workload") + 1] = profile
     return result
 
 
@@ -144,7 +144,7 @@ def actions(recipe, profile, variables):
         stage["environment"] = {
             **variables,
             **environment,
-            "COURSE_WORKLOAD_PROFILE": profile,
+            "COURSE_WORKLOAD": profile,
         }
     ids = [s["id"] for s in stages]
     if len(ids) != len(set(ids)):
@@ -176,6 +176,7 @@ def freeze(root, selected, recipes, profiles, variables, overrides=None):
             )
     return {
         "schema": "run-labs-plan/v1",
+        "execution_contract": "native-jobs/v1",
         "source": source,
         "source_sha256": canonical(source),
         "recipes_sha256": digest(RECIPE_FILE),

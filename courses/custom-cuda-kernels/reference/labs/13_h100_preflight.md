@@ -27,7 +27,7 @@ Build prerequisite (complete before the baseline):
 ```bash
 export COURSE='custom-cuda-kernels'
 bash slurm/build_and_test.sbatch --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_h100_preflight/logs/%j.out" \
   --error="$PWD/results/13_h100_preflight/logs/%j.err" --wait slurm/build_and_test.sbatch
 ```
@@ -41,15 +41,15 @@ Keep the exact completed build directory as `COURSE_BUILD_DIR`; use the course R
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_h100_preflight/logs/%j.out" \
   --error="$PWD/results/13_h100_preflight/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight"
+  slurm/13_h100_preflight.sbatch
 ```
 
 ## Check your results
+
+Each new job owns `results/13_h100_preflight/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/13_h100_preflight/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -80,7 +80,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Global memory bytes | `global_memory_bytes` | `bytes` |
 | Runtime version | `runtime_version` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 13_h100_preflight \
@@ -106,12 +106,12 @@ with that job's completed directory. Save the CUDA selectors for later logins:
 export COURSE_BUILD_DIR='<absolute completed build directory from the job log>'
 declare -p CUDA_IMAGE_DIGEST CUTLASS_ROOT COURSE_CONTAINER_RUNNER COURSE_BUILD_DIR \
   >> "$HOME/courses/.runtime/$COURSE.sh"
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_h100_preflight/logs/%j.out" \
-  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight"
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/13_h100_preflight.sbatch
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Explain which component compiles CUDA C++ and which launches the resulting binary. Why is the required SM90 build distinct from the optional SM90a profile? Identify what must be requalified after a toolkit change.
 

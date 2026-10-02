@@ -9,7 +9,7 @@ Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes
 Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 The optional AIPerf campaign referenced by Lab 30 belongs to Lab 15; submit
-`slurm/aiperf.sbatch` using Lab 15's native submission block and private log
+`slurm/15_streaming_client.aiperf.sbatch` using Lab 15's native submission block and private log
 directory so its logs and serving artifacts retain the same lab identity.
 AIPerf writes native benchmark exports; the Lab 15 dashboard and course
 publisher use the separate streaming client's JSON results.
@@ -26,7 +26,7 @@ greedy-output gate remains required before performance measurements.
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
 
 ## Serving runtime preparation
 
@@ -107,7 +107,7 @@ the interpreter path must exist on the allocated node.
 COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python" \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
-  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/09_hf_prefill_decode.sbatch --workload small
 ```
 
 Pinned engine profiles remain pending until their images, model revisions,
@@ -138,7 +138,7 @@ VLLM_IMAGE_DIGEST='docker://registry/image@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_vllm_offline/logs/%j.out" \
-  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/10_vllm_offline.sbatch --workload small
 ```
 
 After Lessons 6–9 and qualification of both vLLM and AIPerf images, follow
@@ -156,7 +156,7 @@ AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
-  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/vllm_chunked_prefill_ab.sbatch
+  --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.sbatch
 ```
 
 After Lesson 13, follow [Lab 33’s speculative-decoding guide](reference/labs/33_speculative_engine_client.md) and qualify a compatible target/draft pair before the profile;
@@ -169,12 +169,12 @@ AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
 COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
-  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/vllm_speculative_ab.sbatch TARGET TARGET_REVISION DRAFT DRAFT_REVISION
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch TARGET TARGET_REVISION DRAFT DRAFT_REVISION
 ```
 
 Actual distributed serving practice is in the advanced course, where Dynamo experiments own their workers, discovery, model revision, client measurements and server captures.
 
-The final mechanics capstone uses `slurm/capstone_three_trials.sbatch`. It
+The final mechanics capstone uses `slurm/32_inference_capstone.trials.sbatch`. It
 launches three fresh processes, alternates variant order, validates correctness,
 and writes one scoped aggregate keep/reject record; it makes no serving claim.
 Aggregation retains the observed GPU family in its claim and rejects trials

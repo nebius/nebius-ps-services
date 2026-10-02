@@ -230,27 +230,7 @@ def service(args, folder):
                 if getattr(args, "worker_prefix", None) is not None:
                     command = [*native_systems_prefix(args.worker_prefix, folder / f"server-rank{rank}", server=True), *command]
                 else:
-                    command = [
-                        "env",
-                        "-u",
-                        "DEBUGINFOD_URLS",
-                        binary,
-                        "profile",
-                        "--trace=cuda,nvtx,osrt,nccl",
-                        "--cuda-trace-scope=process-tree",
-                        "--trace-fork-before-exec=true",
-                        "--cuda-graph-trace=node",
-                        "--capture-range=cudaProfilerApi",
-                        "--capture-range-end=stop",
-                        "--flush-on-cudaprofilerstop=false",
-                        "--kill=none",
-                        "--wait=primary",
-                        "--sample=none",
-                        "--discard-environment=true",
-                        "--force-overwrite=false",
-                        "--output=" + str(folder / f"server-rank{rank}"),
-                        *command,
-                    ]
+                    raise ValueError("Systems capture requires the job's explicit --worker-prefix")
             processes.start(
                 f"worker{rank}",
                 step(
@@ -350,8 +330,8 @@ def run(kind):
         measured = benchmark(
             url,
             count=args.iterations,
-            words=16 if args.profile == "small" else 256,
-            output_tokens=32 if args.profile == "small" else 128,
+            words=16 if args.workload == "small" else 256,
+            output_tokens=32 if args.workload == "small" else 128,
             concurrency=args.concurrency,
             warmup=args.warmup,
             folder=folder,

@@ -15,8 +15,8 @@ from test_course_content_contract import COURSES as GPU_COURSES
 from test_course_content_contract import ROOT
 from test_practice_integration import load_validator
 
-COURSES = ("soperator", *GPU_COURSES, "advanced-gpu-communication")
-RESOURCES = ("soperator", "lab-guide", *GPU_COURSES, "advanced-gpu-communication")
+COURSES = ("soperator", GPU_COURSES[0], "gpu-performance-tools", *GPU_COURSES[1:], "advanced-gpu-communication")
+RESOURCES = ("soperator", "lab-guide", GPU_COURSES[0], "gpu-performance-tools", *GPU_COURSES[1:], "advanced-gpu-communication")
 
 
 class PageLinks(HTMLParser):
@@ -52,9 +52,9 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     cards = re.findall(
         r'<article class="course-card .*?</article>', document, re.DOTALL
     )
-    assert len(cards) == 8
+    assert len(cards) == 9
     assert re.findall(r'<article[^>]+id="([^"]+)"', document) == list(RESOURCES)
-    assert re.findall(r'class="course-number">(\d+)<', document) == [f"{n:02d}" for n in range(1, 9)]
+    assert re.findall(r'class="course-number">(\d+)<', document) == [f"{n:02d}" for n in range(1, 10)]
     guide = cards[1]
     assert '<h3>Lab Guide</h3>' in guide
     assert 'href="lab-guide.html"' in guide
@@ -72,7 +72,7 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     assert "Text only · No labs" in cards[0]
     learning_path = document.split('<aside class="learning-map"', 1)[1].split('</aside>', 1)[0]
     assert re.findall(r'<li[^>]*>.*?<a href="#([^"]+)"', learning_path) == list(RESOURCES)
-    assert '<strong>6</strong> courses' in document
+    assert '<strong>7</strong> courses' in document
     assert '<strong>1</strong> Advanced Labs collection' in document
     assert '<strong>1</strong> Lab Guide' in document
     metadata["gpu-fundamentals"]["title"] = 'GPU <execution> & "memory"'

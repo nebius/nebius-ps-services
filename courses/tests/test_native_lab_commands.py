@@ -47,11 +47,10 @@ def test_native_example_submits_with_private_logs_and_no_monitoring(tmp_path, su
     lab = '01_cpu_gpu_crossover'
     captured = json.loads((tmp_path / 'submission.json').read_text())
     assert captured['argv'] == [
-        '--export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0',
         f'--chdir={tmp_path}',
         f'--output={tmp_path}/results/{lab}/logs/%j.out',
         f'--error={tmp_path}/results/{lab}/logs/%j.err',
-        'slurm/single_gpu.sbatch', f'labs/{lab}.py', '--profile', 'small',
+        f'slurm/{lab}.sbatch', '--workload', 'small',
     ]
     assert not (tmp_path / "results").exists()  # Preparation is a separate setup operation.
 
@@ -76,8 +75,8 @@ def test_mechanics_example_preserves_per_command_interpreter(tmp_path, submit_sp
     assert result.returncode == 0, result.stderr
     captured = json.loads((tmp_path / 'submission.json').read_text())
     assert captured['python'] == str(tmp_path / 'courses/.venvs/llm-inference/bin/python')
-    assert captured['argv'][-4:] == [
-        'slurm/single_gpu.sbatch', 'labs/09_hf_prefill_decode.py', '--profile', 'small',
+    assert captured['argv'][-3:] == [
+        'slurm/09_hf_prefill_decode.sbatch', '--workload', 'small',
     ]
 
 
@@ -99,12 +98,11 @@ def test_intro_variations_produce_inspectable_jobs(
         result = run_block(tmp_path, submit_spy, command)
         assert result.returncode == 0, result.stderr
         argv = json.loads((tmp_path / 'submission.json').read_text())['argv']
-        assert '--export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0' in argv
+        assert not any('COURSE_PROFILE_TOOL=' in arg for arg in argv)
         assert f'--output={tmp_path}/results/{lab}/logs/%j.out' in argv
         assert f'--error={tmp_path}/results/{lab}/logs/%j.err' in argv
-        launcher = 'cpu' if index < cpu_runs else 'single_gpu'
+        launcher = lab if index < cpu_runs else lab + '.cuda'
         assert f'slurm/{launcher}.sbatch' in argv
-        assert f'labs/{lab}.py' in argv
         device = argv[argv.index('--device') + 1]
         assert device == ('cpu' if index < cpu_runs else 'cuda')
 

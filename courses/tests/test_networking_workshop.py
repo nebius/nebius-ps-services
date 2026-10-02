@@ -41,7 +41,7 @@ def test_networking_profiles_are_one_factor_and_fail_on_conflicts():
 
 
 def test_nccl_launcher_help_and_allocation_guard():
-    script = ROOT / "advanced-gpu-communication/slurm/nccl_tests.sbatch"
+    script = ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch"
     help_run = subprocess.run(
         ["bash", str(script), "--help"], capture_output=True, text=True, check=False
     )
@@ -56,12 +56,12 @@ def test_nccl_launcher_help_and_allocation_guard():
         check=False,
     )
     assert run.returncode != 0
-    assert "Slurm" in run.stderr
+    assert "sbatch" in run.stderr
 
 
 def test_no_new_network_admin_commands():
     for path in (
-        ROOT / "advanced-gpu-communication/slurm/nccl_tests.sbatch",
+        ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch",
         ROOT / "advanced-gpu-communication/labs/09_nccl_transport_sweep.py",
         ROOT / "advanced-gpu-communication/labs/10_nccl_tests_report.py",
     ):
@@ -196,6 +196,7 @@ def test_mocked_mpi_launch_checks_exit_and_redacts_report(
             "ring",
             "--output-dir",
             str(output),
+            *(["--worker-prefix", "nsys", "profile"] if tool == "nsys" else []),
         ],
     )
     with load_lab("advanced-gpu-communication/labs/10_nccl_tests_report.py") as lab:

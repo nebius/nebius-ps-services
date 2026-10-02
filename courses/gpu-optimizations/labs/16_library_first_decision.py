@@ -69,7 +69,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    size = 512 if args.profile == "small" else 4096
+    size = 512 if args.workload == "small" else 4096
     x = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
     weight = torch.randn_like(x)
     bias = torch.randn(size, device="cuda", dtype=torch.bfloat16)

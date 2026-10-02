@@ -25,15 +25,15 @@ Use Lab 24 to compare uninterrupted and interrupted/resumed trajectories.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_checkpoint_resume/logs/%j.out" \
   --error="$PWD/results/24_checkpoint_resume/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/24_checkpoint_resume.py --profile small
+  slurm/24_checkpoint_resume.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/24_checkpoint_resume/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/24_checkpoint_resume/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -64,7 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Resumed next loss | `resumed_next_loss` | `none` |
 | Max parameter error | `max_parameter_error` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 24_checkpoint_resume \
@@ -83,12 +83,12 @@ Run the supplied deterministic case without adding asynchronous data loading or 
 
 ```bash
 "$COURSE_PYTHON" labs/24_checkpoint_resume.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_checkpoint_resume/logs/%j.out" \
-  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile small
+  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/24_checkpoint_resume.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Name the state that determines the next operation in your own training loop: scheduler, scaler, sampler position, accumulation progress, and data cursor may matter. Which are absent because this lab intentionally uses a smaller system?
 
@@ -97,17 +97,12 @@ Frequent checkpoints reduce recovery loss but consume I/O, storage, and synchron
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/24_checkpoint_resume/logs/capture-%J-%t.out" \
-  --error="results/24_checkpoint_resume/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/24_checkpoint_resume/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/24_checkpoint_resume.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/24_checkpoint_resume/logs/%j.out" \
+  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/24_checkpoint_resume.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/24_checkpoint_resume.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Expand lab_workload and CUDA API/GPU rows. Locate training updates and device-to-host/host-to-device checkpoint transfers. Distinguish host serialization from GPU work, and require reference/resumed losses and parameter error to match. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

@@ -7,20 +7,18 @@ All notable changes to this project are tracked here. This changelog follows
 ## How to use this file
 
 - Keep `## [Unreleased]` at the top and add bullets as changes land.
-- Before release tagging, move `Unreleased` into a dated release section with
-  `./publish-release.sh --mode prep --tag X.Y.Z` from a clean feature branch
-  that contains current `origin/__MAIN_BRANCH__`, or from clean synced
-  `__MAIN_BRANCH__`. The helper reuses the feature branch; from
-  `__MAIN_BRANCH__`, it creates and pushes a release branch.
-- After the release-prep PR merges to `__MAIN_BRANCH__`, run
-  `./publish-release.sh --mode publish --tag X.Y.Z` on clean synced
-  `__MAIN_BRANCH__`.
-- The prep step fails before editing `CHANGELOG.md` if the target tag already
-  exists locally or on `origin`.
-- The prep step preserves a blank line between dated release sections when it
-  moves `Unreleased` into the new heading.
-- The publish step verifies that the tagged source checkout resolves the
-  package runtime version to `X.Y.Z` before the tag is pushed.
+- Invoke `$publish-release --tag X.Y.Z` from this project to prepare, commit,
+  push and merge the release PR, tag the verified merged commit in
+  `__MAIN_BRANCH__` history, and verify published assets.
+- If GitHub requires approval, follow the displayed link. The skill waits up
+  to ten minutes and continues automatically when an eligible reviewer approves.
+- After a timeout or interruption, use `$publish-release --resume --tag X.Y.Z`.
+- The generated shell helper exposes private content/tag/push/verify primitives;
+  it does not commit or publish branches. The skill delegates those effects to
+  the existing canonical commit/PR owner.
+- Preparation refuses conflicting tags and preserves separation between sections.
+  Runtime version verification follows local annotated-tag creation and precedes
+  remote push, so SCM-derived versions resolve correctly.
 - Release section format:
   `## [__PROJECT_TAG_PREFIX__-vX.Y.Z] - YYYY-MM-DD`
 

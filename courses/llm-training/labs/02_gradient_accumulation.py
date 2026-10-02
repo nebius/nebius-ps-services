@@ -51,8 +51,8 @@ def main() -> None:
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
 
-    width = 2_048 if args.profile == "small" else 8_192
-    total_batch, microbatch = (64, 16) if args.profile == "small" else (128, 16)
+    width = 2_048 if args.workload == "small" else 8_192
+    total_batch, microbatch = (64, 16) if args.workload == "small" else (128, 16)
     reference = torch.nn.Sequential(
         torch.nn.Linear(width, 4 * width, bias=False),
         torch.nn.GELU(),

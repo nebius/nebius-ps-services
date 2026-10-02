@@ -55,7 +55,7 @@ def main() -> None:
     torch = load_torch()
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
-    hidden = 256 if args.profile == "small" else 1_024
+    hidden = 256 if args.workload == "small" else 1_024
     weight = torch.randn((hidden, hidden), device="cuda", dtype=torch.bfloat16)
 
     def incremental_peak(operation: object) -> int:

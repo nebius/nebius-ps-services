@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from contextlib import nullcontext
 
 from common import (
@@ -50,6 +51,8 @@ def main() -> None:
         return loss
 
     training_step = annotated_operation(training_step, "training_step")
+    if not args.external_only:
+        os.environ["COURSE_PROFILE_TOOL"] = "torch"
     with (
         nullcontext()
         if args.external_only

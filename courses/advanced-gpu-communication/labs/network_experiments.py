@@ -64,7 +64,7 @@ def run(kind):
         sizes = (
             (4, 4096, 1048576)
             if kind == "latency"
-            else ((4 if args.profile == "small" else 64) * 2**20,)
+            else ((4 if args.workload == "small" else 64) * 2**20,)
         )
         rows = []
         for size in sizes:

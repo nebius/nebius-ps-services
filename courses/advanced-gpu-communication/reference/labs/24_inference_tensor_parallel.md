@@ -29,15 +29,15 @@ Run the expert and tensor mechanics in Labs 23–24. Compare batch one with the 
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
   --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" \
-  slurm/two_node.sbatch \
-  labs/24_inference_tensor_parallel.py --profile small
+  slurm/24_inference_tensor_parallel.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/24_inference_tensor_parallel/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/24_inference_tensor_parallel/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -71,7 +71,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Logical collective tensor bytes | `logical_collective_tensor_bytes` | `bytes` |
 | Parameter shard bytes per rank | `parameter_shard_bytes_per_rank` | `bytes` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 24_inference_tensor_parallel \
@@ -89,18 +89,18 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the two partition patterns together using the course launcher. Profiles select width 2,048/batch 32 for small and width 8,192/batch 128 for H100. The optional positive `--batch-size` changes input rows while keeping the selected width fixed. Use batch one as a small-message comparison, not as a simulation of a complete autoregressive decode step. Repeat each comparison in at least three independent jobs with distinct output directories under `results/`, where the result inspector searches, and preserve the topology and workload settings.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
-  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/24_inference_tensor_parallel.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
-  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile large
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/24_inference_tensor_parallel.sbatch --workload large
+sbatch --chdir="$PWD" \
   --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
-  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/two_node.sbatch labs/24_inference_tensor_parallel.py --profile small --batch-size 1 --output-dir results/tp-batch1-run1
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/24_inference_tensor_parallel.sbatch --workload small --batch-size 1 --output-dir results/tp-batch1-run1
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Why does one split concatenate output columns while the other sums partial outputs? Predict what reversing the gathered rank order would do: shape checks would pass, but reference agreement would fail. Which activation dimensions determine communicated bytes? Compare batch one with the default batch at the same width; use sample variability and three independent runs to explain the communication-to-compute ratio. Finally, list the validation-only tensors a deployment could remove and the KV-cache/workspace allocations it would need to add.
 
@@ -109,18 +109,12 @@ Replication uses more weight memory but avoids per-token model-parallel collecti
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/24_inference_tensor_parallel/logs/capture-%J-%t.out" \
-  --error="results/24_inference_tensor_parallel/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/24_inference_tensor_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/24_inference_tensor_parallel.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/24_inference_tensor_parallel/logs/%j.out" \
+  --error="$PWD/results/24_inference_tensor_parallel/logs/%j.err" slurm/24_inference_tensor_parallel.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/24_inference_tensor_parallel.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.
 

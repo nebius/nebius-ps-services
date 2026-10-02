@@ -101,11 +101,11 @@ def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
     )[1]
     assert 'COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python"' in command
     assert (
-        'slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py'
+        'slurm/09_hf_prefill_decode.sbatch'
         in command
     )
     assert 'sbatch --chdir="$PWD"' in command
-    launcher = text("llm-inference", "slurm/single_gpu.sbatch")
+    launcher = text("llm-inference", "slurm/09_hf_prefill_decode.sbatch")
     assert "COURSE_PYTHON" in launcher
 
 
@@ -145,7 +145,7 @@ def test_custom_capstone_uses_completed_build_directory():
     body = text("custom-cuda-kernels", "reference/labs/12_capstone.md")
     assert "slurm/capstone_three_trials.sbatch build/12_capstone" not in body
     assert (
-        '"${COURSE_BUILD_DIR:?set the completed build directory}/12_capstone"' in body
+        'slurm/12_capstone.trials.sbatch' in body
     )
 
 
@@ -189,15 +189,15 @@ def cuda_argument_probe(tmp_path_factory):
     ("arguments", "status", "output"),
     [
         ([], 0, "4096"),
-        (["--profile", "small"], 0, "17"),
-        (["--profile", "large"], 0, "4096"),
-        (["--profile", "h100"], 2, ""),
+        (["--workload", "small"], 0, "17"),
+        (["--workload", "large"], 0, "4096"),
+        (["--workload", "h100"], 2, ""),
         (["--smoke"], 2, ""),
         (["--help"], 0, "help"),
         (["-h"], 0, "help"),
         (["--smok"], 2, ""),
-        (["--profile", "small", "--profile", "small"], 2, ""),
-        (["--profile", "small", "extra"], 2, ""),
+        (["--workload", "small", "--workload", "small"], 2, ""),
+        (["--workload", "small", "extra"], 2, ""),
         (["--help", "extra"], 2, ""),
         (["--size"], 2, ""),
     ],
@@ -215,7 +215,7 @@ def test_simple_cuda_flags_fail_before_any_device_work(
     assert result.stdout == output
     if status:
         assert (
-            "--profile" in result.stderr
+            "--workload" in result.stderr
             and "small" in result.stderr
             and "large" in result.stderr
         )

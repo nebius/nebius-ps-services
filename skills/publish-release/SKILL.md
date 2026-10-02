@@ -1,6 +1,6 @@
 ---
 name: publish-release
-description: "Use only when explicitly asked to publish GitHub Releases end to end: collect package inputs, set up optional assets, prepare/merge a PR, tag, wait, verify assets, and report. Also supports setup-only guidance."
+description: "Use only when explicitly asked to publish a GitHub Release: commit current work, push and merge its PR, wait for approvals, tag, verify assets, and resume interruptions. Also supports setup-only guidance."
 disable-model-invocation: true
 ---
 
@@ -23,189 +23,168 @@ authorization.
 ## Agent Compatibility
 
 Use `$publish-release` in Codex, `/publish-release` in Claude Code, or
-`/skills:publish-release` in the Claude plugin. Dollar-prefixed skill examples
-refer to the same named skill on either host; use the native invocation syntax.
-Preserve the declared invocation policy, approvals and workflow ownership.
-Use available native tools; an unavailable required capability is a blocker,
-never permission to bypass a guard or claim unobserved behavior.
+`/skills:publish-release` in the Claude plugin. This skill is explicit-only.
+Use the selected host's native tools and private home; missing required tools or
+owners are blockers, never permission to bypass their controls.
 
 ## Purpose
 
-Publish a versioned application/package release to GitHub Releases from the
-current project folder. This is a doer-first skill: setup/guidance is still
-supported, but release execution is the primary workflow when the user asks to
-publish.
+Publish a verified GitHub Release from the current project in one invocation.
+Own the entire continuation through commit, PR, approval, merge, tag, workflow
+and asset verification. Do not return a routine instruction for the user to merge
+or invoke a second publication phase when the task can continue automatically.
 
 ## When To Use
 
-- Publishing package artifacts to GitHub Releases end to end.
-- Setting up release assets only when requested or missing.
-- Running one explicit phase: `setup`, `prep`, `publish`, or `complete`.
-- Producing a final publish report with PR, tag, workflow, release URL, and
-  asset verification.
+Use for an explicit request to publish or resume a GitHub Release, or to prepare
+its release setup. A complete request delegates the necessary owner handoffs.
 
 ## When Not To Use
 
-- Use `create-pr` for a PR that is not part of an explicitly requested release.
-- Use the artifact-specific publish skill for Helm charts, container images, or
-  another separately owned publication flow.
-- Do not run a release workflow from a managed child worktree or active SDLC
-  integration branch; return to that workflow's publication owner.
+Do not publish from a design discussion, skill-source edit, help request or
+implicit trigger. Use the image or Helm publication owners for those artifacts.
+
+## Public Usage
+
+- `$publish-release [--tag X.Y.Z|<prefix>-vX.Y.Z]`: complete publication and wait.
+- `$publish-release --resume [--tag X.Y.Z|<prefix>-vX.Y.Z]`: reconcile and continue
+  one unfinished release for the current project, including in a fresh session.
+- `--mode setup|prep|publish|complete`: default `complete`; setup prepares assets,
+  prep ends at the pushed PR, publish continues an existing merged release, and
+  complete follows the whole workflow.
+- `--project-dir <path>`: selected project, default current directory.
+- `--main-branch <branch>`: expected default branch; verify against live origin.
+- `--tag-prefix <prefix>`: derive only from unambiguous project/workflow metadata.
+- `--merge-method squash|merge|rebase`: default squash; required queues select
+  their configured method through `merge-pr`.
+- `--wait|--no-wait`: default wait. No-wait checkpoints pending work and reports
+  pending, never published without final verification.
+- `--project-name`, `--package-import-name`, `--asset-glob`, `--python-version`:
+  derive release setup/build inputs from the project when possible.
+- `-h, --help`: help only. No additional public flags.
+
+Use an explicit tag or unambiguous prepared release version. If neither exists,
+ask once; do not invent a patch bump. Resolve resume before choosing a new version.
+A tag disambiguates multiple unfinished releases. Repeating the same release
+invocation reuses its checkpoint; only an explicit resume renews wait deadlines.
 
 ## Inputs
 
-Common flags:
-
-- `--mode setup|prep|publish|complete`; use `complete` for an end-to-end
-  publish request.
-- `--tag X.Y.Z` or `<tag-prefix>-vX.Y.Z`.
-- `--project-dir <path>`; default current working directory.
-- `--main-branch <branch>`; default the repository default branch.
-- `--tag-prefix <prefix>`; derive from project name only when unambiguous.
-- `--merge-method squash|merge|rebase`; default `squash`.
-- `--wait` or `--no-wait`; default `--wait` for `publish` and `complete`.
-
-Release inputs:
-
-- `--project-name`
-- `--package-import-name`
-- `--asset-glob`
-- `--python-version`
-- optional build, lint, test, or artifact-verification commands
-
-If required values are missing and cannot be derived from the repository, ask
-the user before continuing.
+Use the selected project, explicit or prepared version, Git/GitHub identity,
+release workflow and expected artifacts. Resolve missing version information
+once and reject ambiguous project or publication targets.
 
 ## Required Reads
 
-- Read applicable repository instructions, current Git status and branch,
-  default-branch and remote state, `CHANGELOG.md`, package version metadata, and
-  the tag-triggered release workflow before mutation.
-- Read the setup assets only when setup is requested or required files are
-  missing.
-- Resolve and follow `create-pr` and `merge-pr` for their owned publication and
-  merge gates during `complete` mode.
+Read applicable instructions, project README/changelog/version/build metadata,
+Git status and complete diff, live default and origin destinations, release
+workflow and expected assets. Read `references/orchestration.md` before execution.
+Load `create-pr` and its commit-continuation reference for commit/PR work, and
+`merge-pr` plus completion-verification for merge and exact-result CI evidence.
 
 ## Writes
 
-- `setup` may create or update the project changelog, helper, and release
-  workflow after the user requests setup or complete publication needs them.
-- `prep` updates and commits the changelog, then pushes either the reused
-  feature branch or a new `release/<tag>` branch created from the default
-  branch.
-- `complete` may create and merge the release-prep PR; `publish` and `complete`
-  may create and push the annotated tag under the explicit release request.
-- Do not create repository-local private workflow state.
+An explicit complete release request authorizes its necessary preparation,
+reviewed repository-wide commits, pushes, PR creation/reuse, protected merge,
+annotated tag and release publication. Do not require a second commit/PR/merge
+invocation or repeated approval for those actions. This is delegation to the
+existing owners, not a new commit authorization protocol.
+
+Review and validate all current repository changes plus release metadata. Only
+create-pr's canonical transaction stages with repository-root `git add -A` and
+commits. No raw Git commit fallback, separate commit-push task, cherry-pick,
+force push or direct default-branch commit. Preserve new unrelated work appearing
+on resume; do not silently add it to the frozen release.
+
+Setup may create missing release assets and workflow. Private checkpoints belong
+under the selected agent home outside Git, contain no credentials, and never
+serve as commit/merge authorization. The tag workflow owns artifact publication.
+Managed children and active SDLC publication remain with their workflow owners.
 
 ## Process
 
-1. Inspect the current project folder and Git repository.
-2. Parse the requested mode and tag. Normalize tags to
-   `<tag-prefix>-vMAJOR.MINOR.PATCH`.
-3. For `setup`, create or update reusable release assets from `assets/`,
-   validate the generated shell/workflow files, and stop with a setup report.
-4. For `prep`, require a clean named branch, an absent release tag, and current
-   default-branch history. If the current branch is the default branch, require
-   it to equal `origin/<default>` and create `release/<tag>`. If it is a feature
-   branch, require current `origin/<default>` to be an ancestor, require any
-   same-named remote branch to be an ancestor of local `HEAD`, and reuse the
-   current branch. Then run the skill-owned helper script:
-   `scripts/publish-release-doer.sh --mode prep ...`
-   The helper updates `CHANGELOG.md`, commits release prep, and pushes the
-   selected PR branch without committing directly on the default branch.
-5. For `complete`, run `prep`, invoke `create-pr` for the selected prep branch,
-   then invoke `merge-pr` after checks pass. Reuse an existing PR for that
-   feature branch when `create-pr` resolves one; do not create a nested release
-   branch from a feature branch.
-6. After merge, switch to the default branch, fetch, and fast-forward only.
-   Verify the release changelog section from prep is present.
-7. Run `publish` only from the clean, synced default branch:
-   `scripts/publish-release-doer.sh --mode publish ...`
-   The helper creates the annotated tag locally, verifies the runtime package
-   version against that tag when configured, and pushes only after the version
-   matches. If verification fails, it removes that exact unpushed local tag.
-8. If waiting is enabled, find the tag-triggered workflow with `gh run list`,
-   wait with `gh run watch --exit-status`, and inspect the terminal run.
-9. Verify the GitHub Release with `gh release view <tag>` and confirm expected
-   assets exist.
-10. Return the final publish report.
+Setup-only requests generate/validate setup assets and stop without release
+version selection, checkpoints or Git publication. Prep stops after binding the
+pushed PR; publish starts from the reconciled merged checkpoint. No-wait stops
+at the first pending gate and reports its checkpoint. Resume does not apply to
+setup. Complete follows every step below.
 
-## Setup Assets
+1. Inspect and freeze project, repository, origin, default branch, version,
+   release workflow and expected asset families. Reject ambiguous/mismatched
+   destinations, unfinished Git operations and missing required capabilities.
+2. Reconcile any existing release checkpoint before doing preparation. A
+   completed record still requires fresh remote release/asset verification.
+3. For a new release, begin the canonical create-pr grant before branch changes.
+   Reuse the feature branch; from default, create `release/<tag>` at the captured
+   head. Create missing setup assets and prepare release notes/metadata.
+4. Use the serialized content-only preparation helper, then create-pr's review,
+   validation, complete-tree commit, base synchronization, push and PR reuse.
+   An initially dirty worktree is normal. Preparation itself never commits.
+5. Bind the exact pushed PR/head to the checkpoint. Wait for checks and human
+   approvals. Continue through merge-pr when ready; refresh its required gates
+   and guard the exact head. A queued PR is pending, never a completed merge.
+6. Observe actual merge, freeze its method-specific resulting SHA, and require
+   merge-pr's remote-default ancestry and exact-result CI verification. Failed,
+   pending or unverified applicable CI blocks tagging. No configured CI is
+   acceptable only when the owner independently establishes that fact.
+7. Create a private isolated clone at that exact merged SHA with full history.
+   Keep the user's working checkout and local tags unchanged. Recheck remote
+   ancestry, release notes and runtime inputs. Preserve required signing/auth
+   configuration by references; never copy secret values into files or output.
+8. Create and runtime-verify the annotated tag locally, checkpoint its exact
+   object and public tag metadata, then push the exact object. On resume, inspect
+   remote state first and restore only that same object if the clone was lost.
+9. Wait for the exact tag/commit/workflow, including environment approvals.
+   Download expected release artifacts; verify versions, sizes and available
+   SHA-256 digests before marking the release complete.
+10. Report the release URL, tag, merged SHA, PR/workflow results and asset proof.
+    Retain resumable checkpoint evidence; clean only exact task-owned scratch.
 
-Use setup mode when the project does not already have a release flow:
+## Waiting And Resume
 
-- `assets/CHANGELOG.md.template`
-- `assets/publish-release.sh.template`
-- `assets/project-name-release-publish.yml.template`
+Show `Waiting for approval on GitHub: <link>` immediately when approval is needed.
+Explain that an eligible reviewer must approve and that continuation is automatic.
+Poll every 15 seconds, update progress at least once per minute, and wait at most
+600 seconds for a PR approval or a release run's environment approvals. Partial
+approval or reordered API responses never restart that deadline.
 
-The project-local helper script is optional, but it is a maintained runnable
-helper template, not a documentation stub. Keep it behaviorally aligned with
-the skill-owned `scripts/publish-release-doer.sh`, which remains the canonical
-doer path.
+Checks, merge queue and release execution each have independent 3600-second
+phase budgets. Failed checks, rejected reviews, closed PRs, conflicts and identity
+drift are blockers; do not mislabel them as pending approval.
+
+At timeout, preserve progress and show `$publish-release --resume --tag <tag>`.
+Do not cancel GitHub work or leave a local background publisher. A later explicit
+resume renews waiting budgets and rechecks actual state; it does not recreate
+commits, PRs, merges, tags or releases already completed. New-session commit work
+requires fresh owner intake, never replay of an old grant or manufactured receipt.
 
 ## Idempotency
 
-- Refuse an existing local or remote release tag before changelog mutation.
-- Reuse the current feature branch and any matching open PR instead of creating
-  duplicate branches or PRs. From the default branch, refuse a colliding
-  `release/<tag>` branch rather than overwriting it.
-- A repeated feature-branch prep for an untagged version may merge new
-  `Unreleased` notes into the existing release section; never duplicate or
-  empty an already prepared release section.
-- Before tagging, re-read the merged changelog and current remote/default
-  identity instead of relying on prep-time state.
-- Keep runtime-version verification between local annotated-tag creation and
-  the remote push so SCM-derived packages resolve the final version. Remove the
-  exact local tag on verification failure; retain it after an ambiguous push
-  failure for inspection rather than assuming the remote was unchanged.
+- Reuse matching branch/PR/release identities. Refuse collisions and remote
+  divergence; let create-pr own safe base synchronization and validated repairs.
+- Observe ambiguous effects before retrying any mutation.
 
 ## Failure Handling
 
-- Stop before changelog mutation on a dirty or detached checkout, a stale
-  feature branch, remote feature-branch divergence, an empty release payload,
-  a duplicate tag, or an unsynchronized default branch.
-- Stop at failing checks, required reviews or approvals, merge conflicts,
-  missing credentials, or branch protection. Preserve the prepared branch and
-  report the exact next owner action; do not retry by bypassing the gate.
-- If prep succeeds but merge or publication fails, resume from the existing
-  branch, PR, or tag state only after re-verifying its exact identity.
-- A runtime-version mismatch must leave no local or remote release tag. A push
-  failure may leave the local tag as ambiguity evidence and requires explicit
-  local/remote identity inspection before retry.
+- A version mismatch deletes only the exact task-created unpushed local tag.
+  A push error keeps identity evidence until the remote outcome is established.
+- Missing assets, draft releases and mismatched tag/workflow commits never count
+  as success. Repair failing publication through its owner, not duplicate uploads.
 
 ## Must Not
 
-- Do not hardcode repository names, private endpoints, or secrets in skill
-  sources or generated examples.
-- Store only variable and secret names in workflow templates.
-- Do not print, request, or persist secret values.
-- Do not update the changelog in a dirty worktree or commit release prep
-  directly on the default branch.
-- Do not create a second release branch when a clean current feature branch can
-  be the PR head.
-- Do not publish a tag from a feature branch, a detached checkout, or a default
-  branch that differs from `origin/<default>`.
-- Do not use cherry-pick or commit-copy workflows to move release content
-  between branches unless the user explicitly asks for that reconstruction.
-- Do not force-push, use admin merge, bypass branch protection, or ignore
-  required checks/reviews.
-- Stop when GitHub approvals, environment approvals, missing credentials, or
-  branch protection require human action.
-- Verify runtime/artifact version alignment before pushing a release tag when
-  package metadata is available.
+- No remote tag rewrite/deletion, branch-protection bypass, admin merge, implicit
+  requeue or CI rerun.
+- A release checkpoint is progress evidence. Never use it to bypass managed
+  workflow guards, current user intent, normal Git hooks or credential controls.
 
 ## Completion Criteria
 
-- Prep selected the correct branch path, committed a non-empty release section,
-  and pushed the exact PR head.
-- Complete mode merged that prep branch through required checks and reviews,
-  refreshed the default branch by fast-forward only, and verified the release
-  section before tagging.
-- Publish pushed the annotated tag from the clean synchronized default branch;
-  when waiting is enabled, the tag-triggered workflow completed successfully
-  and the GitHub Release contains every expected asset.
-- The final report distinguishes source/static, Git/PR, workflow, release, and
-  asset evidence and names every skipped or blocked lane.
+Complete means confirmed protected merge, verified result in default history,
+exact annotated tag, successful matching workflow, published release and verified
+expected assets. Partial modes, no-wait and timeouts must report their actual
+checkpoint and exact next action. Distinguish source tests, installed/native
+behavior and live publication evidence.
 
 ## Learning Loop
 
@@ -218,18 +197,13 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
 
-Return:
-
-- mode, project directory, tag, version, tag prefix
-- release branch, PR URL, and merge result when `complete` mode is used
-- pushed tag and workflow run URL/conclusion
-- GitHub Release URL and asset verification result
-- validation commands run
-- blockers, skipped live checks, or required user approvals
+Return mode, project, version/tag, PR and merge result, frozen merged SHA,
+workflow result, release URL and asset evidence, or the blocker/approval link,
+timeout and exact resume command. Report skipped or unverified lanes explicitly.
 
 ## Resources
 
-- `scripts/publish-release-doer.sh`
-- `assets/CHANGELOG.md.template`
-- `assets/publish-release.sh.template`
-- `assets/project-name-release-publish.yml.template`
+- `references/orchestration.md`: owner handoffs, helper calls and recovery.
+- `scripts/release_session.py`: private checkpoints, observation and deadlines.
+- `scripts/publish-release-doer.sh`: content, local tag, exact push and wheel checks.
+- `assets/`: optional changelog, runnable helper and tag-workflow templates.

@@ -38,7 +38,7 @@ def main() -> None:
 
     torch.cuda.empty_cache()
     baseline = snapshot()
-    scale = 1 if args.profile == "small" else 4
+    scale = 1 if args.workload == "small" else 4
 
     def allocate(mebibytes: int) -> Any:
         tensor = torch.empty(

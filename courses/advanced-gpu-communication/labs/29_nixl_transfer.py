@@ -53,7 +53,7 @@ def parse_rows(text, block_bytes, batch_size):
 
 
 def benchmark_command(binary, endpoint, group, args):
-    size = 4096 if args.profile == "small" else 4 * 2**20
+    size = 4096 if args.workload == "small" else 4 * 2**20
     return [
         str(binary),
         "--etcd_endpoints",
@@ -140,7 +140,7 @@ def main():
         # Only the benchmark's reporting process prints the aggregated table.
         if re.search(r"^\s*[0-9]+\s+1\s+[0-9]", text, re.MULTILINE):
             reports.append(
-                parse_rows(text, 4096 if args.profile == "small" else 4 * 2**20, 1)
+                parse_rows(text, 4096 if args.workload == "small" else 4 * 2**20, 1)
             )
     if len(reports) != 1:
         raise ValueError("Expected one authoritative NIXL reporting process")

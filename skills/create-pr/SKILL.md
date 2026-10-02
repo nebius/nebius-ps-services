@@ -145,6 +145,9 @@ expire the authorization when publication completes or stops.
 
 ## Commit Authority
 
+Explicit complete `publish-release` requests delegate necessary PR/commit work
+to this owner; see the release-caller contract in `references/commit-continuation.md`.
+
 An explicit PR task authorizes the necessary validated staging, commits and
 pushes throughout its branch-owned repair loop. Do not request a new user turn
 for each repair. Before committing, read `references/commit-continuation.md`

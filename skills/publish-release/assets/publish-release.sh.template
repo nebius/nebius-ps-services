@@ -1,22 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
-
-TAG_PREFIX="__PROJECT_TAG_PREFIX__"
-PACKAGE_IMPORT_NAME="__PACKAGE_IMPORT_NAME__"
-MAIN_BRANCH="__MAIN_BRANCH__"
-CHANGELOG_FILE="CHANGELOG.md"
-ASSET_GLOB="__ASSET_GLOB__"
-
 S_RESET=""
 S_BOLD=""
 S_DIM=""
 S_RED=""
-S_YELLOW=""
 S_GREEN=""
-S_CYAN=""
 
 init_output_style() {
   if [[ ( -t 1 || -t 2 ) && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
@@ -24,9 +13,7 @@ init_output_style() {
     S_BOLD=$'\033[1m'
     S_DIM=$'\033[2m'
     S_RED=$'\033[31m'
-    S_YELLOW=$'\033[33m'
     S_GREEN=$'\033[32m'
-    S_CYAN=$'\033[36m'
   fi
 }
 
@@ -43,35 +30,27 @@ log_success() {
 }
 
 show_usage() {
-  printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode prep --tag X.Y.Z [options]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode publish --tag X.Y.Z [options]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh${S_RESET} ${S_DIM}--mode verify --tag X.Y.Z --asset-glob 'dist/*.whl' [options]${S_RESET}"
-  printf '\n'
+  cat <<'HELP'
+Usage: publish-release-doer.sh --mode MODE --tag X.Y.Z [options]
 
-  printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}prep${S_RESET}      Reuse a clean current feature branch, or create release/<tag> from a clean synced default branch; update, commit, and push the changelog."
-  printf '%b\n' "                 Fails if the tag already exists locally or on origin."
-  printf '%b\n' "  ${S_YELLOW}publish${S_RESET}   Verify runtime version when configured, then create and push the annotated release tag."
-  printf '%b\n' "  ${S_YELLOW}verify${S_RESET}    Verify a built wheel artifact version with --asset-glob."
-  printf '\n'
+Private release primitives (the skill owns orchestration):
+  prep    Prepare changelog only on the selected non-default branch
+  tag     Create and verify a local annotated tag at --release-commit
+  push    Push the verified --tag-object at --release-commit
+  verify  Verify every wheel matching --asset-glob
 
-  printf '%b\n' "${S_BOLD}Options:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--tag TAG${S_RESET}                  Version or full ${TAG_PREFIX}-vX.Y.Z tag."
-  printf '%b\n' "  ${S_YELLOW}--project-dir DIR${S_RESET}          Project directory, default this helper's directory."
-  printf '%b\n' "  ${S_YELLOW}--main-branch BRANCH${S_RESET}       Default branch, default ${MAIN_BRANCH}."
-  printf '%b\n' "  ${S_YELLOW}--tag-prefix PREFIX${S_RESET}        Release tag prefix, default ${TAG_PREFIX}."
-  printf '%b\n' "  ${S_YELLOW}--changelog FILE${S_RESET}           Changelog path, default ${CHANGELOG_FILE}."
-  printf '%b\n' "  ${S_YELLOW}--package-import-name NAME${S_RESET} Publish mode: import and verify NAME.__version__."
-  printf '%b\n' "  ${S_YELLOW}--asset-glob GLOB${S_RESET}          Verify mode: wheel glob to verify against release version."
-  printf '%b\n' "  ${S_YELLOW}--no-push${S_RESET}                  Prep only: do not push the branch."
-  printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}                 Show help."
-  printf '\n'
-
-  printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode prep --tag 0.1.0${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode publish --tag 0.1.0${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-release.sh --mode verify --tag 0.1.0 --asset-glob 'dist/*.whl'${S_RESET}"
+Options:
+  --project-dir DIR          Project directory (default current directory)
+  --tag-prefix NAME          Release tag prefix (default project directory name)
+  --main-branch BRANCH       Destination branch (default live origin HEAD)
+  --changelog FILE           Relative changelog path (default CHANGELOG.md)
+  --release-commit SHA       Exact verified merged commit (tag/push required)
+  --tag-object SHA           Exact verified annotated tag object (push required)
+  --origin-digest SHA256     Frozen effective-origin digest (push required)
+  --package-import-name NAME Verify NAME.__version__ after local tag creation
+  --asset-glob GLOB          Wheels to verify (verify required)
+  -h, --help                Show help
+HELP
 }
 
 require_cmd() {
@@ -82,27 +61,71 @@ require_cmd() {
   fi
 }
 
-ensure_repo_ready() {
-  require_cmd "git"
-  require_cmd "python3"
-  if [[ ! -f "${CHANGELOG_FILE}" ]]; then
-    log_error "Missing changelog: ${CHANGELOG_FILE}"
-    exit 1
-  fi
+ensure_origin_identity() {
+  python3 - "${1:-}" <<'PYCODE'
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+fetch = subprocess.check_output(["git", "remote", "get-url", "--all", "origin"], text=True).splitlines()
+push = subprocess.check_output(["git", "remote", "get-url", "--push", "--all", "origin"], text=True).splitlines()
+if len(fetch) != 1 or len(push) != 1:
+    raise SystemExit("Origin must have exactly one fetch and one push destination")
+def target(url):
+    if re.fullmatch(r"git@[^/:]+:[^/]+/[^/]+", url):
+        host, path = url[4:].split(":", 1)
+        return host, path.removesuffix(".git")
+    parsed = urlsplit(url)
+    if parsed.password or parsed.query or parsed.fragment or (parsed.username and not (parsed.scheme == "ssh" and parsed.username == "git")):
+        raise SystemExit("Origin must not embed credentials")
+    if parsed.scheme in {"https", "ssh"}:
+        return parsed.hostname, parsed.path.removesuffix(".git")
+    return url
+if target(fetch[0]) != target(push[0]):
+    raise SystemExit("Origin fetch/push repositories differ")
+actual = hashlib.sha256(json.dumps([fetch, push]).encode()).hexdigest()
+if sys.argv[1] and actual != sys.argv[1]:
+    raise SystemExit("Origin differs from the frozen release checkpoint")
+PYCODE
+}
+
+repo_default_branch() {
+  local output branch
+  output="$(git ls-remote --symref origin HEAD)" || return 1
+  branch="$(printf '%s\n' "${output}" | sed -n 's|^ref: refs/heads/\(.*\)[[:space:]]HEAD$|\1|p')"
+  [[ -n "${branch}" ]] || { log_error "Cannot resolve live origin default branch."; return 1; }
+  printf '%s\n' "${branch}"
+}
+
+derive_tag_prefix() {
+  basename -- "$1"
 }
 
 normalize_tag() {
   local raw="$1"
+  local tag_prefix="$2"
+  local full_prefix="${tag_prefix}-v"
+  local version_part=""
   if [[ "${raw}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf '%s\n' "${TAG_PREFIX}-v${raw}"
-    return 0
+    printf '%s\n' "${tag_prefix}-v${raw}"
+    return
   fi
-  if [[ "${raw}" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf '%s\n' "${raw}"
-    return 0
+  if [[ "${raw:0:${#full_prefix}}" == "${full_prefix}" ]]; then
+    version_part="${raw:${#full_prefix}}"
+    if [[ "${version_part}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s\n' "${raw}"
+      return
+    fi
   fi
-  log_error "Version/tag must be X.Y.Z or ${TAG_PREFIX}-vX.Y.Z"
+  log_error "Version/tag must be X.Y.Z or ${tag_prefix}-vX.Y.Z"
   exit 1
+}
+
+tag_version() {
+  printf '%s\n' "${1##*-v}"
 }
 
 ensure_clean_worktree() {
@@ -118,121 +141,42 @@ ensure_clean_worktree() {
 ensure_named_branch() {
   local branch="$1"
   if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
-    log_error "This operation must run from a local branch, not a detached HEAD."
+    log_error "This operation must run from a local branch, not detached HEAD."
     exit 1
   fi
-}
-
-push_current_branch() {
-  local branch="$1"
-  ensure_named_branch "${branch}"
-  git push --set-upstream origin "HEAD:refs/heads/${branch}"
-}
-
-publish_source_required_note() {
-  log_note "Merge the release-prep PR into ${MAIN_BRANCH}, then switch to ${MAIN_BRANCH}, fast-forward, and rerun."
 }
 
 ensure_publish_source_ready() {
-  local branch="$1"
-  local status_output=""
-  ensure_named_branch "${branch}"
-  if [[ "${branch}" != "${MAIN_BRANCH}" ]]; then
-    log_error "--mode publish must run from ${MAIN_BRANCH}; current branch is ${branch}."
-    publish_source_required_note
-    exit 1
-  fi
-  status_output="$(git status --short --untracked-files=all)"
-  if [[ -n "${status_output}" ]]; then
-    log_error "--mode publish requires a clean working tree on ${MAIN_BRANCH}."
-    printf '%s\n' "${status_output}" >&2
-    publish_source_required_note
-    exit 1
-  fi
-  ensure_branch_synced "${MAIN_BRANCH}"
-}
-
-ensure_remote_branch_publishable() {
-  local branch="$1"
-  local remote_status=0
-  git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1 || remote_status=$?
-  if [[ "${remote_status}" -eq 2 ]]; then
-    return 0
-  fi
-  if [[ "${remote_status}" -ne 0 ]]; then
-    log_error "Unable to check origin for current branch: ${branch}"
-    exit 1
-  fi
-  git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
-  if ! git merge-base --is-ancestor "origin/${branch}" HEAD; then
-    log_error "Pushing current ${branch} would not fast-forward origin/${branch}."
-    log_note "Merge the remote branch into ${branch} without rewriting shared history, validate it, and rerun."
-    exit 1
-  fi
-}
-
-ensure_prep_source_ready() {
-  local branch="$1"
-  ensure_named_branch "${branch}"
+  local main_branch="$1" release_commit="$2"
+  [[ "${release_commit}" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+    log_error "A full --release-commit SHA is required."; return 1;
+  }
   ensure_clean_worktree
-  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
-    ensure_branch_synced "${MAIN_BRANCH}"
-    return 0
-  fi
-  git fetch origin "+refs/heads/${MAIN_BRANCH}:refs/remotes/origin/${MAIN_BRANCH}"
-  if ! git merge-base --is-ancestor "origin/${MAIN_BRANCH}" HEAD; then
-    log_error "Current ${branch} does not contain the latest origin/${MAIN_BRANCH}."
-    log_note "Merge origin/${MAIN_BRANCH} into ${branch}, resolve and validate the result, then rerun."
-    exit 1
-  fi
-  ensure_remote_branch_publishable "${branch}"
+  [[ "$(git rev-parse HEAD)" == "${release_commit}" ]] || {
+    log_error "Checkout differs from the frozen release commit."; return 1;
+  }
+  git fetch --no-tags --no-recurse-submodules --refmap= origin "+refs/heads/${main_branch}:refs/remotes/origin/${main_branch}"
+  git merge-base --is-ancestor "${release_commit}" "refs/remotes/origin/${main_branch}" || {
+    log_error "Release commit is not in remote default-branch history."; return 1;
+  }
 }
 
-release_branch_name() {
-  local tag="$1"
-  printf 'release/%s\n' "${tag}"
-}
-
-ensure_release_branch_absent() {
-  local branch="$1"
-  local remote_status=0
-  if git show-ref --verify --quiet "refs/heads/${branch}"; then
-    log_error "Release branch already exists locally: ${branch}"
-    exit 1
+ensure_tag_absent() {
+  local tag="$1" remote_status=0
+  if git show-ref --verify --quiet "refs/tags/${tag}"; then
+    log_error "Local tag already exists: ${tag}"; return 1
   fi
-  git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1 || remote_status=$?
+  git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1 || remote_status=$?
   if [[ "${remote_status}" -eq 0 ]]; then
-    log_error "Release branch already exists on origin: ${branch}"
-    exit 1
+    log_error "Remote tag already exists: ${tag}"; return 1
   fi
-  if [[ "${remote_status}" -ne 2 ]]; then
-    log_error "Unable to check origin for release branch: ${branch}"
-    exit 1
-  fi
-}
-
-ensure_branch_synced() {
-  local branch="$1"
-  git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
-  local local_commit=""
-  local remote_commit=""
-  local_commit="$(git rev-parse HEAD)"
-  if ! remote_commit="$(git rev-parse "refs/remotes/origin/${branch}" 2>/dev/null)"; then
-    log_error "Remote branch origin/${branch} not found."
-    exit 1
-  fi
-  if [[ "${local_commit}" != "${remote_commit}" ]]; then
-    log_error "Local ${branch} is not at origin/${branch}."
-    log_note "local : ${local_commit}"
-    log_note "origin: ${remote_commit}"
-    exit 1
-  fi
+  [[ "${remote_status}" -eq 2 ]] || { log_error "Unable to inspect remote tag."; return 1; }
 }
 
 ensure_release_section_ready() {
   local tag="$1"
-
-  python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
+  local changelog="$2"
+  python3 - "${tag}" "${changelog}" <<'PY'
 import pathlib
 import re
 import sys
@@ -244,33 +188,23 @@ patterns = [
     re.compile(rf"^##\s+\[?{re.escape(tag)}\]?(?:\s+-.*)?$"),
     re.compile(rf"^##\s+\[?{re.escape(version)}\]?(?:\s+-.*)?$"),
 ]
-any_heading = re.compile(r"^##\s+")
-
-capture = False
-notes = []
-for line in lines:
-    stripped = line.strip()
-    if not capture and any(pattern.match(stripped) for pattern in patterns):
-        capture = True
-        continue
-    if capture and any_heading.match(stripped):
+release_idx = next((i for i, line in enumerate(lines) if any(p.match(line.strip()) for p in patterns)), None)
+if release_idx is None:
+    raise SystemExit(f"Missing changelog section for {tag} in {changelog_path}")
+content = []
+for line in lines[release_idx + 1:]:
+    if line.startswith("## "):
         break
-    if capture:
-        notes.append(line)
-
-if not capture:
-    print(f"Missing changelog section for {tag} in {changelog_path}", file=sys.stderr)
-    sys.exit(1)
-
-if not "\n".join(notes).strip():
-    print(f"Changelog section for {tag} is empty in {changelog_path}", file=sys.stderr)
-    sys.exit(1)
+    content.append(line)
+if not "\n".join(content).strip():
+    raise SystemExit(f"Release changelog section for {tag} in {changelog_path} is empty")
 PY
 }
 
 ensure_release_payload_available() {
   local tag="$1"
-  python3 - "${tag}" "${CHANGELOG_FILE}" <<'PY'
+  local changelog="$2"
+  python3 - "${tag}" "${changelog}" <<'PY'
 import pathlib
 import re
 import sys
@@ -302,39 +236,30 @@ PY
 
 update_changelog() {
   local tag="$1"
+  local changelog="$2"
   local release_date=""
   release_date="$(date +%Y-%m-%d)"
-
-  python3 - "${tag}" "${release_date}" "${CHANGELOG_FILE}" <<'PY'
+  python3 - "${tag}" "${release_date}" "${changelog}" <<'PY'
 import pathlib
 import re
 import sys
 
 tag, date_str, changelog_path = sys.argv[1], sys.argv[2], sys.argv[3]
 path = pathlib.Path(changelog_path)
-text = path.read_text()
-
+text = path.read_text(encoding="utf-8")
 if "## [Unreleased]" not in text:
-    print("Unreleased section not found in CHANGELOG.md", file=sys.stderr)
-    sys.exit(1)
-
+    raise SystemExit("Unreleased section not found in CHANGELOG.md")
 release_header = f"## [{tag}] - {date_str}"
-
-header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
-headers = list(header_re.finditer(text))
+headers = list(re.finditer(r"^## \[.+?\].*$", text, re.MULTILINE))
 if not headers:
-    print("No CHANGELOG headers found", file=sys.stderr)
-    sys.exit(1)
-
+    raise SystemExit("No CHANGELOG headers found")
 preamble = text[: headers[0].start()]
 sections = []
-for i, h in enumerate(headers):
-    end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
-    header = h.group(0)
-    content = text[h.end() : end]
-    sections.append((header, content))
+for idx, header in enumerate(headers):
+    end = headers[idx + 1].start() if idx + 1 < len(headers) else len(text)
+    sections.append((header.group(0), text[header.end():end]))
 
-def normalize_content(content: str) -> str:
+def normal(content: str) -> str:
     stripped = content.strip("\n")
     if not stripped.strip():
         return "\n\n"
@@ -357,184 +282,147 @@ for idx, (header, _) in enumerate(sections):
         unreleased_idx = idx
     if header.startswith(f"## [{tag}] -"):
         tag_idx = idx
-
 if unreleased_idx is None:
-    print("Unable to locate Unreleased heading", file=sys.stderr)
-    sys.exit(1)
-
+    raise SystemExit("Unable to locate Unreleased heading")
 unreleased_header, unreleased_content = sections[unreleased_idx]
-unreleased_payload = unreleased_content.strip("\n")
-
+payload = unreleased_content.strip("\n")
 if tag_idx is None:
     new_sections = []
     for idx, (header, content) in enumerate(sections):
         if idx == unreleased_idx:
-            new_sections.append((header, "\n\n"))
-            new_sections.append((release_header, normalize_content(unreleased_payload)))
+            new_sections.append((unreleased_header, "\n\n"))
+            new_sections.append((release_header, normal(payload)))
         else:
             new_sections.append((header, content))
     sections = new_sections
 else:
-    if unreleased_payload.strip():
+    if payload.strip():
         tag_header, tag_content = sections[tag_idx]
-        sections[tag_idx] = (tag_header, merge_content(unreleased_payload, tag_content))
+        sections[tag_idx] = (tag_header, merge_content(payload, tag_content))
     sections[unreleased_idx] = (unreleased_header, "\n\n")
-
-new_text = preamble + "".join(f"{h}{c}" for h, c in sections)
-path.write_text(new_text)
+path.write_text(preamble + "".join(f"{h}{c}" for h, c in sections), encoding="utf-8")
 PY
-}
-
-prep_release() {
-  local tag="$1"
-  local do_push="$2"
-  local branch="$3"
-  local release_branch=""
-
-  ensure_tag_absent "${tag}"
-  ensure_prep_source_ready "${branch}"
-  ensure_release_payload_available "${tag}"
-  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
-    release_branch="$(release_branch_name "${tag}")"
-    ensure_release_branch_absent "${release_branch}"
-    git switch -c "${release_branch}"
-    branch="${release_branch}"
-    log_success "Created release branch ${release_branch} from ${MAIN_BRANCH}."
-  else
-    log_success "Reusing current feature branch ${branch} for release prep."
-  fi
-  log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
-  update_changelog "${tag}"
-  ensure_release_section_ready "${tag}"
-
-  git add "${CHANGELOG_FILE}"
-  if git diff --cached --quiet -- "${CHANGELOG_FILE}"; then
-    log_note "No changelog changes to commit."
-  else
-    git commit -m "Prepare release ${tag}" -- "${CHANGELOG_FILE}"
-    log_success "Committed ${CHANGELOG_FILE}."
-  fi
-
-  if [[ "${do_push}" -eq 1 ]]; then
-    log_note "Pushing release branch..."
-    push_current_branch "${branch}"
-    log_success "Branch pushed."
-  fi
-}
-
-ensure_tag_absent() {
-  local tag="$1"
-  if git rev-parse --verify --quiet "${tag}" >/dev/null 2>&1; then
-    log_error "Local tag already exists: ${tag}"
-    exit 1
-  fi
-  if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-    log_error "Remote tag already exists on origin: ${tag}"
-    exit 1
-  fi
 }
 
 verify_runtime_version() {
   local package_import_name="$1"
   local expected_version="$2"
-  local resolved_version=""
   [[ -n "${package_import_name}" ]] || return 0
-
-  log_note "Verifying runtime version resolves to ${expected_version} on the local tag..."
+  local resolved_version=""
   if ! resolved_version="$(
     PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${PWD}/src${PYTHONPATH:+:${PYTHONPATH}}" python3 - "${expected_version}" "${package_import_name}" <<'PY'
 import importlib
 import sys
 
-expected = sys.argv[1]
-module_name = sys.argv[2]
+expected, module_name = sys.argv[1], sys.argv[2]
 package = importlib.import_module(module_name)
 resolved = getattr(package, "__version__", "")
-
 if resolved != expected:
     print(resolved, end="")
     raise SystemExit(1)
-
 print(resolved, end="")
 PY
   )"; then
-    log_error \
-      "Runtime version mismatch on the local tag. Source checkout resolved to '${resolved_version:-unknown}' instead of '${expected_version}'."
+    log_error "Runtime version '${resolved_version:-unknown}' does not match '${expected_version}'."
     return 1
   fi
   log_success "Runtime version resolved to ${resolved_version}."
 }
 
 verify_artifact_version() {
-  local asset_glob="$1"
-  local expected_version="$2"
-  [[ -n "${asset_glob}" ]] || return 0
-  require_cmd "python3"
-  local asset=""
-  local assets=()
-
-  while IFS= read -r asset; do
-    assets+=("${asset}")
-  done < <(compgen -G "${asset_glob}" | sort)
-
-  if [[ "${#assets[@]}" -eq 0 ]]; then
-    log_error "No release asset found with glob ${asset_glob}"
-    exit 1
-  fi
-
-  asset="${assets[0]}"
-  python3 - "${asset}" "${expected_version}" <<'PY'
+  local asset_glob="$1" expected_version="$2"
+  [[ -n "${asset_glob}" ]] || { log_error "--asset-glob is required."; return 1; }
+  python3 - "${asset_glob}" "${expected_version}" <<'PYCODE'
+import glob
 import sys
 import zipfile
 from email import message_from_bytes
 
-asset, expected = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(asset) as zf:
-    metadata_names = [name for name in zf.namelist() if name.endswith("METADATA")]
-    if not metadata_names:
-        raise SystemExit(f"No METADATA found in {asset}")
-    metadata = message_from_bytes(zf.read(metadata_names[0]))
-    actual = metadata.get("Version", "")
-if actual != expected:
-    raise SystemExit(f"Artifact {asset} has version {actual!r}, expected {expected!r}")
-PY
-  log_success "Verified artifact version for ${asset}."
+pattern, expected = sys.argv[1:]
+assets = sorted(glob.glob(pattern))
+if not assets:
+    raise SystemExit("No release assets match the configured glob")
+for asset in assets:
+    with zipfile.ZipFile(asset) as wheel:
+        names = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
+        if len(names) != 1:
+            raise SystemExit("Expected exactly one wheel METADATA file")
+        version = message_from_bytes(wheel.read(names[0])).get("Version", "")
+        if version != expected:
+            raise SystemExit(f"Wheel version {version} does not match {expected}")
+print(f"Verified {len(assets)} wheel(s).")
+PYCODE
 }
 
-publish_tag() {
-  local tag="$1"
-  local version="${tag##*-v}"
-  ensure_clean_worktree
-  ensure_release_section_ready "${tag}"
+prep_release() {
+  local tag="$1" changelog="$2" branch="$3" main_branch="$4"
+  ensure_named_branch "${branch}"
+  [[ "${branch}" != "${main_branch}" ]] || {
+    log_error "Select a release branch through create-pr before preparation."; return 1;
+  }
   ensure_tag_absent "${tag}"
-  git tag -a "${tag}" -m "Release ${tag}"
-  if ! verify_runtime_version "${PACKAGE_IMPORT_NAME}" "${version}"; then
-    if git tag -d "${tag}" >/dev/null 2>&1; then
-      log_note "Removed unpushed local tag ${tag} after runtime verification failed."
-    else
-      log_error "Unable to remove unpushed local tag ${tag} after runtime verification failed."
-    fi
+  ensure_release_payload_available "${tag}" "${changelog}"
+  update_changelog "${tag}" "${changelog}"
+  ensure_release_section_ready "${tag}" "${changelog}"
+  log_success "Release content prepared; create-pr owns validation, commit and push."
+}
+
+create_tag() {
+  local tag="$1" changelog="$2" package_import_name="$3" expected_version="$4"
+  ensure_release_section_ready "${tag}" "${changelog}"
+  ensure_tag_absent "${tag}"
+  git tag -a "${tag}" -m "Release ${tag}" HEAD
+  local created_object
+  created_object="$(git rev-parse "refs/tags/${tag}")"
+  if ! verify_runtime_version "${package_import_name}" "${expected_version}"; then
+    git update-ref -d "refs/tags/${tag}" "${created_object}"
+    log_note "Removed exact unpushed local tag after runtime verification failed."
     return 1
   fi
-  git push origin "refs/tags/${tag}"
+  log_success "Local tag verified. Record its object before push: ${created_object}"
+}
+
+push_tag() {
+  local tag="$1" tag_object="$2" release_commit="$3" remote
+  [[ "${tag_object}" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+    log_error "A full --tag-object SHA is required."; return 1;
+  }
+  [[ "$(git rev-parse "refs/tags/${tag}")" == "${tag_object}" &&
+     "$(git cat-file -t "${tag_object}")" == tag &&
+     "$(git rev-parse "refs/tags/${tag}^{commit}")" == "${release_commit}" ]] || {
+    log_error "Local annotated tag identity differs from checkpoint."; return 1;
+  }
+  remote="$(git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")" || return 1
+  if [[ -n "${remote}" ]]; then
+    if [[ "$(printf '%s\n' "${remote}" | awk -v r="refs/tags/${tag}" '$2 == r {print $1}')" == "${tag_object}" &&
+          "$(printf '%s\n' "${remote}" | awk -v r="refs/tags/${tag}^{}" '$2 == r {print $1}')" == "${release_commit}" ]]; then
+      log_success "Exact tag already pushed."
+      return 0
+    fi
+    log_error "Remote tag conflicts with checkpoint."; return 1
+  fi
+  git push --no-follow-tags --recurse-submodules=no origin "${tag_object}:refs/tags/${tag}"
   log_success "Tag pushed: ${tag}"
-  log_success "Release workflow will run from this tag push."
 }
 
 main() {
   init_output_style
-
   local mode=""
   local raw_tag=""
-  local tag_prefix="${TAG_PREFIX}"
-  local project_dir="${SCRIPT_DIR}"
-  local main_branch="${MAIN_BRANCH}"
-  local changelog="${CHANGELOG_FILE}"
-  local package_import_name="${PACKAGE_IMPORT_NAME}"
-  local asset_glob="${ASSET_GLOB}"
-  local no_push=0
+  local tag_prefix="__PROJECT_TAG_PREFIX__"
+  local project_dir="${PWD}"
+  local main_branch="__MAIN_BRANCH__"
+  local changelog="CHANGELOG.md"
+  local package_import_name="__PACKAGE_IMPORT_NAME__"
+  local asset_glob="__ASSET_GLOB__"
+  local release_commit=""
+  local tag_object=""
+  local origin_digest=""
 
   while [[ $# -gt 0 ]]; do
+    if [[ "$1" != "-h" && "$1" != "--help" && ( $# -lt 2 || -z "$2" ) ]]; then
+      log_error "Missing value for $1"; exit 1
+    fi
     case "$1" in
       --mode) mode="${2:-}"; shift 2 ;;
       --tag) raw_tag="${2:-}"; shift 2 ;;
@@ -544,92 +432,66 @@ main() {
       --changelog) changelog="${2:-}"; shift 2 ;;
       --package-import-name) package_import_name="${2:-}"; shift 2 ;;
       --asset-glob) asset_glob="${2:-}"; shift 2 ;;
-      --no-push)
-        no_push=1
-        shift
-        ;;
-      -h|--help)
-        show_usage
-        exit 0
-        ;;
-      --)
-        shift
-        break
-        ;;
-      -*)
-        log_error "Unknown option: $1"
-        show_usage >&2
-        exit 1
-        ;;
-      *)
-        log_error "Unexpected argument: $1"
-        show_usage >&2
-        exit 1
-        ;;
+      --release-commit) release_commit="${2:-}"; shift 2 ;;
+      --tag-object) tag_object="${2:-}"; shift 2 ;;
+      --origin-digest) origin_digest="${2:-}"; shift 2 ;;
+      -h|--help) show_usage; exit 0 ;;
+      *) log_error "Unknown argument: $1"; show_usage >&2; exit 1 ;;
     esac
   done
 
-  local missing_required=()
-  [[ -n "${mode}" ]] || missing_required+=("--mode")
-  [[ -n "${raw_tag}" ]] || missing_required+=("--tag")
-  if ((${#missing_required[@]} > 0)); then
-    log_error "Missing required option(s): ${missing_required[*]}"
-    if [[ " ${missing_required[*]} " == *" --tag "* ]]; then
-      log_note "Provide an explicit release version/tag; do not infer it from latest tags, branch names, or changelog text."
+  [[ -n "${mode}" && -n "${raw_tag}" ]] || { show_usage >&2; exit 1; }
+  local git_option
+  for git_option in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_COUNT; do
+    if [[ -n "${!git_option+x}" ]]; then
+      log_error "Repository-shaping Git environment is not supported."; exit 1
     fi
-    show_usage >&2
-    exit 1
-  fi
-
-  case "${mode}" in
-    prep|publish|verify) ;;
-    *)
-      log_error "--mode must be prep, publish, or verify."
-      show_usage >&2
-      exit 1
-      ;;
-  esac
-
-  if [[ "${mode}" != "prep" && "${no_push}" -eq 1 ]]; then
-    log_error "--no-push is only valid with --mode prep."
-    exit 1
-  fi
-
-  TAG_PREFIX="${tag_prefix}"
-  MAIN_BRANCH="${main_branch}"
-  CHANGELOG_FILE="${changelog#./}"
-  PACKAGE_IMPORT_NAME="${package_import_name}"
-  ASSET_GLOB="${asset_glob}"
-
-  local tag=""
-  tag="$(normalize_tag "${raw_tag}")"
-
+  done
+  require_cmd "git"
+  require_cmd "python3"
   cd "${project_dir}"
-
-  if [[ "${mode}" == "verify" ]]; then
-    verify_artifact_version "${ASSET_GLOB}" "${tag##*-v}"
-    return 0
-  fi
-
-  ensure_repo_ready
-
-  local branch=""
+  ensure_origin_identity
+  local live_default
+  live_default="$(repo_default_branch)"
+  main_branch="${main_branch:-${live_default}}"
+  [[ "${main_branch}" == "${live_default}" ]] || { log_error "Expected branch differs from live origin default."; exit 1; }
+  tag_prefix="${tag_prefix:-$(derive_tag_prefix "${PWD}")}"
+  [[ "${tag_prefix}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { log_error "Invalid tag prefix."; exit 1; }
+  git check-ref-format "refs/heads/${main_branch}" >/dev/null || { log_error "Invalid main branch."; exit 1; }
+  changelog="${changelog#./}"
+  python3 - "${changelog}" <<'PYCODE'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+if path.is_absolute() or not path.resolve().is_relative_to(Path.cwd().resolve()):
+    raise SystemExit("Changelog must remain within the selected project")
+PYCODE
+  [[ -f "${changelog}" ]] || { log_error "Missing changelog: ${changelog}"; exit 1; }
+  local tag version branch
+  tag="$(normalize_tag "${raw_tag}" "${tag_prefix}")"
+  version="$(tag_version "${tag}")"
   branch="$(git rev-parse --abbrev-ref HEAD)"
 
   case "${mode}" in
     prep)
-      prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
+      prep_release "${tag}" "${changelog}" "${branch}" "${main_branch}"
       ;;
-    publish)
-      ensure_tag_absent "${tag}"
-      ensure_publish_source_ready "${branch}"
-      publish_tag "${tag}"
+    tag)
+      ensure_publish_source_ready "${main_branch}" "${release_commit}"
+      create_tag "${tag}" "${changelog}" "${package_import_name}" "${version}"
+      ;;
+    push)
+      [[ "${origin_digest}" =~ ^[0-9a-f]{64}$ ]] || { log_error "--origin-digest is required."; exit 1; }
+      ensure_origin_identity "${origin_digest}"
+      ensure_publish_source_ready "${main_branch}" "${release_commit}"
+      ensure_origin_identity "${origin_digest}"
+      push_tag "${tag}" "${tag_object}" "${release_commit}"
       ;;
     verify)
-      verify_artifact_version "${ASSET_GLOB}" "${tag##*-v}"
+      verify_artifact_version "${asset_glob}" "${version}"
       ;;
     *)
-      log_error "Invalid mode: ${mode}"
+      log_error "--mode must be prep, tag, push, or verify."
       exit 1
       ;;
   esac

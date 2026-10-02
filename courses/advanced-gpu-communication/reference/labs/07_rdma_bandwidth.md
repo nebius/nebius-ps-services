@@ -23,15 +23,15 @@ RDMA lets the NIC access registered memory without the CPU copying each payload.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
   --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" \
-  slurm/fabric_tools.sbatch \
-  labs/07_rdma_bandwidth.py --profile small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
+  slurm/07_rdma_bandwidth.sbatch --workload small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
 ```
 
 ## Check your results
+
+Each new job owns `results/07_rdma_bandwidth/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/07_rdma_bandwidth/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -74,12 +74,12 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
-  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/07_rdma_bandwidth.sbatch --workload small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
+sbatch --chdir="$PWD" \
   --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
-  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory cuda-dmabuf --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA"
+  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/07_rdma_bandwidth.sbatch --workload small --memory cuda-dmabuf --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA"
 ```
 
 Slurm writes job logs under `results/07_rdma_bandwidth/logs/<job>.out` and `.err`. A submitted job is not a completed result.

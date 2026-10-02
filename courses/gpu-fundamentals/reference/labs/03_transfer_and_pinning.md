@@ -21,15 +21,15 @@ The program creates one pageable input, copies its contents into a pinned alloca
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
   --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/03_transfer_and_pinning.py --profile small
+  slurm/03_transfer_and_pinning.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/03_transfer_and_pinning/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/03_transfer_and_pinning/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -59,7 +59,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Modes / case / median (seconds) | `modes.*.median_ms` | `s` |
 | Modes / case / effective gib per s | `modes.*.effective_gib_per_s` | `Bps` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 03_transfer_and_pinning \
@@ -77,15 +77,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Compare two transfer sizes in separate jobs. Allocation and initial pinning are outside the copy timing, so record that exclusion when relating results to your application.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
-  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/03_transfer_and_pinning.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
-  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small --size-mib 128
+  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/03_transfer_and_pinning.sbatch --workload small --size-mib 128
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which costs are excluded by reusing the buffers? Why can `non_blocking=True` have little effect when the host immediately waits? Compare the size trend before assuming a hardware link has reached its practical limit.
 
@@ -94,17 +94,12 @@ Pinned memory enables asynchronous host/device transfers and can improve bandwid
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/03_transfer_and_pinning/logs/capture-%J-%t.out" \
-  --error="results/03_transfer_and_pinning/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/03_transfer_and_pinning/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/03_transfer_and_pinning.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
+  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/03_transfer_and_pinning.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/03_transfer_and_pinning.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 

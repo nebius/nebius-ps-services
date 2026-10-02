@@ -31,7 +31,7 @@ __global__ void block_atomic_sum(const float* input, float* output, std::size_t 
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 04_reduction [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 04_reduction [--workload small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
     require_course_gpu();

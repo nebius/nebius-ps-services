@@ -46,15 +46,15 @@ Both workers enable `VLLM_BATCH_INVARIANT=1`, select FlashAttention 2 with `atte
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
   --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated
+  slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated
 ```
 
 ## Check your results
+
+Each new job owns `results/32_dynamo_disaggregation/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/32_dynamo_disaggregation/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -96,12 +96,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
-  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
-  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout disaggregated
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout disaggregated
 ```
 
 Logs stay under `results/32_dynamo_disaggregation/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -119,19 +119,12 @@ a monotonic clock; a clock offset must not be interpreted as a transfer delay.
 This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Repeat with `--layout disaggregated` to capture the candidate. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
-  --chdir="$PWD" --output="results/32_dynamo_disaggregation/logs/capture-%j.out" \
-  --error="results/32_dynamo_disaggregation/logs/capture-%j.err" \
-  slurm/vendor_job.sbatch labs/32_dynamo_disaggregation.py --profile small --model-dir "$MODEL_PATH" --layout aggregated --capture systems \
-  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
-  --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none \
-  --discard-environment=true --force-overwrite=false --kill=none \
-  --trace-fork-before-exec=true --cuda-graph-trace=node \
-  --capture-range=cudaProfilerApi --capture-range-end=stop \
-  --flush-on-cudaprofilerstop=false --wait=primary \
-  '--output={report}'
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated --capture systems
 ```
+
+The native Systems command is in `slurm/32_dynamo_disaggregation.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.
 

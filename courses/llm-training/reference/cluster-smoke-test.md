@@ -38,22 +38,22 @@ one-GPU labs in Gate 2 perform their own H100 device check.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_learning_basics/logs/%j.out" \
-  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
+  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/32_learning_basics.cuda.sbatch --device cuda
 sbatch --chdir="$PWD" \
   --output="$PWD/results/13_loss_masking/logs/%j.out" \
-  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/single_gpu.sbatch labs/13_loss_masking.py --profile small
+  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/13_loss_masking.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_tiny_transformer_train/logs/%j.out" \
-  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/01_tiny_transformer_train.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/02_gradient_accumulation/logs/%j.out" \
-  --error="$PWD/results/02_gradient_accumulation/logs/%j.err" slurm/single_gpu.sbatch labs/02_gradient_accumulation.py --profile small
+  --error="$PWD/results/02_gradient_accumulation/logs/%j.err" slurm/02_gradient_accumulation.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
-  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/14_activation_checkpointing.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
-  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile small
+  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/21_mixed_precision_training.sbatch --workload small
 ```
 
 Lab 32 can first be studied locally with `--device cpu`. Require a learned
@@ -83,13 +83,13 @@ that the other is correct.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/05_lora_sft/logs/%j.out" \
-  --error="$PWD/results/05_lora_sft/logs/%j.err" slurm/single_gpu.sbatch labs/05_lora_sft.py --profile small
+  --error="$PWD/results/05_lora_sft/logs/%j.err" slurm/05_lora_sft.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/06_grpo_objective/logs/%j.out" \
-  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/06_grpo_objective.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/07_grpo_trainer/logs/%j.out" \
-  --error="$PWD/results/07_grpo_trainer/logs/%j.err" slurm/single_gpu.sbatch labs/07_grpo_trainer.py --profile small
+  --error="$PWD/results/07_grpo_trainer/logs/%j.err" slurm/07_grpo_trainer.sbatch --workload small
 ```
 
 External model exercises require pinned, approved artifacts. Check trainable
@@ -102,16 +102,16 @@ held-out model quality or production training efficiency.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/24_checkpoint_resume/logs/%j.out" \
-  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/single_gpu.sbatch labs/24_checkpoint_resume.py --profile small
+  --error="$PWD/results/24_checkpoint_resume/logs/%j.err" slurm/24_checkpoint_resume.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/25_sequence_packing/logs/%j.out" \
-  --error="$PWD/results/25_sequence_packing/logs/%j.err" slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small
+  --error="$PWD/results/25_sequence_packing/logs/%j.err" slurm/25_sequence_packing.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/26_input_pipeline/logs/%j.out" \
-  --error="$PWD/results/26_input_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/26_input_pipeline.py --profile small
+  --error="$PWD/results/26_input_pipeline/logs/%j.err" slurm/26_input_pipeline.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/27_fused_graph_trace/logs/%j.out" \
-  --error="$PWD/results/27_fused_graph_trace/logs/%j.err" slurm/single_gpu.sbatch labs/27_fused_graph_trace.py --profile small
+  --error="$PWD/results/27_fused_graph_trace/logs/%j.err" slurm/27_fused_graph_trace.sbatch --workload small
 ```
 
 Resume must reproduce the next batch and update under the stated deterministic
@@ -127,7 +127,7 @@ and its recipe have been qualified in the approved environment:
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/22_transformer_engine_fp8/logs/%j.out" \
-  --error="$PWD/results/22_transformer_engine_fp8/logs/%j.err" slurm/single_gpu.sbatch labs/22_transformer_engine_fp8.py --profile small
+  --error="$PWD/results/22_transformer_engine_fp8/logs/%j.err" slurm/22_transformer_engine_fp8.sbatch --workload small
 ```
 
 Record the resolved version and recipe. Collect warmed delayed-scaling samples
@@ -166,10 +166,10 @@ failure propagation, CUDA tracing and cross-node timelines need target evidence.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/30_training_profiler/logs/%j.out" \
-  --error="$PWD/results/30_training_profiler/logs/%j.err" slurm/single_gpu.sbatch labs/30_training_profiler.py --profile small
+  --error="$PWD/results/30_training_profiler/logs/%j.err" slurm/30_training_profiler.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/31_training_capstone/logs/%j.out" \
-  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/31_training_capstone.trials.sbatch --workload small
 ```
 
 Retain all three fresh-process capstone records and confirm the launcher

@@ -26,15 +26,15 @@ Both workers enable `VLLM_BATCH_INVARIANT=1`, select FlashAttention 2 with `atte
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
   --error="$PWD/results/33_dynamo_routing/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin
+  slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin
 ```
 
 ## Check your results
+
+Each new job owns `results/33_dynamo_routing/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/33_dynamo_routing/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -76,12 +76,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
-  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin
+sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
-  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router kv
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router kv
 ```
 
 Logs stay under `results/33_dynamo_routing/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -100,19 +100,12 @@ individual request.
 This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Repeat with `--router kv` to capture the candidate. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
-  --chdir="$PWD" --output="results/33_dynamo_routing/logs/capture-%j.out" \
-  --error="results/33_dynamo_routing/logs/capture-%j.err" \
-  slurm/vendor_job.sbatch labs/33_dynamo_routing.py --profile small --model-dir "$MODEL_PATH" --router round-robin --capture systems \
-  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
-  --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none \
-  --discard-environment=true --force-overwrite=false --kill=none \
-  --trace-fork-before-exec=true --cuda-graph-trace=node \
-  --capture-range=cudaProfilerApi --capture-range-end=stop \
-  --flush-on-cudaprofilerstop=false --wait=primary \
-  '--output={report}'
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin --capture systems
 ```
+
+The native Systems command is in `slurm/33_dynamo_routing.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.
 

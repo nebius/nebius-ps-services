@@ -53,6 +53,7 @@ def request(state, unit, stage, action):
         "name": name,
     }
     if action == "cleanup":
+        body["lab"] = unit["lab"]
         body["jobs"] = [s["dispatch"] for s in unit["stages"] if s.get("dispatch")]
     elif action == "submit":
         body.update(

@@ -81,7 +81,7 @@ def check_output(torch: Any, host: Any, batch: int, delay_ms: float) -> int:
 
 
 def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
-    width = 512 if args.profile == "small" else 2048
+    width = 512 if args.workload == "small" else 2048
     pooled = args.mode in ("pooled", "nonblocking", "pipeline")
     asynchronous = args.mode in ("nonblocking", "pipeline")
     compute = torch.cuda.Stream()

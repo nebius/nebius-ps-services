@@ -12,7 +12,7 @@ __global__ void stencil(const float* input, float* output, std::size_t count) {
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 05_tiled_stencil [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 05_tiled_stencil [--workload small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 1003, 1U << 24);
     require_course_gpu();

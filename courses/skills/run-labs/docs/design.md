@@ -310,5 +310,72 @@ The canonical catalog validates the narrow stage environment before freezing, pr
 Before repair, 23 focused cases failed for omitted flags/memory, lost precedence or accepted invalid mappings. After repair, 178 controller, evidence-runner, collection and vLLM capture tests pass; scoped Ruff passes. Source review confirms existing transport preserves the frozen stage mapping and no shell wrapper, secret/runtime override or allocation change leaks into clean jobs. Installed parity and live allocation/report verification are separate subsequent gates.
 
 <!-- /FEATURE: FEAT-005 -->
+<!-- FEATURE: FEAT-006 reqs=REQ-006 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-006: Native dispatch with preserved campaign recovery
+
+#### Requirements Covered
+
+- REQ-006: Native course jobs and exact-job evidence ownership.
+
+#### Context Evidence
+
+The approved course refactor replaces generic Python execution wrappers with explicit per-lab native jobs, separates workload size from diagnostic mode, and introduces private per-job output directories. Existing campaign orchestration still owns scheduling, durable intent, uncertain dispatch reconciliation and evidence verification.
+
+#### Design Details
+
+Recipes name reviewed course-owned batch files. The catalog freezes native-jobs/v1 and expands workload sizes into existing serialized profile identities. Native submission prepares private logs/jobs parents and executes sbatch --parsable with explicit working directory and scheduler paths. It validates launcher containment and narrow scheduler overrides before dispatch. The existing intent/receipt lifecycle owns retries and exact job identity; incompatible saved plans cannot execute. Status and owned cancellation remain available for historical state.
+
+Collection inventories only exact dispatched job subtrees and scheduler logs, rejects traversal, NUL separators, symlinks and unowned paths before rsync, and verifies returned hashes. Cleanup requires completed successful dispatches and removes only their exact runtime outputs. Published history and unrelated jobs stay outside collection and cleanup. Explicit profiler jobs preserve server/rank/vendor coordination and report cardinality. Source instructions, recipes and installed payload use the same contract.
+
+#### Selected Option
+
+Share explicit native lab jobs between learner commands and the existing durable campaign controller.
+
+#### Alternatives Considered
+
+A replacement generic dispatcher would hide commands again. Removing campaign orchestration would lose recovery and evidence guarantees. Reusing historical result trees would break producing-job identity.
+
+#### Implementation Boundaries
+
+Canonical run-labs instructions, recipes, catalog, native submission, collection, cleanup, saved-plan validation, tests and project-installed payload. No live cluster changes, infrastructure installation or evidence publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: Native argv and both workloads reach the reviewed jobs; retired wrappers and incompatible executable plans fail.
+- TDD-002: Unowned paths fail before copying, and completed-job cleanup leaves history and other jobs unchanged.
+- TDD-003: Existing dispatch reconciliation, dependency, verification and evidence gates continue passing.
+
+#### Validation Plan
+
+Run controller/evidence regressions and native command doubles, inspect source and installed parity, and validate canonical specs.
+
+#### Test Plan
+
+Exercise workload defaults, scheduler override restrictions, path ownership, job identities, report failures, server export waits, distributed producers and collection/cleanup boundaries.
+
+#### Evaluation Plan
+
+Compare frozen recipes with actual native job commands. Require future live campaigns to establish target runtime and browser evidence independently.
+
+#### Rollout And Rollback
+
+Refresh the project installation from canonical source and create fresh native campaigns. Keep old receipts/results readable; do not translate saved executable plans or rewrite original evidence. Revert only scoped source edits if needed.
+
+#### Done Definition
+
+Native dispatch and exact-job evidence ownership are locally verified with preserved campaign safeguards and identical installed payload.
+
+#### Implementation Evidence
+
+The native-jobs/v1 catalog, direct sbatch submission, workload CLI, safe pre-copy admission, exact-job cleanup and incompatible-plan rejection are implemented. Instructions and recipes select explicit native jobs. Historical specification records remain provenance; this design supersedes their generic-launcher assumptions without discarding their evidence.
+
+#### Verification Evidence
+
+The complete courses suite passes 2150 tests, including native execution, campaign, collection, saved-plan and recovery regressions. Native process tests check server shutdown/export, failure propagation and rank/report completeness. Changed Python lint, all course validators and source/installed parity pass. All 2,872 original course evidence files remain unchanged. No live cluster or published result replacement was performed; target execution and browser evidence gates remain mandatory for future campaigns.
+
+Subsequent alignment clarifies that collection includes only dispatched job trees and their scheduler logs. The full courses suite now passes 2165 tests; independent dispatch/collection/cleanup review found no material defect and canonical/installed payloads remain identical. Course-side history copying is bounded and binds attribution metadata to copied bytes. Existing evidence is preserved; no live campaign was run.
+
+<!-- /FEATURE: FEAT-006 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

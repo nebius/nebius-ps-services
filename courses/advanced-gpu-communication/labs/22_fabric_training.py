@@ -31,7 +31,7 @@ def main():
     validate_common_args(args)
     torch, rank, world, local, env = initialize(args.seed)
     try:
-        global_batch, width = (128, 512) if args.profile == "small" else (512, 2048)
+        global_batch, width = (128, 512) if args.workload == "small" else (512, 2048)
         local_batch, accumulation = batch_geometry(global_batch, world, args.microbatch)
         # Identical global examples and model on every rank establish a full-batch reference.
         x = torch.randn(global_batch, width, device="cuda")
