@@ -57,6 +57,49 @@ def test_migrated_classic_import_is_noop_on_repeat():
     assert not any(uid.startswith("cxcli-preview-") for uid in client.resources)
 
 
+def test_canonical_equal_import_skips_only_previous_resource_conversion():
+    client = FakeGrafana()
+    execute_imports(
+        client, prepare_imports(client, [dashboard()], folder="folder"), emit=lambda _: None
+    )
+    previous = copy.deepcopy(client.resources["board"])
+    client.calls.clear()
+
+    plans = prepare_imports(client, [dashboard()], folder="folder", overwrite=True)
+
+    assert plans[0].unchanged
+    assert plans[0].previous == previous
+    assert sum("dryRun=" in path for _, path, _ in client.calls) == 1
+    assert execute_imports(client, plans, emit=lambda _: None) == {"board": "unchanged"}
+    assert client.resources["board"] == previous
+
+
+def test_older_existing_schema_still_receives_server_conversion():
+    client = FakeGrafana()
+    execute_imports(client, prepare_imports(client, [dashboard()]), emit=lambda _: None)
+    client.resources["board"]["spec"]["schemaVersion"] = 30
+    client.calls.clear()
+
+    plans = prepare_imports(client, [dashboard()])
+
+    assert plans[0].unchanged
+    assert sum("dryRun=" in path for _, path, _ in client.calls) == 2
+    assert execute_imports(client, plans, emit=lambda _: None) == {"board": "unchanged"}
+
+
+def test_equal_content_in_another_folder_does_not_skip_conversion():
+    client = FakeGrafana()
+    execute_imports(
+        client, prepare_imports(client, [dashboard()], folder="old"), emit=lambda _: None
+    )
+    client.calls.clear()
+
+    with pytest.raises(GrafanaError, match="--overwrite"):
+        prepare_imports(client, [dashboard()], folder="new")
+
+    assert sum("dryRun=" in path for _, path, _ in client.calls) == 2
+
+
 def test_whole_batch_preflight_refuses_different_existing_dashboard():
     client = FakeGrafana()
     execute_imports(client, prepare_imports(client, [dashboard("z")]), emit=lambda _: None)

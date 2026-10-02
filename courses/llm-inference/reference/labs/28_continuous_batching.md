@@ -4,7 +4,7 @@ Long prompt processing can delay requests that are ready to generate another tok
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/28_continuous_batching.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the mechanics environment. The wrapper checks H100, but scheduling is a CPU simulation. Its equal-cost work units are deliberately not an H100 latency model.
 
@@ -20,25 +20,35 @@ The fixture has fixed arrivals and 256 abstract work units per service quantum. 
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/28_continuous_batching.py` simulates unchunked and chunked-prefill scheduling for fixed arrivals and output demands. It checks completed modeled work and records waiting/completion behavior in abstract service quanta, not milliseconds.
 
-Run the fixed-arrival fixture before editing policies. All policies must complete the same declared work; simulator time is reported in quanta, not milliseconds.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 28_continuous_batching slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/28_continuous_batching/logs/%j.out" \
+  --error="$PWD/results/28_continuous_batching/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/28_continuous_batching.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 28_continuous_batching --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/28_continuous_batching/logs/$LAB_JOB_ID.out"
+cat "results/28_continuous_batching/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require equivalent scheduled work and completion of every request. Inspect each policy's trace, dispatch duration, first-output latency, maximum active requests, and completion times. These modeled latencies are not measured service TTFT or token-aware ITL.
 
@@ -54,7 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Chunked 64 / median first token latency quanta | `chunked_64.median_first_token_latency_quanta` | `none` |
 | Chunked 256 control / median first token latency quanta | `chunked_256_control.median_first_token_latency_quanta` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 28_continuous_batching \
@@ -66,6 +76,18 @@ Select two successful, equivalent, unprofiled runs in the same profile. For prog
 In Grafana, select the workspace and profile. Require **Correctness of selected results** to equal 1 and **Selected comparison generation** to match publication confirmation. Compare the selected artifact fields and experiment timestamps. This dashboard omits GPU telemetry because this recipe cannot attribute device activity to its result.
 
 ## Investigate the behavior
+
+### Workload variations
+
+Run the fixed-arrival fixture before editing policies. All policies must complete the same declared work; simulator time is reported in quanta, not milliseconds.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/28_continuous_batching/logs/%j.out" \
+  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Locate an arrival during a long full-prefill dispatch and calculate its waiting time. How does chunking change the next admission opportunity? Explain which conclusions depend on the model's equal unit-cost assumption.
 

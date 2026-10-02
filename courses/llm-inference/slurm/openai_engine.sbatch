@@ -16,7 +16,7 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab 30_engine_profile [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s [MODEL] [REVISION]\n' "$0"
   printf '\nStarts a loopback-only vLLM server, runs the bounded OpenAI protocol probe, and stops the server.\n'
 }
 

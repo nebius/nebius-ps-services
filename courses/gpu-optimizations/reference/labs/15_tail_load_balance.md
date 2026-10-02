@@ -4,7 +4,7 @@ A long final task can delay completion even when most work has finished, while a
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/15_tail_load_balance.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use one H100 with the course-qualified Triton compiler. Review task makespan—the time until all tasks finish—and the difference between task imbalance, warp divergence, and a grid tail.
 
@@ -20,26 +20,35 @@ Run Lab 15's balanced/skewed concurrent task survey and separate partial-wave pr
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/15_tail_load_balance.py` compares balanced and skewed work across eight CUDA streams and measures separate Triton partial-wave cases. It checks approximately matched work and valid outputs, then reports timing distributions and estimated residency.
 
-Run both task sets and the wave probe together. Keep the declared work ratio in your report rather than describing the candidate as identical useful work.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 15_tail_load_balance slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile small
-python3 tools/submit_lab.py --lab 15_tail_load_balance slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile large
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/15_tail_load_balance/logs/%j.out" \
+  --error="$PWD/results/15_tail_load_balance/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/15_tail_load_balance.py --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 15_tail_load_balance --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/15_tail_load_balance/logs/$LAB_JOB_ID.out"
+cat "results/15_tail_load_balance/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require the work-ratio gate, finite task outputs, and reference-matching partial-wave outputs. Inspect `makespan_distribution`, `task_duration_distribution`, `skewed_to_balanced_modeled_work_ratio`, and `partial_wave_probe`. GEMM finiteness alone is not numerical reference equivalence.
 
@@ -55,7 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Skewed / makespan / median (seconds) | `skewed.makespan.median_ms` | `s` |
 | Partial wave probe / cases / case / completion distribution / p50 (seconds) | `partial_wave_probe.cases.*.completion_distribution.p50_ms` | `s` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 15_tail_load_balance \
@@ -68,6 +77,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run both task sets and the wave probe together. Keep the declared work ratio in your report rather than describing the candidate as identical useful work.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_tail_load_balance/logs/%j.out" \
+  --error="$PWD/results/15_tail_load_balance/logs/%j.err" slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_tail_load_balance/logs/%j.out" \
+  --error="$PWD/results/15_tail_load_balance/logs/%j.err" slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile large
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Compare the longest task with the median task and the joined completion time. Does the tail model predict the observed transition? Use a profiler to confirm actual concurrent execution and residency before interpreting the model as hardware fact.
 
 Sorting/grouping work reduces divergence but adds preprocessing and can hurt locality. Splitting heavy tasks improves balance but adds launches/atomics. Padding a grid adds useless work. Dynamic scheduling improves balance with queue-management cost.
@@ -75,7 +99,16 @@ Sorting/grouping work reduces divergence but adds preprocessing and can hurt loc
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 15_tail_load_balance --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/15_tail_load_balance/logs/capture-%J-%t.out" \
+  --error="results/15_tail_load_balance/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/15_tail_load_balance/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/15_tail_load_balance.py --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
@@ -83,10 +116,20 @@ Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_
 For the partial-wave control, the Compute command selects `uniform_tail_probe` inside `tail_measure`. This opt-in range wraps each timed probe launch and excludes input initialization, warmup, the one-block compilation probe and sentinel validation. The launch-count limit selects the first measured grid, with `resident_block_slots` blocks. Compare its launch resources and occupancy limits with the source's residency estimate; one capture does not prove scheduling or counters for all four grids or the concurrent GEMM task sets. Inspect those task streams and the remaining grids in Systems.
 
 ```bash
-python3 tools/submit_lab.py --lab 15_tail_load_balance --export=ALL,COURSE_PROFILE_TOOL=ncu,COURSE_PROFILE_RANGE=tail_measure,COURSE_PROFILE_KERNEL=uniform_tail_probe slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/15_tail_load_balance/logs/capture-%J-%t.out" \
+  --error="results/15_tail_load_balance/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include tail_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/15_tail_load_balance/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/15_tail_load_balance.py --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare balanced and skewed task sets, preserving the guide's approximate-work caveat. Independently select the bottleneck task and calculate the tail cost; confirm concurrency before attributing it to scheduling.
 

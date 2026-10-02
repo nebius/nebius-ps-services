@@ -14,6 +14,72 @@ from test_practice_integration import load_validator
 PRACTICAL = (*COURSES, "advanced-gpu-communication")
 
 
+def test_fabric_preparation_creates_its_prefix_without_publishing(tmp_path):
+    guide = (ROOT / "advanced-gpu-communication/reference/labs/01_fabric_topology.md").read_text()
+    block = next(block for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
+                 if "tools/install_fabric_tools.py" in block)
+    runtime = tmp_path / "courses/.runtime"
+    runtime.mkdir(parents=True)
+    (tmp_path / "courses/.profiling-tools").mkdir(mode=0o700)
+    interpreter = tmp_path / "python3.12"
+    interpreter.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\nfrom pathlib import Path\n"
+        "assert sys.argv[1] == 'tools/install_fabric_tools.py'\n"
+        "prefix = Path(sys.argv[3])\n"
+        "assert prefix.is_dir(), 'installer requires an existing prefix'\n"
+        "assert prefix.stat().st_mode & 0o777 == 0o700\n"
+        "fabric = prefix / 'fabric'\nfabric.mkdir()\n"
+        "(fabric / 'environment.sh').write_text('export FABRIC_PREPARED=yes\\n')\n"
+    )
+    interpreter.chmod(0o700)
+    completed = subprocess.run(
+        ["bash", "-eu", "-c", block + '\ntest "$FABRIC_PREPARED" = yes'],
+        cwd=tmp_path,
+        env={"HOME": str(tmp_path), "PATH": str(tmp_path) + os.pathsep + os.defpath,
+             "COURSE": "advanced-gpu-communication"},
+        text=True, capture_output=True, timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert 'COURSE_TOOLS=' in (runtime / 'advanced-gpu-communication.sh').read_text()
+    assert not (tmp_path / 'courses/.profiling-tools/venv').exists()
+
+
+def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
+    guide = (ROOT / "README.md").read_text()
+    block = next(block for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
+                 if "tools/verify_monitoring.py" in block)
+    checkout = tmp_path / "checkout with spaces/courses"
+    course = checkout / "gpu-fundamentals"
+    (course / 'tools').mkdir(parents=True)
+    (course / 'tools/verify_monitoring.py').write_text('# fixture\n')
+    setup = tmp_path / 'monitoring setup'
+    setup.mkdir()
+    (setup / 'laptop-environment.sh').write_text(
+        f'export COURSE_SETUP_DIR="{setup}"\n'
+        'export KUBECONFIG="/fixture/kubeconfig"\n'
+        'export CLUSTER_CONTEXT="fixture-context"\n'
+    )
+    interpreter = tmp_path / '.gpu-course-tools/bin/python'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text(
+        f'#!{sys.executable}\nimport sys\nfrom pathlib import Path\n'
+        "assert Path(sys.argv[1]).is_file(), 'verification must use the selected course'\n"
+        'assert sys.argv[-1] == "fixture-context"\n'
+        'print(Path.cwd())\n'
+    )
+    interpreter.chmod(0o700)
+    block = block.replace('<absolute setup directory>', str(setup))
+    block = block.replace('<absolute checkout path>/courses', str(checkout))
+    completed = subprocess.run(
+        ['bash', '-eu', '-c', f'source "{setup}/laptop-environment.sh"\n' + block],
+        cwd=tmp_path, env={'HOME': str(tmp_path), 'PATH': os.defpath},
+        text=True, capture_output=True, timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(course)
+
+
 @pytest.mark.parametrize(
     ("relative", "arguments"),
     [
@@ -31,11 +97,35 @@ PRACTICAL = (*COURSES, "advanced-gpu-communication")
         ("llm-inference/reference/cluster-smoke-test.md", "-m pip check"),
     ],
 )
-def test_direct_commands_use_the_restored_runtime(tmp_path, relative, arguments):
+def test_documented_commands_use_the_restored_runtime(tmp_path, relative, arguments):
     source = (ROOT / relative).read_text()
-    command = re.search(
-        r'(?:python3?|"\$COURSE_PYTHON") ' + re.escape(arguments), source
-    ).group()
+    if "/reference/labs/" in relative:
+        command = next(
+            block for block in re.findall(r"```bash\n(.*?)```", source, re.S)
+            if block.startswith("sbatch ")
+        )
+        # Execute the documented submission through its real batch script, with
+        # only scheduler boundaries replaced; no Slurm service is contacted.
+        for name, body in {
+            "sbatch": (
+                "args = sys.argv[1:]\n"
+                "while args[0].startswith('--'):\n    args.pop(0)\n"
+                "assert args[0] == 'slurm/cpu.sbatch'\n"
+                "os.environ['SLURM_JOB_ID'] = '123'\n"
+                "os.execv('/bin/bash', ['bash', *args])\n"
+            ),
+            "srun": (
+                "assert sys.argv[1] == '--ntasks=1'\n"
+                "os.execv(sys.argv[2], sys.argv[2:])\n"
+            ),
+        }.items():
+            executable = tmp_path / name
+            executable.write_text(f"#!{sys.executable}\nimport os,sys\n" + body)
+            executable.chmod(0o700)
+    else:
+        command = re.search(
+            r'(?:python3?|"\$COURSE_PYTHON") ' + re.escape(arguments), source
+        ).group()
     interpreter = tmp_path / "prepared python"
     interpreter.write_text(
         f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n"
@@ -47,7 +137,8 @@ def test_direct_commands_use_the_restored_runtime(tmp_path, relative, arguments)
         system.chmod(0o700)
     result = subprocess.run(
         ["/bin/bash", "-c", command],
-        env={**os.environ, "PATH": str(tmp_path), "COURSE_PYTHON": str(interpreter)},
+        cwd=ROOT / relative.split("/", 1)[0],
+        env={"PATH": str(tmp_path), "COURSE_PYTHON": str(interpreter)},
         text=True,
         capture_output=True,
     )
@@ -151,7 +242,7 @@ def test_shared_guide_and_lab_referrals_render_as_links():
     for course in PRACTICAL:
         page = (ROOT / course / "index.html").read_text()
         assert (
-            'href="../lab-guide.html#how-to-set-up-the-lab">environment setup</a>'
+            'href="../lab-guide.html#how-to-set-up-the-lab">Lab Guide</a>'
             in page
         )
 
@@ -179,7 +270,7 @@ def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeyp
     assert '</section><footer class="license-footer">' in document
     assert document.endswith('</footer></main></div></body></html>')
     assert "Third-party materials retain their respective licenses." in document
-    assert "execution, and profiling instructions." in document
+    assert "contains the same instructions." in document
 
     # Removing only those presentation fragments from the source must produce
     # identical HTML; every other paragraph and command remains rendered.
@@ -208,9 +299,8 @@ def test_documented_vendor_runtime_restores_in_a_clean_shell(tmp_path):
     source = (ROOT / "README.md").read_text()
     runtime = tmp_path / "courses/.runtime/advanced-gpu-communication.sh"
     runtime.parent.mkdir(parents=True)
-    save_base = re.search(
-        r"declare -p COURSE_TOOLS[^\n]+ \\\n  > [^\n]+", source
-    ).group()
+    save_base = re.search(r"declare -p COURSE_PYTHON[^\n]+", source).group()
+    save_base += "\n" + re.search(r"declare -p COURSE_TOOLS[^\n]+", source).group()
     vendor = (ROOT / "advanced-gpu-communication/README.md").read_text()
     save_vendor = re.search(r"declare -p COURSE_ETCD[^\n]+", vendor).group()
     model = (
@@ -348,7 +438,8 @@ def test_shared_guide_embeds_existing_monitoring_diagram():
 
     source = cb_metadata.shared_guide_source()
     document = cb_pages.render_shared_guide()
-    assert source.index("### How measurements reach Grafana") < source.index("### Install Grafana on the cluster")
+    assert source.index("### Publish a measured comparison") < source.index("![Course measurements")
+    assert source.index("![Course measurements") < source.index("### Capture and qualify profiling")
     match = re.search(r'<img alt="([^"]+)" data-source="docs/grafana.png" src="data:image/png;base64,([^"]+)">', document)
     assert match and "telemetry" in match[1]
     assert base64.b64decode(match[2], validate=True) == (ROOT / "docs/grafana.png").read_bytes()

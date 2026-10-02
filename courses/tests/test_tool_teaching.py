@@ -30,6 +30,7 @@ def primer(
     (directory / "tools-example.svg").write_text(SVG)
     text = "# Using GPU performance tools\n\n" + "\n\n".join(
         f"## {name}\n\n" + (image if name == field else "Explanation.")
+        + ("\n\n![A measured optimization loop](#tools-measurement-loop)" if name == "How it works" else "")
         for name in (
             "Objective",
             "How it works",

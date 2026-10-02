@@ -51,6 +51,11 @@ def test_every_lab_has_truthful_capture_and_dashboard_contract(
         "false-exception",
         "missing-view",
         "unrelated-gpu",
+        "missing-setup",
+        "duplicate-setup",
+        "dashboard-prerequisite",
+        "wrong-native-log",
+        "wrong-native-launcher",
     ],
 )
 def test_evidence_validator_rejects_misleading_wiring(defect):
@@ -70,11 +75,22 @@ def test_evidence_validator_rejects_misleading_wiring(defect):
     elif defect == "wrong-unit":
         dashboard["panels"][1]["fieldConfig"]["defaults"]["unit"] = "bytes"
     elif defect == "missing-command":
-        guide = guide.replace(recipe["systems_command"], "")
+        guide = guide.replace("COURSE_PROFILE_TOOL=nsys", "COURSE_PROFILE_TOOL=none")
     elif defect == "false-exception":
         recipe["systems"]["applicable"] = False
     elif defect == "missing-view":
         guide = guide.replace(recipe["systems"]["view"], "")
+    elif defect == "missing-setup":
+        guide = guide.replace("[Lab Guide]", "[Missing Guide]")
+    elif defect == "duplicate-setup":
+        link = "[Lab Guide](../../../README.md#how-to-set-up-the-lab)"
+        guide = guide.replace(link, link + " " + link)
+    elif defect == "dashboard-prerequisite":
+        guide = guide.replace("## Before you start", "## Before you start\n\n[Dashboard](../grafana/assigned.json)")
+    elif defect == "wrong-native-log":
+        guide = guide.replace("logs/capture-%J-%t.out", "logs/wrong.out")
+    elif defect == "wrong-native-launcher":
+        guide = guide.replace("nsys profile", "nsys stats")
     else:
         recipe["gpu_telemetry"] = False
     with pytest.raises(SystemExit):

@@ -319,7 +319,7 @@ def test_lab_tables_preserve_cells_and_non_table_pipes(
     )
     path.write_text(
         path.read_text().replace(
-            "## Practice\n\n", "## Practice\n\n" + practice
+            "## Investigate the behavior\n\n", "## Investigate the behavior\n\n" + practice
         )
     )
     guide = cb_metadata.lab_guides(tmp_path, metadata, 1)[0]

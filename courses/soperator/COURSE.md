@@ -247,28 +247,22 @@ suitable default, add its supplied `--partition` and `--account` values.
 #SBATCH --gpus-per-node=1
 #SBATCH --mem=4G
 #SBATCH --time=00:05:00
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
 set -euo pipefail
 srun bash -euc 'hostname; nvidia-smi --query-gpu=name,memory.total --format=csv'
 ```
 
-The example's project directory is `~/slurm-examples/device-check`. Create its
-log directory before submitting: Slurm opens output files before the script
-body can create directories. `umask 077` makes newly created files private to
-your user; it does not change existing files.
+Save this script as `job.sbatch` in an existing private, worker-accessible
+working directory. Slurm writes its logs there before the job body starts.
 
 ```bash
-umask 077
-mkdir -p ~/slurm-examples/device-check/logs
-cd ~/slurm-examples/device-check
-# Save the script above as job.sbatch in this directory, then submit it.
 sbatch job.sbatch
 ```
 
 `%x` becomes the job name and `%j` the job ID. For synthetic job ID `12345`,
-standard output is `logs/device-check-12345.out` and standard error is
-`logs/device-check-12345.err`. The batch working directory defaults to the
+standard output is `device-check-12345.out` and standard error is
+`device-check-12345.err`. The batch working directory defaults to the
 submission directory; `--chdir` can select another worker-accessible directory.
 Without an explicit output path, Slurm normally writes `slurm-JOBID.out` in that
 working directory, which explains stray files after submitting from home.

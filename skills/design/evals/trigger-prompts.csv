@@ -35,3 +35,8 @@ design-readme-positive-01,true,"Design a new local reporting CLI and plan its pr
 design-readme-positive-02,true,"Design the switch from positional connection settings to a configuration file, including the setup and common-usage documentation affected by the change."
 design-readme-negative-01,false,Fix the grammar and shorten two paragraphs in the README without changing its structure or project behavior.
 design-readme-negative-02,false,Repair the README's broken relative links and update its TOC to match existing headings; no design changes are needed.
+design-html-positive-01,true,"Design a standalone HTML explainer that readers can copy to another computer and open offline; plan its structure, visual theme and optional navigation before implementation."
+design-html-positive-02,true,"Plan a self-contained HTML quarterly report with a summary, evidence tables, filters and a complete printable snapshot."
+design-html-positive-03,true,"Design an offline single-file HTML presentation with a speaker narrative, accessible previous/next controls and a readable fallback."
+design-html-negative-01,false,Implement this already approved standalone HTML report design exactly; no new design decisions or planning are needed.
+design-html-negative-02,false,Fix two spelling mistakes and the border radius in this existing HTML page without changing its structure or behavior.

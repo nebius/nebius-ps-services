@@ -11,7 +11,7 @@ masks can exhaust shared memory at the longer sequence length.
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/30_megatron_overlap.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -20,36 +20,63 @@ Prepare the [joint vendor runtime](../../README.md) once, then source
 the Bridge, NIXLBench and Dynamo prerequisites together; installation alone does
 not qualify both workers for this experiment.
 
-## Concepts and code path
+Reference preparation (complete before the measured baseline):
 
-The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction, fixed global batch and fixed sequence length. Parameter-gather overlap stays disabled. TensorBoard iteration-time is measured in seconds and includes the vendor training loop. The callback checks skipped steps, finite loss and full final weights; a reference mismatch blocks comparison. Synthetic tokens establish execution equivalence, not model quality or production scaling.
-
-## Practice
-
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+Submit the reference job first and wait for successful completion. Retain its printed job number and reference path.
 
 Select the prepared Bridge runtime before submission and create one reference with the baseline control. Export `TRAINING_REFERENCE` as the printed `final-weights.pt` path after that job completes. Keep that same file for both measured runs.
 
 ```bash
 export COURSE_PYTHON="$COURSE_BRIDGE_PYTHON"
 export COURSE_TORCHRUN="$COURSE_BRIDGE_TORCHRUN"
-python3 tools/submit_lab.py --lab 30_megatron_overlap slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --reference-only
-```
-
-```bash
-python3 tools/submit_lab.py --lab 30_megatron_overlap slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
-python3 tools/submit_lab.py --lab 30_megatron_overlap slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap on --reference "$TRAINING_REFERENCE"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/30_megatron_overlap/logs/%j.out" \
+  --error="$PWD/results/30_megatron_overlap/logs/%j.err" slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --reference-only
 ```
 
 Logs stay under `results/30_megatron_overlap/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
-## Check your results
+## Concepts and code path
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+The four-layer BF16 model uses a distributed optimizer, FP32 gradient reduction, fixed global batch and fixed sequence length. Parameter-gather overlap stays disabled. TensorBoard iteration-time is measured in seconds and includes the vendor training loop. The callback checks skipped steps, finite loss and full final weights; a reference mismatch blocks comparison. Synthetic tokens establish execution equivalence, not model quality or production scaling.
+
+## Practice
+
+`labs/30_megatron_overlap.py` trains a small Megatron Bridge transformer with gradient-reduction overlap disabled or enabled. It checks finite, unskipped steps and final weights against a separate baseline reference and writes timing, throughput, loss, and parameter error.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 30_megatron_overlap --job "$LAB_JOB_ID"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/30_megatron_overlap/logs/%j.out" \
+  --error="$PWD/results/30_megatron_overlap/logs/%j.err" \
+  slurm/fabric.sbatch \
+  labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
+```
+
+## Check your results
+
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+
+```bash
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/30_megatron_overlap/logs/$LAB_JOB_ID.out"
+cat "results/30_megatron_overlap/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 30_megatron_overlap \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -65,13 +92,30 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run the candidate after the baseline passes, preserving the same reference weights and profile.
+
+```bash
+sbatch labs/30_megatron_overlap.py --profile small --overlap on --reference "$TRAINING_REFERENCE"
+```
+
 Capture overlap off and on in separate diagnostic jobs, using the same reference for both. Wait for each capture to finish before submitting the next.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems and select bridge_training_step. Load large reports in small groups and close them between comparisons. Locate backward compute, gradient collectives and the final exposed communication tail. An overlap flag does not prove useful overlap: check whether concurrent communication slowed compute. Independently repeat the same experiment with the large-profile sequence length and report when exposed communication matters.
 
 ```bash
-python3 tools/submit_lab.py --lab 30_megatron_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
-python3 tools/submit_lab.py --lab 30_megatron_overlap --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/30_megatron_overlap.py --profile small --overlap on --reference "$TRAINING_REFERENCE"
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/30_megatron_overlap/logs/capture-%J-%t.out" \
+  --error="results/30_megatron_overlap/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 8 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/30_megatron_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/30_megatron_overlap.py --profile small --overlap off --reference "$TRAINING_REFERENCE"
 ```
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.

@@ -43,7 +43,7 @@
         3,
         2
       ],
-      "after": "Check your results",
+      "after": "Investigate the behavior",
       "home": "lab:07_profile_workload"
     },
     {
@@ -52,7 +52,7 @@
       "lessons": [
         3
       ],
-      "after": "Check your results",
+      "after": "Investigate the behavior",
       "home": "lab:14_profiler_bottlenecks"
     },
     {

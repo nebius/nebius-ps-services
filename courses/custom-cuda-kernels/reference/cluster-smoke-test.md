@@ -8,10 +8,7 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Before submitting jobs, run `umask 077` in the submitting shell. Slurm opens
-output before the job body starts, so the launcher's in-job mask does not
-protect a file that already exists. Keep build output, scheduler output,
-profiler reports, and local paths in the ignored private artifact directories.
+Complete the one-time directory preparation in the shared Lab Guide before submitting. Keep runtime evidence in those private result directories.
 
 1. Record the immutable CUDA development image and review the site-specific
    container runner derived from `slurm/container_runner.example.sh`.
@@ -37,27 +34,50 @@ The build launcher uses a unique `build/run-<build-job-id>` directory. Set
 `COURSE_BUILD_DIR` to that actual completed build directory before later jobs.
 
 ```bash
-umask 077
 python3 tools/validate_course.py
 bash slurm/build_and_test.sbatch --help
-python3 tools/submit_lab.py --lab 13_h100_preflight slurm/build_and_test.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/build_and_test.sbatch
 ```
 
 After that job completes the CMake build and passes CTest, use its privately recorded build directory:
 
 ```bash
 export COURSE_BUILD_DIR='build/run-REPLACE_WITH_BUILD_JOB_ID'
-python3 tools/submit_lab.py --lab 13_h100_preflight slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/13_h100_preflight"
-python3 tools/submit_lab.py --lab 01_vector_add slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add" --profile small
-python3 tools/submit_lab.py --lab 02_fused_elementwise slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/02_fused_elementwise" --profile small
-python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
-python3 tools/submit_lab.py --lab 04_reduction slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/04_reduction" --profile small
-python3 tools/submit_lab.py --lab 05_tiled_stencil slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
-python3 tools/submit_lab.py --lab 06_divergence_tail slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/06_divergence_tail" --profile small
-python3 tools/submit_lab.py --lab 07_resource_sweep slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/07_resource_sweep" --profile small
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
-python3 tools/submit_lab.py --lab 09_library_epilogue slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/09_library_epilogue" --profile small
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/13_h100_preflight"
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_vector_add/logs/%j.out" \
+  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/01_vector_add" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/02_fused_elementwise/logs/%j.out" \
+  --error="$PWD/results/02_fused_elementwise/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/02_fused_elementwise" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/04_reduction/logs/%j.out" \
+  --error="$PWD/results/04_reduction/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/04_reduction" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/06_divergence_tail/logs/%j.out" \
+  --error="$PWD/results/06_divergence_tail/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/06_divergence_tail" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/07_resource_sweep/logs/%j.out" \
+  --error="$PWD/results/07_resource_sweep/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/07_resource_sweep" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/09_library_epilogue/logs/%j.out" \
+  --error="$PWD/results/09_library_epilogue/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/09_library_epilogue" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
 ```
 
 Every kernel must agree with its reference for the declared shapes and
@@ -78,15 +98,30 @@ Choose a new private output prefix for each profiler run. The following uses
 one example kernel; repeat the applicable sanitizer for every required binary.
 
 ```bash
-mkdir -p results
-python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
-python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
-python3 tools/submit_lab.py --lab 08_async_pipeline slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
-python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/nsys_single_gpu.sbatch results/transpose-systems "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
-python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/ncu_single_gpu.sbatch results/transpose-kernel "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
-python3 tools/submit_lab.py --lab 12_capstone slurm/capstone_three_trials.sbatch "${COURSE_BUILD_DIR}/12_capstone" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch synccheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
+  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/08_async_pipeline" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/nsys_single_gpu.sbatch results/transpose-systems "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/ncu_single_gpu.sbatch results/transpose-kernel "${COURSE_BUILD_DIR}/03_tiled_transpose" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/12_capstone/logs/%j.out" \
+  --error="$PWD/results/12_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch "${COURSE_BUILD_DIR}/12_capstone" --profile small
 ```
 
 Require zero relevant sanitizer errors. A missing profiler or counter

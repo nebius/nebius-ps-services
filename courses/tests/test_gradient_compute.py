@@ -327,7 +327,7 @@ def test_validator_rejects_broken_companion_contract(monkeypatch, defect):
     guide = (COURSE / "reference/labs" / (LAB + ".md")).read_text()
     dashboard = json.loads((COURSE / recipe["dashboard"]).read_text())
     if defect == "command":
-        recipe["compute_command"] = "absent from guide"
+        recipe["learner_compute_command"] = "absent from guide"
     elif defect == "path":
         recipe["compute_companion"]["path"] = "labs/missing.py"
     elif defect == "range":
@@ -336,7 +336,8 @@ def test_validator_rejects_broken_companion_contract(monkeypatch, defect):
         recipe["kind"] = "server-client"
     validator = load("validate_course_template")
     monkeypatch.setattr(validator, "ROOT", COURSE)
-    with pytest.raises(SystemExit, match="Compute companion"):
+    message = "native Compute command" if defect == "command" else "Compute companion"
+    with pytest.raises(SystemExit, match=message):
         validator.validate_lab_evidence(recipe, guide, dashboard, COURSE.name)
 
 

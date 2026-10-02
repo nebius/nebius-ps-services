@@ -30,6 +30,7 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli
 import nebius_cxcli.flux_ops as flux_ops
 import nebius_cxcli.soperator_wizard_deployment as wizard_deployment
+from nebius_cxcli import mk8s_exec
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     SourceProfile,
@@ -15627,11 +15628,11 @@ def test_mk8s_exec_credential_cache_renews_repeatedly_across_token_lifetimes(
         }
 
     cache_file = tmp_path / "exec-credential-cache.json"
-    monkeypatch.setattr(cli, "datetime", _ClockedDateTime)
+    monkeypatch.setattr(mk8s_exec, "datetime", _ClockedDateTime)
     monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", acquire)
 
     def status() -> dict[str, str]:
-        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+        return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15656,7 +15657,7 @@ def test_mk8s_exec_credential_cache_rejects_non_owner_only_directory(
 
     with (
         pytest.raises(RuntimeError, match="directory must be owner-controlled"),
-        cli._locked_mk8s_exec_credential_cache(  # noqa: SLF001
+        mk8s_exec._locked_mk8s_exec_credential_cache(  # noqa: SLF001
             cache_dir / "exec-credential-cache.json"
         ),
     ):
@@ -15689,7 +15690,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_callers(
     monkeypatch.setattr(cli, "_init_mk8s_exec_auth_sdk", lambda **_kwargs: _FakeSDK())
 
     def get_status() -> dict[str, str]:
-        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+        return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15708,7 +15709,7 @@ def test_mk8s_exec_credential_cache_uses_still_valid_token_when_refresh_times_ou
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_file = tmp_path / "exec-credential-cache.json"
-    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+    binding_sha256 = mk8s_exec._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
         project_id="project-456",
         client_name="client-a",
         endpoint=None,
@@ -15722,7 +15723,7 @@ def test_mk8s_exec_credential_cache_uses_still_valid_token_when_refresh_times_ou
     cli._write_text_atomic(  # noqa: SLF001
         cache_file,
         json.dumps(
-            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+            mk8s_exec._mk8s_exec_credential_cache_payload(  # noqa: SLF001
                 binding_sha256=binding_sha256,
                 status=status,
             )
@@ -15735,7 +15736,7 @@ def test_mk8s_exec_credential_cache_uses_still_valid_token_when_refresh_times_ou
         lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("transient")),
     )
 
-    observed = cli._mk8s_exec_credential_status(  # noqa: SLF001
+    observed = mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
         project_id="project-456",
         client_name="client-a",
         endpoint=None,
@@ -15750,7 +15751,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_failed_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_file = tmp_path / "exec-credential-cache.json"
-    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+    binding_sha256 = mk8s_exec._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
         project_id="project-456",
         client_name="client-a",
         endpoint=None,
@@ -15764,7 +15765,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_failed_refresh(
     cli._write_text_atomic(  # noqa: SLF001
         cache_file,
         json.dumps(
-            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+            mk8s_exec._mk8s_exec_credential_cache_payload(  # noqa: SLF001
                 binding_sha256=binding_sha256,
                 status=status,
             )
@@ -15784,7 +15785,7 @@ def test_mk8s_exec_credential_cache_single_flights_concurrent_failed_refresh(
     monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", failed_refresh)
 
     def get_status() -> dict[str, str]:
-        return cli._mk8s_exec_credential_status(  # noqa: SLF001
+        return mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
             project_id="project-456",
             client_name="client-a",
             endpoint=None,
@@ -15805,7 +15806,7 @@ def test_mk8s_exec_credential_cache_does_not_fallback_after_token_expires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_file = tmp_path / "exec-credential-cache.json"
-    binding_sha256 = cli._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
+    binding_sha256 = mk8s_exec._mk8s_exec_credential_binding_sha256(  # noqa: SLF001
         project_id="project-456",
         client_name="client-a",
         endpoint=None,
@@ -15819,14 +15820,14 @@ def test_mk8s_exec_credential_cache_does_not_fallback_after_token_expires(
     cli._write_text_atomic(  # noqa: SLF001
         cache_file,
         json.dumps(
-            cli._mk8s_exec_credential_cache_payload(  # noqa: SLF001
+            mk8s_exec._mk8s_exec_credential_cache_payload(  # noqa: SLF001
                 binding_sha256=binding_sha256,
                 status=status,
             )
         ),
         file_mode=0o600,
     )
-    monkeypatch.setattr(cli, "_MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS", 0.01)
+    monkeypatch.setattr(mk8s_exec, "_MK8S_EXEC_CREDENTIAL_FALLBACK_SECONDS", 0.01)
 
     def timed_out_refresh(**_kwargs: Any) -> dict[str, str]:
         time.sleep(0.04)
@@ -15835,7 +15836,7 @@ def test_mk8s_exec_credential_cache_does_not_fallback_after_token_expires(
     monkeypatch.setattr(cli, "_acquire_mk8s_exec_credential_status", timed_out_refresh)
 
     with pytest.raises(TimeoutError, match="transient"):
-        cli._mk8s_exec_credential_status(  # noqa: SLF001
+        mk8s_exec._mk8s_exec_credential_status(  # noqa: SLF001
             project_id="project-456",
             client_name="client-a",
             endpoint=None,

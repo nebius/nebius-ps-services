@@ -106,10 +106,11 @@ def prepare_imports(
         desired = client.canonical(mapped, destination_folder)
         unchanged = False
         if previous is not None:
-            current = client.canonical(client.portable(previous), client.folder(previous))
-            unchanged = content_digest(current, client.folder(previous)) == content_digest(
-                desired, destination_folder
-            )
+            desired_digest = content_digest(desired, destination_folder)
+            unchanged = resource_digest(client, previous) == desired_digest
+            if not unchanged:
+                current = client.canonical(client.portable(previous), client.folder(previous))
+                unchanged = content_digest(current, client.folder(previous)) == desired_digest
             if not unchanged and not overwrite:
                 raise GrafanaError(f"Dashboard {uid} differs; use --overwrite to replace it")
         plans.append(DashboardPlan(desired, destination_folder, previous, unchanged, ownership))

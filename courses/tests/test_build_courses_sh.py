@@ -91,6 +91,8 @@ def test_help_needs_no_python_and_describes_results_archives(wrapper):
     assert calls == []
     assert "check HTML\nand ZIPs against their sources" in result.stdout
     assert "lab-kit ZIPs are not generated" in result.stdout
+    assert "decimal MB (1 MB = 1,000,000 bytes)" in result.stdout
+    assert "including exceeded size limits, in red" in result.stdout
 
 
 def test_invalid_argument_does_not_build(wrapper):

@@ -4,7 +4,7 @@ Padding reserves positions that may contribute no useful training target, while 
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/25_sequence_packing.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use one H100 and review shifted labels versus attention masks. The supplied lengths must fit the selected `--capacity`; the minimum accepted capacity is 32 and every individual example must fit.
 
@@ -20,26 +20,35 @@ The supplied experiment checks packing plans and segment-local causal masks. It 
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/25_sequence_packing.py` packs variable-length examples into bounded sequences and constructs boundary-safe causal attention masks. It checks every example is assigned and cross-example attention is blocked, then writes packing and padding efficiency.
 
-Run two valid capacity choices and inspect the resulting bin membership. Increasing capacity can change both packing efficiency and dense attention work, so it is not automatically an optimization.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 25_sequence_packing slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small --capacity 256
-python3 tools/submit_lab.py --lab 25_sequence_packing slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small --capacity 512
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/25_sequence_packing/logs/%j.out" \
+  --error="$PWD/results/25_sequence_packing/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  labs/25_sequence_packing.py --profile small --capacity 256
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 25_sequence_packing --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/25_sequence_packing/logs/$LAB_JOB_ID.out"
+cat "results/25_sequence_packing/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Inspect `lengths`, `bins`, `valid_tokens`, `padded_tokens`, `packed_capacity_tokens`, and both efficiency ratios. Require every boundary and causal-mask check. These gates prove mask structure, not equivalence of model loss or throughput.
 
@@ -57,7 +66,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Padding efficiency | `padding_efficiency` | `none` |
 | Packing efficiency | `packing_efficiency` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 25_sequence_packing \
@@ -70,6 +79,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run two valid capacity choices and inspect the resulting bin membership. Increasing capacity can change both packing efficiency and dense attention work, so it is not automatically an optimization.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/25_sequence_packing/logs/%j.out" \
+  --error="$PWD/results/25_sequence_packing/logs/%j.err" slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small --capacity 256
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/25_sequence_packing/logs/%j.out" \
+  --error="$PWD/results/25_sequence_packing/logs/%j.err" slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small --capacity 512
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Trace the last token of one example and first token of the next in a packed row. Which attention entries must be blocked? Explain why higher occupancy of token slots need not reduce dense quadratic attention work proportionally.
 
 Packing raises useful-token density but complicates masks, positions, document boundaries, and reproducibility. Bucketing reduces padding but can skew order or batch composition unless sampling is designed deliberately.
@@ -77,7 +101,16 @@ Packing raises useful-token density but complicates masks, positions, document b
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 25_sequence_packing --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/25_sequence_packing.py --profile small --capacity 256
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/25_sequence_packing/logs/capture-%J-%t.out" \
+  --error="results/25_sequence_packing/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/25_sequence_packing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/25_sequence_packing.py --profile small --capacity 256
 ```
 
 **Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Expand lab_workload and CUDA GPU rows. Locate zero-fill, triangular-mask construction and scalar-read synchronization. This lab validates a boundary-safe mask; it does not benchmark packed transformer training. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.

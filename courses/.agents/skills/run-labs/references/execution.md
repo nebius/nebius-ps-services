@@ -69,6 +69,12 @@ uses a remote lock and durable job receipt. A lost response reconciles the same
 name, owner and job. If accounting has no unique row, stop rather than resubmit.
 Do not change Slurm admission/resource flags behind the frozen plan.
 
+Job queries retry SSH transport failures (exit status 255 or timeout) for at
+most three total attempts, each with a 60-second timeout. Other exit statuses,
+malformed responses and application errors fail immediately. Submission,
+cancellation, cleanup and reconciliation each make one transport attempt;
+inspect durable intent and receipts before repeating an uncertain operation.
+
 `bind` resolves only declared `${VARIABLE}` placeholders before a stage starts.
 For Labs 30/31 in Advanced Communication, find the dependency's exact final
 weights, verify its hash and profile, and bind the same artifact to both variants
@@ -176,6 +182,13 @@ Cancellation checks each exact owned Slurm identity before scancel. Wait for
 terminal state before releasing claims; never cancel by broad user, partition,
 job-name prefix or cluster-wide selection. An uncertain intent must reconcile
 before cancellation completes.
+
+`BOOT_FAIL` and `DEADLINE` are terminal failures. The controller preserves their
+accounting evidence, marks the stage and unit failed, and continues other
+eligible units. Once no work remains, it marks the campaign failed and releases
+its claims. Cancellation does not send `scancel` for these already-terminal
+jobs. Resume uses this handling for existing campaigns without rewriting their
+records or automatically resubmitting failed units.
 
 ## Failed profiling unit recovery
 

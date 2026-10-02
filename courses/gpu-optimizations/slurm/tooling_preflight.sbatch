@@ -12,7 +12,7 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab 07_profile_workload [Slurm --name=value options] %s\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s\n' "$0"
   printf '\nReports tool availability from an allocated H100 compute node.\n'
 }
 

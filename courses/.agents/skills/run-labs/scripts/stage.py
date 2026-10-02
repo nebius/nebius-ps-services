@@ -119,6 +119,8 @@ def run(path, operation, receipt_path=None, *, expected_action=None):
             if result["state"] == "COMPLETED" and result["exit_code"] == "0:0":
                 stage["status"] = "complete"
             elif result["state"] in (
+                "BOOT_FAIL",
+                "DEADLINE",
                 "FAILED",
                 "CANCELLED",
                 "TIMEOUT",

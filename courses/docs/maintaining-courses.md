@@ -4,6 +4,47 @@ For course maintainers. Learners start with the
 [course website](https://nebius.github.io/nebius-ps-services/courses/index.html)
 or the [local catalog](../index.html).
 
+## Learner execution and tool ownership
+
+One `course_setup.py prepare --courses-root` operation reads each practical
+course's `reference/course.json` and prepares private result/log/profile paths
+before Slurm opens its logs. It also prepares shared runtime/tool directories.
+Use `--course-root` for a standalone package. Monitoring discovery is the separate
+`course_setup.py monitoring` action. `sync-labs.sh` delivers the catalog setup
+entrypoint as well as standalone course copies.
+
+Each lab guide's Practice explains its actual Python/CUDA program and contains
+one baseline `sbatch`, explicitly clearing external capture. Put workload
+variations in Investigate and required builds/reference jobs in prerequisites.
+Keep lesson Practice as context and links. Author Markdown, then regenerate HTML.
+
+Learner `learner_systems_command` and `learner_compute_command` fields in
+`reference/observability.json` expose native `srun`, `nsys profile` and `ncu`
+arguments. Maintainer `baseline_command`, `systems_command` and `compute_command`
+fields remain the campaign protocol. Native diagnostics mark `COURSE_CAPTURE=1`,
+use per-job/step/rank reports, and do not replace clean acceptance timing.
+The distributed rank shell retains rendezvous and fabric qualification while
+passing the visible profiler argv to each rank. Serving lifecycle code owns
+readiness, acknowledged controls, report completion and bounded cleanup.
+Advanced coordinated jobs use `sbatch` to keep the coordinator on a worker; their terminal
+`--worker-prefix` passes the displayed native argv to each GPU worker without
+shell evaluation. The existing coordinator retains its tested lifecycle.
+
+Keep these supported tools and their consumers:
+
+| Tools | Responsibility |
+| --- | --- |
+| `submit_lab.py`, `inspect_results.py` | Maintainer campaign submissions, receipts and machine-readable inspection. Learners use native `sbatch`, `sacct` and `cat`. |
+| `profile_lab.py`, `server_capture.py`, `managed_profilers.py` | Maintainer capture automation and installed profiler qualification. Learner recipes show native profiling and controls. |
+| `publish_results.py`, `course_evidence.py`, `cuda_result.py` | Validated result contracts, diagnostic labeling and selected-pair publication. |
+| `readiness.py`, `verify_monitoring.py`, `fabric_guard.py`, `install_fabric_tools.py` | Runtime/domain qualification and reproducible tool builds. |
+| Builders, validators and `sync_course_tools.py` | Source-owned publication and standalone-copy parity. |
+
+Do not delete a helper while campaign, launcher or validation consumers remain.
+Keep CUDA result conversion and benchmark stdout isolation: these enforce domain
+contracts rather than hiding learner commands. New native commands require
+source/argv tests; passing local tests does not qualify actual Slurm/Nsight runs.
+
 ## Website publication
 
 **For course maintainers.**
@@ -146,6 +187,13 @@ explanation and GPU validators check every lesson's order, diagram coverage and
 complete source-to-HTML narrative parity. The separate text-profile validator
 checks the same narrative and navigation integrity without diagram requirements.
 
+Put every diagram immediately after its specific explanatory passage using an
+explicit Markdown image marker. Keep the marker inside its registered lesson
+field or practical-guide section; do not collect figures at a section's end.
+The builder rejects unplaced figures. See [Diagram placement](course-builder.md#diagram-placement)
+for overview, SVG and tools-workflow marker formats. Retain one primary home and
+link secondary mentions to it.
+
 **For course maintainers:** Technical vocabulary follows NVIDIA documentation for CUDA, GPU architecture,
 profiling, communication and NVIDIA libraries. Framework-specific concepts use
 the owning framework's official names. Define each term in context and verify
@@ -252,6 +300,13 @@ python3 -m pytest -q
 ```
 
 GPU and engine workloads are intentionally excluded from offline validation.
+Learner submission examples use native `sbatch`, with visible checks for owned,
+mode-700 log directories before Slurm opens output files. Keep launcher arguments
+and environment selectors intact. Each lab's Before you start section links once
+to the shared Lab Guide; unique prerequisites remain local. Explain preparation,
+qualification and publication helpers before use. The automated campaign route
+retains `submit_lab.py` and `inspect_results.py`; changing learner instructions
+does not change campaign recipes or their validation contracts.
 The Soperator text-only validator checks its exact metadata, lesson and syllabus
 identities, complete generated prose, public references and navigation without
 requiring lab folders or runtime dependencies. Synchronization discovers a
@@ -277,6 +332,11 @@ stream termination, generated-response validation, seeded initialization,
 profiler event fields, embedded preflight commands, and benchmark tokenizer
 revision forwarding. These checks use local fixtures and captured commands;
 they do not start serving engines or submit Slurm jobs.
+
+Introductory CPU command tests run the documented `sbatch` through the actual
+batch launcher with local scheduler doubles, checking that `COURSE_PYTHON` and
+lab arguments reach the worker unchanged. Profiling rejection tests distinguish
+an invalid native learner command from invalid Compute companion metadata.
 
 Fault-injection checks require training acceptance to reject missing backward
 or optimizer work. KV-cache checks require inference execution without saved

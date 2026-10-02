@@ -10,9 +10,9 @@ content even when the course labs themselves use synthetic data.
 
 1. Use synthetic or explicitly public inputs. Do not profile customer prompts,
    proprietary model inputs, credentials, or regulated data.
-2. Run `umask 077` in the submitting shell before `sbatch`. The supplied
-   launchers also apply that mask to files created by the job, but the Slurm
-   output file can be opened before the script begins.
+2. Complete the one-time `course_setup.py prepare` step in the shared Lab Guide.
+   Its private parent directories protect scheduler logs even when Slurm opens
+   them before the job body starts.
 3. Keep `results/`, profiler reports, traces, and Slurm output in storage that
    only the learner or approved course reviewers can read.
 4. Do not pass credentials on command lines or enable shell tracing. Remove

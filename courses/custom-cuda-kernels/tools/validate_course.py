@@ -971,8 +971,14 @@ def validate_lab_guides(
                 fail(f"lab {source.name} has inconsistent lesson links")
         sections = dict(zip(pieces[1::2], pieces[2::2], strict=True))
         commands = re.findall(r"```bash\n(.*?)\n```", sections["Practice"], re.DOTALL)
-        if not commands:
-            fail(f"lab {source.name} has no run command")
+        if len(commands) != 1 or not commands[0].startswith("sbatch ") or len(commands[0].replace("\\\n", " ").strip().splitlines()) != 1:
+            fail(f"lab {source.name} requires exactly one baseline sbatch")
+        if "COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0" not in commands[0]:
+            fail(f"lab {source.name} baseline must disable external capture")
+        if re.search(r"for directory|umask|mkdir", sections["Practice"]):
+            fail(f"lab {source.name} repeats one-time preparation")
+        if f"labs/{source.name}" not in sections["Practice"].split("```", 1)[0]:
+            fail(f"lab {source.name} requires a concise source explanation")
         for command in commands:
             result = subprocess.run(
                 ["bash", "-n"],
@@ -990,6 +996,9 @@ def validate_lab_evidence(
 ) -> None:
     """Reject missing applicability, wrong dashboards and stale capture instructions."""
     import hashlib
+
+    # Line continuation and indentation do not change the recipe's command.
+    commands = " ".join(guide.replace("\\\n", " ").split())
 
     systems = recipe.get("systems", {})
     if (
@@ -1009,13 +1018,21 @@ def validate_lab_evidence(
     ):
         fail("Systems command disagrees with applicability")
     if command and (
-        command not in guide
+        not isinstance(recipe.get("learner_systems_command"), str)
+        or " ".join(recipe["learner_systems_command"].replace("\\\n", " ").split()) not in commands
         or (
             "COURSE_PROFILE_TOOL=nsys" not in command
             and "--capture systems" not in command
         )
     ):
         fail("guide must include the exact worker/server Systems command")
+    compute = recipe.get("learner_compute_command")
+    if bool(compute) != bool(recipe.get("compute_command")):
+        fail("learner Compute recipe disagrees with applicability")
+    if compute and ("ncu " not in compute or " ".join(compute.replace("\\\n", " ").split()) not in commands):
+        fail("guide must include the exact native Compute command")
+    if command and "nsys profile" not in recipe["learner_systems_command"]:
+        fail("learner Systems recipe must expose native profiler argv")
     if systems["reason"] not in guide or systems["view"] not in guide:
         fail("guide must explain Systems applicability and inspection")
     if "compute_companion" in recipe:
@@ -1042,7 +1059,8 @@ def validate_lab_evidence(
         if (
             not isinstance(compute_command, str)
             or not compute_command
-            or compute_command not in guide
+            or not isinstance(recipe.get("learner_compute_command"), str)
+            or " ".join(recipe["learner_compute_command"].replace("\\\n", " ").split()) not in commands
         ):
             fail("guide must include the exact local Compute companion command")
     lab = recipe["lab"]
@@ -1059,11 +1077,12 @@ def validate_lab_evidence(
     has_gpu = "DCGM_FI_DEV_" in serialized
     if has_gpu != recipe["gpu_telemetry"]:
         fail("dashboard GPU telemetry disagrees with lab applicability")
-    if (
-        "../../../README.md#how-to-set-up-the-lab" not in guide
-        or ("../grafana/" + recipe["lab"] + ".json") not in guide
-    ):
-        fail("guide must identify shared setup and its assigned dashboard")
+    prerequisites = re.search(r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S)
+    setup_link = "[Lab Guide](../../../README.md#how-to-set-up-the-lab)"
+    if not prerequisites or prerequisites[1].count(setup_link) != 1:
+        fail("Before you start must contain one shared Lab Guide link")
+    if prerequisites and "../grafana/" in prerequisites[1]:
+        fail("dashboard installation belongs to the shared Lab Guide")
     if (
         "nebius-cxcli grafana import" in guide
         or "nebius-cxcli grafana validate" in guide
@@ -1354,11 +1373,7 @@ def validate_figures(
         }
     )
     labs = {Path(item["path"]).stem: item["lessons"] for item in metadata["labs"]}
-    expected = (
-        {"tools-measurement-loop": ("tools", "how-it-works")}
-        if metadata.get("performance_tools")
-        else {}
-    )
+    expected = {}
 
     if metadata.get("performance_tools"):
         source = (ROOT / metadata["performance_tools"]).read_text()
@@ -1371,6 +1386,15 @@ def validate_figures(
             if not match:
                 continue
             relative = match[2]
+            if relative == "#tools-measurement-loop":
+                if (
+                    section != "How it works"
+                    or match[1] != "A measured optimization loop"
+                    or "tools-measurement-loop" in expected
+                ):
+                    fail("measurement-loop figure has an invalid or duplicate placement")
+                expected["tools-measurement-loop"] = ("tools", "how-it-works")
+                continue
             if section != "How it works" or not re.fullmatch(
                 r"diagrams/tools-[a-z0-9-]+\.svg", relative
             ):
@@ -1391,6 +1415,8 @@ def validate_figures(
             if not figure or path.read_text().strip() not in figure[0]:
                 fail("tool figure differs from source")
             expected[target] = ("tools", "how-it-works")
+        if "tools-measurement-loop" not in expected:
+            fail("measurement-loop figure needs an authored placement")
 
     def location(home: str, lesson: int, after: str) -> tuple[str, str]:
         if type(lesson) is not int or not 1 <= lesson <= len(lessons):
@@ -1471,7 +1497,7 @@ def validate_figures(
         expected[target] = location(entry["home"], entry["lessons"][0], entry["after"])
     if parser.figures != expected:
         fail(
-            "figures must appear once after their declared section in the owning lesson or lab"
+            "figures must appear once inside their declared section in the owning lesson or lab"
         )
 
 

@@ -6,6 +6,47 @@ project folder.
 
 ## [Unreleased]
 
+- Display course publication sizes and limits in decimal MB, retaining exact-byte
+  enforcement and showing precise overflow amounts. Highlight build/check
+  failures, including exceeded file, site and archive limits, in red on terminals;
+  preserve plain redirected and `NO_COLOR` output.
+
+- Keep course sync receipts aligned with the effective SSH port, including
+  alias configuration. Retry run-labs SSH transport failures only for queries,
+  and recognize Slurm `BOOT_FAIL` and `DEADLINE` as terminal failures without
+  cancelling terminal jobs or replaying failed units. Preserve failed evidence
+  and release campaign claims after remaining work finishes.
+
+- Repair course regression checks for native CPU submissions and Compute
+  command rejection. Exercise the documented CPU launch through its real batch
+  script with local scheduler doubles while preserving prepared-interpreter
+  and workload-argument checks.
+
+- Prepare all practical course directories once with `course_setup.py prepare`,
+  and separate monitoring discovery into its explicit `monitoring` action.
+  Explain every lab program and show one baseline `sbatch` in each Practice,
+  including CPU-only submissions for introductory and cache-tiering labs and
+  their variations, with GPU telemetry limited to optional CUDA runs. Replace learner
+  profiler wrappers with visible native commands, retain maintainer automation,
+  and expose worker/server capture arguments with bounded lifecycle handling.
+
+- Make fresh-terminal monitoring verification restore its course checkout, and
+  create the Advanced fabric-tools directory independently of publishing setup.
+  Add regression checks for both command-first preparation paths.
+
+- Simplify the shared Lab Guide into a command-first learner workflow with a
+  small GPU execution check before full monitoring/profiling qualification.
+  Show native Slurm submissions, private log preparation and exact-job result
+  inspection across all 110 labs; retain explained helpers for publishing,
+  qualification and automated campaigns. Consolidate each lab's shared
+  prerequisite links and distinguish driver, toolkit and framework versions.
+
+- Place every course diagram immediately after its topic-specific explanation in
+  canonical Markdown. Require explicit placement for overview, detailed, lab and
+  performance-workflow figures; reject missing or duplicate markers instead of
+  collecting diagrams at the end of broad sections. Preserve existing figure
+  identities, assets and text-only/labs-only course profiles.
+
 - Refine the GPU Fundamentals matrix multiplication illustration with equal
   matrix cells, proportional type, a highlighted row–column dot product and
   bounded display width. Clarify dimensions, per-thread accumulation and the

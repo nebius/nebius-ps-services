@@ -8,6 +8,79 @@ followed only by optional References. Each course closes with one Where to Go
 Next, one Glossary and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Fresh preparation alignment — 2026-10-01
+
+Shared guide HTML SHA-256: `8f253a80467840f425ff95e29b7dd9e90e23e7e618b489e058f82f074e086fb0`.
+
+Fresh alignment repaired two documented preparation gaps: Advanced Lab 01 now
+creates its private fabric-tools prefix before installation, independently of
+publishing; workstation monitoring verification restores the connection settings,
+checkout and selected course directory in a new terminal. Both regression tests
+failed for the original omissions and pass after the fixes, including a checkout
+path containing spaces. Runtime helpers and workloads are unchanged.
+
+Source/static: **pass**. 614 focused tests pass with two existing skips. All seven
+native course validators, generated artifact freshness and helper parity pass.
+Scoped Ruff, ShellCheck on 35 changed launchers, learner shell syntax, Markdown
+structural checks and whitespace checks pass. Markdown checks retain long-line
+and COURSE.md emphasis-field conventions; no lint configuration was changed.
+Final read-only code/security review confirms both findings resolved.
+
+Browser/layout: **pass**. Six owned, isolated headless Chrome 154.0.8037.58 cases
+cover the two affected pages at 1440×1100, 390×1100 and 320×1100, including links,
+figure containment/placement, keyboard navigation, TOC/scrollers and text reflow.
+No external requests or page errors occurred. Two additional screenshots show the
+repaired preparation blocks and were visually reviewed. Runners closed their owned
+browser resources. Evidence group: `course-align-kvhui3wx`, with browser/visual
+JSON results, per-page identities and screenshots; no traces were recorded.
+
+Other course artifact hashes remain unchanged from the preceding review. This
+follow-up does not replace its broader test evidence or resolve its unavailable
+PyTorch/live-target lanes and generic-checker diagnostics. No live installation,
+GPU execution, external publication or commit occurred.
+
+## Command-first Lab Guide — local verification: 2026-10-01
+
+Shared guide HTML SHA-256: `e4a5181e9632f846941d6fb8f0d1aabbd9ea8c822abf1c14a9a8dbe426cdace0`.
+
+Canonical learner instructions now show native Slurm submission with visible
+private-directory preparation and exact-job log/JSON inspection. All 110 lab
+prerequisite sections link once to the shared Lab Guide and retain their specific
+prerequisites. The shared guide starts with basic GPU execution, explains retained
+scripts, and introduces monitoring/publication and full profiler qualification
+later. Workload implementations, result schemas and campaign helpers are unchanged.
+
+Source/static: **pass**. All seven native course validators, generated artifact
+freshness and shared-helper parity pass. The available offline suite has
+**1,827 passed, 136 skipped and one deselected test**. Two PyTorch-dependent modules
+could not be collected without PyTorch; the deselected seed test also requires it.
+The focused regression run has 355 passes and two skips. New checks execute the
+documented submissions with a scheduler spy, reject unsafe directories, preserve
+arguments, check every learner shell block and enforce all 110 prerequisite links.
+Read-only review compared 497 converted submissions with their original launcher,
+Slurm and workload arguments. Scoped Ruff, ShellCheck on 35 launcher help changes,
+shell parsing and whitespace checks pass. Markdown structural checks exclude the
+repository's existing long-line convention; no lint configuration was changed.
+
+Browser/layout: **pass**. Twenty-four full-page Playwright Test cases cover all
+seven course pages and the Lab Guide in isolated, owned headless Chrome
+**154.0.8037.58**, at **1440×1100, 390×1100 and 320×1100**. Checks cover figure
+adjacency/containment, fragment and cross-page guide links, keyboard skip links,
+mobile TOC interaction, local scrollers and 200% text reflow. No external requests
+or page errors occurred. Nine additional visual captures cover the Lab Guide,
+Fundamentals and CUDA at all three widths; representative captures were inspected.
+
+Evidence group: `course-command-first-h1gxjdx3`, with `browser-results.json`,
+per-page `browser/placement-<page>-<width>/identity.json`, `context.png`,
+`visual-results.json` and `visual/visual-visual-<page>-<width>/context.png`.
+Both Playwright runners exited and closed their owned browser resources; no
+traces were recorded. The generic skill checker retains exactly its prior
+markup/navigation/profile diagnostics and is **not a passing gate**.
+
+Installed-environment, GPU runtime and live-target qualification: **not run**.
+These source/browser checks do not qualify a cluster, compiler, container,
+profiler capture or monitoring installation. No external publication occurred.
+
 ## Current single-appendix review
 
 All seven course pages now have one course-wide Where to Go Next and one Glossary.

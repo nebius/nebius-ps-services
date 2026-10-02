@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 2 ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s TOOL EXECUTABLE [arguments]\n' "$0" >&2
+  printf 'Usage: sbatch [Slurm --name=value options] %s TOOL EXECUTABLE [arguments]\n' "$0" >&2
   printf 'TOOL must be memcheck, racecheck, initcheck, or synccheck.\n' >&2
   exit 2
 fi

@@ -12,7 +12,7 @@ set -o noclobber
 umask 077
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab 12_capstone %s EXECUTABLE [--profile small]\n' "$0"
+  printf 'Usage: sbatch %s EXECUTABLE [--profile small]\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ || $# -lt 1 ]]; then

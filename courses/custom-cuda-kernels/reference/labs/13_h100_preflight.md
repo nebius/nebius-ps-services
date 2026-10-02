@@ -4,7 +4,7 @@ A custom kernel depends on a compiler, target architecture, runtime, and physica
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/13_h100_preflight.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 The CUDA development image must contain Python 3, CMake, NVCC and NVTX3.
 Use the reviewed CUTLASS 4.6.1 tree and require Apptainer on both workers.
@@ -22,34 +22,49 @@ CMake describes how to configure and build the project. CTest is its test runner
 
 The build launcher configures a unique CMake build directory, builds targets, and runs CTest in the declared environment. Lab 13 calls the shared CUDA device checks and reports H100 properties. `common.cuh` centralizes checked CUDA calls, owned buffers, reference comparisons, and event timing for later labs. Passing preflight does not exercise every kernel or sanitizer.
 
-## Practice
-
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
-
-Submit the build first and wait for success. Read its `.out` log, then set
-`COURSE_BUILD_DIR` to the printed absolute build directory before submitting
-preflight; do not point it at an unrelated or stale build.
+Build prerequisite (complete before the baseline):
 
 ```bash
-umask 077
+export COURSE='custom-cuda-kernels'
 bash slurm/build_and_test.sbatch --help
-python3 tools/submit_lab.py --lab 13_h100_preflight --wait slurm/build_and_test.sbatch
-export COURSE_BUILD_DIR='<absolute completed build directory from the job log>'
-declare -p COURSE_TOOLS COURSE_PUBLISH_PYTHON CUDA_IMAGE_DIGEST CUTLASS_ROOT COURSE_CONTAINER_RUNNER COURSE_BUILD_DIR \
-  > "$HOME/courses/.runtime/$COURSE.sh"
-python3 tools/submit_lab.py --lab 13_h100_preflight slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" --wait slurm/build_and_test.sbatch
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the exact completed build directory as `COURSE_BUILD_DIR`; use the course README for the optional SM90a build and `COURSE_CLUSTER_BUILD_DIR`.
+
+## Practice
+
+`labs/13_h100_preflight.cu` verifies the allocated GPU satisfies the course device contract and reports compute capability, SM count, memory, CUDA runtime, and driver API versions. It does not benchmark a kernel. The baseline launcher records its output as course result JSON.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight"
+```
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 13_h100_preflight --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/13_h100_preflight/logs/$LAB_JOB_ID.out"
+cat "results/13_h100_preflight/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require successful compiler/build/CTest records and exactly one visible full non-MIG H100 with compute capability 9.0. Record the image and source identities privately. Compiler availability alone does not prove device execution.
 
@@ -65,7 +80,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Global memory bytes | `global_memory_bytes` | `bytes` |
 | Runtime version | `runtime_version` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 13_h100_preflight \
@@ -77,6 +92,26 @@ Select two successful, equivalent, unprofiled runs in the same profile. For prog
 In Grafana, select your workspace and profile. Require **Correctness of selected results** to be `1` for both slots and **Selected comparison generation** to match the publisher's confirmation. Summary panels always show the currently published pair. Set the time picker to **Experiment start** through **Experiment end** for telemetry, then select the allocated GPU worker and its local GPU indices. GPU activity, framebuffer memory, power, temperature, and node panels provide context; they cannot time individual short kernels or establish exclusive attribution.
 
 ## Investigate the behavior
+
+### Workload variations
+
+Submit the build first and wait for success. Read its `.out` log, then set
+`COURSE_BUILD_DIR` to the printed absolute build directory before submitting
+preflight; do not point it at an unrelated or stale build.
+
+Continue only after the build job succeeds. Read its log and replace the path below
+with that job's completed directory. Save the CUDA selectors for later logins:
+
+```bash
+export COURSE_BUILD_DIR='<absolute completed build directory from the job log>'
+declare -p CUDA_IMAGE_DIGEST CUTLASS_ROOT COURSE_CONTAINER_RUNNER COURSE_BUILD_DIR \
+  >> "$HOME/courses/.runtime/$COURSE.sh"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/13_h100_preflight"
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Explain which component compiles CUDA C++ and which launches the resulting binary. Why is the required SM90 build distinct from the optional SM90a profile? Identify what must be requalified after a toolkit change.
 

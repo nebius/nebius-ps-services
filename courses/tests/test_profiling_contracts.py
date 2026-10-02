@@ -229,7 +229,7 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
                 assert "../../../README.md#how-to-set-up-the-lab" in guide
-                assert "../grafana/" + recipe["lab"] + ".json" in guide
+                assert "[Lab Guide](../../../README.md#how-to-set-up-the-lab)" in guide
                 assert "grafana import" not in guide
                 assert "grafana validate" not in guide
                 for obsolete in (
@@ -254,16 +254,18 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
         'nebius-cxcli deploy "$CLUSTER_CONFIG"',
         'nebius-cxcli soperator profiling install "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --interactive',
         'nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway',
-        "tools/course_setup.py",
-        "Start the Grafana connection",
         "New → New folder",
         "export COURSE_GRAFANA_FOLDER_UID=",
         "nebius-cxcli grafana import ./reference/grafana --recursive",
-        "nebius-cxcli grafana validate ./reference/grafana --recursive",
+        'labs/10_compatibility_stack.py --profile small',
+        'tools/course_setup.py monitoring \\',
+        'tools/verify_monitoring.py \\',
+        '"$COURSE_PYTHON" tools/readiness.py',
     )
     positions = [guide.index(command) for command in ordered]
     assert positions == sorted(positions)
-    assert "COURSE_DATASOURCE_UID" in guide
+    assert "course-soperator-metrics" in guide
+    assert "wizard" in guide
     assert "--attach" not in guide
     assert "--dashboard-json" not in guide
 

@@ -48,6 +48,7 @@ show_usage() {
   printf 'The selected account overrides SSH config User; use user@TARGET for non-root.\n'
   printf 'Discovery requires one Service, one external endpoint and one TCP port.\n'
   printf 'Ambiguous results require an explicit target; --port overrides the Service port.\n'
+  printf 'Receipts record the effective SSH port, including alias configuration defaults.\n'
   printf 'Interactive login requires terminal stdin; --dry-run and --sync-only do not.\n'
   printf 'Sync before submitting jobs. Run existing sbatch commands from a course root.\n'
 }
@@ -188,13 +189,13 @@ build_manifest() {
     pathspecs+=(":(literal)$name/")
   done
   [[ ${#courses[@]} -gt 0 ]] || die 'No courses found beside this script (expected reference/course.json and COURSE.md).'
-  for relative in index.html README.md lab-guide.html docs/grafana.png; do
+  for relative in index.html README.md lab-guide.html docs/grafana.png tools/course_setup.py; do
     [[ -f $source_root/$relative && ! -L $source_root/$relative ]] || die "Missing regular shared file: $relative"
   done
   git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'The script must be located in the courses directory of a Git clone.'
   # Check Git before consuming the list; process substitution would hide failures.
   git -C "$source_root" ls-files --cached --others --exclude-standard -z -- \
-    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
+    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/course_setup.py' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
   : > "$work_dir/files"
   while IFS= read -r -d '' relative; do
     [[ -e $source_root/$relative || -L $source_root/$relative ]] || continue
@@ -213,6 +214,7 @@ main() {
   init_output_style
   local dry_run=0 sync_only=0 receipt='' destination=courses port='' identity='' target='' options=1 target_given=0
   local source_root ssh_target remote_code remote_command login_code login_command status
+  local ssh_config config_key config_value config_extra
   local -a courses=() ssh_args=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
   local -a rsync_args=(-rlptz --safe-links --from0 --itemize-changes --stats)
 
@@ -272,6 +274,17 @@ main() {
   trap 'cancel_sync 129' HUP
   build_manifest
   if [[ $target_given == 0 ]]; then discover_target; fi
+  if [[ -n $receipt && -z $port ]]; then
+    # Resolve once before remote effects, then pin the same port for every phase.
+    ssh_config=$(ssh -G "${ssh_args[@]}" "$ssh_target") || die 'Unable to resolve the SSH port for the receipt.'
+    while read -r config_key config_value config_extra; do
+      [[ $config_key == port ]] || continue
+      [[ -z $port && -z $config_extra && $config_value =~ ^[0-9]{1,5}$ ]] || die 'Invalid or duplicate SSH port in effective configuration.'
+      port=$((10#$config_value))
+      [[ $port -ge 1 && $port -le 65535 ]] || die 'Effective SSH port must be from 1 through 65535.'
+    done <<< "$ssh_config"
+    [[ -n $port ]] || die 'Missing SSH port in effective configuration.'
+  fi
   if [[ -n $port ]]; then ssh_args+=(-p "$port"); fi
 
   # This guard is read-only and runs again immediately before the receiver.
@@ -350,7 +363,7 @@ TRANSPORT
     return "$status"
   fi
   if [[ -n $receipt ]]; then
-    python3 - "$receipt" "$ssh_target" "${port:-22}" "$destination" "$identity" <<'RECEIPT'
+    python3 - "$receipt" "$ssh_target" "$port" "$destination" "$identity" <<'RECEIPT'
 import json, os, sys
 path, target, port, destination, identity = sys.argv[1:]
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -6677,8 +6677,8 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=2 -->
-### FEAT-037: Code-grounded design and conditional README planning
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-037: Code-grounded software and portable artifact design
 
 #### Requirements Covered
 
@@ -6688,9 +6688,9 @@ fresh native behavior is still outside the verified scope.
 
 The existing source skill grounds seven-phase plans in code, allows explicitly
 requested implementation when the host permits it, and retains canonical
-publication with maintain-project-specs. Its 457-line core delegates detail to
-a workflow reference. Before this extension, 32 trigger cases and nine quality
-cases cover those boundaries but omit conditional README design guidance.
+publication with maintain-project-specs. Before the portable-HTML extension,
+its 468-line core uses conditional workflow and README references. Its 36 trigger
+cases and 11 quality cases cover software/README design but omit portable HTML.
 
 #### Design Details
 
@@ -6713,18 +6713,44 @@ Use references/readme-design.md as the sole detailed README guidance owner.
 Load it for new-project design, material user-workflow changes or explicit README
 design. Keep only conditional routing, README impact and reference registration
 in the core; the workflow handoff records the first-success path, useful
-sections, deeper-document destinations and validation. Preserve the current
-frontmatter, host metadata, help behavior and implementation authority.
+sections, deeper-document destinations and validation. README guidance alone
+does not broaden triggers; preserve Help, implicit invocation and implementation
+authority when adding the separately requested portable-HTML scope.
 The reference supplies one adaptable outline, early TOC guidance, concise
 formatting, prerequisites and minimum configuration before commands, relative
 links, accessible images and evidence-based current-versus-planned claims.
 Detailed architecture, reference material, runbooks and policy remain separate.
 
+Version 3 adds references/portable-html-design.md as the sole detailed owner for
+standalone HTML documents, reports and presentations. Share one portability
+contract and the approved warm-neutral theme; vary information hierarchy,
+interaction and print behavior by profile. Keep essential content in semantic
+HTML, use embedded CSS/JavaScript/SVG/data and local system fonts, allow external
+citations only as reader-followed links, and keep state in memory or fragments.
+Require offline direct-file operation without automatic requests or neighboring
+files, no-JavaScript reading, relocation resilience and complete printing.
+
+The reference retains exact approved color/typography/spacing defaults,
+configurable category meanings, accessible controls/diagrams, safe shortcuts,
+responsive layouts, reduced motion, report snapshot/data semantics and safe
+embedded-data handling. Ten acceptance checks distinguish artifact evidence
+from skill definitions, including blocked request attempts and copied files.
+MDN, W3C and OWASP sources substantiate browser/accessibility/security claims.
+
+Extend the trigger description, purpose and UI prompt for this new artifact
+scope; preserve implicit invocation, Help, public usage, planning authority and
+existing software/README/specialist routes. Add short conditional core routing
+and workflow handoff fields. Hosted-page/app work skips this reference unless
+a standalone portable artifact is part of its scope. No new generator or
+starter artifact is needed. Fixed native web technologies require no stack
+selection or AI subsystem handoff.
+
 #### Selected Option
 
 Add focused core directives and conditional detail in the existing workflow
 reference, preserving current specialist routes, help and source-owned metadata.
-Add one conditional README reference rather than another skill or a generator.
+Add focused conditional README and portable-HTML references rather than new
+skills or generators. Preserve detailed guidance in its one reference owner.
 
 #### Alternatives Considered
 
@@ -6734,6 +6760,9 @@ default. A new writer or mode flag would duplicate existing ownership or authori
 Putting the full README template into the core would load irrelevant detail;
 broad README frontmatter would capture routine edits. Mandatory template sections
 would create repetition and empty headings. Reject all three approaches.
+A single fixed HTML layout would impose presentation structure on reports and
+documents. A hosted application framework would add dependencies without serving
+the offline artifact contract. Reject these in favor of three native profiles.
 
 #### Implementation Boundaries
 
@@ -6752,6 +6781,13 @@ configuration unchanged; preserve unrelated working changes.
   four trigger additions distinguish design work from wording/link maintenance.
 - TDD-005: Native traces verify conditional reference reads and help short-circuiting;
   output assertions do not substitute for successful read evidence.
+- TDD-006: Three HTML profile trigger positives and two implementation/cosmetic
+  negatives extend the existing 36 cases to 41 without removing old cases.
+- TDD-007: Three HTML quality cases extend 11 cases to 14, exercising portability,
+  the theme, distinct profiles, report data and non-mutating planning.
+- TDD-008: Native process checks prove conditional HTML-reference loading and
+  preserve unrelated-design and Help boundaries; all ten artifact checks remain
+  required for future delivered HTML, not claimed from instruction validation.
 
 #### Validation Plan
 
@@ -6787,6 +6823,22 @@ remain distinct from source or installation evidence.
 
 #### Implementation Evidence
 
+Version 3 portable-HTML extension is implemented in source. The 258-line focused
+reference owns one portability contract, the exact approved theme defaults,
+three layout profiles, optional interaction, accessibility, responsive/print
+behavior, data safety and ten artifact acceptance checks. Fifteen MDN, W3C and
+OWASP links substantiate browser, accessibility and security guidance. Internal
+organization systems were not relevant to this public reusable contract.
+
+Core conditional routing, Phase 7 and reference registration use that owner;
+frontmatter and UI metadata expose the additional artifact design scope without
+changing implicit invocation. The workflow handoff, skill README, catalog and
+Unreleased changelog agree. Five added trigger cases bring coverage to 41
+(24 positive, 17 negative); three profile quality cases bring coverage to 14.
+Process cases cover conditional reference reads, unrelated-design exclusion and
+Help short-circuiting. The core grew from 468 to 481 lines, below the soft review
+budget. No generator, starter HTML, library or shared-validator change is needed.
+
 Version 2 README extension is implemented in the source skill. The new focused
 reference owns reader journey, an adaptable template, early TOC, prerequisites,
 first success, formatting, documentation boundaries and quality checks. Core
@@ -6807,6 +6859,34 @@ No shared validators, installers, real host configuration or installed skill
 copies were modified by this task.
 
 #### Verification Evidence
+
+Version 3 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
+passed with strict frontmatter, required repository evals and no warnings.
+Eval JSON/CSV and all fixture containment/payload checks passed. All 36 old
+trigger cases, 11 old quality cases and fixture bytes are preserved. Working-byte
+comparison confirms unchanged Help, public usage, execution/document ownership,
+implementation continuation, guardrails and Learning Loop. The implicit policy
+remains true; metadata text intentionally adds the accepted artifact scope.
+
+Scoped Markdown lint with the repository configuration, Markdown rendering,
+four reference tables, all ten checklist entries, all 13 palette values, 15
+primary-source links, core reference targets and diff whitespace checks passed.
+The paired canonical documents validate with no pending findings. An independent
+nested read-only code-review and advisory apply-security found no actionable
+findings; no executable product or browser behavior was inferred from review.
+
+Disposable skills CLI 1.5.26 installation passed discovery, copied-resource
+parity, repeat installation and isolation for Codex and Claude. The source repair
+does not alter real installed skills or hooks. This is distribution evidence,
+not native activation evidence.
+
+Fresh isolated Codex and Claude runs of the new document trigger each returned
+UNAVAILABLE because agent authentication was absent. Comparative QUALITY is
+UNAVAILABLE for the same prerequisite; remaining trigger and native read-order
+process checks are NOT_RUN. No existing credentials were copied or changed.
+Actual HTML offline/no-JavaScript/browser/print/data behavior is NOT_RUN because
+this change supplies guidance and eval definitions, not a generated artifact.
+REQ-038 remains active and FEAT-037 delivery implemented, not verified.
 
 Version 2 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
 passed with required evals, strict frontmatter and no warnings. Eval definitions,

@@ -11,14 +11,14 @@ from test_course_review_fixes import load_lab
 
 
 @pytest.mark.parametrize("course", COURSES)
-def test_first_lesson_has_substantive_beginner_entry(course):
+def test_first_lesson_has_substantive_beginner_entry(course, authored_figure_placeholders):
     _, _, lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")
     entry = lessons[0]["How it works"]
     assert len(entry.split()) >= 350
     assert all(term in entry for term in ("### What", "### Why", "### How", "### Try"))
-    rendered = cb_content.lesson_markup(lessons[0], 1, {destination: "#practice" for value in lessons[0].values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)})
+    rendered = cb_content.lesson_markup(lessons[0], 1, {destination: "#practice" for value in lessons[0].values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)}, figures=authored_figure_placeholders(lessons[0]))
     assert rendered.index("Objective") < rendered.index("How it works")
-    assert cb_markdown.block(entry, heading_offset=1) in rendered
+    assert cb_markdown.block(entry, heading_offset=1, figure=lambda *_: "<figure></figure>") in rendered
     manifest = json.loads(
         (ROOT / course / "reference/visual-manifest.json").read_text()
     )

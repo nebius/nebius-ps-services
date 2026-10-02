@@ -13,8 +13,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-from course_evidence import allocation_gpu_family
 from common import add_common_args, validate_common_args, write_result
+from course_evidence import allocation_gpu_family
 from job_processes import (
     Processes,
     allocated_nodes,
@@ -24,6 +24,11 @@ from job_processes import (
     wait_http,
 )
 from serving_client import benchmark, request
+from vendor_capture import (
+    add_worker_prefix,
+    native_systems_prefix,
+    validate_worker_prefix,
+)
 
 MODEL_REVISION = "b968826d9c46dd6066d109eabc6255188de91218"
 
@@ -222,27 +227,30 @@ def service(args, folder):
                 binary = shutil.which("nsys")
                 if not binary:
                     raise ValueError("Source the shared profiler environment first")
-                command = [
-                    "env",
-                    "-u",
-                    "DEBUGINFOD_URLS",
-                    binary,
-                    "profile",
-                    "--trace=cuda,nvtx,osrt,nccl",
-                    "--cuda-trace-scope=process-tree",
-                    "--trace-fork-before-exec=true",
-                    "--cuda-graph-trace=node",
-                    "--capture-range=cudaProfilerApi",
-                    "--capture-range-end=stop",
-                    "--flush-on-cudaprofilerstop=false",
-                    "--kill=none",
-                    "--wait=primary",
-                    "--sample=none",
-                    "--discard-environment=true",
-                    "--force-overwrite=false",
-                    "--output=" + str(folder / f"server-rank{rank}"),
-                    *command,
-                ]
+                if getattr(args, "worker_prefix", None) is not None:
+                    command = [*native_systems_prefix(args.worker_prefix, folder / f"server-rank{rank}", server=True), *command]
+                else:
+                    command = [
+                        "env",
+                        "-u",
+                        "DEBUGINFOD_URLS",
+                        binary,
+                        "profile",
+                        "--trace=cuda,nvtx,osrt,nccl",
+                        "--cuda-trace-scope=process-tree",
+                        "--trace-fork-before-exec=true",
+                        "--cuda-graph-trace=node",
+                        "--capture-range=cudaProfilerApi",
+                        "--capture-range-end=stop",
+                        "--flush-on-cudaprofilerstop=false",
+                        "--kill=none",
+                        "--wait=primary",
+                        "--sample=none",
+                        "--discard-environment=true",
+                        "--force-overwrite=false",
+                        "--output=" + str(folder / f"server-rank{rank}"),
+                        *command,
+                    ]
             processes.start(
                 f"worker{rank}",
                 step(
@@ -320,7 +328,9 @@ def run(kind):
     )
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--capture", choices=("none", "systems"), default="none")
+    add_worker_prefix(parser)
     args = parser.parse_args()
+    validate_worker_prefix(args, server=True)
     if (
         not 1 <= args.concurrency <= 64
         or not 8 <= args.iterations <= 4096

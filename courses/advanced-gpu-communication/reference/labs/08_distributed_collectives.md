@@ -4,7 +4,7 @@ Distributed work cannot progress faster than its required data exchanges allow. 
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/08_distributed_collectives.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -24,26 +24,35 @@ Distinguish the software operation, local GPU/network-adapter attachment, inter-
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/08_distributed_collectives.py` times a two-node NCCL all-reduce at a chosen payload size and verifies every output element equals three. It writes median latency and effective payload throughput.
 
-Submit separate bounded message sizes and keep the rank count unchanged. Use new result files for each run rather than overwriting the smaller-payload evidence.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 08_distributed_collectives slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4
-python3 tools/submit_lab.py --lab 08_distributed_collectives slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 32
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/08_distributed_collectives/logs/%j.out" \
+  --error="$PWD/results/08_distributed_collectives/logs/%j.err" \
+  slurm/two_node.sbatch \
+  labs/08_distributed_collectives.py --profile small --payload-mib 4
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 08_distributed_collectives --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/08_distributed_collectives/logs/$LAB_JOB_ID.out"
+cat "results/08_distributed_collectives/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require `all_reduce_sum`, then inspect `payload_mib`, `median_ms`, and `effective_payload_gib_per_s`. This lab reports rank zero's local median, not a reduced slowest-rank statistic. Its payload rate is not automatically network-link bandwidth or NCCL bus bandwidth.
 
@@ -58,7 +67,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Median (seconds) | `median_ms` | `s` |
 | Effective payload gib per s | `effective_payload_gib_per_s` | `Bps` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 08_distributed_collectives \
@@ -71,6 +80,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit separate bounded message sizes and keep the rank count unchanged. Use new result files for each run rather than overwriting the smaller-payload evidence.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/08_distributed_collectives/logs/%j.out" \
+  --error="$PWD/results/08_distributed_collectives/logs/%j.err" slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/08_distributed_collectives/logs/%j.out" \
+  --error="$PWD/results/08_distributed_collectives/logs/%j.err" slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 32
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Explain why small messages can be dominated by startup latency and why larger messages may expose transfer cost. Draw the operation's dependencies and distinguish application payload from the bytes moved by a particular collective algorithm.
 
 Larger buckets amortize latency but delay overlap opportunities and require memory. Different collective algorithms favor different message sizes and topology. Tuning before fixing rank placement or skew usually optimizes the wrong problem.
@@ -78,7 +102,17 @@ Larger buckets amortize latency but delay overlap opportunities and require memo
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 08_distributed_collectives --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/08_distributed_collectives.py --profile small --payload-mib 4
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/08_distributed_collectives/logs/capture-%J-%t.out" \
+  --error="results/08_distributed_collectives/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 1 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/08_distributed_collectives/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/08_distributed_collectives.py --profile small --payload-mib 4
 ```
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.

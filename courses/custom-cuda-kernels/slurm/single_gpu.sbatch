@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  printf 'Usage: python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s EXECUTABLE [arguments]\n' "$0"
+  printf 'Usage: sbatch [Slurm --name=value options] %s EXECUTABLE [arguments]\n' "$0"
   exit 0
 fi
 if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 1 ]]; then

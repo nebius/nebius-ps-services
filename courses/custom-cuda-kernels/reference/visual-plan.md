@@ -2,7 +2,7 @@
 
 The table defines this course's overview diagrams. The
 [visual manifest](visual-manifest.json) links additional detailed diagrams to
-their conceptual lessons. Each figure appears within the specified lesson section or after the specified lab section in its declared lesson or lab home,
+their conceptual lessons. Each figure has an explicit Markdown image marker immediately after its topic-specific explanation inside the declared lesson or lab section,
 with accessible labels, captions, and fit-to-width sizing.
 
 The host-API and device-kernel diagram is inside **How it works** in Lesson 1.

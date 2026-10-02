@@ -14,7 +14,7 @@ export COURSE_PROFILE_TOOL=nsys
 export PYTHONDONTWRITEBYTECODE=1
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s LAB.py [lab options]\n' "$0"
   printf '\nCaptures a focused Nsight Systems report and CLI statistics for one H100 lab.\n'
 }
 

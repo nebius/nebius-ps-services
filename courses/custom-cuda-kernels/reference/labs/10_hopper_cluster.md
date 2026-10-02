@@ -4,7 +4,7 @@ Hopper thread-block clusters introduce an additional execution grouping beyond i
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/10_hopper_cluster.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 The standard build launcher does not enable Lab 10. For this advanced profile,
 first obtain a site-approved interactive allocation with one full H100. Run
@@ -16,7 +16,6 @@ reviewed `CUTLASS_ROOT`, and set `COURSE_CLUSTER_BUILD_DIR` to a fresh, private
 build directory distinct from the required SM90 build.
 
 ```bash
-umask 077
 : "${SLURM_JOB_ID:?obtain an approved one-H100 allocation first}"
 : "${CUDA_IMAGE_DIGEST:?set the qualified immutable CUDA 13.3 image}"
 : "${COURSE_CONTAINER_RUNNER:?set the reviewed container runner}"
@@ -56,26 +55,35 @@ Enable Lab 10 only with the documented toolkit and isolated SM90a build profile.
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/10_hopper_cluster.cu` launches four CUDA blocks in two-block clusters, checks each block writes its expected identity, and records launch timing and architecture details. It demonstrates cluster launch, not distributed shared-memory communication. The baseline launcher records its output as course result JSON.
 
-After the optional build and targeted CTest check pass, run the probe and memory check with the same qualified image and build directory.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 10_hopper_cluster slurm/single_gpu.sbatch "${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster" --profile small
-python3 tools/submit_lab.py --lab 10_hopper_cluster slurm/sanitizer.sbatch memcheck "${COURSE_CLUSTER_BUILD_DIR}/10_hopper_cluster" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/10_hopper_cluster/logs/%j.out" \
+  --error="$PWD/results/10_hopper_cluster/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  "${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster" --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 10_hopper_cluster --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/10_hopper_cluster/logs/$LAB_JOB_ID.out"
+cat "results/10_hopper_cluster/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require exact block-index outputs, the two-block cluster declaration, and the optional architecture identity. A successful launch validates only this probe. There is no ordinary-block baseline or useful-work speedup comparison.
 
@@ -91,7 +99,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Cluster blocks | `cluster_blocks` | `none` |
 | Elements | `elements` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_hopper_cluster \
@@ -104,6 +112,21 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+After the optional build and targeted CTest check pass, run the probe and memory check with the same qualified image and build directory.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_hopper_cluster/logs/%j.out" \
+  --error="$PWD/results/10_hopper_cluster/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/10_hopper_cluster/logs/%j.out" \
+  --error="$PWD/results/10_hopper_cluster/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_CLUSTER_BUILD_DIR}/10_hopper_cluster" --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Explain how block grouping differs from a two-node distributed job. Which synchronization and ownership rules would be needed before one block reads another's shared data? Which would be needed for an asynchronous TMA transfer?
 
 Offloaded copies save SM instructions/register address work but add descriptor and barrier complexity. Clusters enlarge cooperation scope while reducing scheduling flexibility and possibly occupancy. L2 may be simpler and faster.
@@ -111,7 +134,17 @@ Offloaded copies save SM instructions/register address work but add descriptor a
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 10_hopper_cluster --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch "${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster" --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/10_hopper_cluster/logs/capture-%J-%t.out" \
+  --error="results/10_hopper_cluster/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/10_hopper_cluster/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_CLUSTER_BUILD_DIR:?set the qualified optional build directory}/10_hopper_cluster" --profile small
 ```
 
 **Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Expand course_measure and CUDA GPU kernel rows. Locate the cluster kernel and inspect launch gaps and its device duration. Check cluster capability and numerical correctness first; a capture does not prove a cluster-launch speedup. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.

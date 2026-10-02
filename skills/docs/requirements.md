@@ -3099,6 +3099,8 @@ with visible documentation conflicts and a planning default that does not
 silently implement changes or take over canonical specification ownership.
 Project README plans must orient readers, expose the first successful workflow,
 and connect to deeper documentation without becoming a catch-all manual.
+Standalone HTML artifact plans need one offline portability contract, a shared
+visual theme and layouts appropriate to documents, reports and presentations.
 
 #### Acceptance Criteria
 
@@ -3123,7 +3125,8 @@ and connect to deeper documentation without becoming a catch-all manual.
 
 - AC-007: Load focused README guidance when a design creates a project,
   materially changes how it is used, or explicitly includes README design.
-  Keep the existing trigger description and invocation policy unchanged.
+  Preserve the routine-edit trigger boundary and implicit invocation policy;
+  standalone portable HTML design is an additional supported design scope.
 - AC-008: README plans use an adaptable reader-first outline, an early visible
   TOC for substantial documents, explicit prerequisites and minimum setup,
   copyable examples, an observable first result, and links to deeper owners.
@@ -3131,6 +3134,28 @@ and connect to deeper documentation without becoming a catch-all manual.
 - AC-009: Describe current implementation accurately and label proposed
   greenfield or future-feature content as planned. Keep detailed architecture,
   complete references, runbooks and policies with their documentation owners.
+
+- AC-010: Load one focused portable-HTML reference for standalone document,
+  report or presentation design. Keep detailed guidance out of the core skill
+  and retain existing software-design routes and planning authority.
+- AC-011: Require a single HTML deliverable that opens offline through file:
+  without installation, a server, neighboring files or automatic network
+  requests. Embed required assets/data, survive copying/renaming/relocation and
+  keep essential content readable without JavaScript. External citations may
+  require internet only when followed. State must not depend on localStorage.
+- AC-012: Use semantic HTML and the shared warm-neutral theme with configurable
+  semantic color roles. Preserve the approved typography and spacing defaults
+  while distinguishing them from accessibility thresholds.
+- AC-013: Use document, report and presentation profiles with purpose-specific
+  hierarchy, optional interaction and complete printing. Reports identify their
+  snapshot period, generation date, units, sources, definitions and missing data.
+- AC-014: Specify keyboard access, visible focus, safe shortcuts, non-color
+  selection cues, responsive reflow, diagram text equivalents, reduced motion,
+  print completeness and safe handling of embedded data.
+- AC-015: Require all ten artifact acceptance checks: offline direct-file,
+  dependencies, no-JavaScript content, interactions, keyboard, layouts, visuals,
+  print, intended browsers and report data. Include relocation and attempted
+  request checks; report observed evidence separately from proposed checks.
 
 #### Negative Criteria
 
@@ -3144,6 +3169,12 @@ and connect to deeper documentation without becoming a catch-all manual.
 - NC-004: Wording-only and link/TOC-only README maintenance must not become
   new implicit design triggers. A README template must not require empty
   sections, invented commands or unsupported support/license claims.
+- NC-005: Cosmetic HTML edits and implementation-only requests must not become
+  new design triggers. Hosted app/page design does not automatically load the
+  portable-artifact reference. Do not mandate fixed tabs, section counts,
+  inspectors, diagram dimensions, paper sizes or a global character shortcut.
+- NC-006: Static skill definitions or a localhost preview must not be reported
+  as proof of offline artifact behavior, native triggering or output quality.
 
 #### Validation Method
 
@@ -3163,6 +3194,8 @@ non-mutating planning, explicit execution and document-owner handoffs. Verify
 host Plan Mode and read order with actual host context and traces when available.
 Include new-project and changed-usage README plans, routine-edit near misses,
 and conditional reference reads; compare quality with the prior working version.
+Add one portable HTML quality case per profile and trigger near misses. Preserve
+Help short-circuiting and verify that unrelated designs skip the new reference.
 
 <!-- /REQUIREMENT: REQ-038 -->
 

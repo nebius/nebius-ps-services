@@ -77,6 +77,8 @@ def request(state, unit, stage, action):
                 check=False,
                 timeout=60,
             )
+            if proc.returncode == 255:
+                raise ConnectionError
             if proc.returncode:
                 raise ValueError(
                     "Remote operation failed; inspect the private remote receipt before retry"

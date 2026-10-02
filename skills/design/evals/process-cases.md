@@ -68,6 +68,13 @@ new-project README case uses explicit hypothetical requirements without source
 fixtures; its commands must remain labeled as proposed. The prototype demonstrates a lossy
 delimiter boundary; it is evaluation input, not a recommended implementation.
 
+Cases 12–14 cover standalone HTML document, report and presentation plans. They
+use synthetic requirements without existing artifacts, exercise the shared
+portability/theme contract and require distinct profile behavior. The report
+case includes missing data and explicit dates so calculations and scope can be
+checked independently. No case may claim that its planned artifact passed
+browser, offline or print checks before an artifact is implemented and tested.
+
 Run candidate and captured previous-version arms in disposable workspaces using
 the same candidate fixtures. Do not substitute HEAD for accepted working bytes.
 The runner installs only the target skill; fixed-stack local cases must report
@@ -107,6 +114,18 @@ Exercise these additional process cases in actual host sessions:
 8. Repeat help checks with the README reference installed. Expect no workflow
    reference reads after the selected skill loads. For wording-only or link/TOC
    maintenance without explicit design invocation, expect no design activation.
+9. Request standalone portable HTML document, report and presentation designs.
+   For each profile, require a successful native read of
+   `references/portable-html-design.md` before the proposal. Check the shared
+   portability/theme contract, appropriate hierarchy, optional interaction and
+   print plan without implementation writes. Counts come from actual content.
+10. Request a hosted application interface design without a standalone artifact,
+    then an unrelated backend design. Existing design routing may still apply,
+    but neither request should load the portable-HTML reference. Cosmetic HTML
+    edits and implementation-only requests should not newly activate design.
+11. Repeat `$design --help` and `$design -h`, including native Claude forms,
+    with the HTML reference present. After the skill loads, expect no reference
+    reads, project inspection, additional tools or mutation.
 
 Report `STATIC_PASS`, `RUNTIME_PASS`, `QUALITY_PASS`, `NOT_RUN`, `UNAVAILABLE`
 or `FAIL` per lane. Host-mode and trace checks remain `NOT_RUN` or `UNAVAILABLE`

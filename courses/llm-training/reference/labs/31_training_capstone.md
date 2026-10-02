@@ -4,7 +4,7 @@ This capstone compares a baseline linear training step with a candidate using a 
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/31_training_capstone.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use one H100 and complete the preceding measurement and profiler exercises. Each lab invocation is one fresh-process trial; the supplied campaign launcher runs three and alternates variant order. Keep all trial records private.
 
@@ -31,26 +31,35 @@ Use separate unprofiled runs of `slurm/capstone_three_trials.sbatch` for three f
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/31_training_capstone.py` compares equivalent separate-bias and fused-`addmm` training updates in one fresh-process trial. It checks losses and updates agree and writes timing, incremental memory, throughput, and variant order; the launcher runs three counterbalanced trials.
 
-Use the campaign launcher for the required three independent processes. Supply a peak-TFLOP/s reference only after verifying the exact H100 variant and arithmetic mode; an arbitrary peak makes utilization meaningless.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-"$COURSE_PYTHON" labs/31_training_capstone.py --help
-python3 tools/submit_lab.py --lab 31_training_capstone slurm/capstone_three_trials.sbatch --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/31_training_capstone/logs/%j.out" \
+  --error="$PWD/results/31_training_capstone/logs/%j.err" \
+  slurm/capstone_three_trials.sbatch \
+  --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 31_training_capstone --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/31_training_capstone/logs/$LAB_JOB_ID.out"
+cat "results/31_training_capstone/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require `full_update_close` in every trial. Inspect `variant_order`, timing distributions, incremental peaks, candidate tokens/s, and `minimum_step_flops`. A single record remains provisional until the campaign is complete; matmul-only utilization is not full-transformer MFU.
 
@@ -91,6 +100,8 @@ groups must not be combined into one aggregate. Select only successful,
 equivalent, unprofiled originals. On the login node, set the paths to the printed
 result files and review the current generation (use `0` for the first selection):
 
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 31_training_capstone \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
@@ -102,6 +113,19 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Use the campaign launcher for the required three independent processes. Supply a peak-TFLOP/s reference only after verifying the exact H100 variant and arithmetic mode; an arbitrary peak makes utilization meaningless.
+
+```bash
+"$COURSE_PYTHON" labs/31_training_capstone.py --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/31_training_capstone/logs/%j.out" \
+  --error="$PWD/results/31_training_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Does the candidate help at the complete-step boundary, not just one operator? Explain the profiler-observed mechanism and any order sensitivity. Identify which omitted arithmetic makes the reported FLOP numerator a lower-bound accounting convention.
 
 A slower step may be accepted if it enables the required batch or removes OOM risk. A faster step may be rejected for quality drift, fragility, startup cost, memory, or a negligible end-to-end contribution.
@@ -109,18 +133,37 @@ A slower step may be accepted if it enables the required batch or removes OOM ri
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 31_training_capstone --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch labs/31_training_capstone.py --profile small --variant-order baseline-first
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/31_training_capstone/logs/capture-%J-%t.out" \
+  --error="results/31_training_capstone/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/31_training_capstone/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/31_training_capstone.py --profile small --variant-order baseline-first
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-python3 tools/submit_lab.py --lab 31_training_capstone --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch labs/31_training_capstone.py --profile small --variant-order baseline-first
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/31_training_capstone/logs/capture-%J-%t.out" \
+  --error="results/31_training_capstone/logs/capture-%J-%t.err" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/31_training_capstone/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/31_training_capstone.py --profile small --variant-order baseline-first
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare baseline and candidate complete steps using all three independent seeded trials. Independently explain a counterexample or order sensitivity before deciding whether to retain the candidate.
 

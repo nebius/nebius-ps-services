@@ -168,15 +168,16 @@ def test_foundations_teaches_basic_timing_before_first_benchmark():
     concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
     assert "warm-up" in concepts and "cuda events" in concepts
     practice = lab_section("gpu-fundamentals", 1, "Practice")
-    assert "--profile small" in practice and "--profile large" in practice
+    assert "--profile small" in practice and "--profile large" not in practice
+    assert "--profile large" in lab_section("gpu-fundamentals", 1, "Investigate the behavior")
     assert "README" not in practice and "Lesson" not in practice
-    assert "repack timing" in lab_section("gpu-fundamentals", 4, "Practice")
+    assert "repack timing" in lab_section("gpu-fundamentals", 4, "Investigate the behavior")
 
 
 def test_training_previews_do_not_require_advanced_execution():
     practice = lab_section("llm-training", 32, "Practice")
-    assert "CPU example" in practice
-    assert "optional CUDA alternative" in practice
+    assert "slurm/cpu.sbatch" in practice and "--device cpu" in practice
+    assert "optional CUDA alternative" in lab_section("llm-training", 32, "Investigate the behavior")
     batching = lesson("llm-training", EXPECTED_ORDER["llm-training"][1])
     assert "logits" in batching["How it works"]
     assert "does not execute transformer training" in lab_section(
@@ -192,10 +193,8 @@ def test_inference_starts_with_basic_engine_then_advanced_work():
     assert "loopback server and client in one Slurm allocation" in prerequisites
     practice = lab_section("llm-inference", 30, "Practice")
     for launcher in ("openai_engine", "trtllm_triton"):
-        assert (
-            f"python3 tools/submit_lab.py --lab 30_engine_profile slurm/{launcher}.sbatch"
-            in practice
-        )
+        assert f"slurm/{launcher}.sbatch" in lab_section("llm-inference", 30, "Investigate the behavior")
+    assert practice.count("\nsbatch ") == 1
     concepts = lab_section("llm-inference", 30, "Concepts and code path")
     assert "Both launchers own startup, bounded readiness and cleanup" in concepts
     assert "paper exercise" in concepts
@@ -203,7 +202,8 @@ def test_inference_starts_with_basic_engine_then_advanced_work():
     # Both metrics belong here; the explanation should distinguish them.
     assert all(term in metrics["How it works"] for term in ("ITL", "TPOT"))
     practice = lab_section("llm-inference", 15, "Practice")
-    assert "AIPerf" in practice and "slurm/aiperf.sbatch" in practice
+    assert "slurm/vllm_streaming_benchmark.sbatch" in practice
+    assert "slurm/aiperf.sbatch" in lab_section("llm-inference", 15, "Investigate the behavior")
 
 
 def test_cuda_safety_practice_uses_completed_vector_lab():

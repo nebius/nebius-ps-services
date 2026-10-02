@@ -6,7 +6,7 @@ The **base route** uses two workers with one H100 each. Its TCP/IP inter-node pa
 
 This course has no multi-node executable labs. Hopper thread-block clusters in Lab 10 operate inside one GPU and remain in the base route. Use [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html) for cross-GPU practice.
 
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
@@ -76,11 +76,12 @@ container runner. Set the submitting shell's file mask before Slurm creates
 its output; the mask inside the job starts too late for those files.
 
 ```bash
-umask 077
 CUDA_IMAGE_DIGEST='docker://REGISTRY/IMAGE@sha256:DIGEST' \
 CUTLASS_ROOT=/shared/reviewed-cutlass-4.6.1 \
 COURSE_CONTAINER_RUNNER="$PWD/slurm/container_runner.example.sh" \
-python3 tools/submit_lab.py --lab 13_h100_preflight slurm/build_and_test.sbatch
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
+  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/build_and_test.sbatch
 ```
 
 The example runner uses Apptainer. Review and adapt it to the site's container
@@ -123,7 +124,15 @@ CUDA compilation, CTest, Compute Sanitizer, Nsight, and performance remain
 pending until they run on the Linux/H100 target.
 
 The sanitizer launcher takes an explicit allow-listed tool, for example
-`python3 tools/submit_lab.py --lab 03_tiled_transpose slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose"`; use `memcheck`,
+:
+
+```bash
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
+  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR:?set the completed build directory}/03_tiled_transpose"
+```
+
+Use `memcheck`,
 `racecheck`, `initcheck`, or `synccheck` according to the failure hypothesis.
 For Racecheck, the launcher bounds analysis workers by the allocated CPU count
 and synchronizes after two queued launches to limit host tracking-memory growth.

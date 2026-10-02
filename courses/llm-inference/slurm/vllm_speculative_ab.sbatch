@@ -15,7 +15,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 usage() {
-  printf 'Usage: python3 tools/submit_lab.py --lab 33_speculative_engine_client %s TARGET_MODEL TARGET_REVISION DRAFT_MODEL DRAFT_REVISION\n' "$0"
+  printf 'Usage: sbatch %s TARGET_MODEL TARGET_REVISION DRAFT_MODEL DRAFT_REVISION\n' "$0"
   printf 'Runs three independent, counterbalanced target-only/speculative trials.\n'
 }
 

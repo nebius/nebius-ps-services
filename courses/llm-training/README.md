@@ -6,7 +6,7 @@ The **base route** uses two workers with one H100 each. Its TCP/IP inter-node pa
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Every submission uses `tools/submit_lab.py`; it creates private `results/<lab>/logs/<job>.out` and `.err` before calling Slurm. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
@@ -57,8 +57,9 @@ shell before Slurm creates its output.
 Begin with Lesson 1 and [Lab 32’s CPU learning exercise](reference/labs/32_learning_basics.md). After completing Lessons 1–4, run the following transformer small experiment using [Lab 01’s guide](reference/labs/01_tiny_transformer_train.md).
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 01_tiny_transformer_train slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/01_tiny_transformer_train/logs/%j.out" \
+  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
 ```
 
 Transformer Engine is optional and must match the installed PyTorch/CUDA ABI.

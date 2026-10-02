@@ -11,6 +11,11 @@ import zipfile
 from pathlib import Path
 
 
+def format_mb(size: int, *, precision: int = 2) -> str:
+    """Format decimal megabytes for display; budgets still compare exact bytes."""
+    return f"{size / 1_000_000:,.{precision}f} MB"
+
+
 def relative_path(relative: str) -> Path:
     """Validate a relative name without consulting a filesystem namespace."""
     if not isinstance(relative, str):
@@ -139,17 +144,19 @@ def check_budget(
     total = sum(sizes.values())
     largest = max(sizes, key=sizes.get) if sizes else None
     over = [
-        f"{name}: {size} bytes"
+        f"{name}: {format_mb(size)} "
+        f"(over by {format_mb(size - max_file_bytes, precision=6)})"
         for name, size in sorted(sizes.items())
         if max_file_bytes is not None and size > max_file_bytes
     ]
     if over:
         raise ValueError(
-            f"File limit {max_file_bytes} bytes exceeded: " + "; ".join(over)
+            f"File limit {format_mb(max_file_bytes)} exceeded: " + "; ".join(over)
         )
     if max_site_bytes is not None and total > max_site_bytes:
         raise ValueError(
-            f"Site limit {max_site_bytes} bytes exceeded: {total} bytes (over by {total - max_site_bytes})"
+            f"Site limit {format_mb(max_site_bytes)} exceeded: {format_mb(total)} "
+            f"(over by {format_mb(total - max_site_bytes, precision=6)})"
         )
     return {
         "total_bytes": total,
@@ -179,7 +186,8 @@ def results_zip(
     content = output.getvalue()
     if max_file_bytes is not None and len(content) > max_file_bytes:
         raise ValueError(
-            f"Results archive exceeds {max_file_bytes} bytes: {len(content)}"
+            f"Results archive exceeds {format_mb(max_file_bytes)}: {format_mb(len(content))} "
+            f"(over by {format_mb(len(content) - max_file_bytes, precision=6)})"
         )
     return content
 

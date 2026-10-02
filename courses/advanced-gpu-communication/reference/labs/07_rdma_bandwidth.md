@@ -4,7 +4,7 @@ RDMA lets the NIC access registered memory without the CPU copying each payload.
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/07_rdma_bandwidth.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -18,23 +18,37 @@ RDMA lets the NIC access registered memory without the CPU copying each payload.
 
 ## Practice
 
-On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+`labs/07_rdma_bandwidth.py` runs validated bidirectional InfiniBand RDMA writes between two nodes using host or GPU buffers. It checks both endpoint reports and writes aggregate bandwidth, validated bytes, and transport correctness.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 07_rdma_bandwidth slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
-python3 tools/submit_lab.py --lab 07_rdma_bandwidth slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory cuda-dmabuf --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
+  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" \
+  slurm/fabric_tools.sbatch \
+  labs/07_rdma_bandwidth.py --profile small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
 ```
-
-Logs are created before submission under `results/07_rdma_bandwidth/logs/<job>.out` and `.err`. A submitted job is not a completed result.
 
 ## Check your results
 
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
 Wait for both jobs to complete successfully. Inspect the measured fields and correctness status; a failed check must be resolved before comparing performance.
 
+Record each successful submission's job number. For each job, require `COMPLETED` and exit code `0:0`, then open its own logs and printed result path:
+
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 07_rdma_bandwidth --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/07_rdma_bandwidth/logs/$LAB_JOB_ID.out"
+cat "results/07_rdma_bandwidth/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 | Dashboard panel | Field under `measurements` | Display unit |
 | --- | --- | --- |
@@ -42,6 +56,8 @@ sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
 | Minimum validated endpoint bytes | `validated_bytes_min` | bytes |
 
 Select the two unprofiled result artifacts. The publisher checks equivalent parameters and allows only the named change. Repeated qualification uses no changed parameter.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 07_rdma_bandwidth \
@@ -52,6 +68,21 @@ Select the two unprofiled result artifacts. The publisher checks equivalent para
 In Grafana, select the workspace and profile. Require **Correctness of selected results** to equal 1 and **Selected comparison generation** to match publication confirmation. Set the time picker from **Experiment start** to **Experiment end**, then select the allocated workers with **GPU worker**, then choose their local indices with **GPU index on selected workers** for telemetry. Summary panels show the selected pair; telemetry describes its actual job window.
 
 ## Investigate the behavior
+
+### Workload variations
+
+On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
+  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory host --server-device "${SERVER_HCA:?qualified mlx5 device}" --client-device "${CLIENT_HCA:?qualified mlx5 device}"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/07_rdma_bandwidth/logs/%j.out" \
+  --error="$PWD/results/07_rdma_bandwidth/logs/%j.err" slurm/fabric_tools.sbatch labs/07_rdma_bandwidth.py --profile small --memory cuda-dmabuf --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA"
+```
+
+Slurm writes job logs under `results/07_rdma_bandwidth/logs/<job>.out` and `.err`. A submitted job is not a completed result.
 
 Require both endpoint logs to say VALIDATION: PASSED with nonzero chunks and bytes, and both JSON reports to identify IB/RC and CUDA device 0 for the candidate. Bidirectional Gbit/s is aggregate traffic in both directions, not one-way GB/s. After the host/GPU comparison, hold GPU memory fixed and independently change --tx-depth from 128 to 64; publish the two printed result paths; the publisher detects the single changed parameter. Match NIC/GPU locality from nvidia-smi topo -m and ibdev2netdev before testing. NET/IB alone is insufficient evidence of GPUDirect. Registration failure is a failed prerequisite, not evidence that host memory is faster.
 

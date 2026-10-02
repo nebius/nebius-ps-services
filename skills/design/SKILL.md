@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Design non-SDLC features, architectures, ADRs, or proven contract-changing remediations against existing code and project design documents. Plan by default; continue to implementation only on explicit request. Route due diligence to research, agent design to ai-agent-design, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist-only reviews to system-design-rules."
+description: "Design non-SDLC features, architectures, ADRs, proven contract-changing remediations, or standalone portable HTML documents, reports and presentations. Ground plans in existing code and project docs; implement only on explicit request. Route due diligence to research, agent design to ai-agent-design, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist reviews to system-design-rules."
 ---
 
 # Design
@@ -38,10 +38,10 @@ never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
-Use this skill to turn a software idea, feature request, or application concept
-into an evidence-backed design and implementation plan. It works for both
-brownfield systems and greenfield applications, including unused prototypes
-with existing code.
+Use this skill to turn a software idea, feature request, application concept or
+standalone portable HTML artifact into an evidence-backed design and
+implementation plan. It works for brownfield systems and greenfield applications,
+including unused prototypes with existing code, and for standalone artifacts.
 
 ## Execution And Document Ownership
 
@@ -69,6 +69,8 @@ second writer. Preserve its advisory status and any enclosing workflow's gates.
 ## Use This Skill For
 
 - Designing a new feature against an existing repository.
+- Designing a standalone portable HTML document, report or presentation with
+  a shared theme, purpose-specific layout and explicit acceptance checks.
 - Designing a new application, service, CLI, workflow, API, UI, data model, or
   integration before code exists.
 - Choosing components, boundaries, data flow, control flow, validation
@@ -157,6 +159,12 @@ explicitly designing creation or restructuring of its `README.md`, read
 `references/readme-design.md`. Use it for the reader journey, information
 hierarchy, quick-start path and boundaries with deeper documentation. Routine
 README wording or link/TOC maintenance alone does not require this workflow.
+
+When designing a standalone portable HTML document, report or presentation, read
+`references/portable-html-design.md` for the shared portability contract, theme,
+three layout profiles and acceptance checks. Hosted pages/app interfaces do not
+load it unless a portable artifact is in scope. Cosmetic HTML edits and
+implementation-only requests do not create new design triggers.
 
 When the application stack or a technology choice for any application layer is
 undecided or under review, use `app-stack` and follow its required reads. Do not
@@ -355,6 +363,8 @@ The plan handoff must include:
 - vertical slice order and any prerequisite foundation steps
 - expected files or modules to inspect or modify
 - tests and validation commands to add or run
+- for standalone HTML, the selected profile, portability, interaction, print and
+  browser acceptance plan from `references/portable-html-design.md`
 - documentation and changelog updates when in scope, including README impact
   from changes to purpose, setup, configuration, usage, architecture,
   compatibility or operational behavior
@@ -465,4 +475,7 @@ short answer is explicitly requested:
 - Read `references/readme-design.md` for the conditional README design scope
   in Required Reads: structure, TOC, examples, formatting, documentation
   boundaries and quality checks.
+- Read `references/portable-html-design.md` for standalone HTML design: one
+  portability contract and theme, document/report/presentation profiles, and
+  artifact acceptance evidence.
 - Use `evals/trigger-prompts.csv` when reviewing or tuning trigger readiness.

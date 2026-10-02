@@ -4,7 +4,7 @@ Remote direct memory access, or RDMA, lets a network adapter access registered m
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/27_rdma_latency.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -14,22 +14,41 @@ The coordinator starts one owned ib_read_lat endpoint on each worker. The client
 
 ## Practice
 
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+`labs/27_rdma_latency.py` runs completed InfiniBand RDMA READ latency tests with host or GPU memory. It checks memory and transport configuration and writes latency statistics and payload size; it does not claim payload-content validation.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 27_rdma_latency slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
-python3 tools/submit_lab.py --lab 27_rdma_latency slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/27_rdma_latency/logs/%j.out" \
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" \
+  slurm/vendor_job.sbatch \
+  labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
 ```
-
-Logs stay under `results/27_rdma_latency/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 ## Check your results
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 27_rdma_latency --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/27_rdma_latency/logs/$LAB_JOB_ID.out"
+cat "results/27_rdma_latency/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 27_rdma_latency \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -43,6 +62,21 @@ sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
 Select workspace and profile in Grafana. Require **Correctness of selected results** to equal 1 and **Selected comparison generation** to match confirmation. Set the time picker to **Experiment start** through **Experiment end** and select the allocated workers with **GPU worker**, then choose their local indices with **GPU index on selected workers**. Sampled utilization is context, not a per-kernel explanation or proof of transport selection.
 
 ## Investigate the behavior
+
+### Workload variations
+
+Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/27_rdma_latency/logs/%j.out" \
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/27_rdma_latency/logs/%j.out" \
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
+```
+
+Logs stay under `results/27_rdma_latency/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 Read both private endpoint logs and the vendor JSON transport fields. Compare the p99 tail with the median: a lower median can coexist with worse variability. Repeat the same GPU-memory comparison using cuda-peermem only when available. CUDA kernel replay is inapplicable to this network completion measurement; use vendor evidence and job-window Grafana context.
 

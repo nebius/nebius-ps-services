@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Discover cxcli-installed private monitoring and write course connections only."""
+"""Prepare private lab directories or discover existing course monitoring."""
 
 from __future__ import annotations
 
@@ -10,11 +10,10 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
-
-import yaml
 
 SCHEMA = "gpu-course-monitoring/v2"
 SCRAPE_JOB = "cxcli-pushgateway"
@@ -69,6 +68,8 @@ def artifact(root, relative):
 
 
 def accepted_documents(generated, baseline, target):
+    import yaml
+
     documents = []
     prefix = f"flux/targets/{target}/"
     for group in ("protected_files", "ordinary_files"):
@@ -343,6 +344,8 @@ def native_monitoring(connection, documents):
 
 
 def verify_scrape(agent, pushgateway, port):
+    import yaml
+
     spec = agent["spec"]
     if (
         int(spec.get("replicaCount", 1)) != 1
@@ -391,6 +394,8 @@ def verify_metrics_write(agent, service, port):
 
 
 def discover(args):
+    import yaml
+
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", args.workspace):
         raise ValueError("Use one persistent lowercase workspace ID")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.target):
@@ -587,15 +592,142 @@ def write_connections(args, receipt):
             stream.write(content)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--target", required=True)
-    parser.add_argument("--kubeconfig", type=Path, required=True)
-    parser.add_argument("--context", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--workspace", required=True)
-    args = parser.parse_args()
+def open_directory(path):
+    """Open every component without following links, including source ancestors."""
+    path = Path(os.path.abspath(path))
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            child = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+            )
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def private_directory(info, label):
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise ValueError(f"Use an owned mode-700 directory, without symlinks: {label}")
+
+
+def course_labs(root):
+    """Read the course-owned lab inventory, never glob runtime output paths."""
+    course_fd = open_directory(root)
+    try:
+        reference_fd = os.open(
+            "reference",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=course_fd,
+        )
+        try:
+            fd = os.open(
+                "course.json",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=reference_fd,
+            )
+            with os.fdopen(fd, "r") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("Course metadata must be a regular file")
+                metadata = json.load(stream)
+        finally:
+            os.close(reference_fd)
+        if not isinstance(metadata, dict):
+            raise TypeError("Course metadata must be an object")
+        if metadata.get("profile") == "text-only":
+            return []
+        labs = metadata.get("labs")
+        if not isinstance(labs, list) or not labs:
+            raise ValueError(f"Missing practical lab inventory: {root}")
+        identities = []
+        for row in labs:
+            source = row.get("path") if isinstance(row, dict) else None
+            if not isinstance(source, str) or not re.fullmatch(
+                r"labs/[0-9]{2}_[a-z0-9_]+\.(py|cu)", source
+            ):
+                raise ValueError(f"Unsafe lab source identity in {root}")
+            lab = PurePosixPath(source).stem
+            if lab in identities:
+                raise ValueError(f"Duplicate lab identity: {lab}")
+            identities.append(lab)
+        return identities
+    finally:
+        os.close(course_fd)
+
+
+def prepare(courses_root=None, course_root=None):
+    """Validate first, then create private directories with no-follow dir handles."""
+    selected = Path(course_root if course_root is not None else courses_root).absolute()
+    selected_fd = open_directory(selected)
+    os.close(selected_fd)
+    roots = (
+        [selected]
+        if course_root is not None
+        else sorted(
+            p
+            for p in selected.iterdir()
+            if (p / "reference/course.json").exists()
+            or (p / "reference/course.json").is_symlink()
+        )
+    )
+    inventory = [(root, course_labs(root)) for root in roots]
+    inventory = [(root, labs) for root, labs in inventory if labs]
+    if not inventory:
+        raise ValueError("No practical courses found at the selected root")
+    paths = [(selected, ".runtime"), (selected, ".profiling-tools")]
+    paths += [
+        (root, relative)
+        for root, labs in inventory
+        for relative in [
+            "results",
+            *(
+                name
+                for lab in labs
+                for name in (
+                    f"results/{lab}",
+                    f"results/{lab}/logs",
+                    f"results/{lab}/profiles",
+                )
+            ),
+        ]
+    ]
+    # Do not partially prepare a catalog when a known existing path is unsafe.
+    for root, relative in paths:
+        path = root / relative
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        private_directory(info, path)
+    for root, relative in paths:
+        parent_fd = open_directory(root)
+        try:
+            for part in PurePosixPath(relative).parts:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    pass
+                child_fd = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+                )
+                os.close(parent_fd)
+                parent_fd = child_fd
+                private_directory(os.fstat(parent_fd), root / relative)
+        finally:
+            os.close(parent_fd)
+    return {root.name: len(labs) for root, labs in inventory}
+
+
+def monitoring(args):
+    import yaml
+
     os.umask(0o077)
     try:
         write_connections(args, discover(args))
@@ -614,6 +746,42 @@ def main():
     print(
         "Private course connection files created. Source laptop-environment.sh, then verify monitoring and import dashboards."
     )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_subparsers(dest="action", required=True)
+    local = actions.add_parser(
+        "prepare", help="Prepare all private lab logs and profiles locally."
+    )
+    selection = local.add_mutually_exclusive_group(required=True)
+    selection.add_argument(
+        "--courses-root", type=Path, help="Catalog containing the course directories."
+    )
+    selection.add_argument(
+        "--course-root", type=Path, help="One independently copied practical course."
+    )
+    remote = actions.add_parser(
+        "monitoring", help="Discover existing cxcli-managed monitoring."
+    )
+    remote.add_argument("--config", type=Path, required=True)
+    remote.add_argument("--target", required=True)
+    remote.add_argument("--kubeconfig", type=Path, required=True)
+    remote.add_argument("--context", required=True)
+    remote.add_argument("--output-dir", type=Path, required=True)
+    remote.add_argument("--workspace", required=True)
+    args = parser.parse_args()
+    os.umask(0o077)
+    if args.action == "monitoring":
+        monitoring(args)
+        return
+    try:
+        counts = prepare(args.courses_root, args.course_root)
+    except (OSError, ValueError, TypeError) as exc:
+        parser.error(f"Directory preparation failed: {exc}")
+    for course, count in counts.items():
+        print(f"Prepared {course}: {count} labs (private logs and profiles)")
+    print("Ready for native sbatch and srun commands. Existing results were preserved.")
 
 
 if __name__ == "__main__":

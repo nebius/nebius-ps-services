@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1541,6 +1543,193 @@ def controller_modules():
         return importlib.import_module("run_labs"), importlib.import_module("stage")
     finally:
         sys.path.remove(str(SCRIPTS))
+
+
+@pytest.fixture
+def transport_request(monkeypatch, controller_modules):
+    transport = module("transport")
+    stage = {"id": "run", "argv": ["python3", "tools/submit_lab.py"],
+             "dispatch": {"job": 123, "name": "owned-job"}}
+    unit = {"key": "example:01_example", "profile": "small",
+            "remote_root": "/fixture/workspace", "stages": [stage]}
+    state = {"id": "test", "environment": {"ssh": {"target": "student@example"}},
+             "plan": {"source_sha256": "a" * 64}}
+    calls = []
+
+    def invoke(outcomes, action="query"):
+        pending = iter(outcomes)
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            result = next(pending)
+            if result == "timeout":
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            code, stdout = result
+            return subprocess.CompletedProcess(argv, code, stdout, "private diagnostic")
+
+        monkeypatch.setattr(transport.subprocess, "run", run)
+        return transport.request(state, unit, stage, action)
+
+    return invoke, calls
+
+
+@pytest.mark.parametrize("failure", [(255, ""), "timeout"])
+def test_query_retries_transport_failure_with_identical_request(transport_request, failure):
+    invoke, calls = transport_request
+    assert invoke([failure, (0, '{"state":"RUNNING"}')]) == {"state": "RUNNING"}
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert calls[0][1]["timeout"] == 60
+
+
+@pytest.mark.parametrize("failure", [(255, ""), "timeout"])
+def test_query_exhausts_three_transport_attempts(transport_request, failure):
+    invoke, calls = transport_request
+    with pytest.raises(ValueError, match="SSH connection failed within the retry bound"):
+        invoke([failure] * 3)
+    assert len(calls) == 3
+    assert all(call == calls[0] for call in calls)
+
+
+@pytest.mark.parametrize("result,message", [
+    ((2, ""), "Remote operation failed"),
+    ((0, '{"error":"ValueError","message":"Ownership differs"}'), "Ownership differs"),
+    ((0, "invalid JSON"), "Expecting value"),
+])
+def test_query_does_not_retry_semantic_failures(transport_request, result, message):
+    invoke, calls = transport_request
+    with pytest.raises(ValueError, match=message) as error:
+        invoke([result])
+    assert len(calls) == 1
+    assert "private diagnostic" not in str(error.value)
+
+
+@pytest.mark.parametrize("action", ["submit", "cancel", "cleanup", "reconcile"])
+@pytest.mark.parametrize("failure", [(255, ""), "timeout"])
+def test_nonquery_operations_keep_single_transport_attempt(transport_request, action, failure):
+    invoke, calls = transport_request
+    with pytest.raises(ValueError):
+        invoke([failure], action)
+    assert len(calls) == 1
+    assert json.loads(calls[0][1]["input"])["action"] == action
+
+
+@pytest.mark.parametrize("job_state", [
+    "BOOT_FAIL", "DEADLINE", "FAILED", "COMPLETED", "RUNNING", "PENDING", "FUTURE_STATE",
+])
+@pytest.mark.parametrize("more_work", [False, True])
+def test_terminal_job_failure_preserves_evidence_and_finishes_claims(
+    tmp_path, monkeypatch, controller_modules, job_state, more_work
+):
+    controller, stages = controller_modules
+    private = skill_common.directory(tmp_path / "private")
+    path = skill_common.directory(private / "campaigns/test")
+    units = []
+    for index in range(2 if more_work else 1):
+        lab = f"0{index + 1}_example"
+        unit = {"key": f"example:{lab}", "course": "example", "lab": lab,
+                "profile": "small", "stages": [{"id": "run", "kind": "execute",
+                "dispatch": {"job": 123 + index}, "intent": True}]}
+        if index == 0:
+            unit["stages"].append({"id": "export", "kind": "export"})
+        units.append(unit)
+    state = {"schema": "run-labs-campaign/v1", "id": "test", "status": "running",
+             "courses_root": str(tmp_path / "courses"), "preflight": {"passed": True},
+             "environment": {"private_root": str(private), "target_id": "target"},
+             "plan": {"source_sha256": "a" * 64, "units": units}}
+    controller.save(path, state)
+    controller.ensure_claims(path.resolve(), state)
+    claims = [controller.claim_path(state, unit) for unit in units]
+    skill_common.directory(private / "staging/test/example/01_example/small")
+    raw = private / "staging/test/example/01_example/small/raw/failure.json"
+    skill_common.write(raw, {"diagnostic": "preserved"})
+    calls = []
+
+    def request(state, unit, stage, action):
+        calls.append((unit["key"], action))
+        assert action == "query"  # Never submit, cancel or clean a failed unit.
+        return {"job": stage["dispatch"]["job"],
+                "state": job_state if unit["lab"] == "01_example" else "COMPLETED",
+                "exit_code": "0:0"}
+
+    monkeypatch.setattr(stages, "verify_frozen", lambda state: None)
+    monkeypatch.setattr(stages, "request", request)
+    result = stages.run(path, "advance")
+    saved = controller.load(path)
+    first = saved["plan"]["units"][0]
+    if job_state not in ("BOOT_FAIL", "DEADLINE", "FAILED"):
+        assert first.get("status") != "failed"
+        completed = job_state == "COMPLETED"
+        assert first["stages"][0].get("status") == ("complete" if completed else None)
+        assert result["status"] == "running"
+        assert result["next_action"]["kind"] == ("export" if completed else "execute")
+        assert all(claim.exists() for claim in claims)
+        return
+    assert first["status"] == first["stages"][0]["status"] == "failed"
+    assert first["stages"][0]["slurm"]["state"] == job_state
+    assert first["stages"][0]["dispatch"]["job"] == 123
+    assert "status" not in first["stages"][1]
+    if more_work:
+        assert result["status"] == "running"
+        assert result["next_action"]["unit"] == units[1]["key"]
+        assert all(claim.exists() for claim in claims)
+        result = stages.run(path, "advance")
+    assert result["status"] == "failed" and result["next_action"] is None
+    assert all(not claim.exists() for claim in claims)
+    assert skill_common.read(raw) == {"diagnostic": "preserved"}
+    before = list(calls)
+    skill_common.write(claims[0], {"id": "new", "campaign": "new"})
+    assert stages.run(path, "advance")["status"] == "failed"
+    assert calls == before
+    assert skill_common.read(claims[0])["id"] == "new"
+
+
+@pytest.mark.parametrize("job_state", [
+    "BOOT_FAIL", "DEADLINE", "FAILED", "COMPLETED", "CANCELLED by 0",
+    "RUNNING", "PENDING", "FUTURE_STATE",
+])
+def test_remote_cancel_classifies_terminal_states_without_repository_imports(tmp_path, job_state):
+    import getpass
+
+    root = tmp_path.resolve()
+    name = "rl-" + "a" * 24
+    owner = {"campaign": "test", "source_sha256": "a" * 64}
+    skill_common.write(root / ".run-labs-workspace.json", owner)
+    binaries = root / "bin"
+    binaries.mkdir()
+    cancelled = root / "cancelled.json"
+    sacct = binaries / "sacct"
+    sacct.write_text(f"#!{sys.executable}\nprint({f'123|{name}|{getpass.getuser()}|{job_state}|0:0'!r})\n")
+    scancel = binaries / "scancel"
+    scancel.write_text(f"#!{sys.executable}\nimport json, sys\nfrom pathlib import Path\n"
+                       f"Path({str(cancelled)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+    for tool in (sacct, scancel):
+        tool.chmod(0o755)
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", (SCRIPTS / "remote_job.py").read_text()],
+        input=json.dumps({**owner, "root": str(root), "action": "cancel", "name": name, "job": 123}),
+        cwd=root, env={**os.environ, "PATH": str(binaries)},
+        text=True, capture_output=True, check=True, timeout=10,
+    )
+    receipt = json.loads(result.stdout)
+    assert receipt["state"] == job_state.split()[0]
+    active = job_state in ("RUNNING", "PENDING", "FUTURE_STATE")
+    assert receipt.get("cancel_requested", False) == active
+    assert cancelled.exists() == active
+    if active:
+        assert json.loads(cancelled.read_text()) == ["123"]
+
+
+def test_installed_run_labs_payload_matches_source():
+    def payload(root):
+        return {
+            path.relative_to(root): (path.read_bytes(), path.stat().st_mode & 0o111)
+            for path in root.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        }
+
+    source = payload(ROOT / "skills/run-labs")
+    assert source
+    assert payload(ROOT / ".agents/skills/run-labs") == source
 
 
 @pytest.mark.parametrize("conflict", [False, True])

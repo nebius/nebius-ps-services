@@ -9,10 +9,11 @@ import math
 import os
 from pathlib import Path
 
-from course_evidence import allocation_gpu_family
 from common import add_common_args, validate_common_args, write_result
+from course_evidence import allocation_gpu_family
 from dynamo_experiments import MODEL_REVISION, service
 from job_processes import private_folder
+from vendor_capture import add_worker_prefix, validate_worker_prefix
 
 
 def aiperf_tokenizer_config(model_dir):
@@ -354,7 +355,9 @@ def main():
     parser.add_argument("--ttft-slo-ms", type=float, default=1000)
     parser.add_argument("--itl-slo-ms", type=float, default=50)
     parser.add_argument("--capture", choices=("none", "systems"), default="none")
+    add_worker_prefix(parser)
     args = parser.parse_args()
+    validate_worker_prefix(args, server=True)
     if (
         args.iterations != 128
         or args.warmup != 0

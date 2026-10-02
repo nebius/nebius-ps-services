@@ -101,9 +101,10 @@ def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
     )[1]
     assert 'COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python"' in command
     assert (
-        "tools/submit_lab.py --lab 09_hf_prefill_decode slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py"
+        'slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py'
         in command
     )
+    assert 'sbatch --chdir="$PWD"' in command
     launcher = text("llm-inference", "slurm/single_gpu.sbatch")
     assert "COURSE_PYTHON" in launcher
 

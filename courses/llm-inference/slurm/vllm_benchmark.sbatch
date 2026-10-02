@@ -15,7 +15,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 show_usage() {
-  printf 'Usage:\n  python3 tools/submit_lab.py --lab 11_serving_client [Slurm --name=value options] %s [MODEL] [CONCURRENCY] [REVISION]\n' "$0"
+  printf 'Usage:\n  sbatch [Slurm --name=value options] %s [MODEL] [CONCURRENCY] [REVISION]\n' "$0"
   printf '\nStarts a loopback-only vLLM server, runs the course client, and stops the server.\n'
 }
 

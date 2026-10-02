@@ -10,7 +10,7 @@
       "path": "reference/diagrams/09_nccl_transport_sweep-all-reduce-result-units.svg",
       "title": "Reading an illustrative all-reduce result",
       "lab": "09_nccl_transport_sweep",
-      "after": "Check your results"
+      "after": "Concepts and code path"
     },
     {
       "path": "reference/diagrams/fabric-boundaries.svg",

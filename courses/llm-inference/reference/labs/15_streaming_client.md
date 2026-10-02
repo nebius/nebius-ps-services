@@ -4,7 +4,7 @@ Users experience streamed generation as a wait for first content followed by a s
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/15_streaming_client.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Qualify the engine and client environments and use the supplied streaming launcher. It owns the local server lifecycle. Keep prompts, responses, and raw streaming logs private and preserve the immutable model revision.
 
@@ -22,34 +22,33 @@ For the initial token-aware AIPerf exercise, qualify the image/model prerequisit
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/15_streaming_client.py` reads concurrent loopback response streams and verifies completion markers and content. It records time to first content, inter-chunk gaps, end-to-end latency, and request throughput; chunks are not necessarily tokens.
 
-Inspect request-count and concurrency options before changing load. The baseline launcher uses bounded generation and a loopback endpoint, avoiding any requirement to expose the service publicly.
-
-```bash
-umask 077
-bash slurm/vllm_streaming_benchmark.sbatch --help
-python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch
-```
-
-For token-aware metrics, run the separate AIPerf campaign with the qualified images and runner described above. Its supplied workload fixes concurrency at four; it accepts model and revision arguments, not the streaming launcher's request-count and concurrency arguments.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-bash slurm/aiperf.sbatch --help
-python3 tools/submit_lab.py --lab 15_streaming_client slurm/aiperf.sbatch
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
+
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
 After the streaming-client job completes, inspect its state and measured results on the login node. The second command prints the exact course JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 15_streaming_client --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/15_streaming_client/logs/$LAB_JOB_ID.out"
+cat "results/15_streaming_client/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 The separate AIPerf job prints its private `results/aiperf-run-RUN_ID` artifact
 directory. Inspect its native JSON summary and per-request JSONL exports for
@@ -78,7 +77,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Median inter chunk gap (seconds) | `median_inter_chunk_gap_ms` | `s` |
 | Request throughput per second | `request_throughput_per_second` | `requests/s` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 15_streaming_client \
@@ -91,14 +90,52 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Inspect request-count and concurrency options before changing load. The baseline launcher uses bounded generation and a loopback endpoint, avoiding any requirement to expose the service publicly.
+
+```bash
+bash slurm/vllm_streaming_benchmark.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch
+```
+
+For token-aware metrics, run the separate AIPerf campaign with the qualified images and runner described above. Its supplied workload fixes concurrency at four; it accepts model and revision arguments, not the streaming launcher's request-count and concurrency arguments.
+
+```bash
+bash slurm/aiperf.sbatch --help
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/aiperf.sbatch
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Draw request start, first content, later chunks, and completion. Why can one received chunk contain several tokens generated during the preceding gap? Compare these observations with server metrics without assuming their clocks and boundaries are identical.
 
 Higher concurrency can improve aggregate throughput until saturation, while increasing latency under contention; the direction and size of the effect require measurement. Compare this client's requests/s, first-content latency and completion latency without converting characters or chunks to tokens. Native engine benchmarks and endpoint clients observe different boundaries.
 
 Capture a separate diagnostic run:
 
+This diagnostic captures the GPU server while the supplied Python client generates requests. `slurm/capture_server.sh` provides bounded readiness, native `curl` start/stop controls, report paths and process cleanup; read those commands in `slurm/capture_server.sh` in the synced course directory. `@URL@`, `@PORT@` and `@OUTPUT@` receive job-local values. This captures one configuration; retain the full baseline campaign for paired correctness and acceptance timing.
+
 ```bash
-python3 tools/submit_lab.py --lab 15_streaming_client --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/vllm_streaming_benchmark.sbatch
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \
+  --mem=64G --time=00:15:00 --chdir="$PWD" \
+  bash slurm/capture_server.sh 15_streaming_client \
+  --client "${COURSE_PYTHON:?source the course runtime}" labs/15_streaming_client.py --base-url @URL@ \
+    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ \
+  --server nsys profile --trace=cuda,nvtx,osrt \
+    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \
+    --cuda-graph-trace=node --sample=none --cpuctxsw=none \
+    --discard-environment=true --force-overwrite=false \
+    --capture-range=cudaProfilerApi --capture-range-end=stop \
+    --duration=300 --kill=none --wait=all \
+    --output "results/15_streaming_client/profiles/nsys-%q{COURSE_CAPTURE_ID}" \
+    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
+    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \
+    --profiler-config.profiler cuda
 ```
 
 The launcher profiles the **GPU server**, while the client measures requests. Open the emitted `.nsys-rep` in Systems; expand CUDA API, GPU kernels, copies, and worker-process rows. The launcher triggers `/start_profile` after server readiness and `/stop_profile` after the request campaign, using the engine’s CUDA profiler API. Match that interval to the client artifact timestamps. Require actual request activity inside the capture; initialization alone is insufficient. Server NVTX availability depends on the pinned engine; use its CUDA kernels and request interval when named phases are absent.
@@ -110,8 +147,12 @@ Use the same qualified image and runner for both unprofiled submissions:
 ```bash
 STREAM_MODEL='Qwen/Qwen2.5-0.5B-Instruct'
 STREAM_REVISION='7ae557604adf67be50417f59c2c2f167def9a775'
-python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch "$STREAM_MODEL" 8 2 "$STREAM_REVISION"
-python3 tools/submit_lab.py --lab 15_streaming_client slurm/vllm_streaming_benchmark.sbatch "$STREAM_MODEL" 8 4 "$STREAM_REVISION"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch "$STREAM_MODEL" 8 2 "$STREAM_REVISION"
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/15_streaming_client/logs/%j.out" \
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch "$STREAM_MODEL" 8 4 "$STREAM_REVISION"
 ```
 
 Save both streaming-client result paths for the workload comparison. Do not pass `--concurrency` to either Slurm launcher or substitute the native AIPerf exports for these course result artifacts.

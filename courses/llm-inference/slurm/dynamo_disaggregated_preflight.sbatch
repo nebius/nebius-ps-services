@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  printf 'Usage: DYNAMO_IMAGE_DIGEST=... python3 tools/submit_lab.py --lab LAB_ID [Slurm --name=value options] %s\n' "$0"
+  printf 'Usage: DYNAMO_IMAGE_DIGEST=... sbatch [Slurm --name=value options] %s\n' "$0"
   exit 0
 fi
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi

@@ -4,7 +4,7 @@ Residual addition followed by RMSNorm is a common transformer data path with opp
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/11_residual_rmsnorm.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the completed SM90 build on one H100. The supplied width is fixed at 256 with unit scale weights; small has 17 rows and full has 4096. Hidden-size and dtype switches are not implemented.
 
@@ -18,27 +18,35 @@ Given a BF16 row of width 4096, separate kernels write 8 KiB and reread another 
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/11_residual_rmsnorm.cu` fuses residual addition and RMS normalization with learned scaling in one CUDA kernel. It checks the full output against a CPU reference and reports timing, dimensions, FP32 accumulation, and epsilon. The baseline launcher records its output as course result JSON.
 
-Run the small reference and relevant memory/race checks. The full profile changes row count only and does not test the width-generalization problem.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" \
+  slurm/single_gpu.sbatch \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
 ```
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 11_residual_rmsnorm --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/11_residual_rmsnorm/logs/$LAB_JOB_ID.out"
+cat "results/11_residual_rmsnorm/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require complete FP32 CPU-reference agreement and no relevant sanitizer errors. Inspect timing, accumulation dtype, and epsilon. These gates do not prove BF16/FP16 behavior, arbitrary-width correctness, or a speedup over an unfused implementation.
 
@@ -54,7 +62,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Elements | `elements` | `none` |
 | Epsilon | `epsilon` | `none` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 11_residual_rmsnorm \
@@ -67,6 +75,24 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Run the small reference and relevant memory/race checks. The full profile changes row count only and does not test the width-generalization problem.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/11_residual_rmsnorm" --profile small
+```
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Why can the sum of the input and residual stay in a register through the reduction? Which barrier makes the final sum safe to read? Explain why merely launching 256 threads cannot process a 4096-column row correctly with this indexing.
 
 Keeping residual values in registers can raise pressure; rereading them adds traffic. One-pass reductions can be less stable or more complex. Fusion reduces modularity and needs variants for dtype/layout.
@@ -74,25 +100,48 @@ Keeping residual values in registers can raise pressure; rereading them adds tra
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/11_residual_rmsnorm/logs/capture-%J-%t.out" \
+  --error="results/11_residual_rmsnorm/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/11_residual_rmsnorm/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
 ```
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
-For one kernel, use the same fixed workload in a separate Compute capture. The default first-launch report checks that collection works; it can select initialization instead of the measured operation. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
+For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm --export=ALL,COURSE_PROFILE_TOOL=ncu slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
+srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/11_residual_rmsnorm/logs/capture-%J-%t.out" \
+  --error="results/11_residual_rmsnorm/logs/capture-%J-%t.err" \
+  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
+  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off \
+  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
+  --launch-count 1 --set basic --section SpeedOfLight \
+  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
+  --export "results/11_residual_rmsnorm/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
+  "${COURSE_BUILD_DIR:?set the completed build directory}/11_residual_rmsnorm" --profile small
 ```
 
-Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then set `COURSE_PROFILE_RANGE=phase_name` when selecting it. Keep annotations opt-in and outside clean timing paths.
+Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
 Guided comparison: Compare the fused kernel with its CPU reference, then independently replace its shared-tree reduction with a warp/block reduction and rebuild. Preserve rows, width=256, epsilon and tolerance; use memory traffic and stalls to assess the candidate.
 
 For the source experiment, rebuild with the same image and build directory, then repeat the original run and capture commands:
 
 ```bash
-python3 tools/submit_lab.py --lab 11_residual_rmsnorm --wait slurm/build_and_test.sbatch
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
+  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" --wait slurm/build_and_test.sbatch
 export COURSE_BUILD_DIR="${COMPLETED_BUILD_DIRECTORY:?completed build/run-JOB_ID directory}"
 ```
 

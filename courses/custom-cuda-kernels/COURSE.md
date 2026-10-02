@@ -42,13 +42,17 @@ The first decision example uses general matrix multiplication (GEMM), which comb
 
 Ordinary host C++ executes on the CPU. A CUDA kernel is marked with `__global__` and launched with CUDA launch syntax; it does not run on the CPU as an ordinary function call. A host reference implementation uses a separate CPU path. The application chooses which implementation to invoke, allocates accessible storage, arranges transfers when needed, and waits before consuming an unfinished result. Compiling with nvcc does not automatically parallelize every C++ loop or copy every host object to device memory.
 
-For the ordinary explicit-memory path, allocate host inputs and device buffers, copy inputs to the device, launch the kernel in a stream, check submission errors, and wait for the required GPU work and output transfers before inspecting results on the host. Device buffers can remain resident across many launches. Production wrappers usually accept existing device pointers and a stream so they do not force unnecessary copies or device-wide synchronization. The diagram distinguishes application orchestration from the kernel's device work.
+For the ordinary explicit-memory path, allocate host inputs and device buffers, copy inputs to the device, launch the kernel in a stream, check submission errors, and wait for the required GPU work and output transfers before inspecting results on the host. Device buffers can remain resident across many launches. Production wrappers usually accept existing device pointers and a stream so they do not force unnecessary copies or device-wide synchronization.
 
 ### How another application can reuse your kernel
 
 Expose a host-facing application programming interface (API) rather than asking every consumer to reproduce launch geometry. Its contract names supported shapes, strides, dtypes, alignment, pointer/device ownership, stream ordering, error reporting and numerical tolerance. It should reject unsupported inputs explicitly. A consumer is simply another program that calls that API.
 
 A source package lets consumers compile for their declared toolkit and GPU targets. A compiled static/shared library needs matching headers, linkage and an explicit binary support matrix. A framework extension additionally needs operator registration and, where applicable, gradient and compiler integration; wrapping a pointer is not sufficient. Shipping an sm_90a binary does not promise forward compatibility. A license, documented build, examples, clean consumer test and correctness/sanitizer evidence are release requirements, not optional polish. Later lessons return to these decisions after the kernel has been validated; nothing in this course publishes an artifact on your behalf.
+
+The diagram connects the host-facing API and application orchestration to the kernel's device work.
+
+![From a CPU application to a reusable GPU kernel](reference/diagrams/host-api-and-device-kernel.svg)
 
 ### Execution and dependencies
 
@@ -57,6 +61,8 @@ Fundamentals explains SM90 execution and GPU Optimizations proves a hotspot. The
 A custom kernel is useful when a required operation leaves an important gap after maintained paths have been considered. The starting point is the operation's contract: supported shapes and value ranges, layouts/strides, dtypes and accumulation, broadcasting, masks, boundaries, aliasing/mutation, determinism, synchronization and numerical tolerances. Without that contract, a faster implementation may simply compute something different.
 
 The missing work determines the next option. Batching or vectorization can remove repeated small calls. Existing PyTorch operators, compiler fusion or graph replay may remove dispatch or intermediates. cuBLAS, cuDNN and CUB/CCCL provide maintained algorithms, while a CUTLASS composition can specialize an epilogue without replacing the matrix-multiply structure. Handwritten CUDA is the remaining option for the smallest important region those paths cannot supply.
+
+![Library-first decision](#diagram-1-library-first-decision)
 
 Each candidate should have an explicit reason to help: fewer launches, less data movement, more useful parallel work or support for otherwise unavailable semantics. Its application value depends on how much of the end-to-end critical path that work occupies. A kernel that halves a negligible stage has negligible overall value.
 
@@ -96,6 +102,8 @@ CMake first configures the program's languages, compiler tools, build options an
 
 Architecture selection determines what device code the artifact contains. SM90 is the ordinary H100 target. Architecture-accelerated features have narrower compatibility requirements, so generating an SM90 executable does not establish support for every optional Hopper feature. PTX carried with an application also needs a driver capable of translating it for the target.
 
+![CUDA build and load](#diagram-13-cuda-build-and-load)
+
 CTest is a later stage: it runs the checks registered by the CMake project. Configuration succeeding, the executable building and tests running answer different questions. A correct host build alone cannot prove that the intended device code loaded and executed on an H100, and registered tests do not replace sanitizer checks.
 
 A container can package the compiler, headers and libraries under an immutable image digest. The GPU driver still comes from the host environment. Reproducibility therefore requires both a defined build artifact and a compatible execution environment; one compiler-version string cannot stand in for both.
@@ -129,6 +137,10 @@ The build produces a kernel, but correctness depends on the mapping from logical
 The host first prepares initialized input buffers and device storage, then transfers any inputs not already resident. It chooses a thread count per block and computes `blocks = ceil_div(n, threads)`, providing enough threads to cover n elements even when n is not an exact multiple of the block size.
 
 Inside the kernel, a thread forms `i = blockIdx.x * blockDim.x + threadIdx.x`. Only threads with `i < n` load inputs and write an output. Extra threads in the final block therefore perform no invalid access. A grid-stride loop can extend this mapping so a deliberately bounded grid covers more than one element per thread.
+
+The GPU places blocks on streaming multiprocessors (SMs), which execute their threads in groups of 32 called warps. Those threads issue memory accesses as they load inputs and store outputs. The diagram connects the logical index mapping to these execution and memory resources; it does not assign each thread its own physical core.
+
+![CUDA execution](#diagram-2-cuda-execution)
 
 Submission and execution have separate error boundaries. The host checks launch errors immediately, then waits for the required work to complete to surface errors from device execution. It cannot inspect an unfinished result merely because the launch call returned. `__restrict__` adds a non-aliasing promise only when the caller truly guarantees that the relevant pointer ranges do not overlap.
 
@@ -172,6 +184,8 @@ A sentinel helps detect omitted work. If every valid output must be finite, init
 
 Once correctness is established, Nsight Systems locates launches, copies, gaps and synchronization on the application timeline. Nsight Compute then examines a selected kernel with focused metrics. Instrumentation and replay can alter execution, so final acceptance timing comes from a separate unprofiled run. Tool version, command, exit status and sanitized findings define the evidence without exposing raw private traces.
 
+![Kernel evidence sequence](#diagram-14-kernel-evidence-sequence)
+
 A kernel with a race can pass thousands of runs and fail under another schedule or GPU. Profiling incorrect code wastes effort, and profiler overhead must not be mistaken for application timing.
 
 **Practice**
@@ -201,6 +215,8 @@ The vector kernel established two input reads, one addition, and one output writ
 Follow one element through `y = relu(scale*x + bias)`. Separate kernels write the scaled value into one intermediate, read it to add bias, write another intermediate, then read that value to apply ReLU. Each kernel also needs a launch. The arithmetic is small relative to the repeated storage and submission work.
 
 A fused kernel loads the required inputs, carries the intermediate value in registers, performs the same stages and writes the final output once. The saving is the removed launches and intermediate reads/writes. It is valid only if broadcasting, aliasing, not a number (NaN)/Inf, signed-zero, precision and activation behavior still satisfy the operation's contract and no external consumer requires the removed intermediate.
+
+![Fusion traffic](#diagram-3-fusion-traffic)
 
 Logical bytes and physical traffic need separate accounting. Global-memory intermediates are backed by HBM, but some accesses may hit caches. Eliminating a logical write or reread therefore does not guarantee an equal reduction in measured dynamic random-access memory (DRAM) bytes. A byte/launch ledger explains the intended change; profiler traffic and unprofiled timing establish its effect.
 
@@ -238,6 +254,8 @@ The tiled kernel uses shared memory for that rearrangement. Threads cooperativel
 
 Shared-memory layout matters too. In the 32-bit-word case, H100 shared memory has 32 banks. Reading a column of `tile[32][32]` steps by 32 words, sending different addresses to the same bank. Padding to `tile[32][33]` changes that stride to 33 words: modulo 32, successive accesses advance one bank. The padding changes storage mapping without adding a logical matrix column.
 
+![Coalesced transpose](#diagram-4-coalesced-transpose)
+
 Edge tiles still need the full synchronization protocol. Predicate invalid loads and stores instead of letting some threads return before the block barrier. Correctness must cover the partial edges, while sectors/requests, bank-conflict evidence and effective bandwidth distinguish global-access savings from shared-memory costs.
 
 A naive transpose has coalesced reads but strided writes, wasting global-memory transactions. A shared tile can make both sides coalesced, yet its own bank mapping can serialize accesses.
@@ -274,6 +292,8 @@ A hierarchical reduction combines values before they reach that bottleneck. Thre
 
 Next, warp representatives write their partial sums to shared memory. A block barrier makes those writes visible before the consuming warp combines them. The block then issues one global atomic or writes one partial for a later reduction kernel. Warp synchronization cannot replace a block barrier when values cross warp boundaries.
 
+![Hierarchical reduction](#diagram-5-hierarchical-reduction)
+
 CUB/CCCL `DeviceReduce` supplies a maintained implementation and is often the appropriate production choice. Comparisons include non-power-of-two, empty/small and multiple-block cases, plus the declared not a number (NaN) behavior. Because floating-point addition is not associative, different valid trees can differ numerically. A higher-precision reference and magnitude-aware tolerance check the result, while deterministic versus nondeterministic ordering remains an explicit part of the contract.
 
 Having every thread atomically update one value is simple but can serialize. A fast tree can still be wrong if inactive lanes, barriers, or numerical order are mishandled.
@@ -307,6 +327,8 @@ The transpose uses shared memory for reordering. A stencil uses it for overlappi
 For a radius-one stencil, each output needs its left neighbor, center and right neighbor. A block owns a tile of outputs, but computing its first and last outputs also needs one input outside each end of that tile. Those extra values form the left and right halo.
 
 The block first loads its interior inputs and halos into shared memory. Threads responsible for out-of-range global positions write the values required by the boundary condition instead of making invalid reads. Once staging is complete, every participating thread reaches the barrier. Valid output threads can then read their three shared values and compute their result.
+
+![Stencil tile](#diagram-6-stencil-tile)
 
 Threads with no output in a partial block may still be needed for staging or synchronization. Returning before the block-wide barrier can therefore break the algorithm even if that thread would never store an output. In higher dimensions, edge and corner halo ownership must be assigned just as explicitly.
 
@@ -344,6 +366,8 @@ Residency only provides possible work. A resident warp may be stalled on a depen
 
 Changing block size, tile size, unrolling, launch bounds or a register cap can move several costs at once. More live values may improve reuse or instruction-level parallelism but reduce resident blocks. A forced register cap, or some dynamically indexed local arrays, can introduce device-backed local-memory traffic. That added traffic can overwhelm the benefit of higher occupancy, which is why variants change one factor at a time.
 
+![Resource tradeoff](#diagram-8-resource-tradeoff)
+
 A persisting L2 (level-two cache) access window addresses a separate resource. It gives a bounded memory region preferential cache-retention treatment, not guaranteed residency in L2. That region competes with other data and needs its own reuse evidence; the policy does not repair register spills or alter the SM's occupancy limits.
 
 Occupancy is an input to latency hiding, not a score. Forcing more occupancy can spill registers to local memory, shrink tiles, or reduce instruction-level parallelism.
@@ -373,6 +397,8 @@ Regrouping puts similar tasks together, but packing moves their inputs and scatt
 The resource sweep established how many blocks can reside at once. Now diagnose whether remaining waste comes from active lane masks, unequal block durations or the final partial wave; each is a different scheduling problem.
 
 Unused capacity can arise at three different levels. Within a warp, divergent control paths execute under different active-lane masks. Across blocks, unequal iteration counts, contention or data-dependent work let some blocks finish earlier than others. At the end of a grid, even equal-duration blocks can leave a partial wave with too few blocks to fill the available SM slots.
+
+![Imbalance diagnosis](#diagram-7-imbalance-diagnosis)
 
 Each explanation predicts a different control. Uniform branch work versus mixed lanes isolates divergence. Equal task lengths versus skewed lengths isolates block imbalance. Grid sizes near a full-wave boundary expose the scheduling tail, while requiring care about changed total work. Active-lane metrics, task-duration proxies and grid/residency counts should be interpreted at their matching level.
 
@@ -412,6 +438,8 @@ A double-buffered device pipeline reserves two shared-memory buffers. Lab 08 use
 
 In steady state, the lab submits the next tile's copy into the alternate buffer before computing from the current buffer. After computation, the group waits for the copy and calls `block.sync()` before the next iteration. These calls establish copy completion and keep buffer reuse after all participating threads finish reading. Alternating buffer indices repeats the process; the loop completes the remaining work after the last copy.
 
+![Double-buffer pipeline](#diagram-9-double-buffer-pipeline)
+
 All participants must follow the same copy, wait and barrier protocol. Cooperative Groups names the participating CUDA thread group and supplies coordinated operations for it; a group application programming interface (API) does not excuse a member from the required synchronization. Omitting a wait creates a race, and reusing a stage too early overwrites data still in use.
 
 Another CUDA interface combines `cuda::memcpy_async` with `cuda::pipeline`. That interface has explicit `producer_acquire()`, `producer_commit()`, `consumer_wait()` and `consumer_release()` operations. Those names belong to that API; Lab 08 uses the Cooperative Groups copy/wait interface instead. Hardware acceleration depends on architecture, alignment, byte count and memory spaces. Tensor Memory Accelerator (TMA), introduced later, is a distinct bulk/tensor transfer mechanism.
@@ -448,6 +476,8 @@ A GEMM mainloop accumulates the matrix product. Output-side work can then scale 
 
 The arithmetic policy remains part of correctness. A cuBLAS math mode controls permitted computation choices; pedantic mode follows prescribed precision and standardized arithmetic but does not promise bitwise equality with a CPU reference. A CUTLASS composition must separately support the desired mainloop, epilogue and layout. Using CUTLASS alone does not establish a Hopper Tensor Core path or broadcast-bias implementation. The supplied 32-bit floating point (FP32) SIMT case and its expanded bias remain distinct from those extensions.
 
+![Library epilogue](#diagram-10-library-epilogue)
+
 Storage interpretation must also match the call. Row-major arrays place adjacent columns together; column-major arrays place adjacent rows together. To compute row-major `C = A @ B` through the traditional column-major cuBLAS interface, interpret the same buffers as transposes and compute `C.T = B.T @ A.T`. This swaps operand roles and M/N dimensions without physically transposing the data.
 
 Each leading dimension comes from the actual buffer's storage stride, not automatically its logical row count. Incorrect layout, alpha or beta changes the operation rather than merely selecting a different implementation. The complete comparison therefore includes numerical policy, layout, output-side work and full operation cost.
@@ -478,7 +508,11 @@ Fused residual addition plus RMSNorm first forms x + skip and then normalizes th
 
 Fusion, reduction and resource tuning are now established, with asynchronous pipelines and library epilogues as additional patterns. Residual addition plus RMSNorm combines the core fusion/reduction patterns. Optional Hopper clusters and CUDA Tile C++ are not prerequisites for this case study.
 
+The reciprocal-square-root operation is `rsqrt(v) = 1 / sqrt(v)`. It converts the positive mean-square-plus-epsilon value into the shared normalization scale; epsilon prevents division by zero for an all-zero row.
+
 For each row, the kernel first forms the residual values `r = x + skip`. RMSNorm needs their mean square, so it squares the row elements, combines them through a warp/block reduction in FP32 and divides by the row width. It then computes `inv_rms = rsqrt(mean(r²)+epsilon)` and produces each output as its residual value times `inv_rms` times the learned weight.
+
+![Residual normalization](#diagram-15-residual-normalization)
 
 Every output depends on the same row reduction. The residual values must therefore remain available until that reduction finishes, either retained in registers/shared memory or reproduced afterward. Fusion avoids writing the residual to global memory solely for the normalization to reread it. If the residual is itself a required external output, its store cannot be removed; that choice belongs in the operation contract.
 
@@ -489,8 +523,6 @@ Trusted CPU, CUDA or library results check zero, random and extreme inputs withi
 Separate residual and normalization kernels materialize an intermediate and reread it. A fused kernel can remove traffic, but normalization needs a numerically stable row reduction and support for arbitrary hidden sizes.
 
 Precision-specialized paths may change vector width, accumulation, and math instructions; `--use_fast_math` changes numerical semantics globally and is never a free speed switch.
-
-The reciprocal-square-root operation is `rsqrt(v) = 1 / sqrt(v)`. It converts the positive mean-square-plus-epsilon value into the shared normalization scale; epsilon prevents division by zero for an all-zero row.
 
 **Practice**
 
@@ -521,6 +553,8 @@ Acceptance begins at the application boundary. Fixed operation semantics, worklo
 Maintained alternatives come before a new implementation. If a gap remains, the smallest candidate receives independent reference checks, edge-shape cases, explicit errors and numerical tolerances. Relevant sanitizers examine memory and synchronization behavior; compiler reports and a focused Compute profile explain resources and the proposed performance mechanism.
 
 At least three independent kernel and end-to-end trials, with counterbalanced order, test whether the saving survives normal variation and integration overhead. Supported shapes, dtypes, layouts and any declared fallback are part of that evidence. Correctness, non-finite handling, p50/p95 timing, memory, launch count and compilation/startup costs determine the result together with ownership, portability and limitations.
+
+![Acceptance flow](#diagram-12-acceptance-flow)
 
 A reusable release adds another boundary: another program calls a supported interface. That contract specifies input validity, device and stream ownership, completion/error behavior, numerical limits and the build/runtime matrix. A clean consumer test checks use without relying on the teaching executable. Source packages and compiled libraries have different distribution obligations; successful compilation alone does not establish runtime support or authorize publication.
 
@@ -558,6 +592,8 @@ Thread-block clusters address cooperation between blocks assigned to SMs in the 
 
 TMA and clusters are distinct mechanisms. The optional course probe tests only a cluster launch: an extended configuration requests two blocks per cluster and a grid of four blocks, producing two clusters if the device supports that arrangement. `cudaLaunchKernelEx` submits the attributes along with the ordinary grid/block configuration, and checking every recorded block index verifies the bounded launch.
 
+![H100 advanced path](#diagram-11-h100-advanced-path)
+
 That result does not demonstrate TMA transfers or distributed shared-memory cooperation. Those extensions need their own descriptor/stride validation, portable reference, supported cluster/occupancy checks, sanitizers and focused profiles. Explicit build and runtime gates keep their narrower qualification separate from the core SM90 course.
 
 TMA and clusters can reduce address-generation work or enable reuse beyond one block, yet unsupported shapes, bad descriptors, cluster occupancy, or missing cluster-wide synchronization can make them incorrect or slower.
@@ -587,6 +623,8 @@ In explicit thread/block CUDA, the programmer describes much of the mapping and 
 The core course uses stable CUDA C++ concepts and explicit thread/block code. Tile-level programming is an optional expression model that still compiles to kernels governed by the same memory, synchronization, and evidence rules.
 
 A tile-oriented version starts with the same accepted operation and expresses it in larger units of data. Instead of spelling out every thread's scalar index, it describes a tile shape, loads a tile, applies transformations or reductions, coordinates dependencies and stores the result. The compiler takes responsibility for more of the mapping onto execution resources.
+
+![Tile programming model](#diagram-16-tile-programming-model)
 
 That change in expression does not remove the operation's contract. Partial edge tiles still need safe behavior; loads must finish before consumption; reductions need the intended numerical semantics; and outputs must match the accepted CUDA C++ reference. A shorter source may generate more or less efficient instructions, so readability and performance remain separate questions.
 

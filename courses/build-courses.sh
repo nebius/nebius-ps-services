@@ -34,8 +34,10 @@ identical HTML and ZIP content when inputs are unchanged; timestamps may change.
 Lab scripts are supplied by sync-labs.sh; lab-kit ZIPs are not generated.
 Rebuilding does not synchronize wording between source documents or publish
 the website. Full course validation is a separate maintainer step.
-Terminal output separates checking in cyan, current outputs in green and failed
-checks in red. Redirected output, TERM=dumb and any NO_COLOR use plain text.
+Publication sizes use decimal MB (1 MB = 1,000,000 bytes); limits are checked
+against exact byte counts. Terminal output separates checking in cyan, current
+outputs in green and failures, including exceeded size limits, in red.
+Redirected output, TERM=dumb and any NO_COLOR use plain text.
 USAGE
 }
 

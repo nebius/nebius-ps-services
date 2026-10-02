@@ -9,7 +9,7 @@ set -euo pipefail
 umask 077
 
 if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
-  printf 'Usage: CUDA_IMAGE_DIGEST=... CUTLASS_ROOT=... COURSE_CONTAINER_RUNNER=... python3 tools/submit_lab.py --lab LAB_ID %s\n' "$0"
+  printf 'Usage: CUDA_IMAGE_DIGEST=... CUTLASS_ROOT=... COURSE_CONTAINER_RUNNER=... sbatch %s\n' "$0"
   exit 0
 fi
 if [[ -z ${SLURM_JOB_ID:-} ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi

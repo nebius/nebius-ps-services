@@ -4,7 +4,7 @@ A communication problem can affect tiny synchronization messages differently fro
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/09_nccl_transport_sweep.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -19,6 +19,8 @@ The program is a measurement harness, not a custom implementation of a collectiv
 The networking helper selects one environment override before NCCL starts. For each payload size, the lab refills the tensor and synchronizes readiness. It records a CUDA start event, submits `all_reduce` with `async_op=True`, calls `work.wait()`, records the stop event on that stream and synchronizes it before reading elapsed time. Preparation, output checks and result gathering stay outside the interval. MAX aggregation supplies the slowest rank's duration per iteration; a separate synchronized host sample includes launch and event-handling overhead.
 
 Given an illustrative 64 MiB all-reduce taking 4,000 microseconds on two ranks, algorithmic bandwidth is 67,108,864 / 0.004 / 10⁹ ≈ 16.78 GB/s; normalized bus bandwidth is also 16.78. This is not an H100 performance claim. Change only the eligible collective algorithm in a fresh comparison. Expected observation: a candidate may improve that row but worsen 8 KiB messages. Check which sizes the application actually sends before choosing it; averaging all row bandwidths can hide the regression that matters.
+
+![Reading an illustrative all-reduce result](../diagrams/09_nccl_transport_sweep-all-reduce-result-units.svg)
 
 Use an allocated node, not the login host, for read-only discovery. Inspect GPU/NIC proximity with `nvidia-smi topo -m`; its legend explains path labels such as PIX, PHB and SYS. Use available `ibv_devinfo`, `ibstat` or `rdma link show` output to distinguish an active port from a merely installed adapter, and InfiniBand from Ethernet/RoCE. An IP interface name and an RDMA HCA name are different namespaces. Record only sanitized topology facts in a shared report; raw outputs may contain hostnames, addresses or device identifiers.
 
@@ -50,30 +52,35 @@ Do not copy old RoCE recipes blindly. NCCL 2.21 and later dynamically select a G
 
 ## Practice
 
-Run the experiment commands on the login node. Save the printed JSON paths; job submission alone is not a result.
+`labs/09_nccl_transport_sweep.py` sweeps FP32 all-reduce message sizes under one selected NCCL configuration. It checks exact sums on every rank and writes slowest-rank device/wall timings, algorithm bandwidth, and normalized bus bandwidth.
 
-Submit from the course root. First run a small range and the default profile; then collect a full curve. Each submission starts a new process group. The larger --profile label does not secretly change the message range: the explicit byte bounds define this workload.
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-umask 077
-python3 tools/submit_lab.py --lab 05_transport_readiness slurm/two_node.sbatch labs/05_transport_readiness.py --profile small
-python3 tools/submit_lab.py --lab 09_nccl_transport_sweep slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576
-python3 tools/submit_lab.py --lab 09_nccl_transport_sweep slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --variant default
-python3 tools/submit_lab.py --lab 09_nccl_transport_sweep slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --variant socket
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/09_nccl_transport_sweep/logs/%j.out" \
+  --error="$PWD/results/09_nccl_transport_sweep/logs/%j.err" \
+  slurm/two_node.sbatch \
+  labs/09_nccl_transport_sweep.py --max-bytes 1048576
 ```
-
-For acceptance, repeat each compared profile in at least three independent jobs, alternating default/candidate order. Within a job, `--warmup` and `--iterations` control repeated samples, not independent runs. Use `--variant gdr-off`, `ring`, `tree`, `qp1` or `qp4` only after writing the corresponding hypothesis from the comparison table above. Compare `qp1` with `qp4` as its own experiment; do not combine a QP change with an algorithm change.
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 ## Check your results
 
-After the submitted job completes, inspect its state and measured results on the login node. The second command prints the exact JSON paths and numeric fields used by this dashboard. For a direct CPU run, use job `0`.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+Record the job number printed by this lab's successful submission. Require `COMPLETED` and exit code `0:0`, then read that job's logs and open its printed JSON path. Never select a result from an older job.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?submitted job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 09_nccl_transport_sweep --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/09_nccl_transport_sweep/logs/$LAB_JOB_ID.out"
+cat "results/09_nccl_transport_sweep/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
 ```
+
+Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_job_id`, `correctness` and instrumentation fields; retain every original/aggregate required by this lab.
 
 Require all_sizes_exact_on_all_ranks and a complete ordered curve. Each row contains bytes, slowest_rank_samples_ms, median_ms, min_ms, p90_ms, algbw_GBps_at_median and normalized_busbw_GBps_at_median. The wall_summary and slowest_rank_wall_samples_ms fields provide the host completion cross-check. The environment identifies PyTorch, CUDA and loaded NCCL versions. Verbose NCCL logging marks acceptance_timing false; hidden profilers and site policy still need to be excluded in the experiment record. Inspect distributions at each size, not just the fastest sample; a p90 from twenty measurements is a coarse summary, not a stable production tail estimate.
 
@@ -91,7 +98,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Curve / case / algbw GBps at median | `curve.*.algbw_GBps_at_median` | `Bps` |
 | Curve / case / normalized busbw GBps at median | `curve.*.normalized_busbw_GBps_at_median` | `Bps` |
 
-Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 09_nccl_transport_sweep \
@@ -104,6 +111,29 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit from the course root. First run a small range and the default profile; then collect a full curve. Each submission starts a new process group. The larger --profile label does not secretly change the message range: the explicit byte bounds define this workload.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/05_transport_readiness/logs/%j.out" \
+  --error="$PWD/results/05_transport_readiness/logs/%j.err" slurm/two_node.sbatch labs/05_transport_readiness.py --profile small
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/09_nccl_transport_sweep/logs/%j.out" \
+  --error="$PWD/results/09_nccl_transport_sweep/logs/%j.err" slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/09_nccl_transport_sweep/logs/%j.out" \
+  --error="$PWD/results/09_nccl_transport_sweep/logs/%j.err" slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --variant default
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/09_nccl_transport_sweep/logs/%j.out" \
+  --error="$PWD/results/09_nccl_transport_sweep/logs/%j.err" slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --variant socket
+```
+
+For acceptance, repeat each compared profile in at least three independent jobs, alternating default/candidate order. Within a job, `--warmup` and `--iterations` control repeated samples, not independent runs. Use `--variant gdr-off`, `ring`, `tree`, `qp1` or `qp4` only after writing the corresponding hypothesis from the comparison table above. Compare `qp1` with `qp4` as its own experiment; do not combine a QP change with an algorithm change.
+
+Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+
 Build a small worksheet for three representative sizes: 8 KiB, 1 MiB and 64 MiB. For each, retain all three independent run medians and their range, then compare the median of those run medians between profiles. Do not pool every within-job sample and call them independent runs. Explain whether the effect is limited to small-message latency, large-message transfer, or neither.
 
 Correlate the curve with separate transport diagnostics and read-only link information. If one candidate helps large messages but hurts small ones, inspect actual application collective sizes before choosing it. This harness intentionally inserts barriers and checks; application overlap and asynchronous submission may produce different behavior.
@@ -113,7 +143,17 @@ Diagnostic logging and profilers perturb timing; collect them separately. Blocki
 Capture a separate diagnostic run:
 
 ```bash
-python3 tools/submit_lab.py --lab 09_nccl_transport_sweep --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/two_node.sbatch labs/09_nccl_transport_sweep.py --max-bytes 1048576
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/09_nccl_transport_sweep/logs/capture-%J-%t.out" \
+  --error="results/09_nccl_transport_sweep/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 1 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/09_nccl_transport_sweep/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/09_nccl_transport_sweep.py --max-bytes 1048576
 ```
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.

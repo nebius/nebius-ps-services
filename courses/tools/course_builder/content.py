@@ -7,9 +7,34 @@ import posixpath
 import re
 from .markdown import block, inline, slug
 from .metadata import executable_sources, valid_lesson_fields
-from .visuals import detailed_diagram_markup, tool_figure
+from .visuals import tool_figure
 from .downloads import dashboard_pointer, lab_results_pointer
 from .config import FIELD_CLASSES, LAB_SECTIONS, SHARED_GUIDE_SECTIONS
+
+
+def diagram_block(
+    content: str,
+    figures: list[dict],
+    links: dict[str, str] | None = None,
+    **options,
+) -> str:
+    """Render every registered figure exactly where its author placed it."""
+    remaining = {entry["path"]: entry for entry in figures}
+    if len(remaining) != len(figures):
+        raise ValueError("duplicate figure registration")
+
+    def figure(path: str, caption: str) -> str:
+        entry = remaining.pop(path, None)
+        if entry is None or caption != entry["title"]:
+            raise ValueError(
+                "figure must match its declared home, section and title exactly once"
+            )
+        return entry["markup"]
+
+    rendered = block(content, links, figure=figure, **options)
+    if remaining:
+        raise ValueError("missing authored figure placement: " + ", ".join(remaining))
+    return rendered
 
 
 def lesson_markup(
@@ -17,37 +42,19 @@ def lesson_markup(
     number: int,
     links: dict[str, str] | None = None,
     related: list[tuple[str, str]] | None = None,
-    figures: dict[str, list[str]] | None = None,
+    figures: dict[str, list[dict]] | None = None,
     practice_labs: list[dict] | None = None,
-    authored_figures: list[dict] | None = None,
 ) -> str:
     title = lesson["title"]
+    if set(figures or {}) - set(lesson):
+        raise ValueError("figure section is missing from lesson")
     parts = [
         f'<section class="lesson" id="{slug(title)}" data-lesson-number="{number}">',
         f"<h2>{number}. {html.escape(title)}</h2>",
     ]
     for field in FIELD_CLASSES:
         content = lesson.get(field)
-        remaining_figures = list((figures or {}).get(field, []))
-
-        def figure(path: str, caption: str) -> str:
-            entry = next(
-                (
-                    item
-                    for item in (authored_figures or [])
-                    if item["path"] == path and item["after"] == field
-                ),
-                None,
-            )
-            if entry is None or caption != entry["title"]:
-                raise ValueError(
-                    f"{title}: figure must match its declared lesson home and title"
-                )
-            markup = detailed_diagram_markup(entry)
-            if markup not in remaining_figures:
-                raise ValueError(f"{title}: duplicate or misplaced lesson figure")
-            remaining_figures.remove(markup)
-            return markup
+        registered = (figures or {}).get(field, [])
 
         if field == "Practice" and practice_labs is not None:
             assigned = {
@@ -72,13 +79,12 @@ def lesson_markup(
                 )
                 + "</ul>"
             )
-        elif content:
-            body = block(content, links, heading_offset=1, figure=figure)
+        elif content or registered:
+            body = diagram_block(content or "", registered, links, heading_offset=1)
         else:
             continue
         class_name = FIELD_CLASSES[field]
         parts.append(f'<div class="{class_name}"><h3>{html.escape(field)}</h3>{body}')
-        parts.extend(remaining_figures)
         if field == "How it works" and related:
             parts.append(
                 '<aside class="lesson-visuals"><strong>Related diagram</strong><ul>'
@@ -126,7 +132,7 @@ def lab_guide_links(guide: dict, references: dict[str, str]) -> dict[str, str]:
         if not target.startswith("https://"):
             links[posixpath.relpath(target, "reference/labs")] = anchor
     for destination in re.findall(
-        r"\[[^]]+\]\(([^)]+)\)", guide["guide_path"].read_text(encoding="utf-8")
+        r"(?<!!)\[[^]]+\]\(([^)]+)\)", guide["guide_path"].read_text(encoding="utf-8")
     ):
         base, separator, section = destination.partition("#")
         if (
@@ -148,14 +154,22 @@ def lab_markup(
     guide: dict,
     lessons: list[dict],
     references: dict[str, str],
-    figures: dict[str, list[str]] | None = None,
+    figures: dict[str, list[dict]] | None = None,
 ) -> str:
     source = guide["source"]
     relative = source.relative_to(course).as_posix()
     links = lab_guide_links(guide, references)
+    if set(figures or {}) - set(guide["sections"]):
+        raise ValueError("figure section is missing from lab guide")
     narrative = "".join(
-        f'<div class="lab-guide-section" id="lab-{slug(source.stem)}-{slug(name)}"><h4>{html.escape(name)}</h4>{block(body, links, prefix=f"lab-{slug(source.stem)}-{slug(name)}-")}</div>'
-        + "".join((figures or {}).get(name, []))
+        f'<div class="lab-guide-section" id="lab-{slug(source.stem)}-{slug(name)}"><h4>{html.escape(name)}</h4>'
+        + diagram_block(
+            body,
+            (figures or {}).get(name, []),
+            links,
+            prefix=f"lab-{slug(source.stem)}-{slug(name)}-",
+        )
+        + "</div>"
         for name, body in guide["sections"].items()
     )
     return f"""
@@ -192,6 +206,10 @@ def performance_tools_markup(
         if relative in seen:
             raise ValueError("duplicate tool figure")
         seen.add(relative)
+        if relative == "#tools-measurement-loop":
+            if title != "A measured optimization loop":
+                raise ValueError("tool figure must match its declared title")
+            return diagram
         return tool_figure(course, relative, title)
 
     body = "".join(
@@ -203,10 +221,11 @@ def performance_tools_markup(
             figure=figure if name == "How it works" else None,
             heading_offset=1,
         )
-        + (diagram if name == "How it works" else "")
         + "</div>"
         for name, content in zip(chunks[1::2], chunks[2::2], strict=True)
     )
+    if "#tools-measurement-loop" not in seen:
+        raise ValueError("missing authored measurement-loop figure placement")
     return (
         '<section id="using-gpu-performance-tools" class="performance-tools"><h2>Using GPU performance tools</h2>'
         + body

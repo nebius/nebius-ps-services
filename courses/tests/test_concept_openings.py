@@ -17,6 +17,7 @@ from test_course_review_fixes import load_lab
 def test_every_lesson_has_a_complete_definition_first(course):
     lessons = cb_metadata.parse_course(ROOT / course / "COURSE.md")[2]
     detailed = cb_visuals.detailed_visuals(ROOT / course, len(lessons))
+    overviews = cb_metadata.parse_visuals(ROOT / course / "reference/visual-plan.md")
     page = (ROOT / course / "index.html").read_text()
     for number, lesson in enumerate(lessons, 1):
         field = "How it works"
@@ -37,12 +38,35 @@ def test_every_lesson_has_a_complete_definition_first(course):
             entry["path"]: cb_visuals.detailed_diagram_markup(entry)
             for entry in entries
         }
+        figures.update(
+            {
+                f"#diagram-{index}-{cb_markdown.slug(visual.title)}": cb_visuals.diagram(
+                    visual, index
+                )
+                for index, visual in enumerate(overviews, 1)
+                if visual.home == "lesson" and visual.lesson == number
+            }
+        )
+        registry = [
+            dict(
+                path=entry["path"], title=entry["title"], markup=figures[entry["path"]]
+            )
+            for entry in entries
+        ]
+        registry.extend(
+            dict(
+                path=f"#diagram-{index}-{cb_markdown.slug(visual.title)}",
+                title=visual.title,
+                markup=cb_visuals.diagram(visual, index),
+            )
+            for index, visual in enumerate(overviews, 1)
+            if visual.home == "lesson" and visual.lesson == number
+        )
         rendered = cb_content.lesson_markup(
             lesson,
             number,
             links,
-            figures={"How it works": list(figures.values())},
-            authored_figures=entries,
+            figures={"How it works": registry},
         )
         assert rendered.index("<h3>Objective</h3>") < rendered.index(
             f"<h3>{field}</h3>"

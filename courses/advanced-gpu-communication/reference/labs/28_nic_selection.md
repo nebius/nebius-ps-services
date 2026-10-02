@@ -4,7 +4,7 @@ A host channel adapter, or HCA, connects a worker to InfiniBand. NCCL selects us
 
 ## Before you start
 
-Complete [environment setup](../../../README.md#how-to-set-up-the-lab) once. This lab uses the [assigned Grafana dashboard](../grafana/28_nic_selection.json).
+Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -14,22 +14,41 @@ The single policy sets an exact NCCL_IB_HCA match for each node. The all policy 
 
 ## Practice
 
-Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+`labs/28_nic_selection.py` runs sixteen-rank MAX all-reduce with automatic NIC selection or one selected NIC per node. It checks exact output and writes latency samples and useful payload rate while retaining automatic algorithm selection.
+
+Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-python3 tools/submit_lab.py --lab 28_nic_selection slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy all
-python3 tools/submit_lab.py --lab 28_nic_selection slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy single
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
+  --chdir="$PWD" \
+  --output="$PWD/results/28_nic_selection/logs/%j.out" \
+  --error="$PWD/results/28_nic_selection/logs/%j.err" \
+  slurm/fabric.sbatch \
+  labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy all
 ```
-
-Logs stay under `results/28_nic_selection/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
 
 ## Check your results
 
-Confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
+Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
+
+For pair publication, confirm both completed job states and inspect the actual JSON paths. Set `BASELINE_RESULT` and `CANDIDATE_RESULT` to those artifacts, never to stdout or profiler reports.
 
 ```bash
-sacct -j "${LAB_JOB_ID:?job number}" --format=JobID,State,ExitCode
-"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py --lab 28_nic_selection --job "$LAB_JOB_ID"
+export LAB_JOB_ID='<job number printed by this lab submission>'
+sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
+cat "results/28_nic_selection/logs/$LAB_JOB_ID.out"
+cat "results/28_nic_selection/logs/$LAB_JOB_ID.err"
+export RESULT_JSON='<exact result path printed by the completed run>'
+cat "$RESULT_JSON"
+```
+
+Require `COMPLETED` and exit code `0:0` for each job. Reading JSON is inspection,
+not validation: check `lab_id`, `experiment.slurm_job_id`, correctness and
+instrumentation fields. Retain every original/aggregate required by this lab.
+
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
+
+```bash
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 28_nic_selection \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -44,10 +63,35 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 
 ## Investigate the behavior
 
+### Workload variations
+
+Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
+
+```bash
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/28_nic_selection/logs/%j.out" \
+  --error="$PWD/results/28_nic_selection/logs/%j.err" slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy all
+sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --output="$PWD/results/28_nic_selection/logs/%j.out" \
+  --error="$PWD/results/28_nic_selection/logs/%j.err" slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy single
+```
+
+Logs stay under `results/28_nic_selection/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
+
 Match each global rank to its worker and inspect NET/IB transport, selected HCA and GDR evidence in the logs. In Systems inspect the network_all_reduce range and stragglers. Try another observed HCA in a separate comparison; keep both baseline and candidate HCA arguments identical within that pair. Explain GPU-to-NIC locality before interpreting a throughput difference.
 
 ```bash
-python3 tools/submit_lab.py --lab 28_nic_selection --export=ALL,COURSE_PROFILE_TOOL=nsys slurm/fabric.sbatch labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy all
+srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
+  --chdir="$PWD" --output="results/28_nic_selection/logs/capture-%J-%t.out" \
+  --error="results/28_nic_selection/logs/capture-%J-%t.err" \
+  bash slurm/capture_ranks.sh 8 \
+  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
+  nsys profile --trace=cuda,nvtx,osrt,nccl \
+  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
+  --discard-environment=true --force-overwrite=false \
+  --duration=300 --kill=none --wait=all \
+  --output "results/28_nic_selection/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
+  "${COURSE_PYTHON:?source the course runtime}" labs/28_nic_selection.py --profile small --server-hca "$SERVER_HCA" --client-hca "$CLIENT_HCA" --hca-policy all
 ```
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.

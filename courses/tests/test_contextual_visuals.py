@@ -9,11 +9,77 @@ from course_builder import (
     visuals as cb_visuals,
 )
 import json
+from html.parser import HTMLParser
 import re
 import xml.etree.ElementTree as ET
 
 import pytest
 from test_course_content_contract import COURSES, ROOT
+
+
+class FigurePredecessors(HTMLParser):
+    """Record each figure's preceding sibling without using the course renderer."""
+
+    def __init__(self):
+        super().__init__()
+        self.stack = [{"text": [], "last": None}]
+        self.previous = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "figure":
+            self.previous[dict(attrs).get("id")] = self.stack[-1]["last"]
+        self.stack.append({"text": [], "last": None, "tag": tag})
+        if tag in {"meta", "link", "img", "br", "hr", "input", "source", "wbr"}:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        node = self.stack.pop()
+        assert node["tag"] == tag
+        text = " ".join("".join(node["text"]).split())
+        self.stack[-1]["text"].append(text + " ")
+        self.stack[-1]["last"] = (tag, text)
+
+    def handle_data(self, data):
+        self.stack[-1]["text"].append(data)
+
+
+@pytest.mark.parametrize("course", cb_config.COURSES)
+def test_all_authored_figures_immediately_follow_their_explanation(course):
+    """Compare canonical adjacent blocks with actual published predecessors."""
+    root = ROOT / course
+    actual = FigurePredecessors()
+    actual.feed((root / "index.html").read_text())
+    expected = {}
+    sources = [
+        root / "COURSE.md",
+        *root.glob("reference/performance-tools.md"),
+        *root.glob("reference/labs/*.md"),
+    ]
+    for source in sources:
+        text = source.read_text()
+        links = {
+            destination: "#reference"
+            for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", text)
+        }
+
+        def figure(path, title):
+            if path.startswith("#"):
+                target = path[1:]
+            elif path.startswith("diagrams/tools-"):
+                target = path.rsplit("/", 1)[-1][:-4]
+            else:
+                target = "detail-" + cb_markdown.slug(path.rsplit("/", 1)[-1][:-4])
+            return f'<figure id="{target}"></figure>'
+
+        parsed = FigurePredecessors()
+        parsed.feed(cb_markdown.block(text, links, figure=figure))
+        assert not expected.keys() & parsed.previous.keys()
+        expected.update(parsed.previous)
+    assert expected == actual.previous
+    assert all(
+        previous and previous[0] in {"p", "ul", "ol", "div", "pre"}
+        for previous in expected.values()
+    )
 
 
 @pytest.mark.parametrize("course", COURSES)
@@ -236,23 +302,21 @@ def lesson_figure_example():
 
 def test_authored_figure_consumed_once_at_exact_lesson_position() -> None:
     entry, marker, figure = lesson_figure_example()
-    figures = {"How it works": [figure, "<figure>Other registered figure</figure>"]}
+    figures = {"How it works": [dict(entry, markup=figure)]}
     lesson = {"title": "Example", "How it works": f"Before.\n\n{marker}\n\nAfter."}
-    rendered = cb_content.lesson_markup(
-        lesson, 1, figures=figures, authored_figures=[entry]
-    )
+    rendered = cb_content.lesson_markup(lesson, 1, figures=figures)
     assert rendered.index("Before.") < rendered.index(figure) < rendered.index("After.")
-    assert rendered.index("After.") < rendered.index("Other registered figure")
     assert rendered.count(figure) == 1
-    assert figures["How it works"][0] == figure  # Rendering does not mutate its input.
+    assert figures["How it works"][0]["markup"] == figure  # Inputs are unchanged.
 
 
 @pytest.mark.parametrize(
-    "case", ["unknown", "wrong-home", "wrong-title", "duplicate", "wrong-field"]
+    "case",
+    ["unknown", "wrong-home", "wrong-title", "duplicate", "wrong-field", "missing"],
 )
 def test_authored_figure_rejects_invalid_placement(case: str) -> None:
     entry, marker, figure = lesson_figure_example()
-    registry = [entry]
+    registry = [dict(entry, markup=figure)]
     if case == "unknown":
         marker = marker.replace("example.svg", "missing.svg")
     elif case == "wrong-home":
@@ -261,14 +325,44 @@ def test_authored_figure_rejects_invalid_placement(case: str) -> None:
         marker = marker.replace("[Example]", "[Other title]")
     elif case == "duplicate":
         marker += "\n\n" + marker
+    elif case == "missing":
+        marker = "Explanation without its registered diagram."
     field = "Objective" if case == "wrong-field" else "How it works"
     with pytest.raises(ValueError, match="figure"):
         cb_content.lesson_markup(
             {"title": "Example", field: marker},
             1,
-            figures={"How it works": [figure]},
-            authored_figures=registry,
+            figures={"How it works": registry},
         )
+
+
+@pytest.mark.parametrize(
+    "explanation",
+    [
+        "Explanation.",
+        "- First point\n- Second point",
+        "| Input | Output |\n| --- | --- |\n| 1 | 2 |",
+        "```text\nworked example\n```",
+    ],
+)
+@pytest.mark.parametrize(
+    "path",
+    ["#diagram-1-example", "reference/diagrams/example.svg", "../diagrams/example.svg"],
+)
+def test_diagram_block_preserves_paragraph_adjacency_and_rejects_omissions(
+    path, explanation
+):
+    figure = '<figure id="example"><svg></svg></figure>'
+    entry = dict(path=path, title="Example", markup=figure)
+    marker = f"![Example]({path})"
+    source = f"{explanation}\n\n{marker}\n\n### Another topic\n\nLater text."
+    rendered = cb_content.diagram_block(source, [entry])
+    assert cb_markdown.block(explanation) + figure in rendered
+    assert rendered.index(figure) < rendered.index("Another topic")
+    with pytest.raises(ValueError, match="missing authored figure"):
+        cb_content.diagram_block(source.replace(marker, ""), [entry])
+    with pytest.raises(ValueError, match="figure"):
+        cb_content.diagram_block(source + "\n\n" + marker, [entry])
 
 
 def test_matrix_example_figure_is_inside_work_hierarchy() -> None:
