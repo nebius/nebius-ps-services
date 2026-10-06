@@ -19,12 +19,12 @@ portalocker==4.3.0
 propcache==0.5.2
 protobuf==7.36.1
 pycparser==3.0
-PyJWT==2.14.0
+PyJWT==2.15.0
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 ruff==0.16.6
 s3transfer==0.19.2
 six==1.17.0
 typing_extensions==4.16.0
-urllib3==2.7.0
+urllib3==2.8.0
 yarl==1.24.5
