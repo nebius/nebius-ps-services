@@ -64,7 +64,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -136,7 +136,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -210,7 +210,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -282,7 +282,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -350,11 +350,11 @@
         "kernel_samples"
       ],
       "workload_parameters": [],
-      "guided_comparison": "Compare the global-memory stencil with shared-memory staging. Independently test threads=128 instead of 256, rebuild, and explain halo overhead versus occupancy at fixed elements.",
+      "guided_comparison": "Compare the supplied shared-memory stencil's 256-thread baseline with a source-edited and rebuilt 128-thread candidate at fixed elements. Explain halo overhead versus occupancy and verify both against the CPU reference. A timed direct-global stencil is an optional implementation extension, not a supplied comparison case.",
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -426,7 +426,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -497,7 +497,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -581,7 +581,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -656,7 +656,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -728,7 +728,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Expand course_measure and CUDA GPU kernel rows. Locate the cluster kernel and inspect launch gaps and its device duration. Check cluster capability and numerical correctness first; a capture does not prove a cluster-launch speedup."
       },
       "gpu_telemetry": true,
@@ -801,7 +801,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,
@@ -863,7 +863,7 @@
       "systems": {
         "applicable": true,
         "target": "worker",
-        "reason": "Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+        "reason": "Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
         "view": "Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run."
       },
       "gpu_telemetry": true,

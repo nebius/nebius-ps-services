@@ -23,6 +23,7 @@ def test_dynamo_capture_preserves_worker_configuration(monkeypatch, tmp_path, ca
         )
         monkeypatch.setenv("COURSE_PROFILE_TOOL", "none")
         monkeypatch.setenv("COURSE_DYNAMO_PYTHON", sys.executable)
+        monkeypatch.setenv("COURSE_DYNAMO_LIBRARY_PATH", "/fixture/dynamo/lib")
         monkeypatch.setattr(lab, "allocated_nodes", lambda: ["worker-a", "worker-b"])
         monkeypatch.setattr(
             lab.socket,

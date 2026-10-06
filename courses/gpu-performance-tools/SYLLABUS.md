@@ -6,4 +6,6 @@
 4. PyTorch operator profiling
 5. Grafana and VictoriaMetrics
 
-One guided hour. Read GPU Fundamentals first; return here for flag meanings while following practical labs.
+One guided hour. Read after Soperator and before GPU Fundamentals or any practical
+labs. No cluster is required for reading. Return here for command and flag
+meanings while following the practical courses.

@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Use a selected-kernel profile to explain removed intermediate traffic and launch cost. Does the result survive order reversal? Estimate the maximum application gain from the hotspot's fraction of total runtime before prioritizing integration. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Use a selected-kernel profile to explain removed intermediate traffic and launch cost. Does the result survive order reversal? Estimate the maximum application gain from the hotspot's fraction of total runtime before prioritizing integration. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

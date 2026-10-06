@@ -4,9 +4,9 @@ Vector addition is simple enough to expose the essential CUDA program structure 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Complete the SM90 build and preflight, then set `COURSE_BUILD_DIR` to the completed build. Use one H100. The small case contains 1,003 elements; the full case contains 2^24 elements. Both use 256 threads per block.
+Complete CUDA preparation and Lab 13 preflight; the launcher restores the prepared SM90 build through `COURSE_BUILD_DIR` automatically. Use one H100. The small case contains 1,003 elements; the full case contains 2^24 elements. Both use 256 threads per block.
 
 Prefer maintained SM90 paths first. Any `sm_90a` architecture-accelerated feature is opt-in and not forward-compatible in the same way as ordinary compute capability 9.0 code.
 
@@ -97,6 +97,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 01_vector_add --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 01_vector_add \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -172,7 +173,7 @@ Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**
 
 Guided comparison: Compare 256 with 128 threads per block using the same 1,003 small elements. Independently test 512 threads and explain the final-block waste and Compute occupancy; keep the fastest correct measured configuration.
 
-**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 

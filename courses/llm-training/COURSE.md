@@ -4,6 +4,7 @@ LLM Training explains how a large language model learns and how a training step
 uses compute, memory and communication. Learn to preserve the learning objective
 while improving correctness, recoverability, precision, data flow and throughput.
 
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
 Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
 execution, timing and profiling skills. The course develops training mechanics
 through worked examples and controlled experiments; inference serving has its
@@ -13,7 +14,7 @@ Local GPU practice uses one full H100; distributed-training experiments belong t
 [Advanced Labs](../advanced-gpu-communication/index.html).
 These bounded, often synthetic workloads do not establish production convergence
 or large-model scaling. Prepare with the shared Lab Guide's
-[environment setup](../README.md#how-to-set-up-the-lab).
+[environment setup](../lab-guide.html#lab-preparation-scripts).
 
 ## 1. Model learning and training objectives
 

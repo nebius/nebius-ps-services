@@ -1,12 +1,13 @@
 # Advanced Labs: Multi-GPUs Multi-Nodes communication optimization
 
-[Open the complete course](index.html) · [Lab route](SYLLABUS.md) · [Setup](../README.md#how-to-set-up-the-lab) · [Environment candidates](VERSIONS.md)
+[Open the complete course](index.html) · [Lab route](SYLLABUS.md) · [Lab Guide](../lab-guide.html#lab-preparation-scripts) · [Environment candidates](VERSIONS.md)
 
-This course contains **34 executable labs**, supported by the
-[shared environment setup](../README.md#how-to-set-up-the-lab). Follow the lab
+This course contains **34 executable labs**. Follow the lab
 route from placement and fabric qualification through collective mechanics,
 distributed training, inference and serving goodput. Each guide contains its
-definitions, commands, correctness checks, dashboard and investigation.
+definitions, commands, correctness checks, dashboard and investigation. Read
+[GPU Performance Tools](../gpu-performance-tools/index.html) before the first
+experiment to prepare for the native jobs and profiler evidence.
 
 Use two eight-H100 Soperator workers with NVLink/NVSwitch and InfiniBand. The two one-GPU TCP workers used for the earlier local labs are insufficient for fabric qualification. Sixteen GPUs are allocated; two-rank mechanics deliberately use fewer participating GPUs. Every guide identifies the relevant evidence and a one-variable comparison.
 
@@ -15,7 +16,7 @@ count as comparison invariants. Both selected runs must preserve the two-rank,
 two-host placement and pass the NCCL correctness checks.
 
 NIXL and Dynamo's job-owned etcd coordinator binds the first worker's resolved
-IPv4 address and advertises its hostname. Verify worker name resolution before the vendor installation below.
+IPv4 address and advertises its hostname. Verify worker name resolution before starting the distributed jobs.
 
 Dynamo's installer builds NIXL 1.3.2 and NIXL-EP together against the prepared
 runtime's CUDA-aware UCX, selected by `DYNAMO_UCX_PREFIX`. The native package
@@ -88,16 +89,14 @@ The attention backend supplies causal masking. Dataset mask generation is
 disabled as well as mask transfer, avoiding an unused quadratic mask in each
 prefetched sample at the longer sequence length.
 
-The fabric build in Lab 01 requires PCI development headers and `libpci` in addition
-to the CUDA and RDMA development stack. The installer checks compilation and
-linking before creating a partial build; see [Lab 01](reference/labs/01_fabric_topology.md) for
-package names and owner-supplied compiler/library paths.
-Source the generated fabric environment before submission so perftest can find
-its installed CUDA data-validation plugin while preserving owner library paths.
+The specialized bandwidth labs use prepared native fabric tools, including the
+CUDA data-validation plugin for perftest. Their launchers restore the saved tool
+and library paths automatically. Lab 01 only checks topology and rank placement;
+it does not install or benchmark those tools.
 
 DDP and FSDP memory dashboards convert the artifact’s MiB values to bytes; Grafana selects the displayed byte unit.
 
-Submit with native `sbatch` after preparing private per-lab logs as shown below. Follow the Lab Guide for shared Nsight tools and private Grafana, then prepare publishing when you need monitored comparisons. JSON artifacts remain authoritative; selected comparison metrics are a replaceable cache. `small` and `large` are workload-size profiles.
+Submit with native `sbatch` after the Lab Guide preparation has created private per-lab log directories. Follow the Lab Guide for shared Nsight tools and private Grafana, then prepare publishing when you need monitored comparisons. JSON artifacts remain authoritative; selected comparison metrics are a replaceable cache. `small` and `large` are workload-size profiles.
 
 Keep custom output directories under `results/`, as in Lab 24's batch-one
 example. Inspect the exact JSON paths printed by each completed job.
@@ -143,48 +142,25 @@ still has 34 numbered labs; native Compute qualification remains pending.
 
 ## Runtime preparation
 
-After the shared Python setup, work from
-`~/courses/advanced-gpu-communication`. Prepare fabric tools in
-[Lab 01](reference/labs/01_fabric_topology.md) and MPI-enabled NCCL Tests in
-[Lab 10](reference/labs/10_nccl_tests_report.md). Source
-`"$COURSE_TOOLS/fabric/environment.sh"` before fabric submissions.
+The Lab Guide's course/lab-number lookup selects the regular or specialized
+communication runtime for each experiment. Preparation groups do not change the
+two-node, eight-GPU-per-node hardware qualification requirements. The large
+model belongs only to the Dynamo labs; unrelated experiments do not need it.
 
-### Vendor runtime preparation
+Setup checks NIXLBench's compiled CUDA/etcd features without running it. Its
+`COURSE_ETCD` and `DYNAMO_UCX_PREFIX` runtime selectors are generated privately.
+Bridge receives an isolated pinned PyTorch/vision/Triton/CUTLASS base before its
+locked source dependencies are installed. These are prepared candidates;
+installation does not establish GPU, fabric or full upstream qualification.
 
-The existing installer prepares Bridge, NIXLBench, Dynamo and AIPerf together;
-all prerequisites below are required even when preparing only one vendor lab.
-Run it once, then reuse the installed environments.
-
-For Labs 29–34, prepare isolated vendor environments once. The owner supplies Python 3.12, UV, CUDA 13 and a compatible driver (the generic CUDA 13 floor is 580.00.03), RDMA libraries, and a Bridge base interpreter with the training stack corresponding to NVIDIA PyTorch 26.06-py3. Bridge also needs its CUDA compiler and locked Transformer Engine build dependencies. Do not use an empty stock-Python environment as the Bridge base.
-
-Dynamo needs CUDA 13 compiler tools and CUDA-aware UCX/RDMA development libraries selected by `DYNAMO_UCX_PREFIX`. Its joint NIXL/NIXL-EP build must use that same native stack.
-
-For NIXLBench, the owner prepares Meson/Ninja, GCC 11+, CMake 3.20+, CUDA headers, GFlags, OpenMP, Asio, tomlplusplus, etcd-cpp-api with gRPC/Protobuf, a shared etcd executable, and a separate CUDA-aware UCX 1.22.0 installation (source commit `8a6b06fb880accbb933a79cda893883872c68d9d`). The install script checks CUDA and etcd features rather than accepting a partial build.
+Follow [Lab 01](reference/labs/01_fabric_topology.md) for placement/fabric checks
+and [Lab 10](reference/labs/10_nccl_tests_report.md) for the benchmark's actual
+MPI/Slurm integration. Setup uses configured worker capacity, so unsupported runtime subsets are
+skipped on clusters without two eight-GPU Hopper workers.
 
 NIXL and Dynamo start a private, job-owned etcd process on the first allocated
-worker. Worker names must resolve to their reachable IPv4 addresses. The helper
-binds that worker's resolved IP, as required by etcd, and advertises its hostname
-to clients. Readiness failure stops the experiment before benchmark traffic.
-
-```bash
-export BRIDGE_BASE_PYTHON='<absolute owner-prepared Python 3.12 path>'
-export UCX_PREFIX='<absolute isolated UCX 1.22.0 prefix>'
-export DYNAMO_UCX_PREFIX='<absolute UCX prefix matching the Dynamo CUDA/RDMA runtime>'
-export COURSE_ETCD='<absolute shared etcd executable>'
-bash env/install-vendor-candidates.sh
-source env/vendor-environment.sh
-```
-
-The vendor scripts pin versions and record private receipts. Source `env/vendor-environment.sh` before network/serving labs to restore the base runtime after Bridge work. Keep standalone NIXL UCX separate from Dynamo's prepared stack. Candidate installation is not live qualification.
-
-Save the vendor prerequisites without overwriting the existing Python settings:
-
-```bash
-declare -p COURSE_ETCD UCX_PREFIX DYNAMO_UCX_PREFIX >> "$HOME/courses/.runtime/$COURSE.sh"
-```
-
-Prepare the model in [Lab 32](reference/labs/32_dynamo_disaggregation.md) before
-Dynamo Labs 32–34. Source `env/vendor-environment.sh` in each vendor submission shell.
+worker during the lab. Worker hostnames must resolve to reachable IPv4 addresses.
+Readiness failures stop the experiment before benchmark traffic.
 
 ## Learning order
 

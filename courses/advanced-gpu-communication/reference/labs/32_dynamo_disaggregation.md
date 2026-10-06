@@ -4,32 +4,20 @@ Prefill processes input tokens and creates the key/value cache; decode repeatedl
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
-Prepare the course's joint vendor runtime once using the
-[advanced course runtime instructions](../../README.md). Dynamo requires CUDA 13
-compiler tools and a CUDA-aware UCX/RDMA stack selected by `DYNAMO_UCX_PREFIX`;
-its joint NIXL/NIXL-EP build must use that same stack. Keep it separate from
-standalone NIXLBench's UCX installation.
+The selected preparation from the Lab Guide provides this lab's isolated vendor runtime. The native launcher restores its recorded paths automatically.
 
 The job owns a private etcd process on the first worker. Worker hostnames must
 resolve to reachable IPv4 addresses; etcd binds that address and advertises the
 hostname. Readiness failure stops the experiment before request traffic.
 
-**Login node, from `~/courses/advanced-gpu-communication`:** prepare the pinned
-model once for Labs 32–34, then retain the exported path:
-
-```bash
-source env/vendor-environment.sh
-export MODEL_PATH="$("$COURSE_DYNAMO_PYTHON" -c 'from huggingface_hub import snapshot_download; print(snapshot_download("Qwen/Qwen3-8B", revision="b968826d9c46dd6066d109eabc6255188de91218"))')"
-declare -p MODEL_PATH >> "$HOME/courses/.runtime/$COURSE.sh"
-```
-
-Keep the complete Hugging Face cache snapshot, including repository metadata.
-Lab 34 uses the pinned repository ID and revision for offline tokenizer lookup;
-copying weights and tokenizer files alone is insufficient.
+The setup command caches Qwen/Qwen3-8B at revision
+`b968826d9c46dd6066d109eabc6255188de91218`, including the complete Hugging Face
+repository metadata. The launcher supplies its private `COURSE_MODEL_DIR`
+automatically. Labs 32–34 use that same snapshot and offline tokenizer lookup.
 
 ## Concepts and code path
 
@@ -49,7 +37,7 @@ Run from this course directory on the login node after the one-time Lab Guide se
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
   --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" \
-  slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated
+  slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated
 ```
 
 ## Check your results
@@ -76,6 +64,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 32_dynamo_disaggregation --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_dynamo_disaggregation \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -98,10 +87,10 @@ Submit the two unprofiled jobs from the login node, one after the other after co
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
-  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
-  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir "$MODEL_PATH" --layout disaggregated
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.sbatch --workload small --layout disaggregated
 ```
 
 Logs stay under `results/32_dynamo_disaggregation/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -121,7 +110,7 @@ This coordinated diagnostic uses the native `sbatch` launcher to reserve both no
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_dynamo_disaggregation/logs/%j.out" \
-  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir "$MODEL_PATH" --layout aggregated --capture systems
+  --error="$PWD/results/32_dynamo_disaggregation/logs/%j.err" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --layout aggregated --capture systems
 ```
 
 The native Systems command is in `slurm/32_dynamo_disaggregation.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.

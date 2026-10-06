@@ -180,7 +180,7 @@ def test_representative_mechanisms_and_tooling_are_published() -> None:
     generated = (ROOT / "gpu-optimizations/index.html").read_text(
         encoding="utf-8"
     )
-    assert "(../README.md#how-to-set-up-the-lab)" in readme
+    assert "(../lab-guide.html#lab-preparation-scripts)" in readme
     for required_text in (
         "nsys status -e",
         "ncu --list-sets",

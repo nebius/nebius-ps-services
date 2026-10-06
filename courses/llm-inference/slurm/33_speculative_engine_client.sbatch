@@ -32,10 +32,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 33_speculative_engine_client.sbatch
 umask 077
 for directory in results results/33_speculative_engine_client results/33_speculative_engine_client/logs results/33_speculative_engine_client/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/33_speculative_engine_client/jobs/$SLURM_JOB_ID"
@@ -46,12 +48,12 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 usage() {
   printf 'Usage: sbatch %s TARGET_MODEL TARGET_REVISION DRAFT_MODEL DRAFT_REVISION\n' "$0"
@@ -63,14 +65,10 @@ if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then
   printf 'ERROR: submit with sbatch so SLURM_JOB_ID is numeric.\n' >&2
   exit 2
 fi
-if (($# != 4)); then usage >&2; exit 2; fi
-: "${VLLM_IMAGE_DIGEST:?set the exact qualified vLLM image digest}"
-: "${AIPERF_IMAGE_DIGEST:?set the exact qualified AIPerf image digest}"
-: "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
-if [[ ${VLLM_IMAGE_DIGEST} != *@sha256:* || ${AIPERF_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then
-  printf 'ERROR: both images must use @sha256 and the runner must be executable.\n' >&2
-  exit 2
+if (($# == 0)); then
+  set -- "$COURSE_TARGET_MODEL" "$COURSE_TARGET_REVISION" "$COURSE_DRAFT_MODEL" "$COURSE_DRAFT_REVISION"
 fi
+if (($# != 4)); then usage >&2; exit 2; fi
 target_model=$1
 target_revision=$2
 draft_model=$3
@@ -80,7 +78,7 @@ if [[ ! ${target_revision} =~ ^[0-9a-f]{40}$ || ! ${draft_revision} =~ ^[0-9a-f]
   exit 2
 fi
 course_dir=$PWD
-course_python=${COURSE_PYTHON:-python3}
+course_python=${COURSE_PYTHON}
 command -v "${course_python}" >/dev/null 2>&1 || {
   printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2
   exit 2
@@ -108,17 +106,17 @@ stop_server() {
   local pid=${server_pid:-}
   if [[ -z ${pid} ]]; then return; fi
   server_pid=""
-  kill "${pid}" 2>/dev/null || true
+  kill -- "-${pid}" 2>/dev/null || true
   local stop_attempts=50
   if [[ ${COURSE_PROFILE_TOOL:-none} == nsys ]]; then stop_attempts=600; fi
   for ((attempt=0; attempt<stop_attempts; attempt++)); do
-    if ! kill -0 "${pid}" 2>/dev/null; then
+    if ! kill -0 -- "-${pid}" 2>/dev/null; then
       wait "${pid}" 2>/dev/null || true
       return
     fi
     sleep 0.1
   done
-  kill -KILL "${pid}" 2>/dev/null || true
+  kill -KILL -- "-${pid}" 2>/dev/null || true
   wait "${pid}" 2>/dev/null || true
 }
 handle_signal() { trap - INT TERM; exit "$1"; }
@@ -131,8 +129,7 @@ run_trial() {
   local trial=$2
   local server_log="${COURSE_JOB_DIR}/logs/vllm-speculative-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   local command=(
-    "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}"
-    vllm serve "${target_model}" --revision "${target_revision}"
+    "${COURSE_VLLM:?run serving-lab-setup.py}" serve "${target_model}" --revision "${target_revision}"
     --tokenizer-revision "${target_revision}" --host 127.0.0.1 --port "${port}"
     --dtype bfloat16 --max-model-len 2048
   )
@@ -143,7 +140,7 @@ run_trial() {
       "${draft_model}" "${draft_revision}")
     command+=(--speculative-config "${speculative_config}")
   fi
-  "${command[@]}" >"${server_log}" 2>&1 &
+  setsid "${command[@]}" >"${server_log}" 2>&1 &
   server_pid=$!
   local ready=0
   for _ in {1..180}; do
@@ -172,8 +169,8 @@ run_trial() {
     --output "${base_dir}/${variant}-trial-${trial}-digests.json"
   local artifact_dir="${base_dir}/${variant}-trial-${trial}-aiperf"
   mkdir -m 700 "${artifact_dir}"
-  "${COURSE_CONTAINER_RUNNER}" "${AIPERF_IMAGE_DIGEST}" \
-    aiperf profile --model "${target_model}" --tokenizer-revision "${target_revision}" --url "http://127.0.0.1:${port}" \
+  \
+    "${COURSE_AIPERF:?run serving-lab-setup.py}" profile --model "${target_model}" --tokenizer-revision "${target_revision}" --url "http://127.0.0.1:${port}" \
     --endpoint-type completions --streaming \
     --synthetic-input-tokens-mean 512 --synthetic-input-tokens-stddev 0 \
     --output-tokens-mean 128 --output-tokens-stddev 0 \

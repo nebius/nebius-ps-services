@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 10_vllm_offline.nsys.sbatch
 umask 077
 for directory in results results/10_vllm_offline results/10_vllm_offline/logs results/10_vllm_offline/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/10_vllm_offline/jobs/$SLURM_JOB_ID"
@@ -45,12 +47,9 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=nsys COURSE_CAPTURE=1 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
-: "${COURSE_CONTAINER_RUNNER:?select the qualified container runner}"
-: "${VLLM_IMAGE_DIGEST:?select the immutable vLLM image}"
-[[ $VLLM_IMAGE_DIGEST == *@sha256:* && -x $COURSE_CONTAINER_RUNNER ]] || exit 2
-export COURSE_RUNTIME_ID=$VLLM_IMAGE_DIGEST
-srun --ntasks=1 --gpus-per-task=1 "$COURSE_CONTAINER_RUNNER" "$VLLM_IMAGE_DIGEST" env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none --discard-environment=true --force-overwrite=false --duration=300 --kill=none --wait=all --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" python3 labs/10_vllm_offline.py --in-process --workload "$workload" "$@"
+srun --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none --discard-environment=true --force-overwrite=false --duration=300 --kill=none --wait=all --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "${COURSE_VLLM_PYTHON}" labs/10_vllm_offline.py --in-process --workload "$workload" "$@"
 
 # Successful exit alone does not prove that a profiler collected a report.
 report_count=0

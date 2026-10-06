@@ -1,0 +1,13 @@
+Bootstrap: docker
+From: @BASE@
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends python3.12 python3.12-venv cmake ninja-build build-essential
+    rm -rf /var/lib/apt/lists/*
+
+%labels
+    course.runtime cuda-development
+    course.preparation installed-not-gpu-qualified

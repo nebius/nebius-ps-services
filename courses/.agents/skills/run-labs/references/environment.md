@@ -3,8 +3,10 @@
 Read for a new run or missing prerequisite. Reuse the user's existing access
 receipt, deployment config, login connection and accepted target identity.
 The course root is a sibling set of catalogs, not a single course directory.
-`sync-labs.sh --sync-only` uses existing SSH authentication and writes a private
-connection receipt; no interactive login is needed for subsequent commands.
+`sync-labs.sh --sync-only` uses existing SSH authentication without opening a
+shell. The campaign stores connection settings in its private environment and
+records synchronization proof after independently verifying remote source and
+workspace ownership. No separate connection receipt is needed.
 
 Create the following **outside Git**, mode 600 in a mode 700 directory. Fields
 are examples, not defaults. There are no secret values in this schema:
@@ -21,25 +23,53 @@ are examples, not defaults. There are no secret values in this schema:
   "target": "exact-config-target-name",
   "kube_context": "accepted-context",
   "reports": {"producer_root": "/data/nsight-reports", "viewer_root": "/mnt/reports"},
-  "variables": {"COURSE_PYTHON": "/qualified/bin/python3"}
+  "variables": {}
 }
 ```
 
-Optional `course_variables` maps a course slug to its variable overrides;
-`lab_variables` maps an exact `course:source-stem` to overrides. Precedence is
-global, course, lab, then the recipe's profile variables. Use these for distinct
-prepared Python, torchrun, model and container environments. The reserved
-`${REMOTE_WORKSPACE}` expands after sync to the selected unit's remote directory;
-use it for source-matched CUDA build directories required by the launchers.
+## Managed lab preparation
 
-Resolve missing per-course variables from accepted course environment files;
-load credential-bearing environment content only into process memory, never
-into `variables`, campaign state, logs or shell examples. Typical prerequisites
-are qualified Python/torchrun, immutable container digests and runner, pinned
-model paths/revisions, NCCL Tests/MPI, HCA pairs, and CUDA build directories.
-CUDA binaries must match this source and the new `--workload small|large`
-interface. A source build through the existing build launcher is allowed;
-installing compilers, services or shared README setup is outside this skill.
+Use the checkout's `lab-guide.html#lab-preparation-scripts` for the five scripts,
+course/lab-number lookup and installation instructions. The regular script runs
+without arguments; specialized scripts select a lab, a launcher or default labs
+with `--all`. Their `--plan` mode is read-only. Preparation does not qualify GPU,
+fabric, profiling or monitoring behavior.
+
+The dry-run plan's per-unit `preparation` entries resolve every actual recipe
+launcher to its runtime, script and arguments, including dependencies and
+profiling. Use those selections instead of inferring one group per course.
+Optional launchers require explicit preparation: Inference Lab 30's recipe
+includes TensorRT-LLM as well as native vLLM, so serving `--all` alone does not
+prepare that complete recipe. Do not drop the optional comparison to pass.
+
+An optional top-level `prepared_root` is an absolute path to the existing remote
+prepared catalog. If omitted, it is the remote login account's `~/courses`.
+Both that root and campaign workspaces must be reachable at identical paths on
+Slurm workers. The prepared source must match relevant frozen component inputs.
+A missing or stale runtime reports its exact preparation command; stop before
+submission and return to that preparation workflow. Never install software,
+compile replacement CUDA dependencies or download models during a campaign.
+
+Synchronization keeps an isolated course-slug directory inside each lab/profile
+workspace. Its owned mode-600 `.course-runtime-source.json` binds the prepared
+catalog without copying `.runtime`, caches or model weights. The runtime loader
+checks the original receipt, status, relevant source fingerprint and artifacts;
+source-owned adapters use the frozen copy, while installation/model paths retain
+the original generation. Optional container runners mount that copied course
+alongside the original runtime. Sync records successful proofs for every selected
+launcher; a `prepared_assets: true` checkbox cannot replace that proof. Jobs
+validate their runtime again when activating it. Do not manually write bindings
+or edit receipts to bypass a failure.
+
+Optional `course_variables` maps a course slug to experiment/site overrides;
+`lab_variables` maps an exact `course:source-stem`. Precedence remains global,
+course, lab, then recipe variables. Use these only for genuine experiment inputs,
+such as the selected HCA pair or verified reference artifact. Managed launchers
+restore Python, torchrun, model, toolkit, build and library selections themselves;
+do not use environment overrides as another installation path. The reserved
+`${REMOTE_WORKSPACE}` expands to the isolated course directory after sync.
+Load credential-bearing environment content only into process memory, never
+into variables, campaign state, logs or shell examples.
 
 Preflight independently checks cluster identity, login, Slurm, software versions,
 GPU topology, existing Grafana, both native viewers and prepared assets for the
@@ -48,8 +78,8 @@ with `run-labs-preflight/v1`, the campaign `environment_sha256`, and boolean
 `checks` keys `cluster_identity`, `login`, `slurm`, `software`, `gpu_topology`,
 `grafana`, `systems_viewer`, `compute_viewer`, `prepared_assets`.
 A checkbox is a summary of observations, never a substitute for doing them.
-For a prepared container runner that restricts working directories, verify after
-sync that every selected workspace is admitted by its effective configuration.
+For explicitly selected container variants only, verify after
+sync that every selected workspace is admitted by the prepared runner configuration.
 Checking the runner's executable and image alone is insufficient. Register only
 the exact owned campaign root through the prepared adapter's supported setup,
 preserving unrelated configuration and recording before/after identity privately.
@@ -84,7 +114,7 @@ they cover; retain independent checks for the prepared runtime rather than
 claiming an incompatible setup check passed. Do not reduce GPU inventory or
 accept missing, ambiguous, stale or foreign runtime evidence.
 
-The shared README's `course_setup.py` workflow owns new connection discovery and
+The Lab Guide's explicit `regular-lab-setup.py monitoring` action owns new connection discovery and
 the current `gpu-course-monitoring/v2` receipt. Do not rerun setup solely to resume
 a prepared campaign, convert old receipts, or change the setup helper's ownership
 checks. If new connections are needed, use that workflow and its explicit

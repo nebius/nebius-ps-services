@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Explain how block grouping differs from a two-node distributed job. Which synchronization and ownership rules would be needed before one block reads another's shared data? Which would be needed for an asynchronous TMA transfer? Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Explain how block grouping differs from a two-node distributed job. Which synchronization and ownership rules would be needed before one block reads another's shared data? Which would be needed for an asynchronous TMA transfer? Use unprofiled artifact summaries for comparison. Systems explains CUDA execution and host submission; sampled device telemetry supplies context. Correctness/mechanics exercises do not establish a performance improvement. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

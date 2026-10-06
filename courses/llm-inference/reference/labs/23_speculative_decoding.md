@@ -4,7 +4,7 @@ Speculative decoding proposes several tokens with a cheaper draft and asks the t
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 in the mechanics environment. No external target/draft model is required. The example is a first-order synthetic greedy process, not a transformer engine or proof of stochastic speculative-distribution equivalence.
 
@@ -71,6 +71,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 23_speculative_decoding --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 23_speculative_decoding \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

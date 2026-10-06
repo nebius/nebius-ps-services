@@ -4,7 +4,7 @@ A transpose naturally makes either reads or writes strided when implemented dire
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Complete the supplied SM90 transpose comparison after Lesson 6. The CUDA Tile C++ evaluation below is an optional revisit after Lesson 16, using its separately qualified development-image trial; it is not required for this lab or core course completion.
 
@@ -79,6 +79,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 03_tiled_transpose --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 03_tiled_transpose \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -145,18 +146,11 @@ Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**
 
 Guided comparison: Compare naive, unpadded-tile, and padded-tile transpose. Independently test tile_width=16 instead of 32, update the reported shared-column counts to match, rebuild, and inspect bank conflicts at fixed rows and columns.
 
-For the source experiment, rebuild with the same image and build directory, then repeat the original run and capture commands:
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" --wait slurm/build_and_test.sbatch
-export COURSE_BUILD_DIR="${COMPLETED_BUILD_DIRECTORY:?completed build/run-JOB_ID directory}"
-```
+After changing the CUDA source, rerun this lab’s CUDA preparation from the Lab Guide to compile a new private build with the same pinned toolkit. Then repeat the original run and capture commands.
 
 The publisher compares the declared workload fields and source fingerprint; retain the original artifact and do not change input generation, timed scope, or correctness tolerances.
 
-**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 

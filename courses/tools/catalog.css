@@ -68,8 +68,6 @@ h1 span { color: var(--teal); }
 .course-card:target { border-color: var(--teal); }
 .card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
 .course-number { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 7px; background: #edf6f0; color: var(--teal); font: 13px ui-monospace, monospace; }
-.resource-gpu-fundamentals .course-number, .resource-llm-training .course-number { background: #eef5fc; color: var(--blue); }
-.resource-llm-inference .course-number { background: #fff7e7; color: #86500e; }
 .course-hours { color: var(--muted); font-size: 11px; }
 .card-eyebrow { color: var(--teal); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; line-height: 1.5; margin: 0 0 10px; }
 .course-card h3 { font-size: 23px; line-height: 1.2; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 650; text-wrap: balance; }

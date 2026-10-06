@@ -10,7 +10,7 @@ from test_course_content_contract import COURSES, ROOT
 ADVANCED = "advanced-gpu-communication"
 
 
-def test_labs_only_profile_is_explicit_and_seventh():
+def test_labs_only_profile_is_explicit_and_last():
     assert cb_config.COURSES[-1] == ADVANCED
     metadata = cb_metadata.course_metadata(ROOT / ADVANCED)
     assert metadata["profile"] == "labs-only"
@@ -103,5 +103,17 @@ def test_supporting_guide_resolves_advanced_link_from_its_markdown_directory():
         relative = "reference/cluster-smoke-test.md"
         source = (ROOT / name / relative).read_text()
         assert "(../../advanced-gpu-communication/index.html)" in source
-        rendered = cb_content.guide_markup(ROOT / name, relative, {}, (relative, "VERSIONS.md", "reference/benchmark-record.md", "reference/evidence-security.md", "reference/lab-mechanisms.md"))
+        rendered = cb_content.guide_markup(
+            ROOT / name,
+            relative,
+            cb_content.shared_guide_links(),
+            (
+                relative,
+                "VERSIONS.md",
+                "reference/benchmark-record.md",
+                "reference/evidence-security.md",
+                "reference/lab-mechanisms.md",
+            ),
+        )
         assert 'href="../advanced-gpu-communication/index.html"' in rendered
+        assert 'href="../lab-guide.html#lab-preparation-scripts"' in rendered

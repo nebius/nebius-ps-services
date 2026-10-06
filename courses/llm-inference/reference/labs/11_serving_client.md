@@ -4,9 +4,9 @@ A serving system's performance includes request handling and completion delivery
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Qualify the vLLM container, model, and client environment. The supplied launcher owns server startup, readiness, client execution, metric snapshots, and cleanup. Teaching HTTP remains loopback-only; no public endpoint is required.
+Qualify the native vLLM runtime, model, and client environment. The supplied launcher owns server startup, readiness, client execution, metric snapshots, and cleanup. Teaching HTTP remains loopback-only; no public endpoint is required.
 
 ## Concepts and code path
 
@@ -59,6 +59,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 11_serving_client --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 11_serving_client \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -71,7 +72,7 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ### Workload variations
 
-Run the launcher after its required image and runner variables are set. Inspect positional model/concurrency/revision options before changing load; a concurrency sweep must preserve the same artifact and prompt policy.
+Run the launcher after its native serving runtime is prepared. Inspect positional model/concurrency/revision options before changing load; a concurrency sweep must preserve the same artifact and prompt policy.
 
 ```bash
 bash slurm/11_serving_client.sbatch --help
@@ -98,7 +99,7 @@ The native Systems command is in `slurm/11_serving_client.nsys.sbatch`. The [GPU
 
 The launcher profiles the **GPU server**, while the client measures requests. Open the emitted `.nsys-rep` in Systems; expand CUDA API, GPU kernels, copies, and worker-process rows. The launcher triggers `/start_profile` after server readiness and `/stop_profile` after the request campaign, using the engine’s CUDA profiler API. Match that interval to the client artifact timestamps. Require actual request activity inside the capture; initialization alone is insufficient. Server NVTX availability depends on the pinned engine; use its CUDA kernels and request interval when named phases are absent.
 
-Guided comparison: Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
+Guided comparison: Vary the launcher's second positional argument, `CONCURRENCY`, while holding its first argument, `MODEL`, and third argument, `REVISION`, fixed. Inspect `bash slurm/11_serving_client.sbatch --help` for the `[MODEL] [CONCURRENCY] [REVISION]` order and append those values after the script path in the existing submission command. The launcher passes concurrency to the client; it does not accept a `--concurrency` launcher flag. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value, repeat unprofiled, and explain whether the result supports the prediction. Changing concurrency changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
 
 **Nsight Systems evidence:** Capture the owned GPU server and its worker descendants while the client supplies requests. Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

@@ -76,6 +76,7 @@ def inline(
             local_pages = (
                 {"index.html", "../gpu-performance-tools/index.html"}
                 | {f"{name}/index.html" for name in COURSES}
+                | {f"../{name}/index.html" for name in COURSES}
                 | {
                     "../lab-guide.html#" + slug(section)
                     for section in SHARED_GUIDE_SECTIONS

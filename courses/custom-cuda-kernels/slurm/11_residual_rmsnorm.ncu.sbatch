@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 11_residual_rmsnorm.ncu.sbatch
 umask 077
 for directory in results results/11_residual_rmsnorm results/11_residual_rmsnorm/logs results/11_residual_rmsnorm/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/11_residual_rmsnorm/jobs/$SLURM_JOB_ID"
@@ -45,23 +47,21 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=ncu COURSE_CAPTURE=1 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 
 : "${COURSE_BUILD_DIR:?select the completed build directory}"
-: "${CUDA_IMAGE_DIGEST:?select the qualified immutable CUDA image}"
-: "${COURSE_CONTAINER_RUNNER:?select the qualified container runner}"
-[[ $CUDA_IMAGE_DIGEST == *@sha256:* && -x $COURSE_CONTAINER_RUNNER ]] || exit 2
 executable="$COURSE_BUILD_DIR/11_residual_rmsnorm"
 [[ -x $executable && ! -L $executable ]] || exit 2
 raw="$COURSE_JOB_DIR/logs/11_residual_rmsnorm.txt"
 started=$(date +%s)
-srun --ntasks=1 --gpus-per-task=1 "$COURSE_CONTAINER_RUNNER" "$CUDA_IMAGE_DIGEST" env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+srun --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s ncu --target-processes all --nvtx --nvtx-include course_measure/ \
   --kernel-name-base demangled --rename-kernels off --kernel-name "regex:${COURSE_PROFILE_KERNEL:-.*}" \
   --launch-count 1 --set basic --section SpeedOfLight --section MemoryWorkloadAnalysis --section Occupancy \
   --clock-control none --force-overwrite false \
   --export "$COURSE_PROFILES_DIR/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "$executable" --workload "$workload" "$@" >"$raw"
 ended=$(date +%s)
-"${COURSE_PYTHON:-python3}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+"${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
 
 # Successful exit alone does not prove that a profiler collected a report.
 report_count=0

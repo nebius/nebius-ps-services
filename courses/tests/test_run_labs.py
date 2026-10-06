@@ -1529,6 +1529,125 @@ def controller_modules():
         sys.path.remove(str(SCRIPTS))
 
 
+@pytest.mark.parametrize("overrides", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "transfer-failure", "source-mismatch", "proof-mismatch"])
+def test_campaign_sync_owns_connection_and_verified_proof(
+    tmp_path, monkeypatch, controller_modules, overrides, outcome
+):
+    import shlex
+    import shutil
+
+    import prepare
+
+    controller, stages = controller_modules
+    private = skill_common.directory(tmp_path / "private")
+    campaign = skill_common.directory(private / "campaigns/test")
+    from test_run_labs_preparation import managed_fixture
+
+    remote_home = tmp_path / "remote"
+    remote_home.mkdir()
+    prepared = remote_home / ("prepared override" if overrides else "courses")
+    managed_fixture(prepared)
+    root = tmp_path / "courses"
+    shutil.copytree(prepared, root, ignore=shutil.ignore_patterns(".runtime"))
+    source = root / "example/labs/01_example.py"
+    ssh = {"target": "student@course-alias"}
+    if overrides:
+        ssh.update(port=2222, identity_file=str(tmp_path / "key with spaces"))
+    env = {"private_root": str(private), "target_id": "target", "ssh": ssh}
+    if overrides:
+        env["prepared_root"] = str(prepared)
+    state = {
+        "schema": "run-labs-campaign/v1",
+        "id": "test",
+        "status": "running",
+        "courses_root": str(root),
+        "environment": env,
+        "environment_sha256": skill_common.canonical(env),
+        "plan": {
+            "source": catalog.source_identity(root, ["example"]),
+            "source_sha256": "a" * 64,
+            "units": [{
+                "key": "example:01_example",
+                "course": "example",
+                "lab": "01_example",
+                "profile": "small",
+                "stages": [{"id": "execute", "argv": ["${REMOTE_WORKSPACE}/run.sh"]}],
+                "preparation": [{"launcher": "01_example.sbatch", "runtime": "sample"}],
+            }],
+        },
+    }
+    controller.save(campaign, state)
+    before = (campaign / "campaign.json").read_bytes()
+    calls = []
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == str(root / "sync-labs.sh"):
+            assert argv[1:5] == ["--sync-only", "--dest", "run-labs-test", "--port"]
+            assert argv[5] == str(ssh.get("port", 22))
+            assert argv[-1] == ssh["target"]
+            assert "--receipt" not in argv
+            if overrides:
+                assert argv[6:8] == ["--identity", ssh["identity_file"]]
+            else:
+                assert "--identity" not in argv
+            if outcome == "transfer-failure":
+                raise subprocess.CalledProcessError(23, argv)
+            shutil.copytree(root, remote_home / "run-labs-test", dirs_exist_ok=True)
+            if outcome == "source-mismatch":
+                (remote_home / "run-labs-test/example/labs/01_example.py").write_text("changed\n")
+            return subprocess.CompletedProcess(argv, 0)
+        assert argv[0] == "ssh"
+        assert argv[argv.index("-p") + 1] == str(ssh.get("port", 22))
+        assert argv[-2] == ssh["target"]
+        if overrides:
+            assert argv[argv.index("-i") + 1] == ssh["identity_file"]
+        else:
+            assert "-i" not in argv
+        # Execute the real remote verifier against a disposable local home.
+        remote = shlex.split(argv[-1])
+        assert remote[:5] == ["python3.12", "-B", "-E", "-s", "-c"]
+        result = real_run(
+            [sys.executable, *remote[1:]],
+            env={**os.environ, "HOME": str(remote_home)},
+            **kwargs,
+        )
+        if outcome == "proof-mismatch":
+            proof = json.loads(result.stdout)
+            proof["source_sha256"] = "b" * 64
+            result.stdout = json.dumps(proof)
+        return result
+
+    monkeypatch.setattr(stages, "verify_frozen", lambda state: None)
+    monkeypatch.setattr(prepare.subprocess, "run", run)
+    if outcome == "success":
+        for _ in range(2):
+            result = stages.run(campaign, "sync")
+            saved = controller.load(campaign)
+            assert saved["environment"] == env
+            assert saved["sync"]["schema"] == "run-labs-sync/v1"
+            assert saved["sync"]["environment_sha256"] == state["environment_sha256"]
+            assert saved["sync"]["source_sha256"] == state["plan"]["source_sha256"]
+            workspace = Path(saved["sync"]["units"][0]["remote_root"])
+            assert workspace.name == "example"
+            assert not (workspace / ".runtime").exists()
+            assert saved["sync"]["units"][0]["runtimes"][0]["runtime"] == "sample"
+            assert (workspace / "labs/01_example.py").read_bytes() == source.read_bytes()
+            assert saved["plan"]["units"][0]["stages"][0]["argv"] == [str(workspace / "run.sh")]
+            assert result["next_action"]["kind"] == "preflight"
+        assert len(calls) == 4
+    else:
+        error = subprocess.CalledProcessError if outcome == "transfer-failure" else ValueError
+        with pytest.raises(error):
+            stages.run(campaign, "sync")
+        assert (campaign / "campaign.json").read_bytes() == before
+        assert "sync" not in controller.load(campaign)
+        assert len(calls) == (1 if outcome == "transfer-failure" else 2)
+    assert not (campaign / "sync.json").exists()
+
+
 @pytest.fixture
 def transport_request(monkeypatch, controller_modules):
     transport = module("transport")
@@ -1537,7 +1656,7 @@ def transport_request(monkeypatch, controller_modules):
     unit = {"key": "example:01_example", "lab": "01_example", "profile": "small",
             "remote_root": "/fixture/workspace", "stages": [stage]}
     state = {"id": "test", "environment": {"ssh": {"target": "student@example"}},
-             "plan": {"execution_contract": "native-jobs/v1", "source_sha256": "a" * 64}}
+             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64}}
     calls = []
 
     def invoke(outcomes, action="query"):
@@ -1619,7 +1738,7 @@ def test_terminal_job_failure_preserves_evidence_and_finishes_claims(
     state = {"schema": "run-labs-campaign/v1", "id": "test", "status": "running",
              "courses_root": str(tmp_path / "courses"), "preflight": {"passed": True},
              "environment": {"private_root": str(private), "target_id": "target"},
-             "plan": {"execution_contract": "native-jobs/v1", "source_sha256": "a" * 64, "units": units}}
+             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": units}}
     controller.save(path, state)
     controller.ensure_claims(path.resolve(), state)
     claims = [controller.claim_path(state, unit) for unit in units]
@@ -1819,7 +1938,7 @@ def test_export_resumes_cleanup_without_republishing(
         "courses_root": str(tmp_path / "courses"),
         "preflight": {"passed": True},
         "environment": {"private_root": str(private), "target_id": "target"},
-        "plan": {"execution_contract": "native-jobs/v1", "source_sha256": "a" * 64, "units": [unit]},
+        "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": [unit]},
     }
     controller.save(path, state)
     skill_common.write(

@@ -142,7 +142,7 @@ for i in range(int(os.environ['REPORTS'])): (Path(os.environ['COURSE_PROFILES_DI
 
         monkeypatch.setenv("COURSE_WORKLOAD", "large")
         monkeypatch.setenv("COURSE_PROFILE_TOOL", "nsys")
-        arguments = argv[argv.index(f"labs/{lab}.py"):]
+        arguments = argv[argv.index(f"labs/{lab}.py") :]
         monkeypatch.setattr("sys.argv", arguments)
         with load_lab(f"advanced-gpu-communication/labs/{lab}.py") as module:
             monkeypatch.setattr(module, "validate_common_args", stop_before_gpu)
@@ -208,8 +208,7 @@ raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
     )
     env.update(
         COURSE_PYTHON=str(tmp_path / "bin/client"),
-        COURSE_CONTAINER_RUNNER=str(tmp_path / "bin/runner"),
-        VLLM_IMAGE_DIGEST="example.test/image@sha256:" + "a" * 64,
+        COURSE_VLLM="vllm",
         COURSE_RUN_ID="a" * 12,
         FAILURE=failure,
     )

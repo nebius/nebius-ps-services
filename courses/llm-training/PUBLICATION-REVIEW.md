@@ -1,5 +1,65 @@
 # Publication review
 
+## Teaching consistency review — 2026-10-05
+
+Reviewed `index.html` SHA-256: `f72a299c89a2455ddc2866b9a28eaaaf2b247497e3e9c84317b994ef37d26d25`.
+
+The catalog-wide semantic review covers all 89 chapters and 110 lab guides.
+Safe corrections align teaching, glossary entries and commands with supplied
+implementations while preserving this course's declared profile. Source/static
+validation passes; see the [complete consistency review](../docs/course-format-validation.md#complete-teaching-consistency-review--2026-10-05)
+for corrections, test results, artifact identities and remaining generic-checker
+and mobile-diagram limitations. Browser and live GPU qualification were not rerun.
+Earlier entries below apply to their own artifact identities.
+
+## Catalog presentation audit — 2026-10-05
+
+Reviewed `llm-training/index.html` SHA-256:
+`362b6e9bbb2b6b25d8e28480c88518376e7b56d9ea2da86b7c449a8ebe389941`.
+
+The complete eight-course review confirms shared typography, declared profile
+formatting, navigation and current HTML. All eight native validators and 380
+focused tests pass; three PyTorch runtime checks are skipped. Thirty headless
+Chrome 154.0.8037.93 checks cover all ten pages at 1440, 390 and 320 pixels,
+including keyboard controls, local scrollers and doubled-text reflow. These
+artifacts are unchanged by the build. Mobile diagram density and generic
+checker diagnostics remain explicitly qualified in the
+[complete evidence and artifact record](../docs/course-format-validation.md#complete-catalog-presentation-audit--2026-10-05).
+No live installation, GPU run or external publication is established.
+
+## Shared preparation referral review — 2026-10-03
+
+Current preparation teaching points once per course entry or lab guide to the
+shared Lab Guide, which selects the script by course and lab number. Duplicate
+installer commands and competing manual setup procedures were removed while
+preserving lab-specific prerequisites, native commands and historical results.
+
+Inspected `llm-training/index.html` SHA-256:
+`362b6e9bbb2b6b25d8e28480c88518376e7b56d9ea2da86b7c449a8ebe389941`.
+
+See [catalog preparation validation](../docs/catalog-preparation-validation.md)
+for the eight-course/110-lab audit, 536 passing tests, native validators, artifact
+identities and browser evidence at desktop/390px/320px. The final browser run had
+one intermittent 320px guide navigation failure; three unchanged affected-case
+replays passed. The observation and generic-checker limitations remain recorded.
+Installed/runtime/live qualification was not rerun. Earlier entries apply to
+their original artifacts.
+
+## Tools-first navigation review — 2026-10-02
+
+Source/static and browser checks pass for this navigation revision. GPU
+Performance Tools precedes GPU Fundamentals in every course/guide menu.
+Inspected `llm-training/index.html` SHA-256:
+`7f1504a91de65082c357e1ea6ca1a771e4e8ef12c22f24dba7df768e9f7a20fe`.
+
+See [catalog navigation validation](../docs/catalog-navigation-validation.md)
+for 243 focused tests, all eight native validators, 30 isolated headless Chrome
+checks at desktop/390px/320px, exact evidence paths and cleanup. Existing lesson
+bodies, lab sources, figures and results are preserved. The generic checker
+retains its pre-existing profile/markup limitations. This is local navigation
+evidence; runtime qualification and deployment are not claimed. Earlier review
+entries describe their own artifact revisions.
+
 ## CPU variation alignment — 2026-10-01
 
 Artifact: `index.html`, SHA-256 `bf1bc3d2cba5ac3348188ea93e0cf9b6ab890a361b687fca86302d1e738b8f4e`.

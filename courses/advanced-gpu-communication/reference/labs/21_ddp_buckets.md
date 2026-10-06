@@ -4,7 +4,7 @@ Gradient readiness only creates an opportunity for overlap; DDP must group gradi
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -12,7 +12,7 @@ DDP groups gradients into buckets and starts a collective as soon as each bucket
 
 ## Concepts and code path
 
-The fixture has four FP32 Linear/Tanh stages, 256-wide for small and 1024-wide for h100. Tanh is the smooth hyperbolic tangent, bounded between -1 and 1. Each rank trains on an equal disjoint half of the same generated global batch. MSE uses a mean, so averaged rank gradients match the full-batch objective. Candidate and reference use plain SGD: `parameter -= learning_rate * gradient`. The independent reference evolves on the complete batch.
+The fixture has four FP32 Linear/Tanh stages, 256-wide for small and 1024-wide for large. Tanh is the smooth hyperbolic tangent, bounded between -1 and 1. Each rank trains on an equal disjoint half of the same generated global batch. MSE uses a mean, so averaged rank gradients match the full-batch objective. Candidate and reference use plain SGD: `parameter -= learning_rate * gradient`. The independent reference evolves on the complete batch.
 
 DDP receives `--bucket-cap-mb` and exactly one registered hook. The hook wrapper logs public GradBucket indices and uncompressed bytes before delegating to the framework's averaging, FP16, BF16 or PowerSGD implementation. Those bytes describe original gradients, not network traffic. Buckets can rebuild during startup. PowerSGD uses error feedback and warm start; `--power-start` must be at least two, and warm-up must include a compressed step. The default start of two is a short mechanics setting, not a recommendation for real training.
 
@@ -74,6 +74,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 21_ddp_buckets --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 21_ddp_buckets \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -106,10 +107,7 @@ sbatch --chdir="$PWD" \
   --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook powersgd --bucket-cap-mb 0.1 --power-rank 1 --power-start 2 --warmup 4
 ```
 
-```bash
-```
-
-Reports are retained under a unique private `results/nsys-ddp-*` directory, one report per node. Correlate the measured-step ranges across both reports. An unavailable profiler leaves only this diagnostic gate pending.
+The separate Systems job retains reports in its private `results/21_ddp_buckets/jobs/JOB_ID/profiles/` directory with the `nsys-` prefix, one report per rank. This lab runs one rank per node. Correlate the measured-step ranges across both reports. An unavailable profiler leaves only this diagnostic gate pending.
 
 Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 

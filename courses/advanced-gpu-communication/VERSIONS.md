@@ -15,14 +15,14 @@ The following targets and pending checks describe the H100 teaching environment.
 | Environment | Qualification candidate | Identity and boundary |
 | --- | --- | --- |
 | Course PyTorch | requirements.txt | Separate shared virtual environment for the mechanics labs; record resolved packages. |
-| Nsight Systems / Compute |2026.5.1 /2026.3.1 | Unqualified manual-install candidates; the completed campaign used the matching 2026.4.1 / 2026.2.1 pairs above. Review hashes, viewers and both-worker counter permissions before changing versions. |
+| Nsight Systems / Compute | Cluster-managed CLI/viewer pair | Record matching tool and viewer versions and qualify both-worker counter permissions; completed campaign versions remain above. |
 | NIXLBench |v1.4.1 | Commit 778edd1d1a50936b12c264879e12ef465e629002; UCX 1.22.0 isolated from Dynamo. |
-| Megatron Bridge |tag v0.6.0 | Commit 51885cf132b2814188b6855c25a8588254274c2a; tag declares package 0.6.1 plus source suffix. Python 3.12 and owner-prepared training stack required. |
+| Megatron Bridge |tag v0.6.0 | Commit 51885cf132b2814188b6855c25a8588254274c2a; tag declares package 0.6.1 plus source suffix. Python 3.12 and the isolated pinned Bridge runtime are prepared for its selected labs; ABI and execution still need qualification. |
 | Dynamo |1.4.2 | Source 2ecbdfdf192c69c02c6d21e931d20d3b4a0bb64a; vLLM 0.26.0, Torch 2.11 / CUDA 13. Joint NIXL/NIXL-EP 1.3.2 cu13 build from de8115ca97d3f8fb63a4988e9b4d4a038b2e0f72 against the prepared runtime UCX/RDMA stack; SM90. |
 | AIPerf |0.12.0 | Source `be53bf2953d30e46c500e6a80fc1f8b6f84bc718`; separate environment, emitted schema checked. |
 | Serving model |Qwen/Qwen3-8B BF16 | Revision `b968826d9c46dd6066d109eabc6255188de91218`; fixed tokenizer and weights. |
 
-The course README contains the joint vendor installation; Labs 01, 10 and 32 contain fabric, NCCL Tests and model preparation commands. Exact source pins reduce drift; they do not prove that the native dependencies or GPU/network runtime work together. Retain the resolved dependency inventory, actual package versions, driver, CUDA, NCCL, UCX, topology and binary hashes privately after qualification. Ranged transitive dependencies still need a qualified lock for a delivered teaching image.
+Use the [Lab Guide](../lab-guide.html#lab-preparation-scripts) to select preparation by course and lab number, including fabric, NCCL Tests and model dependencies. Exact source pins reduce drift; they do not prove that the native dependencies or GPU/network runtime work together. Retain the resolved dependency inventory, actual package versions, driver, CUDA, NCCL, UCX, topology and binary hashes privately after qualification. Retain the resolved native package inventory for a delivered runtime and immutable image digests for explicitly selected container variants.
 
 A Bridge tag name is not its distribution version. The pinned source and editable Megatron-Core submodule are the authority. Its reduced dense-workload dependency selection needs qualification for each new target; do not assert that a generic empty Python environment is equivalent to NVIDIA's prepared training stack.
 

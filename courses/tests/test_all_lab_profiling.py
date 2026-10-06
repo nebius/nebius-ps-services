@@ -83,7 +83,7 @@ def test_evidence_validator_rejects_misleading_wiring(defect):
     elif defect == "missing-setup":
         guide = guide.replace("[Lab Guide]", "[Missing Guide]")
     elif defect == "duplicate-setup":
-        link = "[Lab Guide](../../../README.md#how-to-set-up-the-lab)"
+        link = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
         guide = guide.replace(link, link + " " + link)
     elif defect == "dashboard-prerequisite":
         guide = guide.replace("## Before you start", "## Before you start\n\n[Dashboard](../grafana/assigned.json)")

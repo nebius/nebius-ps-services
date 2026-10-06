@@ -163,7 +163,7 @@ An operator executes the same readable native Slurm jobs that students inspect, 
 
 - AC-001: Run uses --workload small|large|both, defaults to both and freezes COURSE_WORKLOAD. Preserve serialized profile fields and reject the retired workload CLI without aliases.
 - AC-002: Reviewed recipes select explicit course-owned per-lab batch files. Dispatch uses native sbatch with private scheduler directories, parsable job identity and existing write-ahead reconciliation; it does not call Python submission or profiler wrappers.
-- AC-003: Freeze native-jobs/v1 and reject incompatible saved execution plans. Preserve historical inspection and owned cancellation without rewriting old evidence.
+- AC-003: Freeze native-jobs/v2 with managed preparation binding and reject incompatible saved execution plans. Preserve historical inspection and owned cancellation without rewriting old evidence.
 - AC-004: Collect and clean only exact dispatched job directories and their scheduler logs. Validate remote paths before copying, verify hashes, retain failed evidence and never adopt historical or unrelated output.
 - AC-005: Keep dependency ordering, resource constraints, distributed/server evidence cardinality, independent verification, publication/browser gates and source/installed parity.
 
@@ -184,6 +184,70 @@ Use native scheduler/profiler doubles and campaign regression tests for argv bou
 Keep source and local fixture evidence distinct from live target qualification and browser-reviewed publication.
 
 <!-- /REQUIREMENT: REQ-006 -->
+
+<!-- REQUIREMENT: REQ-007 status=satisfied priority=P1 type=feature -->
+### REQ-007: Campaign-owned connection state and synchronization proof
+
+#### User Story
+
+A campaign operator needs automated synchronization without learner-facing bookkeeping or duplicate connection files.
+
+#### Acceptance Criteria
+
+- AC-001: Invoke sync-labs.sh with --sync-only, the campaign destination and prepared SSH settings, without a connection-receipt option or sync.json file.
+- AC-002: Retain connection settings in the private campaign environment. Independently verify frozen remote source and workspace ownership before persisting run-labs-sync/v1 synchronization evidence.
+- AC-003: Transfer or proof failure cannot mark a fresh campaign synchronized. Preserve retry, preflight and saved source/recipe validation.
+
+#### Negative Criteria
+
+- NC-001: Do not replace, migrate or delete historical connection files, add compatibility paths, or change monitoring, preflight, job or publication evidence receipts.
+
+#### Validation Method
+
+Inspect preparation, transport, campaign persistence, stage wiring and source/installed parity.
+
+#### Test Method
+
+Use local subprocess doubles to verify transfer arguments, independent source proof, successful persistence, failure propagation and absence of duplicate connection output.
+
+#### Evaluation Method
+
+Distinguish local fixture and installed parity checks from live cluster qualification.
+
+<!-- /REQUIREMENT: REQ-007 -->
+
+<!-- REQUIREMENT: REQ-008 status=satisfied priority=P1 type=feature -->
+### REQ-008: Reuse the five-script managed preparation
+
+#### User Story
+
+A campaign operator can execute selected labs with the existing managed preparation and receives the exact required preparation command when a runtime is absent or stale.
+
+#### Acceptance Criteria
+
+- AC-001: Resolve all frozen executable stages through the course runtime bindings, including prerequisite, diagnostic and optional container launchers. Expose the owning preparation script and selection in dry-run plans without installing or connecting.
+- AC-002: Preserve isolated course workspaces with valid course identities. Bind an existing prepared catalog root, defaulting to the remote courses directory or an explicit prepared_root, without copying installations, changing receipts or overriding runtime isolation.
+- AC-003: Validate selected runtime receipts, status, fingerprints and artifacts before accepting preflight. Native jobs validate again on activation. Missing dependencies identify the exact preparation command and stop dispatch.
+- AC-004: Keep preparation in the five scripts and learner instructions in the Lab Guide. Monitoring discovery uses the regular script monitoring action. Preserve hardware qualification, native jobs, source freezing, recovery, evidence and independent publication gates.
+- AC-005: Reject earlier executable plans without rewriting history. Install the aligned skill through the documented project-local npx command and verify resource parity, retaining native host policy and all public actions.
+
+#### Negative Criteria
+
+- NC-001: No dependency installation, model download, container-default substitution, copied or forged runtime receipt, compatibility execution branch, live-cluster trial or automatic Git publication in this alignment.
+
+#### Validation Method
+
+Compare source and installed payloads; inspect actual launcher/runtime bindings, source fingerprints and frozen campaign inputs.
+
+#### Test Method
+
+Use deterministic runtime and campaign fixtures for all 110 recipe selections, optional launchers, missing/stale/skipped records, workspace identity, source drift, symlinks, preflight rejection, interruption and dry-run safety.
+
+#### Evaluation Method
+
+Run portable/Codex/Claude structural and target tests plus disposable npx parity. Keep trigger and comparative quality evidence separate from static checks and live execution.
+
+<!-- /REQUIREMENT: REQ-008 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

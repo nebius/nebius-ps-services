@@ -44,6 +44,15 @@
       ],
       "after": "How it works",
       "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/tools-metrics-paths.svg",
+      "title": "Collect metrics into storage, then query them for panels",
+      "lessons": [
+        5
+      ],
+      "after": "How it works",
+      "home": "lesson"
     }
   ]
 }

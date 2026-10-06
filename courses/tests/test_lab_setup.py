@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 import pytest
 from test_course_content_contract import COURSES, ROOT
@@ -20,45 +21,15 @@ from test_practice_integration import load_validator
 PRACTICAL = (*COURSES, "advanced-gpu-communication")
 
 
-def test_fabric_preparation_creates_its_prefix_without_publishing(tmp_path):
-    guide = (
-        ROOT / "advanced-gpu-communication/reference/labs/01_fabric_topology.md"
-    ).read_text()
-    block = next(
-        block
-        for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
-        if "tools/install_fabric_tools.py" in block
-    )
-    runtime = tmp_path / "courses/.runtime"
-    runtime.mkdir(parents=True)
-    (tmp_path / "courses/.profiling-tools").mkdir(mode=0o700)
-    interpreter = tmp_path / "python3.12"
-    interpreter.write_text(
-        f"#!{sys.executable}\n"
-        "import sys\nfrom pathlib import Path\n"
-        "assert sys.argv[1] == 'tools/install_fabric_tools.py'\n"
-        "prefix = Path(sys.argv[3])\n"
-        "assert prefix.is_dir(), 'installer requires an existing prefix'\n"
-        "assert prefix.stat().st_mode & 0o777 == 0o700\n"
-        "fabric = prefix / 'fabric'\nfabric.mkdir()\n"
-        "(fabric / 'environment.sh').write_text('export FABRIC_PREPARED=yes\\n')\n"
-    )
-    interpreter.chmod(0o700)
-    completed = subprocess.run(
-        ["bash", "-eu", "-c", block + '\ntest "$FABRIC_PREPARED" = yes'],
-        cwd=tmp_path,
-        env={
-            "HOME": str(tmp_path),
-            "PATH": str(tmp_path) + os.pathsep + os.defpath,
-            "COURSE": "advanced-gpu-communication",
-        },
-        text=True,
-        capture_output=True,
-        timeout=10,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert "COURSE_TOOLS=" in (runtime / "advanced-gpu-communication.sh").read_text()
-    assert not (tmp_path / "courses/.profiling-tools/venv").exists()
+def test_fabric_preparation_belongs_to_automatic_setup():
+    definitions = json.loads((ROOT / "tools/course_bootstrap/catalog.json").read_text())
+    fabric = definitions["components"]["fabric-perftest"]
+    assert fabric["recipe"] == "fabric"
+    assert "toolchain" in fabric["depends"]
+    assert "fabric/perftest/bin/ib_write_bw" in fabric["artifacts"]
+    guide = (ROOT / "advanced-gpu-communication/reference/labs/01_fabric_topology.md").read_text()
+    assert "tools/install_fabric_tools.py --prefix" not in guide
+    assert "source tools/course_env.sh 01_fabric_topology --lab" in guide
 
 
 def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
@@ -200,17 +171,17 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
     assert (ROOT / "lab-guide.html").read_text() == cb_pages.render_shared_guide()
     owners = {
         "README.md": (
-            "requirements-mechanics.txt",
+            "regular-lab-setup.py",
             "--workload cuda",
             "--workload torch",
         ),
         "llm-inference/README.md": (
             "requirements-serving.txt",
-            "COURSE_SERVING_PYTHON",
+            "requirements-mechanics.txt",
         ),
         "custom-cuda-kernels/reference/labs/13_h100_preflight.md": (
             "CUTLASS_ROOT",
-            "CUDA_IMAGE_DIGEST",
+            "CUDA_HOME",
             "COURSE_BUILD_DIR",
         ),
         "advanced-gpu-communication/reference/labs/10_nccl_tests_report.md": (
@@ -218,7 +189,7 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
         ),
         "advanced-gpu-communication/README.md": ("DYNAMO_UCX_PREFIX", "COURSE_ETCD"),
         "advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md": (
-            "MODEL_PATH",
+            "COURSE_MODEL_DIR",
         ),
     }
     for relative, values in owners.items():
@@ -268,7 +239,49 @@ def test_shared_guide_and_lab_referrals_render_as_links():
     assert 'href="#browsing-grafana-and-nsight-profilers"' in document
     for course in PRACTICAL:
         page = (ROOT / course / "index.html").read_text()
-        assert 'href="../lab-guide.html#how-to-set-up-the-lab">Lab Guide</a>' in page
+        assert 'href="../lab-guide.html#lab-preparation-scripts">Lab Guide</a>' in page
+
+
+def test_shared_guide_toc_matches_topic_and_subsection_order():
+    source = cb_metadata.shared_guide_source()
+    document = cb_pages.render_shared_guide()
+    navigation = document.split('<nav aria-label="Lab guide contents">', 1)[1].split(
+        "</nav>", 1
+    )[0]
+    toc = ET.fromstring(
+        navigation.split("<summary>Table of contents</summary>", 1)[1].removesuffix(
+            "</details>"
+        )
+    )
+    chunks = re.split(r"^## (.+)\n", source, flags=re.M)
+    topics = list(zip(chunks[1::2], chunks[2::2], strict=True))
+    assert [item.find("a").text for item in toc] == list(
+        cb_config.SHARED_GUIDE_SECTIONS
+    )
+    targets = cb_build.PageTargets(document.encode()).ids
+    for item, (heading, content) in zip(toc, topics, strict=True):
+        assert item.find("a").get("href") == "#" + cb_markdown.slug(heading)
+        children = item.findall("ul/li/a")
+        expected = re.findall(r"^### (.+)$", content, re.M)
+        assert [child.text for child in children] == expected
+        assert [child.get("href") for child in children] == [
+            "#" + cb_markdown.slug(title) for title in expected
+        ]
+        assert all(child.get("href")[1:] in targets for child in children)
+
+
+def test_shared_guide_toc_ignores_fenced_headings(monkeypatch):
+    source = cb_metadata.shared_guide_source().replace(
+        "### Regular labs\n",
+        "### Regular labs\n\n```bash\n### Example comment\n```\n",
+        1,
+    )
+    monkeypatch.setattr(cb_pages, "shared_guide_source", lambda: source)
+    document = cb_pages.render_shared_guide()
+    assert "### Example comment" in document
+    assert 'href="#example-comment"' not in document
+    assert 'id="example-comment"' not in document
+    assert 'href="#regular-labs"' in document
 
 
 def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeypatch):
@@ -317,60 +330,17 @@ def test_inline_still_rejects_unrecognized_local_destinations(target):
         cb_markdown.inline(f"[label]({target})")
 
 
-def test_documented_vendor_runtime_restores_in_a_clean_shell(tmp_path):
+def test_documented_setup_uses_one_automatic_runtime_contract():
     source = (ROOT / "README.md").read_text()
-    runtime = tmp_path / "courses/.runtime/advanced-gpu-communication.sh"
-    runtime.parent.mkdir(parents=True)
-    save_base = re.search(r"declare -p COURSE_PYTHON[^\n]+", source).group()
-    save_base += "\n" + re.search(r"declare -p COURSE_TOOLS[^\n]+", source).group()
-    vendor = (ROOT / "advanced-gpu-communication/README.md").read_text()
-    save_vendor = re.search(r"declare -p COURSE_ETCD[^\n]+", vendor).group()
-    model = (
-        ROOT / "advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md"
-    ).read_text()
-    save_vendor += "\n" + re.search(r"declare -p MODEL_PATH[^\n]+", model).group()
-    values = {
-        name: str(tmp_path / name)
-        for name in (
-            "COURSE_TOOLS",
-            "COURSE_PUBLISH_PYTHON",
-            "COURSE_PYTHON",
-            "COURSE_TORCHRUN",
-            "COURSE_CUDNN_LIB",
-            "COURSE_ETCD",
-            "MODEL_PATH",
-            "UCX_PREFIX",
-            "DYNAMO_UCX_PREFIX",
-        )
-    }
-    minimal = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
-    saved = subprocess.run(
-        ["/bin/bash", "-eu", "-c", save_base + "\n" + save_vendor],
-        env={**minimal, **values, "COURSE": "advanced-gpu-communication"},
-        capture_output=True,
-        text=True,
-    )
-    assert saved.returncode == 0, saved.stderr
-    restored = subprocess.run(
-        [
-            "/bin/bash",
-            "-eu",
-            "-c",
-            'source "$1"; source ./env/vendor-environment.sh; printf "%s\\n" "$UCX_PREFIX" "$COURSE_ETCD" "$COURSE_PYTHON"',
-            "restore",
-            str(runtime),
-        ],
-        cwd=ROOT / "advanced-gpu-communication",
-        env=minimal,
-        capture_output=True,
-        text=True,
-    )
-    assert restored.returncode == 0, restored.stderr
-    assert restored.stdout.splitlines() == [
-        values["UCX_PREFIX"],
-        values["COURSE_ETCD"],
-        str(tmp_path / "courses/.venvs/advanced-gpu-communication/bin/python"),
-    ]
+    assert 'python3.12 "$HOME/courses/tools/regular-lab-setup.py"' in source
+    assert "declare -p COURSE_PYTHON" not in source
+    assert "regular-lab-setup.py\" prepare" not in source
+    assert not (ROOT / "advanced-gpu-communication/env/vendor-environment.sh").exists()
+    assert not (ROOT / "advanced-gpu-communication/env/install-vendor-candidates.sh").exists()
+    definitions = json.loads((ROOT / "tools/course_bootstrap/catalog.json").read_text())
+    for row in definitions["runtimes"].values():
+        if "bridge" in row["components"]:
+            assert row["environment"]["COURSE_PYTHON"] == "{bridge}/venv/bin/python"
 
 
 @pytest.mark.parametrize("defect", ["empty", "extra-section", "order", "symlink"])

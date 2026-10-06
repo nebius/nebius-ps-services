@@ -4,13 +4,12 @@ A key/value cache stores attention state for tokens already processed. When requ
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
 Reuse the joint vendor environment and pinned model prepared in
-[Lab 32](32_dynamo_disaggregation.md). Source `env/vendor-environment.sh` in
-this submission shell. Retain the complete model cache and repository metadata
+[Lab 32](32_dynamo_disaggregation.md). The native launcher restores its recorded runtime automatically. Retain the complete model cache and repository metadata
 for offline tokenizer lookup; do not substitute a weights-only copy.
 
 ## Concepts and code path
@@ -29,7 +28,7 @@ Run from this course directory on the login node after the one-time Lab Guide se
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
   --error="$PWD/results/33_dynamo_routing/logs/%j.err" \
-  slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin
+  slurm/33_dynamo_routing.sbatch --workload small --router round-robin
 ```
 
 ## Check your results
@@ -56,6 +55,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 33_dynamo_routing --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 33_dynamo_routing \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -78,10 +78,10 @@ Submit the two unprofiled jobs from the login node, one after the other after co
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
-  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --router round-robin
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
-  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --model-dir "$MODEL_PATH" --router kv
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.sbatch --workload small --router kv
 ```
 
 Logs stay under `results/33_dynamo_routing/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -102,7 +102,7 @@ This coordinated diagnostic uses the native `sbatch` launcher to reserve both no
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_dynamo_routing/logs/%j.out" \
-  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir "$MODEL_PATH" --router round-robin --capture systems
+  --error="$PWD/results/33_dynamo_routing/logs/%j.err" slurm/33_dynamo_routing.nsys.sbatch --workload small --router round-robin --capture systems
 ```
 
 The native Systems command is in `slurm/33_dynamo_routing.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.

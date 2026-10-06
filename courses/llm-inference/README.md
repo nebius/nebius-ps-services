@@ -6,7 +6,7 @@ The **base route** uses two workers with one H100 each. Its TCP/IP inter-node pa
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
 The optional AIPerf campaign referenced by Lab 30 belongs to Lab 15; submit
 `slurm/15_streaming_client.aiperf.sbatch` using Lab 15's native submission block and private log
@@ -24,32 +24,28 @@ Lab 20 fixes batch-invariant execution and the `TRITON_ATTN` attention backend
 for both cache policies and all correctness and timing phases. Its exact
 greedy-output gate remains required before performance measurements.
 
-Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
+Start with [Lab Guide](../lab-guide.html#lab-preparation-scripts) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Keep `small` and `large` as separate workload campaigns.
 
 ## Serving runtime preparation
 
-On the login node, after the shared Python setup, select
-`COURSE=llm-inference` and work from `~/courses/llm-inference`.
-The mechanics environment uses `requirements-mechanics.txt`.
+The mechanics labs and real serving labs use separate prepared environments.
+Native vLLM and AIPerf remain isolated from mechanics PyTorch and lightweight
+clients. Mechanics and clients use `requirements-mechanics.txt` and
+`requirements-serving.txt`; vLLM keeps its vendor-matched dependencies.
+Both groups share the pinned small-model snapshot; only Lab 33 adds the 1.5B
+model. Jobs restore their runtimes and private writable caches automatically.
+Use the course/lab-number lookup in the Lab Guide linked above for preparation,
+including the explicitly optional TensorRT-LLM and Dynamo container exercises.
 
-**Inference serving:** additionally set `VLLM_IMAGE_DIGEST` and `AIPERF_IMAGE_DIGEST`
-to qualified OCI digests and `COURSE_CONTAINER_RUNNER` to the absolute shared
-`slurm/container_runner.example.sh` path. Require Apptainer on both workers.
-The runner mounts managed Nsight packages and activation; qualify captures inside
-each image. Prepare the separate lightweight serving client and save its settings:
+Lab 30's TensorRT-LLM route uses a prepared llmapi PyTorch model repository; setup
+does not build a GPU engine or start a server. Default model revisions and the
+speculative target/draft pair are recorded in the runtime catalog. Workload
+arguments can select a deliberately prepared alternative experiment.
 
-```bash
-python3.12 -m venv "$HOME/courses/.venvs/llm-inference-serving"
-export COURSE_SERVING_PYTHON="$HOME/courses/.venvs/llm-inference-serving/bin/python"
-"$COURSE_SERVING_PYTHON" -m pip install -r requirements-serving.txt
-declare -p COURSE_SERVING_PYTHON VLLM_IMAGE_DIGEST AIPERF_IMAGE_DIGEST COURSE_CONTAINER_RUNNER \
-  >> "$HOME/courses/.runtime/$COURSE.sh"
-```
-
-Before serving-client jobs, use `export COURSE_PYTHON="$COURSE_SERVING_PYTHON"`.
-Restore `source "$HOME/courses/.runtime/$COURSE.sh"` before returning to mechanics labs.
+Installation is separate from qualification. Use each lab's small run to verify
+the runtime, model, driver, GPU and profiler behavior before performance claims.
 
 ## Course guide
 
@@ -81,8 +77,8 @@ jump between topics.
 
 Take GPU Fundamentals and GPU Performance Optimization first. Use a small
 mechanics environment for PyTorch/Transformers labs and a separate lightweight
-serving-client/test environment. vLLM, TensorRT-LLM, Triton, AIPerf, and Dynamo
-run through immutable container digests and a reviewed site container runner.
+serving-client/test environment. vLLM and AIPerf use native isolated environments. The optional TensorRT-LLM/Triton
+and Dynamo container exercises use immutable digests and the reviewed site runner.
 
 The lessons follow text and token mechanics through production serving,
 including phase-aware memory, queueing, caches, parallelism, and
@@ -99,24 +95,21 @@ relevant [cluster small gates](reference/cluster-smoke-test.md). Keep the
 mechanics and serving-client environments separate. Set the submitting shell's
 file mask before every submission session so early scheduler output stays private.
 
-After Lesson 2 and [Lab 16’s artifact audit](reference/labs/16_model_artifact_audit.md), follow [Lab 09’s phase-measurement guide](reference/labs/09_hf_prefill_decode.md). Run from this course root on shared storage. Select the mechanics interpreter
-explicitly so the active serving-client environment cannot leak into the job;
-the interpreter path must exist on the allocated node.
+After Lesson 2 and [Lab 16’s artifact audit](reference/labs/16_model_artifact_audit.md), follow [Lab 09’s phase-measurement guide](reference/labs/09_hf_prefill_decode.md). Run from this course root on shared storage. The native launcher loads its prepared mechanics runtime automatically.
 
 ```bash
-COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python" \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
   --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/09_hf_prefill_decode.sbatch --workload small
 ```
 
-Pinned engine profiles remain pending until their images, model revisions,
+Pinned engine profiles remain pending until their native environments or optional images, model revisions,
 driver compatibility, readiness, and H100 behavior are verified.
 Lab 30 also requires a nonempty generated-text string in the declared response
 field; a healthy endpoint or a non-text value is insufficient.
 Its OpenAI and Triton launchers each own server startup, the bounded client
 probe, and cleanup inside one Slurm allocation. The OpenAI launcher uses the
-prepared vLLM image and cached pinned model; it does not download model assets.
+prepared native vLLM environment and cached pinned model; it does not download model assets.
 The Triton launcher initializes one MPI rank with the prepared image's
 `mpirun` before starting `tritonserver`, within the same allocated GPU task.
 MPI's `--oversubscribe` permits the backend's spawned worker within that existing
@@ -124,9 +117,8 @@ allocation when the single launcher rank has occupied its advertised task slot.
 Both executables and the backend's Python dependencies must be available in
 that image; the launcher does not install them.
 The prepared runner must also provide writable, job-isolated module and compiler
-caches. When model assets are mounted read-only, set `HF_MODULES_CACHE` to a
-separate writable directory so TensorRT-LLM can acquire its configuration lock;
-keep the model assets and offline settings unchanged.
+caches. The runner sets `HF_MODULES_CACHE` to a job-owned writable directory so
+TensorRT-LLM can acquire its configuration lock while model assets remain read-only.
 It disables configuration auto-completion, so the prepared repository must
 declare its complete batch and transaction-policy settings explicitly, matching
 the reviewed model YAML. See [Lab 30](reference/labs/30_engine_profile.md).
@@ -134,14 +126,12 @@ the reviewed model YAML. See [Lab 30](reference/labs/30_engine_profile.md).
 After Lesson 6, follow [Lab 10’s offline generation guide](reference/labs/10_vllm_offline.md) and run through that same immutable boundary:
 
 ```bash
-VLLM_IMAGE_DIGEST='docker://registry/image@sha256:DIGEST' \
-COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_vllm_offline/logs/%j.out" \
   --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/10_vllm_offline.sbatch --workload small
 ```
 
-After Lessons 6–9 and qualification of both vLLM and AIPerf images, follow
+After Lessons 6–9 and qualification of native vLLM and AIPerf, follow
 [Lab 34’s live-engine guide](reference/labs/34_policy_equivalence_client.md) for the core continuous-
 batching/chunked-prefill comparison with three fresh-server correctness probes
 and three fresh-server AIPerf trials per policy, each in counterbalanced order:
@@ -151,9 +141,6 @@ fixed across both policies and phases. Keep the exact output gate; these
 controlled scheduling measurements do not qualify compiled serving performance.
 
 ```bash
-VLLM_IMAGE_DIGEST='docker://registry/vllm@sha256:DIGEST' \
-AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
-COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_policy_equivalence_client/logs/%j.out" \
   --error="$PWD/results/34_policy_equivalence_client/logs/%j.err" slurm/34_policy_equivalence_client.sbatch
@@ -164,12 +151,9 @@ the launcher requires immutable model revisions and rejects paired greedy
 outputs whose private digests differ:
 
 ```bash
-VLLM_IMAGE_DIGEST='docker://registry/vllm@sha256:DIGEST' \
-AIPERF_IMAGE_DIGEST='docker://registry/aiperf@sha256:DIGEST' \
-COURSE_CONTAINER_RUNNER=slurm/container_runner.example.sh \
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
-  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch TARGET TARGET_REVISION DRAFT DRAFT_REVISION
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch
 ```
 
 Actual distributed serving practice is in the advanced course, where Dynamo experiments own their workers, discovery, model revision, client measurements and server captures.
@@ -185,9 +169,10 @@ in every input and rejects explicit diagnostic timing. Missing or malformed
 provenance requires a fresh unprofiled trial; no aggregate is written from
 rejected inputs.
 
+For optional TensorRT-LLM and Dynamo container variants,
 `slurm/container_runner.example.sh` shows the digest-to-runtime boundary with
-Apptainer. Review it for the site, place it on a shared filesystem, and set
-`COURSE_CONTAINER_RUNNER` plus the launcher-specific `*_IMAGE_DIGEST` variable.
+Apptainer. The launcher reads its cached image identity and runner path from
+the generated runtime record.
 
 Lab 08 performs its cache construction, correctness checks and measurements in
 inference mode. Non-finite prompt or continuation comparisons reject the run

@@ -370,10 +370,17 @@ def test_cuda_capstone_validates_each_trial(case, tmp_path):
 )
 def test_aiperf_uses_server_tokenizer_revision(launcher, model, revision):
     source = (ROOT / "llm-inference/slurm" / launcher).read_text()
-    command = re.search(r"aiperf profile[^\n]*(?:\\\n[^\n]*)*", source).group()
+    command = re.search(
+        r'"\$\{COURSE_AIPERF[^}]*\}" profile[^\n]*(?:\\\n[^\n]*)*', source
+    ).group()
     result = subprocess.run(
         ["bash", "-c", 'aiperf() { printf "%s\\n" "$@"; }; ' + command],
-        env={**os.environ, model: "example/model", revision: "a" * 40},
+        env={
+            **os.environ,
+            "COURSE_AIPERF": "aiperf",
+            model: "example/model",
+            revision: "a" * 40,
+        },
         capture_output=True,
         text=True,
         check=True,

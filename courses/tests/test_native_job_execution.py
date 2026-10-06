@@ -1,12 +1,49 @@
 """Native jobs preserve arguments, failure propagation and isolated evidence."""
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from native_job_fixtures import ROOT, prepare_job, run_job
 
 LAB = "01_cpu_gpu_crossover"
+
+
+def test_vllm_rpc_socket_uses_short_private_path_with_long_job_directory(tmp_path):
+    job = tmp_path / ("long-course-directory-" * 6) / "job"
+    job.mkdir(parents=True, mode=0o700)
+    probe = (
+        "import os, pathlib, socket, uuid; "
+        "path=pathlib.Path(os.environ.get('VLLM_RPC_BASE_PATH', os.environ['TMPDIR']))/str(uuid.uuid4()); "
+        "assert len(os.environ['TMPDIR']) + 37 > 107; "
+        "connection=socket.socket(socket.AF_UNIX); "
+        "connection.bind(str(path)); "
+        "mode=path.stat().st_mode & 0o777; "
+        "connection.close(); path.unlink(); assert mode == 0o700"
+    )
+    subprocess.run(
+        ["bash", "-c", 'umask 077; source "$1"; "$2" -c "$3"',
+         "rpc-test", str(ROOT / "tools/course_job_cache.sh"), sys.executable, probe],
+        env={**os.environ, "COURSE_JOB_DIR": str(job)},
+        capture_output=True, text=True, check=True,
+    )
+
+
+def test_native_job_caches_are_private_and_keep_prepared_models(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir(mode=0o700)
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; env', "cache-test", str(ROOT / "tools/course_job_cache.sh")],
+        env={**os.environ, "COURSE_JOB_DIR": str(job), "HF_HUB_CACHE": "/prepared/shared/models"},
+        capture_output=True, text=True, check=True,
+    )
+    values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    assert values["HF_HUB_CACHE"] == "/prepared/shared/models"
+    for name in ("HF_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "VLLM_CACHE_ROOT", "VLLM_CONFIG_ROOT", "FLASHINFER_WORKSPACE_BASE", "TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR", "CUDA_CACHE_PATH", "TMPDIR"):
+        assert Path(values[name]).is_relative_to(job)
 
 
 @pytest.mark.parametrize("mode", ["", "nsys", "ncu"])
@@ -39,6 +76,7 @@ def test_native_job_preserves_workload_argv_and_private_outputs(
     assert Path(app["results"]) == job / "results"
     assert sorted(p.name for p in job.iterdir()) == [
         "artifacts",
+        "cache",
         "logs",
         "profiles",
         "results",

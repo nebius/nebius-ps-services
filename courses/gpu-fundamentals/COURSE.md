@@ -5,6 +5,7 @@ behavior before changing code. Learn how CPUs and GPUs cooperate, how an H100
 executes and stores work, and how timing, memory access, precision and communication
 shape measured performance.
 
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
 Start here if you can read a small Python program; no CUDA or model-training
 experience is assumed. The worked examples introduce the PyTorch operations used
 in practice and prepare you for GPU Performance Optimization and the specialized
@@ -13,7 +14,7 @@ training, inference and kernel courses.
 Local exercises use one full H100, and operational exercises are read-only.
 Distributed concepts lead to practical work in
 [Advanced Labs](../advanced-gpu-communication/index.html).
-Use the [environment setup](../README.md#how-to-set-up-the-lab) in the shared Lab Guide
+Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
 before running experiments.
 
 ## 1. CPU–GPU cooperation

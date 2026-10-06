@@ -1,6 +1,18 @@
 # GPU Performance Tools
 
-A short reference for understanding the native commands used by the practical GPU courses. Read GPU Fundamentals first. This course has no labs or exercises; use the lab-specific commands in the practical courses. The figures are teaching schematics with synthetic values, not recorded measurements.
+GPU Performance Tools introduces the native commands and evidence used by the
+practical GPU courses. Learn how to read Slurm jobs, select a profiler and
+interpret timelines, kernel counters, operator summaries and dashboard metrics.
+
+Read this course after Soperator and before GPU Fundamentals or any practical
+labs. Basic Linux knowledge and the ability to read small Python examples are
+sufficient; GPU Fundamentals is not a prerequisite. Return here for command and
+flag explanations while following the practical courses.
+
+This reference course has no labs or exercises and needs no running cluster to
+read. Use the practical courses for lab-specific commands and the
+[Lab Guide](../lab-guide.html#lab-preparation-scripts) for environment preparation. The figures use synthetic values to explain concepts;
+they are not recorded measurements.
 
 ## 1. Choose evidence and read native jobs
 
@@ -147,7 +159,7 @@ Select a representative measured kernel and understand replay, counter sections 
 
 **Nsight Compute** gathers hardware counters for selected GPU kernels. A counter describes work done by hardware, such as bytes moved or instructions executed. The tool often replays a kernel to collect groups of counters, so its capture is a diagnostic experiment with additional overhead.
 
-Suppose Systems identifies a vector-add kernel as the main GPU cost. Open its Compute report and inspect **Speed Of Light** for throughput relative to the device's supported peak rates, **Memory Workload Analysis** for memory traffic and cache behavior, and **Occupancy** for resident warps. A warp is a group of GPU threads; occupancy is the fraction of the SM's supported resident warps that are active. An SM is the hardware unit that schedules those warps.
+Suppose Systems identifies a vector-add kernel as the main GPU cost. Open its Compute report and inspect **Speed Of Light** for throughput relative to the device's supported peak rates, **Memory Workload Analysis** for memory traffic and cache behavior, and **Occupancy** for resident warps. A warp is a group of GPU threads; occupancy is the fraction of the SM's supported resident warps that are active. An SM (streaming multiprocessor) is the hardware unit that schedules those warps.
 
 ![Read a kernel report as evidence for a hypothesis](reference/diagrams/tools-compute-report.svg)
 
@@ -236,17 +248,11 @@ Select the course and lab dashboard, persistent workspace, workload size, GPU id
 
 The panels on the left show the selected completed pair; both pass correctness. The graph on the right shows GPU utilization sampled over time, with earlier samples on the left and later samples on the right. Its dots are observations, not individual kernels. Placing the views side by side helps compare outcomes with device conditions; it does not establish that one caused the other. A brief kernel may run between samples, so an empty or low-utilization interval cannot replace the benchmark timer or the Systems trace. Summary panels retain the selected pair independently of the time picker; changing the interval changes the telemetry view, not which results occupy the baseline and candidate slots. Those slots change only when a new validated pair is explicitly published. Activity on a shared GPU is correlation until you establish which workload caused it.
 
-The deployment's collection and query paths have different jobs:
+The deployment's collection and query paths have different jobs. NVIDIA Data Center GPU Manager (DCGM) and node exporters expose sampled GPU/node telemetry. The course publisher validates selected result JSON and exposes benchmark gauges through Pushgateway. VMAgent scrapes those endpoints and writes the samples to VictoriaMetrics. Grafana uses its datasource to query the stored samples and displays the returned data in panels.
 
-```text
-GPU/node exporters -------------------+
-                                      +-> VMAgent -> VictoriaMetrics
-Result JSON -> publisher -> Pushgateway+
+![Collect metrics into storage, then query them for panels](reference/diagrams/tools-metrics-paths.svg)
 
-Grafana -> datasource -> VictoriaMetrics query API -> panels
-```
-
-DCGM and node exporters expose sampled GPU/node telemetry. The course publisher validates selected result JSON and exposes benchmark gauges through Pushgateway. VMAgent scrapes those endpoints and writes the samples to VictoriaMetrics. Grafana does not scrape the GPUs or collect those results itself.
+In the collection path, blue arrows follow the samples; VMAgent initiates both scrapes. In the query path, green arrows distinguish the query request from the returned data. Both VictoriaMetrics boxes refer to the same storage system. Grafana does not scrape the GPUs or collect those results itself.
 
 The existing Grafana datasource uses the Prometheus type and points at VictoriaMetrics' Prometheus-compatible API. The dashboard's symbolic `course-soperator-metrics` datasource is mapped during import to the discovered datasource. Keep its backend URL and credentials in the deployment's protected configuration. The shared Lab Guide owns discovery and setup; this lesson does not install or modify infrastructure.
 

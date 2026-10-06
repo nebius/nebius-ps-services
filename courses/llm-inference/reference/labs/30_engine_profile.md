@@ -4,19 +4,25 @@ Different inference servers expose different readiness endpoints and request sch
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 This lab checks readiness and request schemas using prepared qualified engines. Each launcher owns its loopback server and client in one Slurm allocation. The separately launched AIPerf campaign and paper disaggregation exercise are optional activities; neither changes what the Python readiness probe measures.
 
-For OpenAI mode, set `VLLM_IMAGE_DIGEST` and `COURSE_CONTAINER_RUNNER`, and select a model and immutable revision already present in the prepared cache. The launcher runs offline and starts vLLM on the allocated worker. For Triton, set the reviewed repository, matching profile/model/token field, exact image digest, and container runner for this environment.
+The default runtime is native vLLM. Select the optional TensorRT-LLM variant in the Lab Guide when using its launcher. The OpenAI launcher uses the
+isolated native vLLM 0.28.0 environment and pinned model; the Triton launcher uses the cached
+TensorRT-LLM image and complete llmapi PyTorch repository. Each launcher restores
+its runtime and repository automatically, then starts its server offline
+inside the allocated job.
 
-Use images and engine versions that explicitly support H100/SM90 and the host driver. Do not combine mechanics dependencies with heavyweight engine environments.
+Use toolkit and engine versions that explicitly support H100/SM90 and the host driver. Do not combine mechanics dependencies with heavyweight engine environments.
 
 Dynamo disaggregation is advanced and conditional. Two one-GPU nodes can run a bounded path experiment only when the pinned stack supports transfer; they cannot prove production RDMA or multi-worker scaling.
 
 ## Concepts and code path
 
 The Python client selects a protocol, probes readiness or model discovery, sends a bounded generation request, and validates a response field. Triton profiles are explicit: `llmapi` uses `tensorrt_llm` with `sampling_param_max_tokens`; `inflight_batcher` uses `ensemble` or `tensorrt_llm_bls` with `max_tokens`. Both launchers own startup, bounded readiness and cleanup; this client does not compile an engine.
+
+The optional TensorRT-LLM variant needs its separate preparation selection in the Lab Guide.
 
 The Triton launcher uses the prepared image's `mpirun -n 1` to initialize a
 one-rank Message Passing Interface (MPI) environment inside the allocated GPU
@@ -35,20 +41,21 @@ settings that match the reviewed model YAML. For `llmapi`, copy the effective
 `max_batch_size` and `model_transaction_policy.decoupled`; do not change them
 to work around startup errors.
 
-The launcher exports one validated run ID to the client and passes a results
-directory through `--output-dir`. The client writes
+The launcher exports one validated run ID to the client and passes the job's
+results directory through `--output-dir`. Beneath
+`results/30_engine_profile/jobs/JOB_ID/`, the client writes
 `results/30_engine_profile-run-RUN_ID.json`; the matching private server log is
-`results/30_engine_profile/logs/vllm-server-run-RUN_ID.log` or
-`results/30_engine_profile/logs/trtllm-triton-run-RUN_ID.log`. Use that shared identifier to correlate
-startup and request evidence. An output directory is not a JSON filename.
+`logs/vllm-server-run-RUN_ID.log` or `logs/trtllm-triton-run-RUN_ID.log`.
+Use the printed job directory and shared run identifier to correlate startup
+and request evidence. An output directory is not a JSON filename.
 
 Given a server process started at time zero, weights ready at 45 seconds, graph warm-up complete at 70 seconds, and the first request sent at 10 seconds, that request's TTFT is not a steady-state measurement. Change the launcher to wait for readiness, run a correctness probe, and warm the declared buckets. Expected observation: the benchmark excludes startup while a separate startup metric retains it.
 
-The OpenAI launcher starts the prepared vLLM image with the selected cached model and pins both model and tokenizer revisions. For TensorRT-LLM/Triton, use the dedicated launcher and declare the reviewed repository as `llmapi` with `tensorrt_llm`/`sampling_param_max_tokens`, or `inflight_batcher` with `ensemble` or `tensorrt_llm_bls`/`max_tokens`; the launcher rejects mixed schemas before startup. Multi-LoRA and multimodal workloads are optional extensions.
+The OpenAI launcher starts the prepared native vLLM environment with the selected cached model and pins both model and tokenizer revisions. For TensorRT-LLM/Triton, use the dedicated launcher with its setup-managed `llmapi` repository (`tensorrt_llm`/`sampling_param_max_tokens`). The launcher rejects mixed schemas before startup. Multi-LoRA and multimodal workloads are optional extensions.
 
 Given prefill capacity of 200,000 prompt tokens/s, suppose arrivals require 250,000 prompt tokens/s. Decode has enough capacity for the corresponding output workload, but the prefill queue grows; adding decode workers cannot remove that bottleneck. Change the allocation to increase prefill capacity while accounting for KV handoff cost within the TTFT budget. Expected observation: the backlog can drain only if sustained prefill capacity exceeds the offered load and handoff, routing and decode can keep up.
 
-After qualifying both images and the container runner, inspect `bash slurm/15_streaming_client.aiperf.sbatch --help` and submit the optional campaign with:
+After qualifying native vLLM and AIPerf, inspect `bash slurm/15_streaming_client.aiperf.sbatch --help` and submit the optional campaign with:
 
 ```bash
 sbatch --chdir="$PWD" \
@@ -99,7 +106,7 @@ objects and empty values fail the probe. The AIPerf launcher pins its tokenizer 
 the same immutable revision as the server so input and output token counts use
 the declared model's vocabulary.
 
-Retain immutable image/revision, arguments, readiness, sanitized logs, workload, metrics, and shutdown result.
+Retain immutable runtime identity/model revision, arguments, readiness, sanitized logs, workload, metrics, and shutdown result.
 
 Engine comparisons require equivalent artifacts, requests, tokenization, and accepted quality.
 
@@ -117,6 +124,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 30_engine_profile --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 30_engine_profile \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -172,7 +180,7 @@ Publication failure is separate from probe failure. Retain the JSON files and re
 
 Qualify the exact protocol and artifact before benchmarking. Use the AIPerf launcher for workload campaigns; Dynamo remains a separately gated advanced deployment, not a capability proven by this simple engine probe.
 
-Fail closed until the image is qualified, readiness passes, and the benchmark contract is fixed.
+Fail closed until the selected runtime is qualified, readiness passes, and the benchmark contract is fixed.
 
 List which engine settings can change scheduler or KV behavior.
 

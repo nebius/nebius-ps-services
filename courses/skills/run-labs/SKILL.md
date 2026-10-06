@@ -58,6 +58,7 @@ $run-labs --help
 - `--environment`: private prepared-target JSON described in
   [environment.md](references/environment.md); required except for dry-run.
 - `--dry-run`: return selected recipes without writes, sync, connections or jobs.
+- `CAMPAIGN_DIRECTORY`: existing private campaign path for status, resume or cancel.
 - `status`: read current progress only.
 - `resume`: continue the same unchanged campaign, without repeating completed
   stages or resubmitting an uncertain dispatch.
@@ -73,7 +74,10 @@ there is no Python submission or profiling wrapper between the job and its workl
 
 1. Start in the local `courses/` checkout root on the user's workstation. Resolve
    the prepared environment from user context and existing private receipts.
-   Read [environment.md](references/environment.md).
+   Read [environment.md](references/environment.md), including its managed
+   preparation contract. Resolve requirements from every selected recipe launcher;
+   default preparation does not include optional variants. The checkout's
+   `lab-guide.html#lab-preparation-scripts` owns the five preparation commands.
    Independently qualify existing prepared monitoring at runtime; setup discovery
    and new connection receipts remain a separate workflow. Preserve the selected
    local metrics routing and record every prerequisite observation before jobs.
@@ -99,8 +103,10 @@ there is no Python submission or profiling wrapper between the job and its workl
    Markdown or invent student-authored implementations. Recipes freeze guide
    variants, reference dependencies and launcher-owned repeated trials.
 3. Read [execution.md](references/execution.md). Use the internal stage helper
-   to sync through `sync-labs.sh`, bind the observed prepared prerequisites and
-   execute one stage at a time. Keep one active allocation. Waiting for a job
+   to sync through `sync-labs.sh`, validate the selected managed runtimes and
+   bind the observed prepared prerequisites before executing one stage at a time.
+   Reuse the original prepared root through the verified workspace binding;
+   never copy installations or rewrite runtime receipts. Keep one active allocation. Waiting for a job
    is normal; provide updates and poll at bounded intervals.
 4. Check original correctness, allocation, effective parameters and all declared
    comparison invariants. Retain all capstone/server child trials. A failed
@@ -132,7 +138,9 @@ publication and replacement of owned evidence. For managed dashboards, reuse
 that authorization after the identity and scope checks in
 [browser-evidence.md](references/browser-evidence.md); ownership metadata alone
 does not require another approval. Reuse prepared installations;
-missing installations belong to shared README setup, not this workflow. Do not rerun the
+missing installations belong to the Lab Guide's five preparation scripts.
+Report the exact command selected by the failing launcher and stop before jobs;
+this workflow does not install dependencies. Do not rerun the
 profiling installer for discovery, provision resources, download new models,
 change IAM, expose services or repair course source.
 
@@ -194,6 +202,10 @@ For read-only/report-only work, or when a learning is not public-safe,
 evidence-backed, in scope, or free of unverified/vendor-specific claims, do not
 edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
+
+Derive preparation from actual default, prerequisite and optional launchers,
+not course labels or inherited Python/build variables. Source copies retain the
+course slug and validate original root-bound runtimes using their copied inputs.
 
 Preserve observed launcher ownership, trial cardinality, and native report
 producer coverage in reviewed recipes. A lost submission response requires

@@ -33,7 +33,7 @@ def test_health_query_never_infers_full_gpu_from_missing_mig_state(value, expect
 def test_fundamentals_onboarding_is_reproducible_not_workspace_history():
     readme = text("gpu-fundamentals", "README.md")
     assert "Existing local 2.13 files" not in readme
-    assert "(../README.md#how-to-set-up-the-lab)" in readme
+    assert "(../lab-guide.html#lab-preparation-scripts)" in readme
     assert "(VERSIONS.md)" in readme
     versions = text("gpu-fundamentals", "VERSIONS.md")
     assert "PyTorch | 2.14.0 manifest authority" in versions
@@ -99,7 +99,10 @@ def test_inference_readme_selects_mechanics_interpreter_for_mechanics_job():
     command = re.search(
         r"Example mechanics run:.*?```bash\n(.*?)```", readme, re.DOTALL
     )[1]
-    assert 'COURSE_PYTHON="$HOME/courses/.venvs/llm-inference/bin/python"' in command
+    assert "COURSE_PYTHON=" not in command
+    assert "source tools/course_env.sh 09_hf_prefill_decode.sbatch" in text(
+        "llm-inference", "slurm/09_hf_prefill_decode.sbatch"
+    )
     assert (
         'slurm/09_hf_prefill_decode.sbatch'
         in command

@@ -4,7 +4,7 @@ A reusable prefix is valuable only if compatible cached state survives until the
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Python and the supplied standard-library helpers are sufficient; a GPU and serving dependencies are unnecessary. The profile label is retained for the course result format and does not activate H100 execution. All prefixes are inactive, equally sized and completely reusable inside this model. Active-request pinning and partial-prefix matching are outside its scope.
 
@@ -72,6 +72,7 @@ Select successful baseline and candidate policy-model artifacts in the same work
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 36_kv_tiering --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 36_kv_tiering \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

@@ -4,22 +4,20 @@ FP8 execution relies on scaling and quantization state, not simply changing a te
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Qualify an exact compatible Transformer Engine build on the assigned supported GPU before running. This optional dependency is not a core-course completion gate. Its `te.Linear` workload differs from Lab 21's tiny transformer, so their timings are not a matched-model comparison.
 
 ### Qualify the optional runtime
 
-Use an isolated course environment containing the selected PyTorch build. Choose an exact compatible Transformer Engine version and prepare its CUDA development headers using [NVIDIA's installation guide](https://docs.nvidia.com/deeplearning/transformer-engine/installation.html). Build the PyTorch extension against that environment:
-
-```bash
-"$COURSE_PYTHON" -m pip install --no-build-isolation \
-  "transformer_engine[pytorch]==${COURSE_TE_VERSION:?qualified Transformer Engine version}"
-```
+The selected preparation from the Lab Guide provides an isolated Transformer Engine 2.19 runtime with
+its selected PyTorch build and CUDA development tools. This lab's native launcher
+loads that runtime automatically. See [NVIDIA's installation guide](https://docs.nvidia.com/deeplearning/transformer-engine/installation.html)
+for the library's build requirements.
 
 A successful import does not exercise FP8 runtime compilation. Check the CUDA headers and NVRTC library actually selected, then run the unchanged small-profile command below on an allocated GPU before proceeding to large. A system CUDA installation can be selected even when PyTorch uses libraries from the Python environment.
 
-If a compiler/header mismatch is diagnosed, use the selected release's supported library-discovery controls. For example, [Transformer Engine 2.19's loader](https://github.com/NVIDIA/TransformerEngine/blob/v2.19/transformer_engine/common/__init__.py) supports `NVRTC_HOME` for an existing matching CUDA library root. Scope that setting to this optional lab and verify the small FP8 numerical gate again. Preserve failed evidence and the declared workload and thresholds.
+If a compiler/header mismatch is diagnosed, preserve the failed evidence and repair or reprepare the managed Transformer Engine runtime through the Lab Guide. Runtime activation restores its recorded `NVRTC_HOME` and library paths, so a submitting-shell override is not a repair for the documented job. Repeat the unchanged small FP8 numerical gate afterward; preserve the declared workload and thresholds.
 
 ## Concepts and code path
 
@@ -71,6 +69,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 22_transformer_engine_fp8 --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 22_transformer_engine_fp8 \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

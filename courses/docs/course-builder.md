@@ -114,6 +114,13 @@ python3 -B tools/sync_course_tools.py --check
 For selected courses, use `python3 -B tools/build_course_html.py COURSE ...`.
 The catalog and shared guide are always included. `--check` writes nothing and
 checks both HTML and ZIP bytes against canonical inputs.
+Each successful `built` or `current` line shows an aligned decimal-MB size before
+the path, measured from encoded HTML or compressed ZIP bytes. Standalone Python
+build and check commands finish with a publication summary; `--no-summary`
+suppresses only that summary, leaving per-file sizes and budget checks active.
+The wrapper uses this option for its build phase so the summary appears exactly
+once, at the end of successful verification. Failed builds or checks print their
+diagnostic without a success summary.
 
 The README is the single source for `lab-guide.html`. Its **Read this guide
 online** link sits immediately under **How to set up the lab**, and its final
@@ -158,10 +165,16 @@ The build and read-only check enforce 104,857,600 bytes per file and
 1,000,000,000 bytes for the full repository publication candidate before replacing
 outputs. Git must be available to inventory tracked and nonignored untracked files;
 planned output bytes replace existing sizes once. Missing inventory, symlinks and
-submodules fail instead of silently undercounting. The report prints total size,
-largest file and remaining capacity in decimal MB (1 MB = 1,000,000 bytes), with
-two decimal places and thousands separators. The displayed file and site limits
-are 104.86 MB and 1,000.00 MB; checks still compare exact byte counts. Overflow
+submodules fail instead of silently undercounting. The final report groups
+listed HTML/ZIP output sizes, other publication files and estimated site size,
+then shows the site limit, remaining capacity and per-file limit. It does not
+single out the largest file. All sizes use decimal MB (1 MB = 1,000,000 bytes),
+with two decimal places and thousands separators. The listed-output subtotal
+includes only the current run's planned outputs; other publication files include
+unselected outputs, original evidence, sources and assets counted by the same
+inventory. Subtotals use exact bytes before rounding, so displayed figures can
+differ by 0.01 MB when added. The displayed file and site limits are 104.86 MB
+and 1,000.00 MB; checks still compare exact byte counts. Overflow
 diagnostics show the excess with six decimals so even a one-byte overflow is
 visible. Build and check failures, including file, site and archive limits, are
 red on terminal stderr. Redirected streams, `TERM=dumb` and any defined

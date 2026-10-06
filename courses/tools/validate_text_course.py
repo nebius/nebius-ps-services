@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the explicitly text-only Soperator course without executing examples."""
+"""Validate the catalog's reading profiles without executing examples."""
 
 from __future__ import annotations
 
@@ -113,6 +113,7 @@ def validate_document(document: str, course_name="soperator") -> None:
             found.append(target)
         elif target in {
             "../lab-guide.html#how-to-set-up-the-lab",
+            "../lab-guide.html#lab-preparation-scripts",
             "../lab-guide.html#how-to-run-the-labs",
         }:
             continue
@@ -157,20 +158,21 @@ def validate_document(document: str, course_name="soperator") -> None:
         or page.menu_order != expected_order
     ):
         raise ValueError(
-            "text course navigation must include catalog and nine ordered resources with one current identity"
+            "text course navigation must include catalog and all ordered resources with one current identity"
         )
 
 
 def validate(course_name="soperator") -> None:
     course = cb_config.ROOT / course_name
     reference = course_name == "gpu-performance-tools"
+    metadata = cb_metadata.course_metadata(course)
     required = {
         "COURSE.md",
         "MISSION.md",
+        "RESOURCES.md",
         "SYLLABUS.md",
         "README.md",
         "GLOSSARY.md",
-        "RESOURCES.md",
         "NEXT-STEPS.md",
         "PUBLICATION-REVIEW.md",
         "reference/course.json",
@@ -195,7 +197,7 @@ def validate(course_name="soperator") -> None:
     validate_document(document, course_name)
     validate_course_glossary(document, (course / "GLOSSARY.md").read_text())
     syllabus = (course / "SYLLABUS.md").read_text(encoding="utf-8")
-    _, _, lessons = cb_metadata.parse_text_course(course / "COURSE.md", "reference-only" if reference else "text-only")
+    _, _, lessons = cb_metadata.parse_text_course(course / "COURSE.md", metadata["profile"])
     for number, lesson in enumerate(lessons, 1):
         if f"{number}. {lesson['title']}" not in syllabus:
             raise ValueError("syllabus lesson identity differs from canonical prose")

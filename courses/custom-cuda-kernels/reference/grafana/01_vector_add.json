@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Calculate the block count and number of inactive final-block threads for 1,003 elements. Which bytes are read and written per useful element? Explain why transfer-inclusive application time differs from the distribution of kernel execution times. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Calculate the block count and number of inactive final-block threads for 1,003 elements. Which bytes are read and written per useful element? Explain why transfer-inclusive application time differs from the distribution of kernel execution times. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

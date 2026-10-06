@@ -1,9 +1,11 @@
 """Whole-root hosting budgets and no-write failure boundaries."""
 
+import io
 import os
 import select
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -71,13 +73,140 @@ def test_publication_summary_uses_decimal_mb(
     }
     monkeypatch.setattr(build, "check_budget", lambda *args, **kwargs: report)
     assert build.publication_preflight({}) is report
+    assert capsys.readouterr().out == ""
+    build.report_publication(report, {})
     captured = capsys.readouterr()
     assert captured.out == (
-        f"Publication estimate: {expected_total}; largest {largest} "
-        f"(100.14 MB); site headroom {expected_headroom}; "
-        "limits 104.86 MB/file, 1,000.00 MB/site\n"
+        "\nPublication summary\n"
+        "  Listed HTML/ZIP outputs:        0.00 MB\n"
+        f"  Other publication files:  {expected_total:>13}\n"
+        f"  Estimated site size:      {expected_total:>13}\n"
+        "\n"
+        "  Site limit:                 1,000.00 MB\n"
+        f"  Remaining capacity:       {expected_headroom:>13}\n"
+        "  Per-file limit:               104.86 MB\n"
     )
     assert captured.err == ""
+
+
+@pytest.mark.parametrize("listed,other", [(2_000_000, 8_011_001), (5_001, 5_001)])
+def test_subtotals_overlay_selected_outputs_without_recounting(
+    repo, monkeypatch, capsys, listed, other
+):
+    root = repo / "courses"
+    monkeypatch.setattr(build, "ROOT", root)
+    inventories = []
+
+    def inventory(path):
+        inventories.append(path)
+        return {
+            "courses/index.html": 100,
+            "courses/unselected/index.html": other - 1,
+            "another-project/asset": 1,
+        }
+
+    monkeypatch.setattr(publication, "git_sizes", inventory)
+    outputs = {root / "index.html": b"x" * listed}
+    report = build.publication_preflight(outputs)
+    build.report_publication(report, outputs)
+    assert inventories == [repo]
+    assert report["total_bytes"] == listed + other
+    rows = dict(
+        line.strip().split(":", 1)
+        for line in capsys.readouterr().out.splitlines()
+        if ":" in line
+    )
+    assert rows["Listed HTML/ZIP outputs"].strip() == publication.format_mb(listed)
+    assert rows["Other publication files"].strip() == publication.format_mb(other)
+    assert rows["Estimated site size"].strip() == publication.format_mb(listed + other)
+
+
+@pytest.mark.parametrize("check", [False, True])
+@pytest.mark.parametrize("no_summary", [False, True])
+@pytest.mark.parametrize("selected", [False, True])
+def test_success_lines_show_serialized_sizes_and_summary_last(
+    repo, monkeypatch, capsys, check, no_summary, selected
+):
+    root = repo / "courses"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("result.txt", b"x" * 1_000_000)
+    outputs = {
+        root / "lab-guide.html": b"guide",
+        root / "index.html": b"catalog",
+        root / "gpu-fundamentals/index.html": ("é" * 600_000).encode("utf-8"),
+        root
+        / "gpu-fundamentals/reference/gpu-fundamentals-lab-results.zip": buffer.getvalue(),
+    }
+    assert len(buffer.getvalue()) < 10_000
+    for path, content in outputs.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content if check else b"previous output")
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in outputs}
+    selections = []
+
+    def plan(courses):
+        selections.append(courses)
+        return outputs
+
+    monkeypatch.setattr(build, "ROOT", root)
+    monkeypatch.setattr(build, "plan_outputs", plan)
+    args = ["build_course_html.py"]
+    if selected:
+        args.append("gpu-fundamentals")
+    if check:
+        args.append("--check")
+    if no_summary:
+        args.append("--no-summary")
+    monkeypatch.setattr(sys, "argv", args)
+    build.main()
+    captured = capsys.readouterr()
+    status = "current" if check else "built"
+    prefix = f"{status:<7} "
+    assert captured.out.splitlines()[:4] == [
+        prefix + "    0.00 MB lab-guide.html (shared guide)",
+        prefix + "    0.00 MB index.html (course catalog)",
+        prefix + "    1.20 MB gpu-fundamentals/index.html",
+        prefix
+        + "    0.00 MB gpu-fundamentals/reference/gpu-fundamentals-lab-results.zip",
+    ]
+    assert selections == [["gpu-fundamentals"] if selected else build.COURSES]
+    assert captured.out.count("Publication summary") == (0 if no_summary else 1)
+    assert "largest" not in captured.out
+    assert captured.err == ""
+    if not no_summary:
+        assert captured.out.rstrip().endswith("Per-file limit:               104.86 MB")
+    for path, content in outputs.items():
+        assert path.read_bytes() == content
+        if check:
+            assert (path.read_bytes(), path.stat().st_mtime_ns) == before[path]
+
+
+@pytest.mark.parametrize("defect", ["missing", "stale", "write-error"])
+def test_output_failure_has_no_summary(repo, monkeypatch, capsys, defect):
+    root = repo / "courses"
+    root.mkdir()
+    output = root / "index.html"
+    if defect != "missing":
+        output.write_bytes(b"previous")
+    monkeypatch.setattr(build, "ROOT", root)
+    monkeypatch.setattr(build, "plan_outputs", lambda _: {output: b"expected"})
+    args = ["build_course_html.py", "--check"]
+    if defect == "write-error":
+        args = ["build_course_html.py"]
+
+        def fail_write(*args):
+            raise OSError("replacement failed")
+
+        monkeypatch.setattr(build, "write_atomic", fail_write)
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(SystemExit, match="stale or missing|replacement failed"):
+        build.main()
+    assert "Publication summary" not in capsys.readouterr().out
+    if defect == "missing":
+        assert not output.exists()
+    else:
+        assert output.read_bytes() == b"previous"
 
 
 def test_file_and_site_errors_show_sizes_and_precise_excess(repo, monkeypatch):
@@ -142,8 +271,11 @@ def test_gitlinks_fail_instead_of_undercounting(repo):
 
 
 @pytest.mark.parametrize("check", [False, True])
+@pytest.mark.parametrize("no_summary", [False, True])
 @pytest.mark.parametrize("failure", ["file", "site", "archive"])
-def test_builder_budget_failure_occurs_before_writes(repo, monkeypatch, check, failure):
+def test_builder_budget_failure_occurs_before_writes(
+    repo, monkeypatch, capsys, check, no_summary, failure
+):
     root = repo / "courses"
     root.mkdir()
     output = root / "index.html"
@@ -169,12 +301,17 @@ def test_builder_budget_failure_occurs_before_writes(repo, monkeypatch, check, f
             lambda selected: {output: course_archives.archive_bytes({})},
         )
     monkeypatch.setattr(
-        sys, "argv", ["build_course_html.py"] + (["--check"] if check else [])
+        sys,
+        "argv",
+        ["build_course_html.py"]
+        + (["--check"] if check else [])
+        + (["--no-summary"] if no_summary else []),
     )
     with pytest.raises(SystemExit, match="File limit|Site limit|archive exceeds"):
         build.main()
     assert before == (output.read_bytes(), output.stat().st_mtime_ns)
     assert not list(root.glob(".course-*"))
+    assert "Publication summary" not in capsys.readouterr().out
 
 
 def test_export_archive_cap_is_enforced(monkeypatch):

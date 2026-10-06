@@ -236,6 +236,29 @@
         "Retains original failure evidence and existing acceptance requirements",
         "Explains that the obstacle is correctness or uncertain identity, not recovery count or repeated-approval policy"
       ]
+    },
+    {
+      "id": 21,
+      "prompt": "Use run-labs to review without executing commands. I selected Inference Lab 30 with both workload profiles. Regular and serving --all completed in the prepared catalog, but the TensorRT-LLM launcher has no runtime receipt. What must happen before jobs?",
+      "expected_output": "Resolve the complete recipe, identify the explicit serving launcher preparation for TensorRT-LLM, and stop dispatch until it is prepared and independently checked. Do not install inside the campaign or remove the comparison.",
+      "files": [],
+      "assertions": [
+        "Uses serving-lab-setup.py --launcher 30_engine_profile.trtllm.sbatch rather than assuming --all includes optional variants",
+        "Preserves both protocol trials and both workload profiles; no installation, receipt editing or GPU job before prerequisites",
+        "Uses the shared Lab Guide and separates prepared runtime proof from hardware qualification"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Use run-labs to review without executing commands. A new campaign copied CUDA Lab 01 under a course-slug workspace and bound an existing prepared catalog. Someone changed the copied CUDA source after the original build. They suggest exporting COURSE_BUILD_DIR or copying the old receipt into the workspace. Decide how to proceed.",
+      "expected_output": "Reject stale copied inputs and manual runtime overrides or receipt copying. Preserve evidence, reprepare the matching source through the owning CUDA script outside the campaign and create a fresh campaign when frozen inputs change.",
+      "files": [],
+      "assertions": [
+        "Requires fingerprint validation with copied source inputs and original installation root",
+        "Rejects receipt copying or rewriting and inherited build-directory substitution",
+        "Preserves failed evidence and isolated workspace ownership; source drift requires a new campaign",
+        "No compilation or dependency installation inside a lab campaign"
+      ]
     }
   ]
 }

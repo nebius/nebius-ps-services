@@ -8,18 +8,19 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Run from the Training course root with the approved environment described in
-[VERSIONS.md](../VERSIONS.md). Save each trial independently and use
-[benchmark-record.md](benchmark-record.md) for its interpretation. Before
-submitting any job, restrict files created by the submitting shell:
+Run from this course root after preparing the course and lab number through the
+[Lab Guide](../../lab-guide.html#lab-preparation-scripts). Launchers restore the
+saved runtime automatically; [VERSIONS.md](../VERSIONS.md) describes its scope.
+Preparation creates private log directories before Slurm opens its output.
+For these read-only local dependency checks, select the ordinary lab runtime:
 
 ```bash
+source tools/course_env.sh 01_tiny_transformer_train --lab
 "$COURSE_PYTHON" -m pip check
 python3 tools/validate_course.py
 ```
 
-Slurm can create its output before the job script starts, so the mask inside a
-launcher does not replace this step. Raw logs, checkpoints, traces, and result
+Raw logs, checkpoints, traces, and result
 JSON remain private. Use [evidence-security.md](evidence-security.md) to prepare
 a separately reviewed aggregate report.
 

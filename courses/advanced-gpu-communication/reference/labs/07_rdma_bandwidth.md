@@ -4,13 +4,13 @@ RDMA lets the NIC access registered memory without the CPU copying each payload.
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
 Set SERVER_HCA and CLIENT_HCA to the reviewed mlx5 devices nearest GPU 0. If the owner qualified nvidia-peermem instead of DMA-BUF, use --memory cuda-peermem in the candidate command. Keep model, software, clocks and other workload activity fixed; preserve private artifacts for both runs.
 
-Source `$COURSE_TOOLS/fabric/environment.sh` as described in shared environment setup before submission. CUDA buffer validation needs the installed `libperftest_kernels.so`; a plugin-loading error is a setup failure, not a passing bandwidth result.
+The native launcher restores the prepared fabric tools and library paths automatically. CUDA buffer validation needs the installed `libperftest_kernels.so`; a plugin-loading error is a preparation failure, not a passing bandwidth result.
 
 ## Concepts and code path
 
@@ -60,6 +60,7 @@ Select the two unprofiled result artifacts. The publisher checks equivalent para
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 07_rdma_bandwidth --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 07_rdma_bandwidth \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"

@@ -4,7 +4,7 @@ This capstone compares a baseline linear training step with a candidate using a 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 and complete the preceding measurement and profiler exercises. Each lab invocation is one fresh-process trial; the supplied campaign launcher runs three and alternates variant order. Keep all trial records private.
 
@@ -104,6 +104,7 @@ result files and review the current generation (use `0` for the first selection)
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 31_training_capstone --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 31_training_capstone \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

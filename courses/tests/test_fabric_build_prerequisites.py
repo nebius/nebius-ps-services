@@ -17,7 +17,7 @@ def test_missing_pci_stops_before_clone_or_prefix_mutation(
 ):
     with load_lab(INSTALLER) as installer:
         monkeypatch.setattr(
-            "sys.argv", ["install_fabric_tools.py", "--prefix", str(tmp_path)]
+            "sys.argv", ["install_fabric_tools.py", "--prefix", str(tmp_path), "--tool", "perftest"]
         )
         monkeypatch.setattr(installer.shutil, "which", lambda _: "/available")
         monkeypatch.setenv("CC", "course-test-cc")
@@ -77,7 +77,7 @@ def test_installed_environment_finds_cuda_validation_plugin(
     prefix.mkdir()
     with load_lab(INSTALLER) as installer:
         monkeypatch.setattr(
-            "sys.argv", ["install_fabric_tools.py", "--prefix", str(prefix)]
+            "sys.argv", ["install_fabric_tools.py", "--prefix", str(prefix), "--tool", "perftest"]
         )
         monkeypatch.setattr(installer.shutil, "which", lambda _: "/available")
         monkeypatch.setattr(installer, "check_pci_development_library", lambda: None)

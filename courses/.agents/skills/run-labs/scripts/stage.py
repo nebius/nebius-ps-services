@@ -50,6 +50,9 @@ def run(path, operation, receipt_path=None, *, expected_action=None):
             receipt = read(receipt_path)
             if not state.get("sync"):
                 raise ValueError("Run the sync stage before preflight completion")
+            from prepare import validate_proof
+
+            validate_proof(state["plan"], state["sync"])
             if (
                 receipt.get("schema") != "run-labs-preflight/v1"
                 or receipt.get("environment_sha256") != state["environment_sha256"]

@@ -168,6 +168,7 @@ def test_canonical_results_archive_is_not_retired_on_repeated_builds(course, mon
 def configure_build(monkeypatch, root, course):
     monkeypatch.setattr(build, "ROOT", root)
     monkeypatch.setattr(build, "publication_preflight", lambda outputs: {})
+    monkeypatch.setattr(build, "report_publication", lambda report, outputs: None)
     monkeypatch.setattr(build, "COURSES", ("example",))
     monkeypatch.setattr(build, "render_catalog", lambda: "catalog")
     monkeypatch.setattr(build, "render_shared_guide", lambda: "guide")

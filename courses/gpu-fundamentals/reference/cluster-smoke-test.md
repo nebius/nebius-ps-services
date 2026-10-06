@@ -2,9 +2,9 @@
 
 **Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
 
-Run from the `gpu-fundamentals` course root after activating a cluster-approved environment that satisfies [VERSIONS.md](../VERSIONS.md). Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
+Run from the `gpu-fundamentals` course root with the prepared runtime described in [VERSIONS.md](../VERSIONS.md); launchers restore it automatically. Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
-Complete the one-time directory preparation in the shared Lab Guide before submitting. Keep runtime evidence in those private result directories.
+Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
 
 This runbook is a complete platform-qualification checklist, not the teaching
 order. Learners follow the [syllabus](../SYLLABUS.md): Lab 10 checks the local

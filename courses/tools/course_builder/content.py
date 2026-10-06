@@ -182,9 +182,10 @@ def lab_markup(
 
 def shared_guide_links() -> dict[str, str]:
     return {**{parent + "gpu-performance-tools/index.html": "../gpu-performance-tools/index.html" for parent in ("../", "../../", "../../../")}, **{
-        parent + "README.md#" + slug(section): "../lab-guide.html#" + slug(section)
+        parent + filename + "#" + slug(section): "../lab-guide.html#" + slug(section)
         for parent in ("../", "../../", "../../../")
         for section in SHARED_GUIDE_SECTIONS
+        for filename in ("README.md", "lab-guide.html")
     }}
 
 

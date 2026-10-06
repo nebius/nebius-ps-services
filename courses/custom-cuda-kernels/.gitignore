@@ -7,3 +7,9 @@ logs/
 *.ncu-rep
 *.nsys-rep
 *.sqlite
+
+# Private automatic course installation and worker connection settings.
+.runtime/
+.profiling-tools/
+.venvs/
+.course-environment.sh

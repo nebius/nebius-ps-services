@@ -4,7 +4,7 @@ One line of tensor code can trigger several framework operations and many GPU ke
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 and an environment in which PyTorch Profiler can capture CPU and CUDA activity. Keep profiler and scheduler output private. Run this before the deeper Nsight exercises in GPU Optimizations.
 
@@ -68,6 +68,7 @@ Select two successful, equivalent diagnostic runs in the same workload preset. F
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 08_operator_to_kernels --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 08_operator_to_kernels \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

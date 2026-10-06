@@ -8061,7 +8061,7 @@
       },
       "repetitions": 1,
       "notes": [
-        "Owns separate loopback OpenAI and Triton servers inside their respective allocations using prepared immutable images and cached models; no installation or download. Both profiles use the same bounded qualification request.",
+        "Owns separate loopback servers inside their respective allocations: native vLLM for OpenAI and the explicitly prepared TensorRT-LLM container for Triton, sharing cached models; no installation or download. Both profiles use the same bounded qualification request.",
         "Run two fresh equivalent qualification jobs for each protocol and publish each protocol separately. Never pair OpenAI with Triton or reuse one original in both comparison slots. Two requests do not establish a latency distribution, semantic quality or an engine speedup."
       ],
       "result_count": 1,

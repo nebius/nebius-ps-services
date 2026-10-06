@@ -7,11 +7,11 @@
 
 #### User Story
 
-Engineers need a Slurm and Soperator introduction before the GPU courses that use Slurm, followed by GPU foundations, optimization, LLM and CUDA-kernel specializations, and advanced communication labs.
+Engineers need a Slurm and Soperator introduction and a shared performance-tools reference before the GPU courses that use those tools in labs, followed by GPU foundations, optimization, LLM and CUDA-kernel specializations, and advanced communication labs.
 
 #### Acceptance Criteria
 
-- AC-001: The catalog, learning path, README reading route and all course/guide menus present nine resources in this order: Soperator, Lab Guide, GPU Fundamentals, GPU Performance Tools, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Keep eight course packages; Lab Guide is the shared README-derived page, not a course package. Soperator is the first course because it teaches the Slurm concepts used throughout the GPU courses; it remains independently readable with basic Linux knowledge. The advanced course package is a labs-only route requiring two eight-H100 workers.
+- AC-001: The catalog, learning path, README reading route and all course/guide menus present nine resources in this order: Soperator, Lab Guide, GPU Performance Tools, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Keep eight course packages; Lab Guide is the shared README-derived page, not a course package. Soperator is the first course because it teaches the Slurm concepts used throughout the GPU courses; it remains independently readable with basic Linux knowledge. GPU Performance Tools is prerequisite reading before lab-bearing courses and remains available as a reference during practice; it does not require GPU Fundamentals or a running cluster to read. The advanced course package is a labs-only route requiring two eight-H100 workers.
 - AC-002: Each course is a new standalone package with one canonical implementation.
 - AC-003: Fundamentals and Optimizations are prerequisites for the three specialized courses; neither LLM course is a prerequisite for Custom Kernels.
 - AC-004: Each complete teaching topic and experiment has a course owner selected by its learning objective. Move misplaced content together with its labs, guides, diagrams, references and launch/test wiring; retain standalone setup helpers where each environment needs them.
@@ -23,7 +23,7 @@ Engineers need a Slurm and Soperator introduction before the GPU courses that us
 
 #### Validation Method
 
-Inspect the eight-course catalog, five conceptual GPU packages, the text-only introduction and the advanced lab package.
+Inspect the eight-course catalog, five practical conceptual GPU packages, the text-only introduction, the reference-only tools course and the advanced lab package.
 
 #### Test Method
 
@@ -45,8 +45,8 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 #### Acceptance Criteria
 
 - AC-001: Every GPU course keeps maintainer-only mission and syllabus sources and provides detailed lessons, self-contained HTML, glossary, resources, versions, publication review, labs, Slurm launchers, validation, and cluster-smoke guidance. REQ-024 defines the reference-only performance tools course without labs or exercises. REQ-020 defines an explicit labs-only profile without conceptual lessons. REQ-019 defines the explicit text-only profile; its no-lab, no-diagram scope supersedes GPU-specific requirements for that package only.
-- AC-002: Every GPU lesson uses a concise conceptual title and the ordered sections Objective, How it works, Practice, Mental model, followed only by optional References. How it works integrates definitions, useful prerequisite connections, purpose and causal explanation, with at least one relevant diagram inside that section. The final Mental model summarizes already-explained concepts. The linked labs own hardware context, worked practice, trade-offs, evidence, interpretation, troubleshooting, answers and review.
-- AC-003: Every GPU-course topology, execution, memory, scheduling, or parallelism concept has an accessible responsive inline diagram.
+- AC-002: Except for the explicit reading-profile exceptions, every GPU lesson uses a concise conceptual title and the ordered sections Objective, How it works, Practice, Mental model, followed only by optional References. How it works integrates definitions, useful prerequisite connections, purpose and causal explanation, with at least one relevant diagram inside that section. The final Mental model summarizes already-explained concepts. The linked labs own hardware context, worked practice, trade-offs, evidence, interpretation, troubleshooting, answers and review.
+- AC-003: Outside the explicitly diagram-free reading profiles, every GPU-course topology, execution, memory, scheduling, or parallelism concept has an accessible responsive inline diagram.
 - AC-004: Public course claims use legitimate current official/vendor references collected at the end of each HTML course.
 - AC-005: Do not publish source-coverage tables, course-history comparisons, previous-course names, migration notes, or historical learning records. Explain advanced topic limitations in the lessons themselves.
 - AC-006: All HTML courses use the same navigation, typography, color
@@ -80,7 +80,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
   course maintainers carry a concise audience label. Keep learner setup,
   lab execution and shared guidance distinct from maintainer-only work.
 
-- AC-014: All seven course profiles share the same typography, spacing, readable TOC markers, section-label vocabulary and responsive reflow. Numbered lesson and lab identities remain stable. Soperator remains text-only and the advanced course remains labs-only; alignment must not fabricate missing lessons, labs or diagrams for those explicit profiles.
+- AC-014: All eight course packages share the same typography, spacing, readable TOC markers, section-label vocabulary and responsive reflow. Numbered lesson and lab identities remain stable. Soperator remains text-only and the advanced course remains labs-only; alignment must not fabricate missing lessons, labs or diagrams for those explicit profiles.
 
 - AC-015: Standardization preserves complete explanations, worked examples, lesson/lab identities, executable behavior and evidence boundaries. Each conceptual Practice section states the activity at that stage, including previews and purposeful revisits; diagrams depict the taught relationship and Mental model introduces no new mechanism. Preserve the distinct text-only and labs-only profiles.
 
@@ -88,7 +88,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 
 - AC-017: Learner pages and navigation omit Syllabus and Course mission sections and links. Preserve their unique audience, scope, readiness and completion guidance in course overviews and existing guides; retain authoring sources for maintainers. Each course has its own top-level Glossary section. Official references use numbered lists. Where to Go Next uses one bullet per complete onward-learning direction, with its explanation and caveats preserved. Every course has exactly one top-level Where to Go Next section, sourced from NEXT-STEPS.md, followed by exactly one Glossary and final Official references. Lessons and performance-tool guides contain neither appendix. Consolidation retains distinct optional learning directions, explanations and limits; simple next-lesson pointers may be removed when their purpose is already expressed by the destination objective and ordered TOC. Optional lesson References follow Mental model. All profiles share semantic heading levels, fonts, sizes and spacing for equivalent content.
 
-- AC-018: All seven Course overviews use three short, course-specific paragraphs: purpose and outcomes; audience and prerequisites; practical scope and the next step. Retain brief hardware and safety boundaries, including Soperator's cluster-free reading and Advanced Labs' sixteen-GPU fabric requirement. Shared setup, submission, logs, workload profiles and access procedures belong in the shared Lab Guide. Preserve unique interpretation, qualification and completion guidance in the embedded course guide or owning lab before removing overview repetitions. Do not imply ordinary one-GPU labs require a separate cluster when qualified advanced hardware can be reused.
+- AC-018: All eight Course overviews use three short, course-specific paragraphs: purpose and outcomes; audience and prerequisites; practical scope and the next step. Retain brief hardware and safety boundaries, including Soperator's cluster-free reading and Advanced Labs' sixteen-GPU fabric requirement. Shared setup, submission, logs, workload profiles and access procedures belong in the shared Lab Guide. Preserve unique interpretation, qualification and completion guidance in the embedded course guide or owning lab before removing overview repetitions. Do not imply ordinary one-GPU labs require a separate cluster when qualified advanced hardware can be reused.
 
 #### Negative Criteria
 
@@ -577,20 +577,21 @@ Keep source/CPU, installed environment, CUDA/NCCL/GDS, live H100 and browser lan
 
 #### User Story
 
-Learners need an attractive central course catalog, direct navigation between the seven courses, and clear Nebius attribution and licensing on a publicly browsable website.
+Learners need an attractive central course catalog, direct navigation between the eight courses, and clear Nebius attribution and licensing on a publicly browsable website.
 
 #### Acceptance Criteria
 
-- AC-001: A self-contained light editorial catalog at `courses/index.html` introduces six courses, Advanced Labs and Lab Guide as eight numbered entries in REQ-001 order, each with a concise introduction and a working relative link. Preserve source-derived course titles, hours, prerequisites and outcomes; the guide has no invented hours or course metadata. The courses README prominently links to the published catalog with the visible text Explore the courses and labels its relative `index.html` link Browse the courses catalog. Keep hosting-provider names out of the visible introduction.
-- AC-002: The learning path starts with Soperator and the shared Lab Guide, then Fundamentals and Optimization followed by three independent specializations and Advanced Labs. Every course and the guide has the same ordered eight-entry menu, a separate catalog backlink and exactly one current-page marker. Resolve destinations relative to each page; retain current-course identity and label the current guide appropriately. Display order adds no technical prerequisites.
+- AC-001: A self-contained light editorial catalog at `courses/index.html` introduces seven courses, Advanced Labs and Lab Guide as nine numbered entries in REQ-001 order, each with a concise introduction and a working relative link. All nine catalog card number badges use the same mint background (#edf6f0) and teal text (#206757), without course-specific color overrides. Preserve source-derived course titles, hours, prerequisites and outcomes; the guide has no invented hours or course metadata. The courses README prominently links to the published catalog with the visible text Explore the courses and labels its relative `index.html` link Browse the courses catalog. Keep hosting-provider names out of the visible introduction.
+- AC-002: The learning path starts with Soperator and the shared Lab Guide, then GPU Performance Tools before Fundamentals and Optimization followed by three independent specializations and Advanced Labs. Every course and the guide has the same ordered nine-entry menu, a separate catalog backlink and exactly one current-page marker. Resolve destinations relative to each page; retain current-course identity and label the current guide appropriately. The tools reference prepares learners for the native commands used in labs; the three specialization prerequisites remain Fundamentals and Optimization.
 - AC-003: The catalog and courses carry a readable small-print Nebius B.V. copyright, free educational resource statement and Apache-2.0 license link with the complete license embedded. Preserve third-party notices; do not impose noncommercial or resale restrictions.
 - AC-004: The existing Python builder owns the generated catalog and course pages. The executable `courses/build-courses.sh` entry point rebuilds the shared guide, catalog, every registered course and each combined results ZIP, then checks HTML/ZIP source parity. Its help and status messages describe both output types. It works independently of the caller's directory, including checkout paths containing spaces, preserves builder failures, and provides help without requiring Python. Repeated runs with unchanged inputs produce identical HTML and ZIP content; file modification times may change. The wrapper separates checking from building with a cyan heading; current results are green and stale or missing output diagnostics and build/preflight failures are red on terminals. Check results retain stdout/stderr routing and stop at the first failed page. Redirected streams, `TERM=dumb` and any defined `NO_COLOR` use plain text. Rendering retains embedded reading resources, keyboard navigation, readable responsive layouts and standalone course validation.
 - AC-005: A minimal repository welcome page links to the catalog and GitHub. GitHub Pages publishes all eligible repository files from `main` `/` with `.nojekyll`, HTTPS and no custom workflow file.
-- AC-006: Preserve all seven courses' narrative, code listings, CSS, diagrams, teaching images, identifiers and reading behavior. Keep reading assets embedded; externalize only downloads. Each practical course has a Practical labs section with a Download results subsection. Separate labels from the links beneath them: Download all lab results: links through Grafana dashboards, Small and Large results to the sole external lab-results ZIP; Setup the lab environment: links through Lab setup guide to ../lab-guide.html. Do not generate or publish lab-kit ZIPs; original scripts, launchers, dependency files and displayed source remain intact and sync-labs.sh supplies cluster files. The download introduction replaces the redundant shared-setup/online-guide paragraph and introductory dashboard reminder; retain lab-specific dashboard teaching; prerequisite sections use one shared Lab Guide link. Soperator has no lab downloads. Lab results contain grafana-dashboards/, `small/<lab>/` and `large/<lab>/`, with original manifest-owned bytes and no nested ZIPs. Preserve existing dashboard anchors and replace repetitive download/file lists with concise pointers.
+- AC-006: Preserve all eight courses' narrative, code listings, CSS, diagrams, teaching images, identifiers and reading behavior. Keep reading assets embedded; externalize only downloads. Each practical course has a Practical labs section with a Download results subsection. Separate labels from the links beneath them: Download all lab results: links through Grafana dashboards, Small and Large results to the sole external lab-results ZIP; Setup the lab environment: links through Lab setup guide to ../lab-guide.html. Do not generate or publish lab-kit ZIPs; original scripts, launchers, dependency files and displayed source remain intact and sync-labs.sh supplies cluster files. The download introduction replaces the redundant shared-setup/online-guide paragraph and introductory dashboard reminder; retain lab-specific dashboard teaching; prerequisite sections use one shared Lab Guide link. Soperator and GPU Performance Tools have no lab downloads. Lab results contain grafana-dashboards/, `small/<lab>/` and `large/<lab>/`, with original manifest-owned bytes and no nested ZIPs. Preserve existing dashboard anchors and replace repetitive download/file lists with concise pointers.
 - AC-007: Keep the stdlib Python CLI and static HTML architecture. Separate metadata, Markdown, asset validation, rendering and build orchestration into focused modules. One deterministic archive assembler serves the builder and evidence exporter. Validate the complete selected output set before replacing files; replacements are individually atomic. Check mode writes nothing and verifies both HTML and ZIP bytes.
 - AC-008: Reject unsupported nested Markdown lists and single emphasis outside code. Every Markdown destination has an explicit rendered-link or source-scoped plain-text outcome; unknown destinations fail. Apply one passive SVG policy to all authored embedded SVGs.
-- AC-009: Rename the six combined downloads to `<slug>-lab-results.zip` with identical contents and no aliases. Remove obsolete filename retirement logic; preserve canonical result and dashboard files. Verify all seven course contents and styles.
+- AC-009: Rename the six combined downloads to `<slug>-lab-results.zip` with identical contents and no aliases. Remove obsolete filename retirement logic; preserve canonical result and dashboard files. Verify all eight course contents and styles.
 - AC-010: Normal build and read-only check preflight the complete repository-root publication inventory plus planned outputs before replacement, with exact caps of 104857600 bytes per file and 1000000000 bytes total. Report sizes, limits and headroom in decimal MB (1 MB = 1,000,000 bytes), with two decimal places and thousands separators; overflow diagnostics show excess amounts with six decimal places so one-byte violations remain visible. Keep exact integer-byte comparisons, fail on incomplete inventory or overflow, and never silently drop content. File, site and archive-limit failures use the same stream-specific red terminal diagnostics in build and check. Archive export enforces the same per-file cap under its existing transaction.
+- AC-011: Every successful built/current HTML or ZIP line displays its exact serialized byte length in an aligned decimal-MB column before the path. After successful processing, print an aligned publication summary with listed-output and other-file subtotals, estimated site size, site limit, remaining capacity and per-file limit; omit largest-file reporting. The shell wrapper prints this summary exactly once at the end after verification, replacing its trailing success sentence. The Python builder supports --no-summary to suppress only that summary; preflight enforcement and failure diagnostics remain active. Selected-course subtotals cover only that run's planned outputs. Totals use exact bytes before independent display rounding, which may differ by 0.01 MB. Failed builds/checks emit no success summary.
 
 #### Negative Criteria
 
@@ -607,7 +608,7 @@ Exercise stale and missing catalog output, metadata changes, all navigation edge
 
 #### Evaluation Method
 
-Navigate from the repository welcome page through the catalog and between all seven courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
+Navigate from the repository welcome page through the catalog and between all eight courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
 
 <!-- /REQUIREMENT: REQ-013 -->
 
@@ -682,16 +683,22 @@ enter an interactive shell in the synced remote directory.
   selects that user. The selected account takes precedence over SSH configuration `User`.
   SSH owns name resolution and authentication; port and identity overrides are
   available. Preflight, transfer and interactive SSH use the same selected account.
-- AC-002: Discover course directories by their metadata and labs directory;
-  preserve their source folder names and full supporting source packages plus
-  the catalog under remote `~/courses/`. A destination option selects another
+- AC-002: Discover course directories by `reference/course.json` and `COURSE.md`,
+  including reading-only packages without labs. Preserve their source folder names
+  and full supporting source packages plus the catalog, shared Lab Guide, README
+  and preparation helpers under remote `~/courses/`. A destination option selects another
   safe direct child of remote home. Invocation works from any working directory.
 - AC-003: Transfer current tracked and non-ignored untracked working files,
   including uncommitted edits. Exclude generated environments and outputs using
   Git ignore rules. Size/time checks skip unchanged contents in one rsync
-  transfer across all courses; do not hash every file by default.
+  transfer across all courses. Separately hash selected source files into a local
+  verification manifest and verify destination content, executable status and safe
+  link identity after each real transfer, before the interactive handoff.
 - AC-004: Local source wins for matching files. Preserve remote-only files,
-  including results and locally deleted source counterparts. Dry-run does not
+  including results and locally deleted source counterparts or entire course
+  folders. Exclude locally removed courses even if Git still tracks their files.
+  Only known unmodified old setup entrypoints may be retired after verified
+  synchronization, under REQ-025. Dry-run does not
   modify the remote destination, including on first use.
 - AC-005: Preserve runtime relative paths, executable permissions and timestamps.
   Validate inputs and dependencies, report failures nonzero, clean temporary
@@ -708,19 +715,23 @@ enter an interactive shell in the synced remote directory.
   list candidates for an explicit-target rerun. Explicit targets never require
   or invoke Kubernetes. Bound API requests and retain Kubernetes configuration.
 - AC-008: Every successful normal sync opens foreground interactive SSH in the
-  selected destination, using the account's login shell. Earlier failures never
+  selected destination, ensuring Python 3.12 and venv support through the existing
+  bootstrap before entering the account's login shell. Earlier failures never
   open that shell; SSH exit status becomes the script status. Normal runs without
   a terminal fail before syncing. Dry runs remain noninteractive previews and
   never open a shell. Clean temporary transfer state before handing off terminal
   and signal ownership to SSH.
 
-- AC-009: A requested private course-sync/v1 receipt records the port used by all SSH phases. Explicit --port takes precedence over a discovered Service port; otherwise evaluate the selected target with ssh -G and pin its effective port before remote access. Reject failed, missing, duplicate or invalid port output before transfer. Preserve receipt no-clobber creation and existing behavior without a receipt.
+- AC-009: Sync produces no connection-receipt file and exposes no receipt option. Reject removed options before external access, without aliases or compatibility paths. Automation uses --sync-only and owns its connection settings and independent campaign synchronization proof. The script requires local Python 3 for its transfer manifest and remote Python 3 for post-transfer source verification; --sync-only skips interpreter preparation and the interactive shell. Preserve explicit/discovered SSH port precedence and native SSH configuration when no port override is selected.
 
 #### Negative Criteria
 
-- NC-001: Do not delete destination-only files, weaken SSH host verification,
-  copy Git internals, install dependencies, provision infrastructure or submit
-  Slurm jobs. Do not introduce a sync database or compatibility shims.
+- NC-001: Do not delete destination-only files outside REQ-025's narrow
+  verified-entrypoint retirement, weaken SSH host verification, copy Git internals,
+  install lab runtimes, provision infrastructure or submit Slurm jobs. Normal
+  interactive handoff may ensure Python 3.12 and venv support; dry-run and
+  sync-only perform no installation. Do not introduce a sync database or
+  compatibility shims.
 - NC-002: Local transfer tests do not establish live cluster or GPU readiness.
 
 #### Validation Method
@@ -1076,7 +1087,7 @@ Learners prepare the environment once and then connect, run, profile and inspect
 
 #### Acceptance Criteria
 
-- AC-001: courses/README.md has three main sections: How to set up the lab, How to run the labs, and Browsing Grafana and Nsight Profilers. Keep shared setup concise; specialized runtime and vendor prerequisites belong to their owning course or lab, with direct links from the shared guide. Useful maintainer material lives separately. The README and generated Lab Guide introduction omit the maintainer-guide link, lab-kit/build commentary and the paragraph beginning The seven courses share one reading format; retain the course route, results ZIP explanation and source-sync instruction. Place Read this guide online immediately under How to set up the lab, linking to the published lab-guide.html and explaining that it contains the same instructions as the README. The README ends with the Nebius B.V. free educational material and Apache License 2.0 attribution; nothing follows it.
+- AC-001: courses/README.md has four main sections in order: How to set up the lab, Lab Preparation Scripts, How to run the labs, and Browsing Grafana and Nsight Profilers. Explain each automated preparation group and shared prerequisites in the preparation topic; keep detailed experiment-specific hardware and vendor qualification in the owning course or lab, with direct links from the shared guide. The sidebar includes ordered top-level and subsection links. Useful maintainer material lives separately. The README and generated Lab Guide introduction omit the maintainer-guide link, lab-kit/build commentary and the paragraph beginning The seven courses share one reading format; retain the course route, results ZIP explanation and source-sync instruction. Place Read this guide online immediately under How to set up the lab, linking to the published lab-guide.html and explaining that it contains the same instructions as the README. The README ends with the Nebius B.V. free educational material and Apache License 2.0 attribution; nothing follows it.
 - AC-002: Generate lab-guide.html from the README with the visible title Lab Guide, link it as the second catalog/menu entry, share the eight-entry navigation with every course, and include README.md and lab-guide.html in course synchronization. Keep README.md as the single instructional source. Omit its browser-edition pointer and closing attribution from the generated article body; use the standard HTML footer once with complete license and third-party notices. Remove all six Lab 00 documents, setup_guide metadata and special rendering; preserve executable lab identities and self-contained teaching.
 - AC-003: Show create/render/deploy followed by cxcli soperator profiling install before course monitoring changes and dashboard imports. Explain first-time interactive credentials. Retain private monitoring, explicit target, interactive datasource selection and per-course folder selection; import directories during setup instead of each experiment.
 - AC-004: Use environment_readiness consistently for the unnumbered checks and dashboard. Preserve independent-worker/GPU checks without a legacy alias or automatic migration of historical results.
@@ -1085,12 +1096,12 @@ Learners prepare the environment once and then connect, run, profile and inspect
 - AC-007: The browsing section gives `nebius-cxcli grafana show --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"` and `nebius-cxcli soperator profiling show "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET"`. Learners run the printed explicit-target, loopback forwarding commands in separate terminals, retrieve passwords using the printed commands and open the printed URLs. Preserve both Nsight HTTP/TURN mappings, the installer-selected Nsight username (admin by default), Grafana's printed username and private report originals. Initial installation remains separate from routine access; do not maintain duplicate service, Secret, port or URL recipes in the guide.
 
 - AC-008: Teach a command-first learner path with explicit Python 3.12, current-context verification and no-argument sync-labs.sh discovery. Use portable placeholders and explain each command's effect. Basic readiness uses an explicitly allocated GPU and the existing compatibility-stack lab; it does not claim profiling, container, distributed or monitoring qualification. Retain full qualification before the relevant evidence claims and preserve automated run-labs contracts.
-- AC-009: Learners submit jobs with native sbatch and inspect the exact job's logs and printed result paths. One catalog-wide course_setup.py prepare operation creates and validates private result, log and profile directories before submissions; standalone courses support explicit course-root preparation. Reject symlinked, foreign-owned or non-private existing directories without changing them. Remove repeated directory-preparation blocks and learner-facing umask commands from lab instructions. Preserve working directory, job identity, workload arguments and per-lab output/error paths. Use native sbatch dispatch for automation and retain inspection utilities; REQ-024 replaces generic execution wrappers.
+- AC-009: Learners submit jobs with native sbatch and inspect the exact job's logs and printed result paths. The no-argument regular-lab-setup.py command and selected specialized preparation commands create and validate private result, log and profile directories before submissions; standalone copies discover their course root automatically. Reject symlinked, foreign-owned or non-private existing directories without changing them. Remove repeated directory-preparation blocks and learner-facing umask commands from lab instructions. Preserve working directory, job identity, workload arguments and per-lab output/error paths. Use native sbatch dispatch for automation and retain inspection utilities; REQ-024 replaces generic execution wrappers.
 - AC-010: Each lab's Before you start contains one shared Lab Guide link and no assigned-dashboard link; retain distinct prerequisites and dashboard interpretation. Concisely introduce every supplied Python or CUDA lab program by its actual purpose, actions, correctness checks and output immediately before its canonical Practice command. Explain the retained monitoring discovery, publication, capture and qualification helpers where used. Move detailed campaign instructions to the existing run-labs documentation.
 - AC-011: Explain that driver capability, framework CUDA build and compiler toolkit versions need compatibility, not equality. Never recommend generic CUDA/driver upgrades in the Soperator learner flow. Make supported Ubuntu Python and Apptainer installation conditional administrator preparation; actual worker/container checks remain necessary. Keep fresh-terminal variables explicit, credential reuse accurate, full-project Grafana deployment effects visible and obsolete lab-kit instructions absent.
 - AC-012: Every executable lab guide has exactly one baseline sbatch invocation in Practice, with capture explicitly disabled. CPU-only labs use a CPU launcher without GPU requests. Preserve distinct comparisons and required builds outside that launch block. Lesson Practice remains links and teaching context.
 - AC-013: Teach unprofiled execution, Systems investigation, selected Compute analysis where applicable, and unprofiled verification. Learner diagnostics use visible native srun, nsys, ncu and report-inspection commands. Coordinated multi-node services retain native sbatch allocation with explicit profiler argv passed to each worker. Distributed and server recipes reach actual ranks/servers with private distinct reports, bounded execution and cleanup. Keep diagnostic labeling, capture applicability and maintainer automation; do not hide learner profiling inside Python wrappers.
-- AC-014: Directory preparation is standard-library-only and idempotent, performs no infrastructure or dependency installation, and is available in synchronized course trees. Monitoring discovery remains a separate explicit action with its existing authority checks.
+- AC-014: The internal directory-preparation function is standard-library-only and idempotent, performs no infrastructure or dependency installation itself, and is available in synchronized course trees. Monitoring discovery remains the separate explicit regular-lab-setup.py monitoring action with its existing authority checks.
 
 #### Negative Criteria
 
@@ -1174,7 +1185,7 @@ Students can read the Slurm and NVIDIA commands they run, select workload size e
 - AC-002: Workload CLI is --workload small|large, with unchanged lab defaults; run-labs accepts small|large|both and defaults to both. COURSE_WORKLOAD is the workload environment variable. No old flag/environment aliases. Preserve existing serialized evidence schemas and actual profiling terminology.
 - AC-003: New output belongs to results/<lab>/jobs/<job-id> with results, profiles, logs and artifacts children; scheduler logs remain results/<lab>/logs/<job-id>.out/.err. Create private scheduler directories before submission, reject unsafe paths/restarts/collisions, disable requeue, and collect only exact dispatched jobs.
 - AC-004: Preserve all original results, reports, screenshots, receipts, archives and published paths byte-for-byte. Historical organization makes verified copies only, with attribution/checksum manifests and collision detection. Uncertain attribution stays unresolved; history never supplies fresh evidence.
-- AC-005: Add GPU Performance Tools after Fundamentals: five concise reference lessons covering evidence selection/Slurm, Systems/NVTX, Compute, PyTorch profiler, and Grafana/VictoriaMetrics. No labs or exercises. Move existing primers and contextual diagrams, explain every demonstrated flag centrally, and retain lab-specific commands locally. Grafana queries its datasource; exporters/publishers and VMAgent collect/forward metrics.
+- AC-005: Place GPU Performance Tools before GPU Fundamentals as preparation for lab-bearing courses: five concise reference lessons covering evidence selection/Slurm, Systems/NVTX, Compute, PyTorch profiler, and Grafana/VictoriaMetrics. No labs or exercises. Move existing primers and contextual diagrams, explain every demonstrated flag centrally, and retain lab-specific commands locally. Grafana queries its datasource; exporters/publishers and VMAgent collect/forward metrics.
 - AC-006: Align canonical skills/run-labs source, references, recipes, tests and installed payload. Preserve scheduling, dependency, durable dispatch/reconciliation, owned cancellation, recovery, result identity/cardinality and evidence integrity. Reject incompatible saved executable plans without rewriting historical evidence.
 - AC-007: Lab 08 identifies embedded PyTorch versus external diagnostics and post-warmup measured NVTX ranges; no profiled timing is presented as clean performance evidence. Static and live qualification remain distinct.
 
@@ -1195,6 +1206,80 @@ Exercise workload parsing, native commands with scheduler/profiler doubles, time
 Students can explain each process and locate its evidence; automated campaigns execute the same reviewed jobs without hidden profiler dispatch.
 
 <!-- /REQUIREMENT: REQ-024 -->
+
+<!-- REQUIREMENT: REQ-025 status=satisfied priority=P1 type=feature -->
+### REQ-025: Five idempotent lab preparation commands
+
+#### User Story
+
+After source synchronization and SSH, a learner runs python3.12 "$HOME/courses/tools/regular-lab-setup.py" without arguments for regular labs and explicitly prepares expensive specialized labs when needed.
+
+#### Acceptance Criteria
+
+- AC-001: Python 3.12 scripts discover the synchronized catalog or their standalone course. Normal sync/SSH ensures Python 3.12; dry-run and sync-only do not install dependencies.
+- AC-002: Partition all 110 default labs into regular (79), CUDA (13), communication (10), serving (7), and Transformer Engine (1). Each specialized script supports --lab, --launcher, --all and read-only --plan; no arguments list supported labs without installation. --all excludes optional variants. Regular retains explicit monitoring and organize-history actions through an importable internal module.
+- AC-003: Select dependency closure before system prerequisites. Regular installs ordinary isolated Python environments, publication tools and the shared pinned Qwen2.5-0.5B snapshot, without container images, CUDA toolkit or specialized builds. Invoke Apptainer and jail namespace preparation only for selected container work.
+- AC-004: CUDA uses managed native CUDA 13.3.0 and compiles selected labs without replacing cluster drivers or system CUDA. Serving uses isolated native vLLM 0.28.0 with vendor-matched dependencies and native AIPerf 0.12.0. Communication selects only required fabric, NCCL, NIXL, Bridge or Dynamo components; Transformer Engine has an isolated runtime and native dependencies. Keep TensorRT-LLM, Dynamo container preflight and CUDA container teaching explicitly selectable.
+- AC-005: Share identical pinned model snapshots. Only speculative serving downloads 1.5B; only relevant communication labs download 8B. Artifact audit obtains metadata without downloading weights.
+- AC-006: One shared installation engine, lock, cache and receipt store validates completed generations, resumes interrupted work and atomically publishes selected runtimes. Scope component/runtime fingerprints to relevant inputs. Regular runs preserve specialized records and installations; unrelated source changes do not invalidate them. Preserve all existing results, logs and complete generations.
+- AC-007: Preparation groups differ from hardware eligibility. Inspect configured Slurm capacity without allocations; unsupported hardware reports explicit skips, unknown hardware stays unverified, and real installation/safety failures return nonzero. Setup submits no jobs and performs no GPU qualification, model warmup or persistent service startup.
+- AC-008: Native sbatch, srun, nsys and ncu stay visible. Jobs load isolated declared runtimes and never install dependencies; missing/stale runtimes report the exact preparation command. Preserve launcher arguments, profiling, process cleanup, library isolation and private per-job writable caches.
+- AC-009: Remove course_setup.py with no compatibility alias. Update imports, help, errors, tests, sync inventories, all six standalone copies, README, lab teaching and generated HTML/archives. After verified synchronization retire only digest-identified old distributed entrypoints; preserve modified files, symlinks, runtime state and evidence.
+- AC-010: Complete the five full commands sequentially, then repeat the unchanged sequence, for two successful runs per script on the authorized non-production target. Independently verify receipts, package versions, generations, activation and historical preservation. Report first/repeat wall times, failed/repair time, skips, existing-cache disclosure and total validation time; runtime smokes are separate from preparation timing.
+- AC-011: The README-derived Lab Guide has a dedicated Lab Preparation Scripts topic explaining each script's learner purpose, lab scope, automated installations, prerequisites, selection commands, shared model reuse and installation-versus-qualification boundary. Its sidebar exposes all top-level topics and authored subsections in body order, including each preparation group. Review the entire guide for native/default versus optional-container consistency and retain visible Slurm/profiler commands.
+- AC-012: Across all eight courses and 110 lab guides, dependency preparation has one shared Lab Guide referral per course entry or lab prerequisite section, without duplicated installation commands or competing manual setup procedures. The guide maps each available course/lab number to its preparation group and explains optional selections. Preserve lab-specific hardware/data prerequisites, runtime checks, native execution and intentional build experiments. Current learner teaching and runbooks must not direct users to retired setup entrypoints.
+- AC-013: The source-owned run-labs skill resolves every selected recipe launcher, including optional variants, to its preparation group. Campaign copies reuse an explicitly bound prepared installation without copying or rewriting runtime receipts. Independently validate selected managed runtimes before dispatch, report exact owning preparation commands when missing, preserve isolated job evidence and never install dependencies during a campaign. Refresh and verify the project-local skill through the documented npx installer.
+
+#### Negative Criteria
+
+- NC-001: No compatibility wrappers, unrelated dirty-work changes, historical evidence replacement, platform upgrades, automatic Git commit or external publication.
+- NC-002: Do not equate installation with hardware qualification, hide real errors as skips, or label cached timings pristine cold installs.
+
+#### Validation Method
+
+Inspect complete 110-lab and launcher bindings, dependency closure, native runtime activation, transfer verification and targeted retirement. Keep source, installed and live evidence distinct.
+
+#### Test Method
+
+Exercise exact groups, optional variants, read-only plans, selective packages, fingerprints, shared snapshots, interruption, locking, malicious paths, protected packages, activation isolation and result preservation. Run focused tests, validators, helper and generated parity before the frozen live trial.
+
+#### Evaluation Method
+
+Freeze final source identity, target resources/quiescence, existing installation checkpoint, packages and preservation baseline. Run regular, CUDA --all, communication --all, serving --all and Transformer Engine --all twice unchanged. Failed/interrupted attempts do not count; repair the causal owner and replay affected acceptance against final source. Bounded native smokes qualify only observed hardware.
+
+<!-- /REQUIREMENT: REQ-025 -->
+
+<!-- REQUIREMENT: REQ-026 status=active priority=P1 type=feature -->
+### REQ-026: Portable setup in privileged Soperator login jails
+
+#### User Story
+
+A cluster administrator uses explicitly selected container preparation on current and future jail-based Soperator clusters without manually repairing each build session.
+
+#### Acceptance Criteria
+
+- AC-001: On supported Ubuntu Linux with an already privileged root session, container preparation makes the existing jail the root of its own private mount namespace before image installation; native preparation does not require this transition. Preserve root, working directory, shared paths and the parent session's mount state.
+- AC-002: Require existing namespace capabilities; grant no privileges and change no SSH daemon, platform configuration, host mount namespace or Apptainer isolation guard. Unsupported constrained jails fail with actionable prerequisites.
+- AC-003: Close transient namespace/root descriptors and detach the old root before installation. Execute no subprocess, load external code or write files while the process temporarily sees the namespace root. Any incomplete transition terminates the process.
+- AC-004: Deliver the adaptation through canonical and standalone setup helpers. Selected container runs preserve results/logs and reuse packages, component generations and runtime receipts. Bound image compression memory and parallelism rather than relying on host-sized defaults in a smaller login container. Keep image-build scratch files on the private managed course filesystem instead of pod-local temporary storage.
+
+#### Negative Criteria
+
+- NC-001: Do not claim universal support for untested future platform versions or policies. GPU execution remains a separate lab qualification.
+
+#### Validation Method
+
+Review namespace ownership and failure boundaries against Linux and installed Soperator source. Keep source tests, bounded namespace proof and full setup acceptance separate.
+
+#### Test Method
+
+Test ordinary-root behavior, jail transitions, missing capabilities, failed syscalls, identity mismatches and descriptor cleanup. Verify parent mount/path identities around a bounded Apptainer reproducer, then run full setup twice after final source deployment.
+
+#### Evaluation Method
+
+A fresh SSH session completes setup and a second fresh invocation reuses completed state with no historical data changes.
+
+<!-- /REQUIREMENT: REQ-026 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

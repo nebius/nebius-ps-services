@@ -31,7 +31,6 @@ show_usage() {
   printf '%sOptions%s\n' "$S_BOLD" "$S_RESET"
   printf '  --dry-run         Preview without changing the destination or opening a shell\n'
   printf '  --sync-only       Sync with existing SSH authentication; do not open a shell\n'
-  printf '  --receipt FILE    Write a private JSON connection receipt after successful sync\n'
   printf '  --dest NAME       Direct subfolder of remote home (default: courses)\n'
   printf '  --port PORT       SSH port, from 1 through 65535\n'
   printf '  --identity FILE   SSH private-key file\n'
@@ -48,7 +47,6 @@ show_usage() {
   printf 'The selected account overrides SSH config User; use user@TARGET for non-root.\n'
   printf 'Discovery requires one Service, one external endpoint and one TCP port.\n'
   printf 'Ambiguous results require an explicit target; --port overrides the Service port.\n'
-  printf 'Receipts record the effective SSH port, including alias configuration defaults.\n'
   printf 'Interactive login requires terminal stdin; --dry-run and --sync-only do not.\n'
   printf 'Sync before submitting jobs. Run existing sbatch commands from a course root.\n'
 }
@@ -189,13 +187,13 @@ build_manifest() {
     pathspecs+=(":(literal)$name/")
   done
   [[ ${#courses[@]} -gt 0 ]] || die 'No courses found beside this script (expected reference/course.json and COURSE.md).'
-  for relative in index.html README.md lab-guide.html docs/grafana.png tools/course_setup.py; do
+  for relative in index.html README.md lab-guide.html docs/grafana.png tools/regular-lab-setup.py tools/cuda-lab-setup.py tools/communication-lab-setup.py tools/serving-lab-setup.py tools/transformer-engine-lab-setup.py tools/verify_source_sync.py tools/ensure_python312.sh tools/course_bootstrap/catalog.json; do
     [[ -f $source_root/$relative && ! -L $source_root/$relative ]] || die "Missing regular shared file: $relative"
   done
   git -C "$source_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die 'The script must be located in the courses directory of a Git clone.'
   # Check Git before consuming the list; process substitution would hide failures.
   git -C "$source_root" ls-files --cached --others --exclude-standard -z -- \
-    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/course_setup.py' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
+    "${pathspecs[@]}" ':(literal)index.html' ':(literal)README.md' ':(literal)lab-guide.html' ':(literal)docs/grafana.png' ':(literal)tools/regular-lab-setup.py' ':(literal)tools/cuda-lab-setup.py' ':(literal)tools/communication-lab-setup.py' ':(literal)tools/serving-lab-setup.py' ':(literal)tools/transformer-engine-lab-setup.py' ':(literal)tools/verify_source_sync.py' ':(literal)tools/course_job_cache.sh' ':(literal)tools/course_runtime.py' ':(literal)tools/course_env.sh' ':(literal)tools/ensure_python312.sh' ':(literal)tools/course_bootstrap/' > "$work_dir/git-files" || die 'Unable to enumerate course files with Git.'
   : > "$work_dir/files"
   while IFS= read -r -d '' relative; do
     [[ -e $source_root/$relative || -L $source_root/$relative ]] || continue
@@ -212,9 +210,8 @@ build_manifest() {
 
 main() {
   init_output_style
-  local dry_run=0 sync_only=0 receipt='' destination=courses port='' identity='' target='' options=1 target_given=0
-  local source_root ssh_target remote_code remote_command login_code login_command status
-  local ssh_config config_key config_value config_extra
+  local dry_run=0 sync_only=0 destination=courses port='' identity='' target='' options=1 target_given=0
+  local source_root ssh_target remote_code remote_command login_code login_command verify_code verify_command status
   local -a courses=() ssh_args=(-o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
   local -a rsync_args=(-rlptz --safe-links --from0 --itemize-changes --stats)
 
@@ -224,13 +221,12 @@ main() {
         -h|--help) show_usage; return 0 ;;
         --dry-run) dry_run=1; shift; continue ;;
         --sync-only) sync_only=1; shift; continue ;;
-        --dest|--port|--identity|--receipt)
+        --dest|--port|--identity)
           [[ $# -ge 2 && -n $2 && $2 != --* ]] || die "Missing value for $1"
           case $1 in
             --dest) destination=$2 ;;
             --port) port=$2 ;;
             --identity) identity=$2 ;;
-            --receipt) receipt=$2 ;;
           esac
           shift 2; continue ;;
         --) options=0; shift; continue ;;
@@ -257,15 +253,11 @@ main() {
   require_cmd git
   require_cmd ssh
   require_cmd rsync
+  require_cmd python3
   require_cmd mktemp
   require_cmd find
   [[ $dry_run == 1 || $sync_only == 1 || -t 0 ]] || die 'An interactive terminal is required to open SSH; use --sync-only for automation.'
   if [[ $sync_only == 1 ]]; then ssh_args+=(-o BatchMode=yes); fi
-  if [[ -n $receipt ]]; then
-    [[ $dry_run == 0 ]] || die '--receipt is unavailable with --dry-run.'
-    require_cmd python3
-    [[ ! -e $receipt && ! -L $receipt ]] || die '--receipt must be a new private file.'
-  fi
   source_root=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   work_dir=$(mktemp -d /tmp/course-sync.XXXXXXXX)
   trap cleanup EXIT
@@ -273,18 +265,8 @@ main() {
   trap 'cancel_sync 143' TERM
   trap 'cancel_sync 129' HUP
   build_manifest
+  python3 -B "$source_root/tools/verify_source_sync.py" manifest --root "$source_root" --files "$work_dir/files" > "$work_dir/verification.json"
   if [[ $target_given == 0 ]]; then discover_target; fi
-  if [[ -n $receipt && -z $port ]]; then
-    # Resolve once before remote effects, then pin the same port for every phase.
-    ssh_config=$(ssh -G "${ssh_args[@]}" "$ssh_target") || die 'Unable to resolve the SSH port for the receipt.'
-    while read -r config_key config_value config_extra; do
-      [[ $config_key == port ]] || continue
-      [[ -z $port && -z $config_extra && $config_value =~ ^[0-9]{1,5}$ ]] || die 'Invalid or duplicate SSH port in effective configuration.'
-      port=$((10#$config_value))
-      [[ $port -ge 1 && $port -le 65535 ]] || die 'Effective SSH port must be from 1 through 65535.'
-    done <<< "$ssh_config"
-    [[ -n $port ]] || die 'Missing SSH port in effective configuration.'
-  fi
   if [[ -n $port ]]; then ssh_args+=(-p "$port"); fi
 
   # This guard is read-only and runs again immediately before the receiver.
@@ -362,22 +344,19 @@ TRANSPORT
     log_warn 'Sync incomplete. Rerun the command before submitting jobs; remote-only files are kept.'
     return "$status"
   fi
-  if [[ -n $receipt ]]; then
-    python3 - "$receipt" "$ssh_target" "$port" "$destination" "$identity" <<'RECEIPT'
-import json, os, sys
-path, target, port, destination, identity = sys.argv[1:]
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-with os.fdopen(fd, 'w') as stream:
-    json.dump({'schema': 'course-sync/v1', 'target': target, 'port': int(port),
-               'destination': destination, 'identity_file': identity}, stream, indent=2)
-    stream.write('\n')
-RECEIPT
+  if [[ $dry_run == 0 ]]; then
+    # shellcheck disable=SC2016 # Resolve the selected account's home remotely.
+    verify_code='set -eu; exec python3 -B "$HOME/$1/tools/verify_source_sync.py" verify --root "$HOME/$1"'
+    verify_command="sh -c $(shell_quote "$verify_code") sync-labs $(shell_quote "$destination")"
+    # shellcheck disable=SC2029 # Both command words are POSIX-quoted above.
+    run_remote ssh -T "${ssh_args[@]}" "$ssh_target" "$verify_command" < "$work_dir/verification.json" || die 'Source verification failed; old entrypoints were preserved.'
   fi
   if [[ $dry_run == 0 && $sync_only == 0 ]]; then
     # Expand HOME/SHELL only remotely; stop if the synced directory is unavailable.
     # shellcheck disable=SC2016
     login_code='set -eu
 cd "$HOME/$1"
+bash tools/ensure_python312.sh
 exec "${SHELL:-/bin/sh}" -il'
     login_command="sh -c $(shell_quote "$login_code") sync-labs $(shell_quote "$destination")"
     cleanup

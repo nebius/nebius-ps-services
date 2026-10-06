@@ -24,7 +24,12 @@ def wrapper(tmp_path):
         "with open(os.environ['BUILD_CALLS'], 'a') as stream:\n"
         "    stream.write(json.dumps(sys.argv) + '\\n')\n"
         "phase = 'CHECK_STATUS' if '--check' in sys.argv else 'BUILD_STATUS'\n"
-        "sys.exit(int(os.environ.get(phase, '0')))\n"
+        "status = int(os.environ.get(phase, '0'))\n"
+        "if not status:\n"
+        "    print('current 1.00 MB index.html' if phase == 'CHECK_STATUS' else 'built 1.00 MB index.html')\n"
+        "    if '--no-summary' not in sys.argv:\n"
+        "        print('Publication summary\\n  Per-file limit: 104.86 MB')\n"
+        "sys.exit(status)\n"
     )
     binaries = tmp_path / "bin"
     binaries.mkdir()
@@ -63,8 +68,15 @@ def test_wrapper_builds_all_then_checks_from_another_directory(wrapper, args):
     run, builder, _ = wrapper
     result, calls = run(*args)
     assert result.returncode == 0, result.stderr
-    assert calls == [[str(builder)], [str(builder), "--check"]]
-    assert "All course pages and results ZIPs rebuilt and verified." in result.stdout
+    assert calls == [[str(builder), "--no-summary"], [str(builder), "--check"]]
+    assert result.stdout.splitlines() == [
+        "built 1.00 MB index.html",
+        "",
+        "Checking...",
+        "current 1.00 MB index.html",
+        "Publication summary",
+        "  Per-file limit: 104.86 MB",
+    ]
     assert "\x1b" not in result.stdout + result.stderr
 
 
@@ -79,6 +91,7 @@ def test_wrapper_preserves_failure_and_never_reports_success(
     assert result.returncode == status
     assert len(calls) == count
     assert "rebuilt and verified" not in result.stdout
+    assert "Publication summary" not in result.stdout
     assert "ERROR:" in result.stderr
     assert ("Checking..." in result.stdout) == (count == 2)
 
@@ -92,6 +105,9 @@ def test_help_needs_no_python_and_describes_results_archives(wrapper):
     assert "check HTML\nand ZIPs against their sources" in result.stdout
     assert "lab-kit ZIPs are not generated" in result.stdout
     assert "decimal MB (1 MB = 1,000,000 bytes)" in result.stdout
+    assert (
+        "One final publication summary follows successful verification" in result.stdout
+    )
     assert "including exceeded size limits, in red" in result.stdout
 
 

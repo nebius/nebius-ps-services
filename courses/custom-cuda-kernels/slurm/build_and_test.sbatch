@@ -12,6 +12,8 @@ if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
   printf 'Usage: CUDA_IMAGE_DIGEST=... CUTLASS_ROOT=... COURSE_CONTAINER_RUNNER=... sbatch %s\n' "$0"
   exit 0
 fi
+
+source tools/course_env.sh build_and_test.sbatch
 if [[ -z ${SLURM_JOB_ID:-} ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi
 : "${CUDA_IMAGE_DIGEST:?set the exact qualified CUDA development image digest}"
 : "${CUTLASS_ROOT:?set the shared path to the reviewed CUTLASS 4.6.1 source tree}"

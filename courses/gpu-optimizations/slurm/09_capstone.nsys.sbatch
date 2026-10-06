@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 09_capstone.nsys.sbatch
 umask 077
 for directory in results results/09_capstone results/09_capstone/logs results/09_capstone/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/09_capstone/jobs/$SLURM_JOB_ID"
@@ -45,6 +47,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=nsys COURSE_CAPTURE=1 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 srun --ntasks=1 --gpus-per-task=1 \
   env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s \
@@ -53,7 +56,7 @@ srun --ntasks=1 --gpus-per-task=1 \
   --discard-environment=true --force-overwrite=false \
   --duration=300 --kill=none --wait=all \
   --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:-python3}" labs/09_capstone.py --workload "$workload" "$@"
+  "${COURSE_PYTHON}" labs/09_capstone.py --workload "$workload" "$@"
 
 # Successful exit alone does not prove that a profiler collected a report.
 report_count=0

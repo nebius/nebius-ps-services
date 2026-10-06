@@ -286,10 +286,17 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     )
     assert '"ascending"' in overlap and '"descending"' in overlap
 
-    aiperf = (ROOT / "llm-inference/slurm/15_streaming_client.aiperf.sbatch").read_text()
-    assert "vllm serve" in aiperf and "--streaming" in aiperf
+    aiperf = (
+        ROOT / "llm-inference/slurm/15_streaming_client.aiperf.sbatch"
+    ).read_text()
+    assert (
+        '"${COURSE_VLLM:?run serving-lab-setup.py}" serve' in aiperf
+        and "--streaming" in aiperf
+    )
     assert "--request-count 24" in aiperf and "--output-artifact-dir" in aiperf
-    chunked = (ROOT / "llm-inference/slurm/34_policy_equivalence_client.sbatch").read_text()
+    chunked = (
+        ROOT / "llm-inference/slurm/34_policy_equivalence_client.sbatch"
+    ).read_text()
     assert "--no-enable-chunked-prefill" in chunked
     assert "--enable-chunked-prefill" in chunked
     assert "for trial in 1 2 3" in chunked
@@ -297,7 +304,9 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert 'run_trial enabled "${trial}"' in chunked
     prefix = (ROOT / "llm-inference/slurm/20_prefix_cache_client.sbatch").read_text()
     assert "for trial in 1 2 3" in prefix
-    speculative = (ROOT / "llm-inference/slurm/33_speculative_engine_client.sbatch").read_text()
+    speculative = (
+        ROOT / "llm-inference/slurm/33_speculative_engine_client.sbatch"
+    ).read_text()
     assert "--speculative-config" in speculative
     assert "compare_pair" in speculative
     assert "for trial in 1 2 3" in speculative
@@ -360,21 +369,25 @@ def test_custom_sanitizer_launcher_allowlists_tools() -> None:
     assert '--tool "${tool}"' in sanitizer
 
 
-def test_engine_profiles_require_immutable_digests() -> None:
-    for launcher in (
-        "10_vllm_offline.sbatch",
-        "11_serving_client.sbatch",
-        "34_policy_equivalence_client.sbatch",
-        "20_prefix_cache_client.sbatch",
-        "33_speculative_engine_client.sbatch",
-        "15_streaming_client.sbatch",
-        "30_engine_profile.trtllm.sbatch",
-        "15_streaming_client.aiperf.sbatch",
-        "dynamo_disaggregated_preflight.sbatch",
+def test_engine_profiles_restore_native_or_explicit_container_runtime() -> None:
+    folder = ROOT / "llm-inference/slurm"
+    for name in (
+        "10_vllm_offline",
+        "11_serving_client",
+        "34_policy_equivalence_client",
+        "20_prefix_cache_client",
+        "33_speculative_engine_client",
+        "15_streaming_client",
+        "15_streaming_client.aiperf",
     ):
-        text = (ROOT / "llm-inference/slurm" / launcher).read_text()
+        text = (folder / (name + ".sbatch")).read_text()
+        assert "course_env.sh" in text
+        assert "COURSE_VLLM" in text
+        assert "COURSE_CONTAINER_RUNNER" not in text
+        assert "IMAGE_DIGEST" not in text
+    for name in ("30_engine_profile.trtllm", "dynamo_disaggregated_preflight"):
+        text = (folder / (name + ".sbatch")).read_text()
         assert "@sha256:" in text
-        assert "latest" not in text.lower()
         assert "COURSE_CONTAINER_RUNNER" in text
         assert "IMAGE_DIGEST" in text
 

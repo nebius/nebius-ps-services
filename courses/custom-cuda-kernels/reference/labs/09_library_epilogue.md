@@ -4,19 +4,19 @@ The matrix multiplication itself may already be well served by a library, while 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Build with the required reviewed CUTLASS 4.6.1 source and `COURSE_ENABLE_CUTLASS=ON`. Use the declared SM90 image and one H100. Missing CUTLASS is a blocked lab, not an accepted cuBLAS-only substitute.
+CUDA preparation supplies the reviewed CUTLASS 4.6.1 source and builds this lab with `COURSE_ENABLE_CUTLASS=ON`; the launcher restores that prepared runtime automatically. Use the declared SM90 native toolkit and one H100. Missing CUTLASS is a blocked lab, not an accepted cuBLAS-only substitute.
 
-Hopper Tensor Core instructions used by CUTLASS may require `sm_90a`; the course isolates and documents that architecture-specific build. Do not claim forward compatibility for that binary.
+The supplied CUTLASS path uses FP32 SIMT and is compiled for the required SM90 target. Optional Hopper Tensor Core implementations may require a separately qualified `sm_90a` target; Lab 09 does not implement or qualify those paths.
 
 ## Concepts and code path
 
-The host builds a CPU reference that exercises positive and clamped ReLU outputs. cuBLAS computes row-major GEMM through the equivalent column-major call, followed by a bias/ReLU kernel. The CUTLASS path uses `OpClassSimt` and an `Sm80` template specialization compiled for the course target. It is FP32 SIMT, not a Hopper Tensor Core collective-builder example. The cuBLAS baseline pins pedantic math mode. It expands the bias into a full source matrix and applies `LinearCombinationRelu` with both alpha and beta set to one; expansion occurs outside timing.
+The host builds a CPU reference that exercises positive and clamped ReLU outputs. cuBLAS computes row-major GEMM through the equivalent column-major call, followed by a bias/ReLU kernel. The CUTLASS path uses `OpClassSimt` and an `Sm80` template specialization compiled for the course target. It is FP32 SIMT, not a Hopper Tensor Core collective-builder example. The cuBLAS baseline pins pedantic math mode. The CUTLASS path expands the bias into a full source matrix and applies `LinearCombinationRelu` with both alpha and beta set to one; expansion occurs outside timing.
 
 Given an FP32 M×N intermediate, it costs 4MN logical bytes to write and another 4MN to read before the separate epilogue writes the final output. Change to a fused epilogue. Expected observation: it may remove that intermediate round trip and a launch. However, Lab 09 also changes the GEMM implementation and reads an expanded bias matrix, so its time difference cannot be attributed only to epilogue placement or called a Tensor Core speedup. Report the full paths and include bias expansion/storage when evaluating integration cost. A tightly controlled epilogue-only extension must hold the underlying GEMM algorithm constant where supported.
 
-Build the required source-pinned CUTLASS path, enabled by default with COURSE_ENABLE_CUTLASS=ON, and run Lab 09's cuBLAS-plus-epilogue and CUTLASS SIMT cases. Check both against the supplied reference. The program offers small and full shapes, not an arbitrary-shape CLI; edge-shape coverage is an explicit source-edit/rebuild extension. Leave timing claims pending until the pinned source and CUDA image pass on H100.
+Build the required source-pinned CUTLASS path, enabled by default with COURSE_ENABLE_CUTLASS=ON, and run Lab 09's cuBLAS-plus-epilogue and CUTLASS SIMT cases. Check both against the supplied reference. The program offers small and full shapes, not an arbitrary-shape CLI; edge-shape coverage is an explicit source-edit/rebuild extension. Leave timing claims pending until the pinned source and CUDA toolkit pass on H100.
 
 ## Practice
 
@@ -67,6 +67,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 09_library_epilogue --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 09_library_epilogue \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -122,18 +123,11 @@ Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**
 
 Guided comparison: Compare the library GEMM plus epilogue with the available fused path at fixed GEMM dimensions. Independently change the separate epilogue threads from 256 to 128, rebuild, and determine whether the GEMM still dominates.
 
-For the source experiment, rebuild with the same image and build directory, then repeat the original run and capture commands:
-
-```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/09_library_epilogue/logs/%j.out" \
-  --error="$PWD/results/09_library_epilogue/logs/%j.err" --wait slurm/build_and_test.sbatch
-export COURSE_BUILD_DIR="${COMPLETED_BUILD_DIRECTORY:?completed build/run-JOB_ID directory}"
-```
+After changing the CUDA source, rerun this lab’s CUDA preparation from the Lab Guide to compile a new private build with the same pinned toolkit. Then repeat the original run and capture commands.
 
 The publisher compares the declared workload fields and source fingerprint; retain the original artifact and do not change input generation, timed scope, or correctness tolerances.
 
-**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 

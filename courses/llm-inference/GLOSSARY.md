@@ -3,6 +3,7 @@
 - **AIPerf** — NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
 - **API** — Application programming interface; the request and response contract exposed by a service or software component.
 - **Autoregressive generation** — selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
+- **AWQ** — Activation-aware Weight Quantization; uses calibration activation statistics to choose weight scaling that protects important channels.
 - **Cache restoration** — making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.
 - **Calibration** — Using representative data to choose quantization ranges or scales.
 - **Closed-loop load** — each client waits for completion before sending again, which can hide overload behind client pacing.
@@ -22,6 +23,7 @@
 - **Free list** — A collection of reusable cache blocks available for allocation.
 - **GDS** — GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
 - **Goodput** — completed work that meets declared service objectives.
+- **GPTQ** — a post-training weight-quantization method that uses calibration-derived sensitivity information to compensate rounding error by adjusting weights not yet quantized.
 - **GQA/MQA** — grouped-query attention / multi-query attention; layouts with fewer key/value heads than query heads.
 - **Greedy decoding** — choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
 - **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
@@ -34,6 +36,7 @@
 - **KV-aware routing** — worker selection that combines reusable-prefix state with projected active load.
 - **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
 - **Logit** — an unnormalized model score; softmax converts logits to probabilities.
+- **LoRA** — low-rank adaptation; a task-specific weight update represented by two small matrix factors and added to a fixed base transformation.
 - **LRU eviction** — discarding or demoting the least recently used eligible cache entry under capacity pressure.
 - **Model artifact bundle** — the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
 - **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.

@@ -4,7 +4,7 @@ This capstone deliberately reuses Lab 24's explicit-attention versus SDPA compar
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 and complete Lab 24. Each invocation is one fresh-process trial; the campaign launcher runs three with alternating variant order. Keep raw results and any profiler artifacts private.
 
@@ -101,6 +101,7 @@ result files and review the current generation (use `0` for the first selection)
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 32_inference_capstone --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_inference_capstone \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

@@ -30,13 +30,14 @@
 - **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
 - **HFU** — hardware FLOP utilization; executed hardware FLOP/s divided by a declared aggregate peak. It can include recomputation or other work that does not increase useful model progress.
 - **Host-to-device transfer** — copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
-- **KL divergence** — a directional measure of the difference between probability distributions; a sampled estimator is not exact full-policy divergence.
+- **KL divergence** — Kullback–Leibler divergence, a directional measure of the difference between probability distributions; a sampled estimator is not exact full-policy divergence.
 - **Learning rate** — the step-size factor in an optimizer's update, not a guaranteed rate of useful learning.
 - **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
 - **Logit** — an unnormalized model score for a vocabulary candidate.
 - **LoRA** — low-rank adaptation, which freezes base weights and trains small low-rank update matrices.
 - **Loss mask** — labels set to an ignore value so padding or selected prompt positions do not contribute to training loss.
 - **MFU** — model FLOP utilization; estimated useful model FLOP/s divided by a declared aggregate peak, with the model-FLOP formula and precision denominator disclosed.
+- **MLP** — multilayer perceptron; learned linear layers with nonlinear activations that transform each token position’s representation.
 - **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
 - **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
 - **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
@@ -52,6 +53,7 @@
 - **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
 - **Queue depth** — The number of prepared batches waiting for consumption.
 - **Reference policy** — separate anchor used by a recipe's divergence penalty; not necessarily the old policy.
+- **RoPE** — rotary positional embeddings; rotations of query/key components that encode position in attention.
 - **Sequence packing** — placing multiple examples into less padded storage while preserving boundaries.
 - **SFT** — supervised fine-tuning on prompt/target or instruction/response examples.
 - **Softmax** — transformation of scores into nonnegative probabilities summing to one.

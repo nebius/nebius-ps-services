@@ -1,10 +1,11 @@
 # Where to Go Next
 
-Return to a practical course with one concrete performance question.
+Continue with GPU Fundamentals, then GPU Performance Optimization. Use the course
+switcher to follow this route and revisit the tools reference during practice.
 
 - **Apply the references**
 
-  Read the lab's native batch job, record its workload and interpret the corresponding Systems, Compute or PyTorch view. Use the shared Lab Guide for environment preparation and evidence publication.
+  In GPU Fundamentals or a later practical course, read the lab's native batch job, record its workload and interpret the corresponding Systems, Compute or PyTorch view. Use the shared Lab Guide for environment preparation and evidence publication.
 
 - **Study collection details**
 

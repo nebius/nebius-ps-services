@@ -4,8 +4,10 @@ Choose an optional direction that matches the work you want to do next.
 
 - **Continue with a GPU course**
 
-  Use the course switcher to return to a GPU course. Follow the
-  [shared environment setup](../README.md#how-to-set-up-the-lab), then use its lab
+  Use the course switcher to read GPU Performance Tools, then GPU Fundamentals.
+  The tools reference introduces the profiler commands and evidence used in labs.
+  Follow the
+  [shared environment setup](../lab-guide.html#lab-preparation-scripts), then use its lab
   guides for exact resource requests and performance investigations.
   This introduction explains the scheduler behavior behind those commands.
 

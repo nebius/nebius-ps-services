@@ -5,6 +5,7 @@ establish equivalent work, measure a trustworthy baseline, identify the limiting
 resource, change one factor and measure again. Learn to connect PyTorch execution,
 GPU timelines and kernel evidence to an end-to-end optimization decision.
 
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
 Complete GPU Fundamentals first, or be ready to explain GPU execution, memory
 and timing. This course owns general PyTorch performance; training checkpointing,
 inference attention and CUDA C++ implementation are developed in their
@@ -13,7 +14,7 @@ specialized courses.
 Local experiments use one full H100. Distributed concepts connect to the
 separately qualified fabric experiments in
 [Advanced Labs](../advanced-gpu-communication/index.html).
-Use the [environment setup](../README.md#how-to-set-up-the-lab) in the shared Lab Guide
+Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
 to prepare for practice.
 
 ## 1. Controlled GPU optimization
@@ -151,7 +152,7 @@ PyTorch Profiler connects Python operators, shapes, allocations, and scheduled t
 
 ![Tool scope from service objective to selected kernel](reference/diagrams/tool-scope-from-service-objective-to-selected-kernel.svg)
 
-For an initial tool map, use the [Diagnostic tooling reference](../README.md#how-to-set-up-the-lab) guide: it separates device health, continuous telemetry, framework attribution, system timelines, kernel counters and load generation. It also explains protected DCGM Exporter/Prometheus collection, counter contention, NCCL Tests versus nvbandwidth and standardized benchmark context. Reading these interfaces is not permission to reconfigure cluster monitoring or networking. Use the cheapest observation that can distinguish your current hypothesis, then narrow the scope before collecting expensive kernel details.
+For an initial tool map, use the [GPU Performance Tools](../gpu-performance-tools/index.html) guide: it separates device health, continuous telemetry, framework attribution, system timelines, kernel counters and load generation. It also explains protected DCGM Exporter/Prometheus collection, counter contention, NCCL Tests versus nvbandwidth and standardized benchmark context. Reading these interfaces is not permission to reconfigure cluster monitoring or networking. Use the cheapest observation that can distinguish your current hypothesis, then narrow the scope before collecting expensive kernel details.
 
 ### Follow a submitted operation onto the device
 
@@ -244,7 +245,7 @@ The dependency structure is a directed acyclic graph (DAG): nodes are operations
 
 **Practice**
 
-Use Lab 04 to distinguish graph preparation from replay and check that refreshed inputs still produce the correct result.
+Use Lab 04 to distinguish graph preparation from replay and check correctness for the supplied fixed inputs. As an optional extension, refresh the captured input buffers in place and verify the new result before timing replay.
 
 - [Lab 04: Replay a fixed-shape workload with a CUDA Graph](reference/labs/04_cuda_graphs.md)
 

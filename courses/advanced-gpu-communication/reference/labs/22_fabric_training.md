@@ -4,7 +4,7 @@ Data parallelism replicates the model and partitions examples. In this experimen
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -60,6 +60,7 @@ Select the two unprofiled result artifacts. The publisher checks equivalent para
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 22_fabric_training --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 22_fabric_training \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"

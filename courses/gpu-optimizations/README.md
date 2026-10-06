@@ -9,11 +9,11 @@ Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes
 The networking workshop continues in Advanced Lab 09 for the PyTorch NCCL
 curve and Advanced Lab 10 for the MPI-enabled NCCL Tests benchmark.
 
-Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
-Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
+Start with [Lab Guide](../lab-guide.html#lab-preparation-scripts) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 
@@ -53,17 +53,14 @@ performance workflow before specialization in LLM training, LLM inference, or
 custom CUDA kernels.
 
 The lessons connect tool selection, measurement, memory, input pipelines,
-distributed execution, and causal reporting. Use the complete
-[diagnostic tooling setup](../README.md#how-to-set-up-the-lab) before profiler labs; it
-defines allocation-context checks, tool ownership, permissions, evidence scope,
-and safe installation boundaries.
+distributed execution and causal reporting. GPU Performance Tools explains
+allocation checks, tool ownership, permissions and evidence scope.
 
-Prepare and restore the runtime using the [shared guide](../README.md#how-to-run-the-labs).
-Before submitting a job, use the qualified environment described in
-[Versions and environment](VERSIONS.md), then follow the relevant gates in the
-[cluster small runbook](reference/cluster-smoke-test.md). Stop if that environment
-identity is unavailable. Set the submitting shell's file mask before submission;
-the job's internal mask cannot protect scheduler output created earlier.
+After the Lab Guide preparation, follow the relevant gates in the
+[cluster small runbook](reference/cluster-smoke-test.md). Launchers restore the
+saved runtime automatically. Preparation creates private directories before
+Slurm opens scheduler logs; a job's internal file mask alone cannot protect
+output created earlier.
 
 ```bash
 sbatch --chdir="$PWD" \
@@ -71,7 +68,7 @@ sbatch --chdir="$PWD" \
   --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.sbatch --workload small
 ```
 
-Use the Nsight launchers after freezing the baseline and hypothesis. Distributed transport, scaling and profiling practice now belongs to the advanced course; its setup qualifies the sixteen-H100 fabric.
+Use the Nsight launchers after freezing the baseline and hypothesis. Distributed transport, scaling and profiling practice now belongs to the advanced course; its readiness experiments qualify the sixteen-H100 fabric.
 
 ## Continue learning
 

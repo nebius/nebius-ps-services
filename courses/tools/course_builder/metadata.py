@@ -469,7 +469,7 @@ def shared_guide_source() -> str:
         or tuple(re.findall(r"^## (.+)$", text, re.MULTILINE)) != SHARED_GUIDE_SECTIONS
     ):
         raise ValueError(
-            "shared guide requires the ordered setup, run and browsing sections"
+            "shared guide requires the ordered setup, preparation, run and browsing sections"
         )
     return text
 

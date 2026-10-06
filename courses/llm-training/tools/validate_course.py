@@ -15,8 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COURSE_NAMES = (
     "soperator",
-    "gpu-fundamentals",
     "gpu-performance-tools",
+    "gpu-fundamentals",
     "gpu-optimizations",
     "llm-training",
     "llm-inference",
@@ -453,6 +453,7 @@ class Parser(html.parser.HTMLParser):
             "../lab-guide.html",
             "../gpu-performance-tools/index.html",
             "../lab-guide.html#how-to-set-up-the-lab",
+            "../lab-guide.html#lab-preparation-scripts",
             "../lab-guide.html#how-to-run-the-labs",
             "https://nebius.github.io/nebius-ps-services/courses/lab-guide.html",
         }:
@@ -850,6 +851,20 @@ def validate_next_steps(document: str) -> None:
         fail("next-steps references differ from their canonical destinations")
 
 
+def validate_preparation_referral(guide: str) -> None:
+    """Each lab refers once to shared preparation, without a second installer path."""
+    prerequisites = re.search(r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S)
+    setup_link = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
+    guide_links = re.findall(r"\[[^\]]+\]\([^)]*lab-guide\.html[^)]*\)", guide)
+    if not prerequisites or prerequisites[1].count(setup_link) != 1 or len(guide_links) != 1:
+        fail("each lab must contain one shared Lab Guide link in Before you start")
+    if re.search(r"(?:[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)", guide):
+        fail("dependency preparation commands belong only to the shared Lab Guide")
+    for command in re.findall(r"```(?:bash|sh)\n(.*?)```", guide, re.S):
+        if re.search(r"\b(?:pip(?:3)? install|apt(?:-get)? install|conda (?:create|install)|python(?:3(?:\.12)?)? -m (?:pip install|venv))\b", command):
+            fail("manual dependency installation belongs to the shared Lab Guide")
+
+
 def validate_lab_guides(
     document: str, metadata: dict, lessons: list, sources: list[Path]
 ) -> None:
@@ -1088,9 +1103,7 @@ def validate_lab_evidence(
     if has_gpu != recipe["gpu_telemetry"]:
         fail("dashboard GPU telemetry disagrees with lab applicability")
     prerequisites = re.search(r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S)
-    setup_link = "[Lab Guide](../../../README.md#how-to-set-up-the-lab)"
-    if not prerequisites or prerequisites[1].count(setup_link) != 1:
-        fail("Before you start must contain one shared Lab Guide link")
+    validate_preparation_referral(guide)
     if prerequisites and "../grafana/" in prerequisites[1]:
         fail("dashboard installation belongs to the shared Lab Guide")
     if (

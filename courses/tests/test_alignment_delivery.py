@@ -17,7 +17,7 @@ from test_course_review_fixes import COURSES, ROOT
 def test_readme_gates_live_submission_before_first_job(course):
     document = (ROOT / course / "README.md").read_text()
     before_submit = document[: document.index("sbatch ")]
-    assert "../README.md#how-to-set-up-the-lab" in before_submit
+    assert "../lab-guide.html#lab-preparation-scripts" in before_submit
     assert "umask 077" not in document
     assert "VERSIONS.md" in before_submit
     assert "qualified" in before_submit or "approved" in before_submit
@@ -32,11 +32,12 @@ def test_readme_closing_invitation_has_no_stray_comma(course):
     assert "for optional reading" in " ".join(document.split())
 
 
-def test_cuda_readme_limits_direct_build_to_allocated_qualified_environment():
+def test_cuda_readme_separates_compile_only_setup_from_allocated_tests():
     document = (ROOT / "custom-cuda-kernels/README.md").read_text()
-    before_build = document[: document.index("cmake -S")]
-    assert "allocated H100" in before_build
-    assert "qualified" in before_build
+    before_test = document[: document.index("sbatch ")]
+    assert "without a GPU" in before_test
+    assert "GPU allocation" in before_test
+    assert "not GPU qualified" in before_test
 
 
 @pytest.mark.parametrize("tool", ["memcheck", "racecheck", "initcheck", "synccheck"])
@@ -75,7 +76,8 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
             "bash",
             str(ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sanitizer.sbatch"),
             tool,
-            "--workload", "small",
+            "--workload",
+            "small",
         ],
         cwd=tmp_path,
         env=environment,
@@ -92,8 +94,6 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
     expected = [
         "--ntasks=1",
         "--gpus-per-task=1",
-        str(runner),
-        image,
         "compute-sanitizer",
         "--tool",
         tool,

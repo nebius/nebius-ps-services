@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Trace an odd logical index through its packed position and return mapping. Which work is unchanged and which overhead is added? Use compiler/profiler evidence to inspect the actual branch and residency behavior. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Trace an odd logical index through its packed position and return mapping. Which work is unchanged and which overhead is added? Use compiler/profiler evidence to inspect the actual branch and residency behavior. Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

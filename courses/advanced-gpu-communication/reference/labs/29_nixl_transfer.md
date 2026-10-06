@@ -4,14 +4,11 @@ NVIDIA Inference Xfer Library, or NIXL, moves data between memory regions using 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
-Prepare the [joint vendor runtime](../../README.md) once, then source
-`env/vendor-environment.sh` in this submission shell. The installer requires
-the Bridge, NIXLBench and Dynamo prerequisites together; installation alone does
-not qualify both workers for this experiment.
+The selected preparation from the Lab Guide provides this lab's isolated vendor runtime. The native launcher restores its saved selectors. Qualify both workers before interpreting performance.
 
 ## Concepts and code path
 
@@ -60,6 +57,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 29_nixl_transfer --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 29_nixl_transfer \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"

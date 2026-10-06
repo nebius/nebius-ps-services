@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from course_setup import (
+from course_bootstrap.support import (
     SCHEMA,
     SCRAPE_JOB,
     kube,

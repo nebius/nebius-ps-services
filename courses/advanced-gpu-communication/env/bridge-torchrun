@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Use the selected Bridge interpreter, including inherited base PyTorch packages.
+# Use the isolated Bridge interpreter selected by the native lab runtime.
 set -euo pipefail
-: "${COURSE_BRIDGE_PYTHON:?source env/vendor-environment.sh}"
+: "${COURSE_BRIDGE_PYTHON:?run the one-time course setup}"
 exec "$COURSE_BRIDGE_PYTHON" -m torch.distributed.run "$@"

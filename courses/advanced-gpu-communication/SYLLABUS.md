@@ -1,6 +1,7 @@
 # Lab route
 
-Complete shared environment setup once. Keep these identities in filenames, dashboards and evidence. Mechanics labs intentionally reserve the fabric while using only the ranks their model requires.
+Read the [GPU Performance Tools](../gpu-performance-tools/index.html) course
+before practical work, then complete shared environment setup once. Keep these identities in filenames, dashboards and evidence. Mechanics labs intentionally reserve the fabric while using only the ranks their model requires.
 
 ## Qualify placement and fabric
 

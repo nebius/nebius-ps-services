@@ -20,6 +20,7 @@
 - **Halo** — neighboring input values outside a tile's output region needed for a stencil's boundary outputs.
 - **Host / device** — the CPU-side program and the GPU-side execution environment; CUDA applications normally use both.
 - **Host-facing API** — the callable interface through which a consumer supplies data, shapes and an execution stream to a GPU implementation.
+- **ILP** — instruction-level parallelism; independent instructions within one thread that can make progress without waiting on one another’s results.
 - **Kernel** — a device function launched as a grid of thread blocks; a library API may launch several kernels and is not itself necessarily one kernel.
 - **Layout** — The mapping from logical tensor indices to storage addresses.
 - **Leading dimension** — the physical stride used to reach the next matrix row or column under the selected layout.
@@ -33,10 +34,12 @@
 - **PTX / SASS** — Parallel Thread Execution, an intermediate GPU instruction representation / target-specific machine instructions.
 - **PTXAS** — CUDA assembler component that produces target device code and compiler resource reports.
 - **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **RAII** — Resource Acquisition Is Initialization; C++ resource ownership and cleanup tied to an object’s lifetime, which must outlast asynchronous uses of that resource.
 - **Reduction** — Combining a collection of values into a smaller result, such as a sum.
 - **Register spill** — compiler placement of thread-local values into local memory.
 - **RMSNorm** — normalization by root mean square, followed by learned scaling, without subtracting the mean.
 - **Shared memory** — explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
+- **SIMT** — single instruction, multiple threads; warp instructions operate on participating lanes with per-thread values.
 - **SM** — streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
 - **SM90** — baseline compute capability 9.0 target used for H100; future-device compatibility still depends on the included PTX/cubin and the CUDA compatibility contract.
 - **SM90a** — architecture-accelerated Hopper target with non-forward-compatible features.

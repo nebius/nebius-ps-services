@@ -4,9 +4,9 @@ Real-engine speculation must preserve the intended target output before a throug
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Qualify compatible target/draft artifacts, immutable revisions, engine image, and the AIPerf/client environment. This optional live exercise may require more memory than the small mechanics lab. Do not assume arbitrary draft and target models are compatible.
+Qualify compatible target/draft artifacts, immutable revisions, native engine runtime, and the AIPerf/client environment. This live exercise may require more memory than the small mechanics lab. Do not assume arbitrary draft and target models are compatible.
 
 ## Concepts and code path
 
@@ -22,8 +22,7 @@ Run from this course directory on the login node after the one-time Lab Guide se
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
   --error="$PWD/results/33_speculative_engine_client/logs/%j.err" \
-  slurm/33_speculative_engine_client.sbatch \
-  "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+  slurm/33_speculative_engine_client.sbatch
 ```
 
 ## Check your results
@@ -58,6 +57,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot; the two slots select the paired engine variants from the same trial. The publisher requires matching greedy response digests; these panels establish equivalence, not serving throughput. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 33_speculative_engine_client --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 33_speculative_engine_client \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -70,13 +70,13 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ### Workload variations
 
-Set all four artifact variables to reviewed identities before submitting. The shell requires nonempty values, and the launcher checks immutable-revision syntax; these checks do not establish artifact compatibility. Inspect launcher help first.
+The setup catalog supplies the pinned Qwen2.5-1.5B target and Qwen2.5-0.5B draft pair. Run the default pair below, then require greedy-output equivalence before interpreting performance. Four explicit model/revision arguments remain available for deliberately prepared alternative experiments.
 
 ```bash
 bash slurm/33_speculative_engine_client.sbatch --help
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
-  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.sbatch
 ```
 
 Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
@@ -90,7 +90,7 @@ This diagnostic profiles the GPU server that receives the client requests. Read 
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/33_speculative_engine_client/logs/%j.out" \
-  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.nsys.sbatch "${CLUSTER_TARGET_MODEL:?set target model}" "${CLUSTER_TARGET_REVISION:?set immutable target revision}" "${COURSE_DRAFT_MODEL:?set draft model}" "${COURSE_DRAFT_REVISION:?set immutable draft revision}"
+  --error="$PWD/results/33_speculative_engine_client/logs/%j.err" slurm/33_speculative_engine_client.nsys.sbatch
 ```
 
 The native Systems command is in `slurm/33_speculative_engine_client.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.

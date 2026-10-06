@@ -185,8 +185,11 @@ def service(args, folder):
     python = os.environ.get("COURSE_DYNAMO_PYTHON")
     if not python or not Path(python).is_file():
         raise ValueError(
-            "Complete the shared README setup and export COURSE_DYNAMO_PYTHON on shared storage"
+            "Run the one-time course setup and submit through the native launcher"
         )
+    libraries = os.environ.get("COURSE_DYNAMO_LIBRARY_PATH")
+    if not libraries:
+        raise ValueError("The prepared Dynamo library path is missing; rerun course setup")
     if (
         args.model_dir.resolve().name != MODEL_REVISION
         or not (args.model_dir / "config.json").is_file()
@@ -197,6 +200,7 @@ def service(args, folder):
     with Processes(folder) as processes:
         endpoint = start_etcd(processes, nodes[0])
         shared = {
+            "LD_LIBRARY_PATH": libraries,
             # Preserve the venv path even when its Python is a symlink.
             "PATH": str(Path(python).absolute().parent)
             + os.pathsep
@@ -299,7 +303,8 @@ def run(kind):
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.set_defaults(warmup=4, iterations=64)
-    parser.add_argument("--model-dir", type=Path, required=True)
+    parser.add_argument("--model-dir", type=Path, default=os.environ.get("COURSE_MODEL_DIR"),
+                        required=not bool(os.environ.get("COURSE_MODEL_DIR")))
     parser.add_argument(
         "--layout", choices=("aggregated", "disaggregated"), default="aggregated"
     )

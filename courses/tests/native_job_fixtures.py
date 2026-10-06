@@ -10,6 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def prepare_job(root, course, lab):
+    # These tests isolate scheduler/profiler lifecycle. Runtime activation has its
+    # own real-record tests in test_course_bootstrap; this explicit double leaves
+    # the test-selected executable and container fixture in place.
+    (root / "tools").mkdir(exist_ok=True)
+    shutil.copyfile(
+        ROOT / "tools/course_job_cache.sh", root / "tools/course_job_cache.sh"
+    )
+    (root / "tools/course_env.sh").write_text(
+        ": # isolated runtime selection fixture\n"
+    )
     for relative in (
         "results",
         f"results/{lab}",
@@ -32,6 +42,10 @@ def executable(path, code):
 def local_commands(root):
     binaries = root / "bin"
     binaries.mkdir(exist_ok=True)
+    executable(
+        binaries / "setsid",
+        "import os, sys; os.setsid(); os.execvpe(sys.argv[1], sys.argv[1:], os.environ)\n",
+    )
     for command in ("stat", "timeout", "bash"):
         real = shutil.which("g" + command) or shutil.which(command)
         (binaries / command).symlink_to(real)
@@ -74,6 +88,7 @@ raise SystemExit(status or int(os.environ.get('PROFILER_STATUS','0')))
     return {
         "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
         "COURSE_PYTHON": str(binaries / "python-spy"),
+        "COURSE_TORCHRUN": str(binaries / "torchrun"),
         "COURSE_PROFILE_KERNEL": "measured_kernel",
         "SLURM_JOB_ID": "123",
         "SLURM_JOB_NUM_NODES": "1",

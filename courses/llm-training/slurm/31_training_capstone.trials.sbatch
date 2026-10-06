@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 31_training_capstone.trials.sbatch
 umask 077
 for directory in results results/31_training_capstone results/31_training_capstone/logs results/31_training_capstone/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/31_training_capstone/jobs/$SLURM_JOB_ID"
@@ -45,6 +47,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 set -o noclobber
@@ -60,7 +63,7 @@ if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 course_dir=$PWD
-course_python=${COURSE_PYTHON:-python3}
+course_python=${COURSE_PYTHON}
 command -v "${course_python}" >/dev/null 2>&1 || {
   printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2
   exit 2

@@ -19,7 +19,12 @@ TOOLS = (
     "publish_results",
     "inspect_results",
     "managed_profilers",
-    "course_setup",
+    "regular-lab-setup",
+    "cuda-lab-setup",
+    "communication-lab-setup",
+    "serving-lab-setup",
+    "transformer-engine-lab-setup",
+    "course_runtime",
     "verify_monitoring",
     "readiness",
 )
@@ -31,6 +36,17 @@ def main():
     args = parser.parse_args()
     pairs = []
     for course in COURSES:
+        shared = [
+            ROOT / "tools/course_env.sh",
+            ROOT / "tools/course_job_cache.sh",
+            ROOT / "tools/ensure_python312.sh",
+        ]
+        shared += sorted(
+            path
+            for path in (ROOT / "tools/course_bootstrap").iterdir()
+            if path.is_file()
+        )
+        pairs += [(path, ROOT / course / path.relative_to(ROOT)) for path in shared]
         pairs += [
             (ROOT / "tools" / f"{tool}.py", ROOT / course / "tools" / f"{tool}.py")
             for tool in TOOLS
@@ -59,8 +75,22 @@ def main():
                     f"Stale standalone helper: {destination.relative_to(ROOT)}"
                 )
         else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(content)
             destination.chmod(source.stat().st_mode & 0o777)
+
+    from course_bootstrap.retirement import retire
+
+    if not args.check:
+        # Every replacement was written above; verify bytes before retirement.
+        if any(
+            destination.read_bytes() != source.read_bytes()
+            for source, destination in pairs
+        ):
+            raise SystemExit("Standalone replacement verification failed")
+        outcome = retire(ROOT, [".", *COURSES])
+        for name in outcome["preserved_modified"]:
+            print(f"Preserved modified old entrypoint: {name}")
 
 
 if __name__ == "__main__":

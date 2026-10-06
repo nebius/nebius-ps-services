@@ -44,7 +44,7 @@ barrier and buffer-management costs can erase either predicted benefit.
 
 ### Run the bounded experiment
 
-After the documented CMake build, submit:
+With the prepared Lab 08 runtime, submit:
 
 ```bash
 sbatch --chdir="$PWD" \

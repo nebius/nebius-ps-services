@@ -1,20 +1,20 @@
 # Lab 10: Measure batched offline generation with vLLM
 
-Offline inference submits a known collection of prompts to an engine without exposing an HTTP service. This lab runs real vLLM generation inside the qualified container and accounts for all measured requests and output tokens. You will distinguish engine batch throughput from online request latency and avoid reporting only the final iteration's tokens as the whole run.
+Offline inference submits a known collection of prompts to an engine without exposing an HTTP service. This lab runs real vLLM generation in the prepared native runtime and accounts for all measured requests and output tokens. You will distinguish engine batch throughput from online request latency and avoid reporting only the final iteration's tokens as the whole run.
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Prepare the approved container runner, exact `VLLM_IMAGE_DIGEST`, and immutable model artifact according to the runbook. Keep the engine environment isolated from mechanics PyTorch. One H100 must have enough memory for the model and configured context.
+The selected serving runtime includes isolated native vLLM and the immutable model artifact. Keep the engine environment isolated from mechanics PyTorch. One H100 must have enough memory for the model and configured context.
 
 ## Concepts and code path
 
-The launcher runs the Python lab in the engine container. The lab constructs vLLM, warms generation, submits prompt batches, validates every returned completion, and aggregates prompt/output token counts and finish reasons across measured iterations. The elapsed window covers measured generation, not cold engine construction or an online queueing workload.
+The launcher runs the Python lab in the isolated engine environment. The lab constructs vLLM, warms generation, submits prompt batches, validates every returned completion, and aggregates prompt/output token counts and finish reasons across measured iterations. The elapsed window covers measured generation, not cold engine construction or an online queueing workload.
 
 ## Practice
 
-`labs/10_vllm_offline.py` generates batched completions inside the pinned vLLM container. It validates one bounded, nonempty completion per prompt and records token counts, finish reasons, elapsed time, and output-token throughput.
+`labs/10_vllm_offline.py` generates batched completions inside the isolated native vLLM runtime. It validates one bounded, nonempty completion per prompt and records token counts, finish reasons, elapsed time, and output-token throughput.
 
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
@@ -59,6 +59,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 10_vllm_offline --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_vllm_offline \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -101,12 +102,13 @@ Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `vllm
 
 For one kernel, use the same fixed workload and `--in-process` setting in a separate Compute capture. The `vllm_generate` range wraps measured generation calls and excludes model construction and warmup. Its first launches can update request buffers before model math. The command below selects the first matching matrix kernel inside measured generation, using full kernel names. In Systems, identify the selected launch and its role before interpreting the counters. If your qualified engine uses another matrix kernel name, review that name and update `COURSE_PROFILE_KERNEL` for a new diagnostic trial. A buffer-update capture does not measure model matrix work, and one matrix capture does not characterize the complete engine.
 
-Request additional **host RAM** for Compute replay. The profiler can back up device allocations, including vLLM's KV cache, in system memory. A job that runs normally with the launcher's 64 GiB allocation can therefore be killed during capture. The command below requests 256 GiB through Slurm's `SBATCH_MEM_PER_NODE` variable, whose numeric value is in MiB. This changes the job allocation without changing its one-GPU workload. Verify that the worker can satisfy the request; an out-of-memory capture is incomplete evidence.
+Request additional **host RAM** for Compute replay. The profiler can back up device allocations, including vLLM's KV cache, in system memory. A job that runs normally can therefore exceed its host-memory allocation during capture. This launcher leaves host-memory sizing to submission options or site defaults. The command below explicitly requests 256 GiB with `--mem=256G`, without changing its one-GPU workload. Verify that the worker can satisfy the request; this allocation is not a guarantee of sufficient memory, and an out-of-memory capture is incomplete evidence.
 
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_vllm_offline/logs/%j.out" \
-  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/10_vllm_offline.ncu.sbatch --workload small --in-process
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" \
+  --mem=256G slurm/10_vllm_offline.ncu.sbatch --workload small --in-process
 ```
 
 The native Compute command is in `slurm/10_vllm_offline.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
@@ -119,7 +121,7 @@ Guided comparison: Compare the default engine with `--enforce-eager`, the two se
 
 ## If something goes wrong
 
-Missing image identity, artifact mismatch, engine startup failure, or insufficient memory blocks this live lab. Do not replace it with a mechanics simulation. Preserve private logs and reduce the declared workload only as a new trial.
+Missing native runtime identity, artifact mismatch, engine startup failure, or insufficient memory blocks this live lab. Do not replace it with a mechanics simulation. Preserve private logs and reduce the declared workload only as a new trial.
 
 Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 

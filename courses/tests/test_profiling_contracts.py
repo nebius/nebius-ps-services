@@ -228,8 +228,8 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 )
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
-                assert "../../../README.md#how-to-set-up-the-lab" in guide
-                assert "[Lab Guide](../../../README.md#how-to-set-up-the-lab)" in guide
+                assert "../../../lab-guide.html#lab-preparation-scripts" in guide
+                assert "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)" in guide
                 assert "grafana import" not in guide
                 assert "grafana validate" not in guide
                 for obsolete in (
@@ -257,9 +257,9 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
         "New → New folder",
         "export COURSE_GRAFANA_FOLDER_UID=",
         "nebius-cxcli grafana import ./reference/grafana --recursive",
-        'labs/10_compatibility_stack.py --workload small',
-        'tools/course_setup.py monitoring \\',
-        'tools/verify_monitoring.py \\',
+        "labs/10_compatibility_stack.py --workload small",
+        "tools/regular-lab-setup.py monitoring \\",
+        "tools/verify_monitoring.py \\",
         '"$COURSE_PYTHON" tools/readiness.py',
     )
     positions = [guide.index(command) for command in ordered]
@@ -282,16 +282,12 @@ def test_grafana_official_reference_uses_exact_host(host, accepted):
     assert (not parser.errors) is accepted
 
 
-
-
-
-
-
-
 @pytest.mark.parametrize("phase", ["probe", "profile"])
 @pytest.mark.parametrize("variant", ["disabled", "enabled"])
 def test_chunked_prefill_capture_brackets_each_request_campaign(phase, variant):
-    launcher = (ROOT / "llm-inference/slurm/34_policy_equivalence_client.nsys.sbatch").read_text()
+    launcher = (
+        ROOT / "llm-inference/slurm/34_policy_equivalence_client.nsys.sbatch"
+    ).read_text()
     trial = launcher.split("run_trial() {\n", 1)[1].split("\n}\n", 1)[0]
     # Execute the actual post-readiness campaign with only local Bash fixtures.
     campaign = trial.split("  if [[ ${ready} -ne 1 ]]", 1)[1]
@@ -300,8 +296,7 @@ def test_chunked_prefill_capture_brackets_each_request_campaign(phase, variant):
         r"""
 set -euo pipefail
 course_python=python_fixture
-COURSE_CONTAINER_RUNNER=runner_fixture
-AIPERF_IMAGE_DIGEST=fixture
+COURSE_AIPERF=runner_fixture
 base_dir=fixture
 model=fixture
 revision=fixture
@@ -320,7 +315,7 @@ python_fixture() {
   fi
 }
 runner_fixture() {
-  [[ $2 == aiperf && $3 == profile ]]
+  [[ $1 == profile ]]
   printf 'aiperf\n'
 }
 mkdir() { :; }

@@ -4,9 +4,9 @@ Repeated prompt prefixes can reuse previously computed KV state, but visible tex
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Qualify the vLLM image, client environment, and immutable model revision. Use the prefix-cache launcher, which owns engine restarts, policy variants, metrics, and cleanup. Keep prompts and cache-related raw artifacts private.
+Qualify the native vLLM runtime, client environment, and immutable model revision. Use the prefix-cache launcher, which owns engine restarts, policy variants, metrics, and cleanup. Keep prompts and cache-related raw artifacts private.
 
 Prefix reuse saves H100 prefill compute and KV writes but keeps HBM occupied. The value depends on reuse frequency, prefix length, active load, and engine block/hash implementation.
 
@@ -69,6 +69,7 @@ Select the successful, unprofiled cache-disabled and cache-enabled cohort artifa
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 20_prefix_cache_client --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 20_prefix_cache_client \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

@@ -1,4 +1,4 @@
-"""Compose the catalog, shared guide and three course profiles."""
+"""Compose the catalog, shared guide and declared course profiles."""
 
 from __future__ import annotations
 from pathlib import Path
@@ -182,7 +182,7 @@ def render_text_course(course: Path, metadata: dict) -> str:
         heading = html.escape(lesson["title"])
         lesson_toc.append(f'<li><a href="#{anchor}">{heading}</a></li>')
         sections = "".join(
-            f'<div class="{FIELD_CLASSES[field]}"><h3>{field}</h3>'
+            f'<div class="{FIELD_CLASSES[field]}"><h3>{html.escape(field)}</h3>'
             + (
                 diagram_block(
                     lesson[field],
@@ -275,12 +275,18 @@ def render_shared_guide() -> str:
     toc = ""
     for heading, content in zip(chunks[1::2], chunks[2::2], strict=True):
         anchor = slug(heading)
-        toc += f'<li><a href="#{anchor}">{html.escape(heading)}</a></li>'
         rendered = block(content, links, source="README.md", images=True)
         # Standalone guide headings retain their authored levels.
         rendered = re.sub(
             r"<(/?)h([5-6])(?=[ >])", lambda m: f"<{m[1]}h{int(m[2]) - 2}", rendered
         )
+        # Read actual rendered headings so fenced examples cannot become TOC links.
+        subsections = "".join(
+            f'<li><a href="#{target}">{title}</a></li>'
+            for target, title in re.findall(r'<h3 id="([^"]+)">(.*?)</h3>', rendered)
+        )
+        children = f"<ul>{subsections}</ul>" if subsections else ""
+        toc += f'<li><a href="#{anchor}">{html.escape(heading)}</a>{children}</li>'
         body += f'<section id="{anchor}"><h2>{html.escape(heading)}</h2>{rendered}</section>'
     css = (ROOT / "tools/course.css").read_text(encoding="utf-8")
     return f"""{page_head(GUIDE_TITLE + " | Performance Engineering Courses", css)}
@@ -309,10 +315,12 @@ def render_catalog() -> str:
             if guide
             else "Prerequisites: GPU profiling + the relevant training or inference course; 16 H100 GPUs"
             if name == "advanced-gpu-communication"
-            else "No previous GPU course required"
+            else "Read before GPU Fundamentals and practical labs; no cluster required"
+            if name == "gpu-performance-tools"
+            else "Read GPU Performance Tools before starting the labs"
             if name == "gpu-fundamentals"
             else "Prerequisite: GPU Fundamentals"
-            if name in ("gpu-performance-tools", "gpu-optimizations")
+            if name == "gpu-optimizations"
             else "Prerequisites: Fundamentals + Optimization"
         )
         outcome_items = "".join(f"<li>{html.escape(item)}</li>" for item in outcomes)
@@ -364,21 +372,21 @@ def render_catalog() -> str:
 <main id="main"><header class="hero">
 <div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
 <h1>GPU Performance<br><span>Engineering</span></h1>
-<p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then build your GPU mental model and explore language models and custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
+<p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then read GPU Performance Tools before beginning GPU Fundamentals and its labs. Continue with GPU Performance Optimization before choosing language models or custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
 <div class="hero-actions"><a class="button primary" href="soperator/index.html">Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" href="lab-guide.html">Set up and run the labs <span aria-hidden="true">→</span></a></div>
 <p class="platform-note">GPU performance · Linux · Slurm</p></div>
 <aside class="learning-map" id="learning-path" aria-labelledby="path-title">
-<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">9 resources</span></div>
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">{len(CATALOG_ENTRIES)} resources</span></div>
 <h2 id="path-title">A foundation.<br>Then your direction.</h2>
 {"".join(path_groups)}
-<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. The three specializations are independent. Start any of them after Fundamentals and Optimization; consult the tools reference as needed. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
+<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. Read GPU Performance Tools before Fundamentals and the practical labs; return to it for command and profiler explanations during practice. The three specializations are independent. Start any of them after Fundamentals and Optimization. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
 </header>
 <div class="catalog-facts" aria-label="Catalog overview"><p><strong>{len(COURSES) - 1}</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">{lab_count} practical labs.<br>Free to read.</p></div>
 <section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
 {"".join(collection_groups)}</section>
-<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">From concepts to evidence</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>The five GPU courses connect explanations to experiments. The Soperator introduction explains the cluster and commands through text examples. The advanced course develops communication skills through complete labs.</p></div>
+<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">From concepts to evidence</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>The five practical GPU courses connect explanations to experiments. The Soperator introduction explains the cluster and commands through text examples. GPU Performance Tools introduces profiling and metrics before those experiments, without requiring labs. The advanced course develops communication skills through complete labs.</p></div>
 <ol><li><span>01</span><div><h3>Learn the mechanism</h3><p>Start with definitions, mental models and diagrams.</p></div></li><li><span>02</span><div><h3>Work through the experiment</h3><p>Read the prerequisites, explore the code and run the supplied lab.</p></div></li><li><span>03</span><div><h3>Explain the evidence</h3><p>Check correctness, interpret measurements and decide what to investigate next.</p></div></li></ol></section>
-<p class="environment-note">Read every course in your browser. The Soperator introduction requires no cluster. Run GPU-course labs in their documented Linux and Slurm environment with the specified hardware, dependencies and readiness checks.</p>
+<p class="environment-note">Read every course in your browser. Soperator and GPU Performance Tools require no cluster to read. Run GPU-course labs in their documented Linux and Slurm environment with the specified hardware, dependencies and readiness checks.</p>
 {license_footer()}</main></body></html>"""
 
 

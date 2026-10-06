@@ -1,6 +1,6 @@
 # Advanced cluster readiness
 
-Complete [shared environment setup](../../README.md#how-to-set-up-the-lab) on the dedicated two-worker eight-H100 cluster. Qualification is a gate, not an optimization. Inspect each job's exit state and completed artifact; submitting a job does not pass this gate.
+Complete [shared environment setup](../../lab-guide.html#lab-preparation-scripts) on the dedicated two-worker eight-H100 cluster. Qualification is a gate, not an optimization. Inspect each job's exit state and completed artifact; submitting a job does not pass this gate.
 
 ```bash
 sbatch --chdir="$PWD" \

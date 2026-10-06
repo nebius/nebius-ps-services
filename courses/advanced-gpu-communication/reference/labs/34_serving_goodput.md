@@ -4,13 +4,12 @@ Goodput is the rate of successfully completed requests that also meet declared s
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
 Reuse the joint vendor environment and pinned model prepared in
-[Lab 32](32_dynamo_disaggregation.md). Source `env/vendor-environment.sh` in
-this submission shell. Retain the complete model cache and repository metadata
+[Lab 32](32_dynamo_disaggregation.md). The native launcher restores its recorded runtime automatically. Retain the complete model cache and repository metadata
 for offline tokenizer lookup; do not substitute a weights-only copy.
 
 ## Concepts and code path
@@ -43,7 +42,7 @@ Run from this course directory on the login node after the one-time Lab Guide se
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_serving_goodput/logs/%j.out" \
   --error="$PWD/results/34_serving_goodput/logs/%j.err" \
-  slurm/34_serving_goodput.sbatch --workload small --model-dir "$MODEL_PATH" --concurrency 8
+  slurm/34_serving_goodput.sbatch --workload small --concurrency 8
 ```
 
 ## Check your results
@@ -70,6 +69,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 34_serving_goodput --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 34_serving_goodput \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -100,10 +100,10 @@ Submit the two unprofiled jobs from the login node, one after the other after co
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_serving_goodput/logs/%j.out" \
-  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.sbatch --workload small --model-dir "$MODEL_PATH" --concurrency 8
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.sbatch --workload small --concurrency 8
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_serving_goodput/logs/%j.out" \
-  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.sbatch --workload small --model-dir "$MODEL_PATH" --concurrency 16
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.sbatch --workload small --concurrency 16
 ```
 
 Logs stay under `results/34_serving_goodput/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -121,7 +121,7 @@ This coordinated diagnostic uses the native `sbatch` launcher to reserve both no
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/34_serving_goodput/logs/%j.out" \
-  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.nsys.sbatch --workload small --model-dir "$MODEL_PATH" --concurrency 8 --capture systems
+  --error="$PWD/results/34_serving_goodput/logs/%j.err" slurm/34_serving_goodput.nsys.sbatch --workload small --concurrency 8 --capture systems
 ```
 
 The native Systems command is in `slurm/34_serving_goodput.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.

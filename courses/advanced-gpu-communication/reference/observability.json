@@ -2146,8 +2146,8 @@
       "question": "Capture both aggregated and disaggregated layouts in separate diagnostic jobs. Inspect NIXL cache-transfer activity in the disaggregated capture; aggregated replicas do not perform that cross-worker cache transfer. Capture the actual GPU servers with --capture systems in a separate run. Inspect prefill, decode, NCCL and transfer activity in the two server reports, alongside client request timestamps. A chunk can contain several tokens; chunk-gap p99 is not token-gap p99. Independently repeat the fixed-layout comparison at another concurrency in a new matched campaign; explain the cache-transfer break-even point.",
       "interpretation": "The runner owns private job-scoped discovery, two vLLM workers and a loopback frontend. Both layouts use the same pinned Qwen3-8B BF16 weights, TP8 per worker and deterministic requests. The disaggregated path uses NixlConnector. Fixed output counts and complete streams establish delivery validity; identical output signatures are required for comparison. This is not a model-quality evaluation. TTFT includes queueing and transfer effects, not only GPU prefill.",
       "dashboard": "reference/grafana/32_dynamo_disaggregation.json",
-      "baseline_command": "sbatch slurm/32_dynamo_disaggregation.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated",
-      "systems_command": "sbatch slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
+      "baseline_command": "sbatch slurm/32_dynamo_disaggregation.sbatch --workload small --layout aggregated",
+      "systems_command": "sbatch slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --layout aggregated --capture systems",
       "compute_command": null,
       "tuning_control": "layout",
       "evidence_views": [
@@ -2174,7 +2174,7 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_dynamo_disaggregation/logs/%j.out\" \\\n  --error=\"$PWD/results/32_dynamo_disaggregation/logs/%j.err\" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --layout aggregated --capture systems",
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/32_dynamo_disaggregation/logs/%j.out\" \\\n  --error=\"$PWD/results/32_dynamo_disaggregation/logs/%j.err\" slurm/32_dynamo_disaggregation.nsys.sbatch --workload small --layout aggregated --capture systems",
       "jobs": {
         "run": "slurm/32_dynamo_disaggregation.sbatch",
         "nsys": "slurm/32_dynamo_disaggregation.nsys.sbatch"
@@ -2220,8 +2220,8 @@
       "question": "Capture round-robin and KV-aware routing in separate diagnostic jobs. Compare client TTFT distributions with server prefill activity in a separate Systems capture. Inspect router and worker logs for event readiness; a selected router name is not evidence of cache hits. Independently increase concurrency in a new fixed pair and explain whether load balance begins to dominate prefix locality. Report both median and tail latency.",
       "interpretation": "The serving runner enables prefix caching and publishes KV events from each worker. Four deterministic prefix families create reuse opportunities; each run warms its own fresh deployment before timing. KV-aware routing balances cache reuse and load, so lower TTFT is not guaranteed. Complete output and signature checks prevent a failed or changed response stream from becoming an apparent improvement.",
       "dashboard": "reference/grafana/33_dynamo_routing.json",
-      "baseline_command": "sbatch slurm/33_dynamo_routing.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin",
-      "systems_command": "sbatch slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
+      "baseline_command": "sbatch slurm/33_dynamo_routing.sbatch --workload small --router round-robin",
+      "systems_command": "sbatch slurm/33_dynamo_routing.nsys.sbatch --workload small --router round-robin --capture systems",
       "compute_command": null,
       "tuning_control": "router",
       "evidence_views": [
@@ -2248,7 +2248,7 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_dynamo_routing/logs/%j.out\" \\\n  --error=\"$PWD/results/33_dynamo_routing/logs/%j.err\" slurm/33_dynamo_routing.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --router round-robin --capture systems",
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_dynamo_routing/logs/%j.out\" \\\n  --error=\"$PWD/results/33_dynamo_routing/logs/%j.err\" slurm/33_dynamo_routing.nsys.sbatch --workload small --router round-robin --capture systems",
       "jobs": {
         "run": "slurm/33_dynamo_routing.sbatch",
         "nsys": "slurm/33_dynamo_routing.nsys.sbatch"
@@ -2303,8 +2303,8 @@
       "question": "Read profile_export_aiperf.json together with profile_export.jsonl, profile_export_raw.jsonl and outputs.json. Distinguish successful requests from SLO-passing requests; zero goodput can be a valid result. Independently try concurrency 32 against the same baseline and explain whether queueing, decode work or the network limits useful capacity. Use this lab\u2019s separate server capture to inspect GPU execution alongside AIPerf measurements.",
       "interpretation": "Compare identical transmitted requests and server-verified generated-token work. Different response text is allowed; output signatures are diagnostic. Fixed completion counts include reasoning tokens. Missing usage or failed requests invalidate the comparison, while zero goodput and either performance direction are valid. Use separate server captures for diagnosis; sampled telemetry does not prove a latency mechanism.",
       "dashboard": "reference/grafana/34_serving_goodput.json",
-      "baseline_command": "sbatch slurm/34_serving_goodput.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8",
-      "systems_command": "sbatch slurm/34_serving_goodput.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
+      "baseline_command": "sbatch slurm/34_serving_goodput.sbatch --workload small --concurrency 8",
+      "systems_command": "sbatch slurm/34_serving_goodput.nsys.sbatch --workload small --concurrency 8 --capture systems",
       "compute_command": null,
       "tuning_control": "concurrency",
       "evidence_views": [
@@ -2335,7 +2335,7 @@
         "view": "Open server-rank0.nsys-rep and server-rank1.nsys-rep from the private vendor folder. Expand the GPU worker process trees, CUDA streams and NCCL activity during AIPerf requests after model startup. Compare gaps and kernel activity with client TTFT/ITL; GPU utilization is not request latency. Model startup alone is an incomplete serving trace."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/34_serving_goodput/logs/%j.out\" \\\n  --error=\"$PWD/results/34_serving_goodput/logs/%j.err\" slurm/34_serving_goodput.nsys.sbatch --workload small --model-dir \"$MODEL_PATH\" --concurrency 8 --capture systems",
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/34_serving_goodput/logs/%j.out\" \\\n  --error=\"$PWD/results/34_serving_goodput/logs/%j.err\" slurm/34_serving_goodput.nsys.sbatch --workload small --concurrency 8 --capture systems",
       "jobs": {
         "run": "slurm/34_serving_goodput.sbatch",
         "nsys": "slurm/34_serving_goodput.nsys.sbatch"

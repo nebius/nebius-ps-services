@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Count the extra output pass in the cuBLAS path and the expanded-bias storage in CUTLASS. Why can a fused SIMT implementation lose to a faster library GEMM? Which initialization/copy costs would matter for a one-shot application? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Count the extra output pass in the cuBLAS path and the expanded-bias storage in CUTLASS. Why can a fused SIMT implementation lose to a faster library GEMM? Which initialization/copy costs would matter for a one-shot application? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

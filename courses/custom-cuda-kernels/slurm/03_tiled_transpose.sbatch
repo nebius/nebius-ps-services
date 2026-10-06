@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 03_tiled_transpose.sbatch
 umask 077
 for directory in results results/03_tiled_transpose results/03_tiled_transpose/logs results/03_tiled_transpose/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/03_tiled_transpose/jobs/$SLURM_JOB_ID"
@@ -45,16 +47,14 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 
 : "${COURSE_BUILD_DIR:?select the completed build directory}"
-: "${CUDA_IMAGE_DIGEST:?select the qualified immutable CUDA image}"
-: "${COURSE_CONTAINER_RUNNER:?select the qualified container runner}"
-[[ $CUDA_IMAGE_DIGEST == *@sha256:* && -x $COURSE_CONTAINER_RUNNER ]] || exit 2
 executable="$COURSE_BUILD_DIR/03_tiled_transpose"
 [[ -x $executable && ! -L $executable ]] || exit 2
 raw="$COURSE_JOB_DIR/logs/03_tiled_transpose.txt"
 started=$(date +%s)
-srun --ntasks=1 --gpus-per-task=1 "$COURSE_CONTAINER_RUNNER" "$CUDA_IMAGE_DIGEST" "$executable" --workload "$workload" "$@" >"$raw"
+srun --ntasks=1 --gpus-per-task=1 "$executable" --workload "$workload" "$@" >"$raw"
 ended=$(date +%s)
-"${COURSE_PYTHON:-python3}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+"${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"

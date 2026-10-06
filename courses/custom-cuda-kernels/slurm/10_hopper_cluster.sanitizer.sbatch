@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 10_hopper_cluster.sanitizer.sbatch
 umask 077
 for directory in results results/10_hopper_cluster results/10_hopper_cluster/logs results/10_hopper_cluster/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/10_hopper_cluster/jobs/$SLURM_JOB_ID"
@@ -44,6 +46,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 umask 077
@@ -52,9 +55,6 @@ if [[ -z "${SLURM_JOB_ID:-}" || $# -lt 1 ]]; then
   printf 'TOOL must be memcheck, racecheck, initcheck, or synccheck.\n' >&2
   exit 2
 fi
-: "${CUDA_IMAGE_DIGEST:?set the exact qualified CUDA development image digest}"
-: "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
-if [[ ${CUDA_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then printf 'ERROR: immutable image and executable runner required.\n' >&2; exit 2; fi
 tool="$1"
 executable="${COURSE_CLUSTER_BUILD_DIR:?select completed build}/10_hopper_cluster"
 shift
@@ -71,5 +71,5 @@ if [[ ${tool} == racecheck ]]; then
   fi
   sanitizer_options+=(--racecheck-num-workers "${SLURM_CPUS_PER_TASK}" --force-synchronization-limit 2)
 fi
-srun --ntasks=1 --gpus-per-task=1 "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" \
+srun --ntasks=1 --gpus-per-task=1 \
   compute-sanitizer "${sanitizer_options[@]}" "${executable}" --workload "$workload" "$@"

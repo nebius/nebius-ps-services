@@ -67,14 +67,14 @@ def test_submission_failure_is_not_completion_or_old_result_selection(tmp_path, 
     assert old.read_text() == '{"old": true}'
 
 
-def test_mechanics_example_preserves_per_command_interpreter(tmp_path, submit_spy):
+def test_mechanics_example_needs_no_parent_runtime_selection(tmp_path, submit_spy):
     result = run_block(
         tmp_path, {**submit_spy, 'HOME': str(tmp_path)},
         submissions(ROOT / 'llm-inference/README.md')[0],
     )
     assert result.returncode == 0, result.stderr
     captured = json.loads((tmp_path / 'submission.json').read_text())
-    assert captured['python'] == str(tmp_path / 'courses/.venvs/llm-inference/bin/python')
+    assert captured['python'] is None
     assert captured['argv'][-3:] == [
         'slurm/09_hf_prefill_decode.sbatch', '--workload', 'small',
     ]
@@ -112,7 +112,7 @@ def test_every_lab_has_one_shared_prerequisite_link_and_native_inspection():
     for path in GUIDES:
         source = path.read_text()
         before = source.split('## Before you start\n', 1)[1].split('\n## ', 1)[0]
-        assert before.count('[Lab Guide](../../../README.md#how-to-set-up-the-lab)') == 1, path
+        assert before.count('[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)') == 1, path
         assert 'assigned Grafana dashboard' not in before, path
         assert 'tools/submit_lab.py' not in source, path
         assert '"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py' not in source, path

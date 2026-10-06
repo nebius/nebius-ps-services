@@ -38,10 +38,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 13_collective_overlap.sbatch
 umask 077
 for directory in results results/13_collective_overlap results/13_collective_overlap/logs results/13_collective_overlap/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/13_collective_overlap/jobs/$SLURM_JOB_ID"
@@ -52,6 +54,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 umask 077
@@ -75,10 +78,10 @@ else
   MASTER_PORT=$((20000 + SLURM_JOB_ID % 20000))
 fi
 export MASTER_PORT
-export COURSE_TORCHRUN="${COURSE_TORCHRUN:-torchrun}"
+export COURSE_TORCHRUN="${COURSE_TORCHRUN}"
 command -v "${COURSE_TORCHRUN}" >/dev/null 2>&1 || { printf 'ERROR: torchrun command not found: %s\n' "${COURSE_TORCHRUN}" >&2; exit 2; }
-srun --kill-on-bad-exit=1 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "${COURSE_PYTHON:-python3}" tools/fabric_guard.py
+srun --kill-on-bad-exit=1 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 "${COURSE_PYTHON}" tools/fabric_guard.py
 # shellcheck disable=SC2016
 srun --kill-on-bad-exit=1 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 \
-  bash -c 'exec "$COURSE_TORCHRUN" --nnodes=2 --nproc-per-node=1 --node-rank="$SLURM_NODEID" --master-addr="$MASTER_ADDR" --master-port="$MASTER_PORT" --no-python "${COURSE_PYTHON:-python3}" "$@"' \
+  bash -c 'exec "$COURSE_TORCHRUN" --nnodes=2 --nproc-per-node=1 --node-rank="$SLURM_NODEID" --master-addr="$MASTER_ADDR" --master-port="$MASTER_PORT" --no-python "${COURSE_PYTHON}" "$@"' \
   bash "${lab_path}" "$@"

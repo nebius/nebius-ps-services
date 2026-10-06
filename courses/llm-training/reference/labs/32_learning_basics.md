@@ -4,9 +4,9 @@ This first exercise makes learning visible without a transformer, downloaded mod
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Activate the course's PyTorch environment. CPU is the default and is sufficient for this conceptual exercise; CUDA is an explicit option on a full H100 allocation. No data or model is downloaded. Read the opening definitions of parameter, prediction, loss, gradient, optimizer and held-out evaluation. Both profile labels run the same tiny example; neither is a performance benchmark. The seed field is shared result metadata, but this deterministic example does not sample training data.
+The launcher restores the prepared course PyTorch runtime automatically. CPU is the default and is sufficient for this conceptual exercise; CUDA is an explicit option on a full H100 allocation. No data or model is downloaded. Read the opening definitions of parameter, prediction, loss, gradient, optimizer and held-out evaluation. Both profile labels run the same tiny example; neither is a performance benchmark. The seed field is shared result metadata, but this deterministic example does not sample training data.
 
 H100 changes the feasible batch, precision, and parallel execution, not the definition of the objective. Tiny course models demonstrate mechanics and performance measurement, never production model quality.
 
@@ -64,6 +64,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 32_learning_basics --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_learning_basics \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

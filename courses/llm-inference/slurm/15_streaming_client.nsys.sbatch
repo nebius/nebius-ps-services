@@ -37,10 +37,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 15_streaming_client.nsys.sbatch
 umask 077
 for directory in results results/15_streaming_client results/15_streaming_client/logs results/15_streaming_client/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/15_streaming_client/jobs/$SLURM_JOB_ID"
@@ -51,6 +53,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=nsys COURSE_CAPTURE=1 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 
 control_profile() {
@@ -64,19 +67,12 @@ set -euo pipefail
 set -o noclobber
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
-export COURSE_RUNTIME_ID="${VLLM_IMAGE_DIGEST:-unqualified}"
 
 
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then show_usage; exit 0; fi
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then printf 'ERROR: submit this script with sbatch.\n' >&2; exit 2; fi
 if [[ ! ${SLURM_JOB_ID} =~ ^[0-9]+$ ]]; then printf 'ERROR: SLURM_JOB_ID must be numeric.\n' >&2; exit 2; fi
-: "${VLLM_IMAGE_DIGEST:?set the exact qualified vLLM image as an OCI digest}"
-: "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
-if [[ ${VLLM_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then
-  printf 'ERROR: the image must use @sha256 and COURSE_CONTAINER_RUNNER must be executable.\n' >&2
-  exit 2
-fi
 model=${1:-Qwen/Qwen2.5-0.5B-Instruct}
 requests=${2:-8}
 concurrency=${3:-2}
@@ -92,7 +88,7 @@ if [[ ! -f "${course_dir}/labs/15_streaming_client.py" ]]; then
   printf 'ERROR: submit from the course root containing labs/15_streaming_client.py.\n' >&2
   exit 2
 fi
-course_python="${COURSE_PYTHON:-python3}"
+course_python="${COURSE_PYTHON}"
 command -v "${course_python}" >/dev/null 2>&1 || { printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2; exit 2; }
 if [[ -z ${COURSE_RUN_ID:-} ]]; then
   COURSE_RUN_ID=$("${course_python}" -c 'import secrets; print(secrets.token_hex(6))')
@@ -106,12 +102,12 @@ mkdir -p "${COURSE_JOB_DIR}/logs" "${COURSE_RESULTS_DIR}"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_log="${COURSE_JOB_DIR}/logs/vllm-stream-server-run-${COURSE_RUN_ID}.log"
 
-setsid "${COURSE_CONTAINER_RUNNER}" "${VLLM_IMAGE_DIGEST}" env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt \
+setsid env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt \
   --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
   --discard-environment=true --force-overwrite=false \
   --duration=300 --kill=none --wait=all \
   --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop vllm serve --profiler-config.profiler cuda "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
+  --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run serving-lab-setup.py}" serve --profiler-config.profiler cuda "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
   --max-model-len 2048 >"${server_log}" 2>&1 &
 server_pid=$!
@@ -123,10 +119,10 @@ stop_server() {
   # checking the report, allowing Nsight to finish serializing the capture.
   kill -INT -- "-$pid" 2>/dev/null || true
   for ((attempt=0; attempt<600; attempt++)); do
-    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    if ! kill -0 -- "-$pid" 2>/dev/null; then break; fi
     sleep 0.1
   done
-  if kill -0 "$pid" 2>/dev/null; then
+  if kill -0 -- "-$pid" 2>/dev/null; then
     kill -TERM -- "-$pid" 2>/dev/null || true
     sleep 1
     kill -KILL -- "-$pid" 2>/dev/null || true

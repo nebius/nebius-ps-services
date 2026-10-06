@@ -46,8 +46,15 @@ def private_environment(path):
         raise ValueError(
             "Use the prepared environment receipt schema in references/environment.md"
         )
-    if set(env) - required - {"variables", "course_variables", "lab_variables"}:
+    if set(env) - required - {"variables", "course_variables", "lab_variables", "prepared_root"}:
         raise ValueError("Unknown environment fields; use references for credentials")
+    if "prepared_root" in env and (
+        not isinstance(env["prepared_root"], str)
+        or not Path(env["prepared_root"]).is_absolute()
+        or ".." in Path(env["prepared_root"]).parts
+        or any(c in env["prepared_root"] for c in "\x00\n\r")
+    ):
+        raise ValueError("prepared_root must be an absolute remote catalog path")
     if set(env["ssh"]) - {"target", "port", "identity_file"}:
         raise ValueError("SSH credentials must use existing identity-file references")
     if set(env["reports"]) != {"producer_root", "viewer_root"}:
@@ -91,8 +98,8 @@ def claim_path(state, unit):
 
 
 def verify_frozen(state):
-    if state.get("plan", {}).get("execution_contract") != "native-jobs/v1":
-        raise ValueError("Saved execution plan predates native jobs; preserve its evidence and create a new campaign")
+    if state.get("plan", {}).get("execution_contract") != "native-jobs/v2":
+        raise ValueError("Saved execution plan predates managed preparation binding; preserve its evidence and create a new campaign")
     root = Path(state["courses_root"])
     actual = source_identity(root, [u["course"] for u in state["plan"]["units"]])
     if (

@@ -1,15 +1,22 @@
 # Glossary
 
+- **AIPerf** — the workload and measurement client used here to report request latency, throughput and service-objective results.
 - **Collective** — A coordinated operation such as all-reduce, all-gather or all-to-all across a process group.
+- **DDP** — DistributedDataParallel; replicated model training with gradient synchronization across processes.
 - **Exposed communication** — Communication that remains on the critical path after useful overlap.
+- **FSDP2** — fully sharded data parallelism, second-generation PyTorch interface; shards training state and materializes parameters for computation.
 - **Goodput** — Completed requests per second that meet every declared latency objective.
 - **GPUDirect RDMA** — A device path allowing the network adapter to access registered GPU memory without staging each transfer through host memory.
 - **HCA** — Host channel adapter connecting a worker to the InfiniBand fabric.
 - **InfiniBand** — The inter-node fabric used by the eight-GPU platform; link state and selected transport need separate evidence.
+- **ITL** — inter-token latency; AIPerf reports a per-request average under its declared token-count and timestamp conventions, rather than the distribution of individual token gaps.
 - **KV cache** — Attention keys and values retained for previously processed tokens.
+- **NCCL** — NVIDIA Collective Communications Library; provides GPU collective and point-to-point communication operations.
 - **NIXL** — NVIDIA Inference Xfer Library, used to transfer cache and other data between memory regions.
 - **NVLink / NVSwitch** — GPU links and switching that connect GPUs within the selected H100 node. A topology label alone does not prove switch health.
+- **NVTX** — NVIDIA Tools Extension Library; annotations that name diagnostic markers and ranges without synchronizing or timing GPU execution by themselves.
 - **Rank** — One process participating in a distributed group; global rank identifies the process across workers.
 - **RDMA** — Remote direct memory access between registered memory regions.
+- **SLO** — service-level objective; a declared threshold, such as a latency bound, used to determine whether completed work counts toward goodput.
 - **Tensor / context / expert parallelism** — Partitioning model operations, sequence context or routed experts across ranks.
 - **TTFT** — Time from submitting a request until the client sees its first generated content.

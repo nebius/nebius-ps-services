@@ -4,7 +4,7 @@ Communication is not automatically hidden just because an API is asynchronous. T
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -58,7 +58,7 @@ Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_jo
 
 Require `all_reduce_exact`, `compute_is_finite`, and a finite ratio. Compare `serialized_median_ms`, `overlapped_median_ms`, and the slowest-rank timing scope. Finite GEMM output does not prove reference equivalence for an edited compute path.
 
-For the fixed-work scaling comparison in [Lab 08](12_distributed_scaling.md), retain per-rank step time, collective ranges, overlap, message size, imbalance and scaling efficiency. Strong-scaling efficiency usually decreases as local compute shrinks relative to latency and communication.
+For the fixed-work scaling comparison in [Lab 12](12_distributed_scaling.md), retain per-rank step time, collective ranges, overlap, message size, imbalance and scaling efficiency. Strong-scaling efficiency usually decreases as local compute shrinks relative to latency and communication.
 
 The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
 
@@ -71,6 +71,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 13_collective_overlap --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 13_collective_overlap \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -120,7 +121,7 @@ Guided comparison: Compare serialized communication plus compute with asynchrono
 
 An unrealistically short overlap time may exclude a required wait. Incorrect sums may indicate reused buffers before completion. Restore dependencies and correctness before investigating performance; do not use instrumented durations as acceptance timing.
 
-For the fixed-work scaling comparison in [Lab 08](12_distributed_scaling.md), avoid dividing single-rank time by rank count without holding total work fixed.
+For the fixed-work scaling comparison in [Lab 12](12_distributed_scaling.md), avoid dividing single-rank time by rank count without holding total work fixed.
 
 Publication failure is separate from benchmark failure. Retain the JSON files and retry the same pair using the generation printed by the failed publisher. A stale-generation rejection means another selection won; review it before replacing it. Missing metrics remain unknown. Counter permission errors or an empty capture require readiness repair before a profiling claim.
 

@@ -8,12 +8,14 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Run from the Inference course root. Use the separate mechanics, client, and
-pinned engine environments in [VERSIONS.md](../VERSIONS.md). Prepare the
-site-approved container runner and immutable image identities before engine
-jobs. Before submitting, set the submitting shell's file-creation mask:
+Run from this course root after preparing the course and lab number through the
+[Lab Guide](../../lab-guide.html#lab-preparation-scripts). Launchers restore the
+saved runtime automatically; [VERSIONS.md](../VERSIONS.md) describes its scope.
+Preparation creates private log directories before Slurm opens its output.
+For these read-only local dependency checks, select the ordinary lab runtime:
 
 ```bash
+source tools/course_env.sh 35_inference_basics --lab
 "$COURSE_PYTHON" -m pip check
 python3 tools/validate_course.py
 ```

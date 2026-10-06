@@ -8,13 +8,11 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Complete the one-time directory preparation in the shared Lab Guide before submitting. Keep runtime evidence in those private result directories.
+Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
 
-1. Record the immutable CUDA development image and review the site-specific
-   container runner derived from `slurm/container_runner.example.sh`.
-2. Stage the reviewed CUTLASS 4.6.1 source tree, then submit
-   `slurm/build_and_test.sbatch`; it binds the recorded digest and source path
-   to the CMake build, required CUTLASS Lab 09, SM90 binaries, and CTest.
+1. Record the prepared managed CUDA 13.3.0 toolkit and per-lab build receipts.
+2. Verify the prepared CUTLASS 4.6.1 source and native SM90 binaries. Setup
+   compiles without submitting GPU jobs or running CTest.
 3. Submit Lab 13 and confirm one full non-MIG H100 at compute capability 9.0.
 4. Run Labs 01–09 and 11–12 through the one-node launcher.
 5. Run the matching `slurm/LAB.sanitizer.sbatch memcheck` job for every required binary;
@@ -28,10 +26,9 @@ Complete the one-time directory preparation in the shared Lab Guide before submi
 
 ## Build and correctness commands
 
-Run from this course root after the cluster owner provides the reviewed
-container runner, immutable `CUDA_IMAGE_DIGEST`, and approved `CUTLASS_ROOT`.
-The build launcher uses a unique `build/run-<build-job-id>` directory. Set
-`COURSE_BUILD_DIR` to that actual completed build directory before later jobs.
+Run from this course root after CUDA preparation. The optional container teaching
+exercise below needs the optional selection in the Lab Guide and runs CTest in a unique
+`build/run-<build-job-id>` directory. Native lab jobs use their setup-managed builds.
 
 ```bash
 python3 tools/validate_course.py
@@ -41,10 +38,9 @@ sbatch --chdir="$PWD" \
   --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/build_and_test.sbatch
 ```
 
-After that job completes the CMake build and passes CTest, use its privately recorded build directory:
+Independently of the optional container exercise, run the device and correctness labs with their prepared runtime:
 
 ```bash
-export COURSE_BUILD_DIR='build/run-REPLACE_WITH_BUILD_JOB_ID'
 sbatch --chdir="$PWD" \
   --output="$PWD/results/13_h100_preflight/logs/%j.out" \
   --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/13_h100_preflight.sbatch
@@ -132,4 +128,4 @@ and architecture statement; they are excluded from the core guided-hour total.
 
 ## Optional cluster configure, build, and test
 
-[Lab 10: Qualify an optional thread-block-cluster launch](labs/10_hopper_cluster.md) owns the complete optional configure, build and targeted CTest procedure. Keep its build and image qualification separate from the required SM90 suite.
+[Lab 10: Qualify an optional thread-block-cluster launch](labs/10_hopper_cluster.md) qualifies the setup-managed SM90a target. Keep its execution evidence and native toolkit identity separate from the required SM90 suite.

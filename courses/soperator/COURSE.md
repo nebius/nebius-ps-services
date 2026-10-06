@@ -443,8 +443,8 @@ do not prove zero resource use. Follow the output path reported by `scontrol`.
 For the previous batch example, once the file exists:
 
 ```bash
-tail -n 40 "logs/device-check-${job_id}.out"
-tail -n 40 "logs/device-check-${job_id}.err"
+tail -n 40 "device-check-${job_id}.out"
+tail -n 40 "device-check-${job_id}.err"
 ```
 
 After a job leaves `squeue`, use `sacct` if persistent accounting is enabled.

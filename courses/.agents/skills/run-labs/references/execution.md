@@ -11,9 +11,10 @@ the native NVIDIA command at the GPU process. The selected job owns its profiler
 flags and filters. `--workload small|large` selects problem size; it does not enable
 profiling. The skill accepts `--workload both` to schedule both sizes.
 
-Fresh plans use `execution_contract: native-jobs/v1`. Status and cancellation can
+Fresh plans use `execution_contract: native-jobs/v2`. Status and cancellation can
 inspect earlier campaigns, but execution refuses an older plan: retain its evidence
-and create a new campaign. Do not translate or replay saved wrapper argv.
+and create a new campaign. This version requires managed-runtime selections and
+verified prepared-root bindings. Do not translate old plans or replay saved argv.
 
 Submission prepares private scheduler directories before calling `sbatch` with
 an explicit working directory and log paths. Each fresh job exclusively creates
@@ -64,9 +65,9 @@ Unknown keys, zero, units, placeholders and malformed values fail before jobs.
 Use this mapping instead of shell prefixes or global resource changes.
 
 Inference Lab 16 queries live Hub metadata even when model files are cached.
-Bind `HF_HUB_OFFLINE=0` and `TRANSFORMERS_OFFLINE=0` only for that lab in the
-prepared environment; do not change unrelated offline labs or download model
-weights as part of running the audit.
+Its managed runtime enables metadata access for that lab; verify the activated
+environment instead of supplying inherited offline overrides. Do not change
+unrelated offline labs or download model weights as part of running the audit.
 
 Interrupted claim acquisition leaves the campaign initializing. Resume recovers
 all selected claims under the control lock before any sync or job action. A
@@ -84,8 +85,11 @@ python3 <skill>/scripts/stage.py CAMPAIGN collect
 ```
 
 `sync` runs the inspected repository `sync-labs.sh --sync-only`, verifies every
-frozen source hash remotely, and creates isolated per-lab/profile workspaces.
-Record the observed preflight after sync. `advance` submits or polls exactly the
+frozen source hash remotely, and creates isolated per-lab/profile workspaces
+with the actual course slug as the leaf. It binds the existing prepared catalog
+and runs read-only native activation checks for all selected launchers, recording
+runtime fingerprints. A failure gives the owning preparation command and cannot
+complete preflight. Record independent hardware/monitoring observations after sync. `advance` submits or polls exactly the
 next execution/profile/reference stage. The helper persists intent first and
 uses a remote lock and durable job receipt. A lost response reconciles the same
 name, owner and job. If accounting has no unique row, stop rather than resubmit.

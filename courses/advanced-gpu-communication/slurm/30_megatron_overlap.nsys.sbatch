@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 30_megatron_overlap.nsys.sbatch
 umask 077
 for directory in results results/30_megatron_overlap results/30_megatron_overlap/logs results/30_megatron_overlap/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/30_megatron_overlap/jobs/$SLURM_JOB_ID"
@@ -45,6 +47,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=nsys COURSE_CAPTURE=1 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 umask 077
@@ -63,8 +66,8 @@ export COURSE_NODES=${#nodes[@]}
 export COURSE_WORLD_SIZE=$((COURSE_NODES * 8))
 export MASTER_ADDR=${nodes[0]}
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 20000))
-export COURSE_TORCHRUN=${COURSE_TORCHRUN:-torchrun}
-export COURSE_PYTHON=${COURSE_PYTHON:-python3}
+export COURSE_TORCHRUN=${COURSE_TORCHRUN}
+export COURSE_PYTHON=${COURSE_PYTHON}
 if [[ -z ${COURSE_RUN_ID:-} ]]; then
   COURSE_RUN_ID=$("$COURSE_PYTHON" -c 'import secrets; print(secrets.token_hex(6))')
 fi

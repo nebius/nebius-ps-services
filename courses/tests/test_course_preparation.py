@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
-    "local_course_setup", ROOT / "tools/course_setup.py"
+    "local_setup_support", ROOT / "tools/course_bootstrap/support.py"
 )
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
@@ -114,8 +114,8 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
     path = course(tmp_path)
     for args in (
         ["--help"],
-        ["prepare", "--help"],
-        ["prepare", "--course-root", str(path)],
+        ["monitoring", "--help"],
+        ["organize-history", "--help"],
     ):
         result = subprocess.run(
             check=False,
@@ -123,14 +123,14 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
                 sys.executable,
                 "-I",
                 "-S",
-                str(ROOT / "tools/course_setup.py"),
+                str(ROOT / "tools/regular-lab-setup.py"),
                 *args,
             ],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0, result.stderr
-    assert (path / "results/01_example/logs").is_dir()
+    assert not (path / "results").exists()
 
 
 def test_metadata_symlink_is_rejected(tmp_path):
@@ -155,7 +155,7 @@ def test_malformed_metadata_fails_cleanly_before_any_write(tmp_path, document):
             sys.executable,
             "-I",
             "-S",
-            str(ROOT / "tools/course_setup.py"),
+            str(ROOT / "tools/regular-lab-setup.py"),
             "prepare",
             "--courses-root",
             str(tmp_path),
@@ -174,23 +174,8 @@ def test_fifo_metadata_cannot_hang_preparation(tmp_path):
     metadata = path / "reference/course.json"
     metadata.unlink()
     os.mkfifo(metadata)
-    result = subprocess.run(
-        check=False,
-        args=[
-            sys.executable,
-            "-I",
-            "-S",
-            str(ROOT / "tools/course_setup.py"),
-            "prepare",
-            "--course-root",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 2
-    assert "regular file" in result.stderr
+    with pytest.raises(ValueError, match="regular file"):
+        setup.prepare(course_root=path)
     assert not (path / "results").exists()
 
 

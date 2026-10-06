@@ -4,24 +4,19 @@ Context parallelism partitions a long token sequence across ranks while preservi
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
-Prepare the [joint vendor runtime](../../README.md) once, then source
-`env/vendor-environment.sh` in this submission shell. The installer requires
-the Bridge, NIXLBench and Dynamo prerequisites together; installation alone does
-not qualify both workers for this experiment.
+The selected preparation from the Lab Guide provides this lab's isolated vendor runtime. The native launcher restores its saved selectors. Qualify both workers before interpreting performance.
 
 Reference preparation (complete before the measured baseline):
 
 Submit the reference job first and wait for successful completion. Retain its printed job number and reference path.
 
-Select the prepared Bridge runtime before submission and create one reference with the baseline control. Export `CONTEXT_REFERENCE` as the printed `final-weights.pt` path after that job completes. Keep that same file for both measured runs.
+The launcher selects the prepared Bridge runtime. Create one reference with the baseline control. Export `CONTEXT_REFERENCE` as the printed `final-weights.pt` path after that job completes. Keep that same file for both measured runs.
 
 ```bash
-export COURSE_PYTHON="$COURSE_BRIDGE_PYTHON"
-export COURSE_TORCHRUN="$COURSE_BRIDGE_TORCHRUN"
 sbatch --chdir="$PWD" \
   --output="$PWD/results/31_context_parallel/logs/%j.out" \
   --error="$PWD/results/31_context_parallel/logs/%j.err" slurm/31_context_parallel.sbatch --workload small --reference-only
@@ -77,6 +72,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 31_context_parallel --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 31_context_parallel \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"

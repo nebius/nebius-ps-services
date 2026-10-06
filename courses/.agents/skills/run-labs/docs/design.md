@@ -323,6 +323,8 @@ The approved course refactor replaces generic Python execution wrappers with exp
 
 #### Design Details
 
+FEAT-008 supersedes the v1 execution-contract detail with native-jobs/v2 and managed preparation binding; the native dispatch and evidence invariants below remain. Prior implementation and verification entries describe their original revisions.
+
 Recipes name reviewed course-owned batch files. The catalog freezes native-jobs/v1 and expands workload sizes into existing serialized profile identities. Native submission prepares private logs/jobs parents and executes sbatch --parsable with explicit working directory and scheduler paths. It validates launcher containment and narrow scheduler overrides before dispatch. The existing intent/receipt lifecycle owns retries and exact job identity; incompatible saved plans cannot execute. Status and owned cancellation remain available for historical state.
 
 Collection inventories only exact dispatched job subtrees and scheduler logs, rejects traversal, NUL separators, symlinks and unowned paths before rsync, and verifies returned hashes. Cleanup requires completed successful dispatches and removes only their exact runtime outputs. Published history and unrelated jobs stay outside collection and cleanup. Explicit profiler jobs preserve server/rank/vendor coordination and report cardinality. Source instructions, recipes and installed payload use the same contract.
@@ -376,6 +378,131 @@ The complete courses suite passes 2150 tests, including native execution, campai
 Subsequent alignment clarifies that collection includes only dispatched job trees and their scheduler logs. The full courses suite now passes 2165 tests; independent dispatch/collection/cleanup review found no material defect and canonical/installed payloads remain identical. Course-side history copying is bounded and binds attribution metadata to copied bytes. Existing evidence is preserved; no live campaign was run.
 
 <!-- /FEATURE: FEAT-006 -->
+
+<!-- FEATURE: FEAT-007 reqs=REQ-007 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-007: Remove redundant sync connection receipts
+
+#### Requirements Covered
+
+- REQ-007: Campaign-owned connection state and synchronization proof.
+
+#### Context Evidence
+
+scripts/prepare.py requests a sync.json connection receipt but never reads it. scripts/run_labs.py persists the prepared environment; scripts/transport.py uses its SSH settings. Preparation independently verifies remote source and workspace ownership, and scripts/stage.py persists the returned run-labs-sync/v1 state before preflight.
+
+#### Design Details
+
+Remove only the sync.json path, existence check and receipt arguments from preparation. Keep the deterministic campaign destination, port and identity arguments, private sync log, independent remote verification, workspace ownership and existing synchronization proof. The environment remains the connection owner; no new file, state schema or completion shortcut is introduced.
+
+#### Selected Option
+
+Delete duplicate connection bookkeeping. Keep the existing private campaign environment and verified synchronization state as the single owners of their respective facts.
+
+#### Alternatives Considered
+
+Renaming or hiding the option leaves unnecessary learner-facing behavior. Moving the writer into the campaign duplicates existing state without a reader.
+
+#### Implementation Boundaries
+
+Canonical preparation and environment guidance, focused course tests, this specification pair and the refreshed project-local installed payload. Preserve all other receipts and unrelated changes. No live operations or changes to SSH transport, campaign fingerprints or infrastructure.
+
+#### Test-First Success Criteria
+
+- TDD-001: Successful fresh and repeated sync use the prepared target, port and identity without producing sync.json and persist independently verified source/workspace proof.
+- TDD-002: Transfer failure or source-proof failure cannot persist synchronization success for a fresh campaign.
+
+#### Validation Plan
+
+Run focused sync/controller tests, Python checks, source/installed parity and paired-spec validation; apply the enclosing courses alignment gate.
+
+#### Test Plan
+
+Exercise stage-to-preparation integration with local transport doubles. Cover non-default and default SSH settings, successful proof, transfer failure and mismatched or failed remote proof. Retain existing retry, ownership and preflight coverage.
+
+#### Evaluation Plan
+
+Review help and learner guidance for receipt removal. Report source/fixture and installed parity evidence separately from live target behavior.
+
+#### Rollout And Rollback
+
+Deliver with the sync-labs.sh option removal, then refresh the project-local installed skill through the installer. Existing campaign fingerprints remain governed by their ordinary source/recipe checks. Leave historical sync.json files untouched and add no migration or compatibility branch. Roll back only the scoped source/install change if necessary.
+
+#### Done Definition
+
+No connection-receipt option is requested or emitted, campaign proof still gates preflight, focused tests and parity pass, and documentation reflects the same ownership.
+
+#### Implementation Evidence
+
+Canonical preparation no longer creates or checks sync.json and never passes --receipt. Environment guidance names campaign-owned settings and independent verification. The documented project-local installer refreshes the installed payload and its source hash; campaign, SSH transport, proof schema and other receipts are unchanged.
+
+#### Verification Evidence
+
+The 317 focused sync/controller tests pass, including source/installed payload parity. Eight new integration cases exercise the actual remote verifier in a disposable local home with default/overridden SSH settings, successful repeated sync, failed transfer, changed source and mismatched proof. They verify proof persistence on success, unchanged fresh campaign state on failure and no duplicate connection output. Scoped Python checks, Markdown and paired-spec validation pass. Independent code/security review found no remaining material issue after correcting a shell-test fixture assertion. This proves local behavior and installed payload parity, not live target readiness.
+
+<!-- /FEATURE: FEAT-007 -->
+
+<!-- FEATURE: FEAT-008 reqs=REQ-008 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-008: Prepared runtime binding for isolated campaigns
+
+#### Requirements Covered
+
+- REQ-008: Reuse the five-script managed preparation.
+
+#### Context Evidence
+
+scripts/prepare.py copies courses into small/large leaf directories with no runtime store. Native runtime discovery requires the course slug and validates receipts against the original prepared root. Current preflight only accepts prepared_assets as a boolean, and environment guidance still suggests runtime overrides.
+
+#### Design Details
+
+Freeze per-unit requirements from every actual launcher using reference/runtime.json and the shared runtime catalog. Add a private explicit prepared_root environment selection with remote courses as its default. Copy each course beneath its per-lab/profile namespace under the actual course slug, exclude local caches and runtime state, and write a private .course-runtime-source.json binding. The shared loader validates that binding and the original root receipt while calculating relevant inputs from the copied course. Sync invokes the actual read-only loader for each selected launcher and records successful fingerprints; preflight checks complete proof coverage. Native activation repeats validation. Reject old execution contracts through native-jobs/v2. Preserve native argv, dispatch receipts, claims, recovery, qualification and collection.
+
+#### Selected Option
+
+Reuse original managed installations through explicit source-validated binding while retaining private campaign workspaces and existing exact-job output ownership.
+
+#### Alternatives Considered
+
+Copying runtime receipts would invalidate their root and hide ownership; installing dependencies in each campaign violates prepared-only execution. Running all campaigns in the canonical course root would collapse isolated workspace ownership. Inherited Python/build variables cannot override the managed launcher and are not a supported preparation path.
+
+#### Implementation Boundaries
+
+Canonical skill scripts, instructions, evals and project-local installed payload; directly required shared runtime loader and six standalone copies; focused tests, README, changelog and paired specifications. No live cluster operations.
+
+#### Test-First Success Criteria
+
+- TDD-001: A copied slug-matching course loads an existing prepared runtime without changing any receipt or generation.
+- TDD-002: Missing, stale, skipped, unsafe or source-mismatched runtimes stop sync/preflight with the owning setup command.
+- TDD-003: Every recipe launcher is covered, including optional TensorRT-LLM; dry-run remains read-only and earlier plans fail before dispatch.
+
+#### Validation Plan
+
+Run focused campaign/runtime tests, native source/standalone parity, strict skill validation with required evals for core/Codex/Claude, code/security review, scoped lint and actual disposable npx installs. Install using the README command and compare complete payloads.
+
+#### Test Plan
+
+Use temporary directories, fake receipts and bounded subprocess doubles; never submit jobs or install lab dependencies. Preserve dispatch recovery and cancellation tests; test stale copied build inputs and unsafe binding paths.
+
+#### Evaluation Plan
+
+Update canonical trigger and quality cases for selected preparation and missing optional runtime boundaries. Use the captured working-byte baseline; report unavailable clean native model runners explicitly rather than treating CSV validation as runtime evidence.
+
+#### Rollout And Rollback
+
+Deliver current shared runtime tools with all six copies, then install the aligned source skill with npx. Preserve prior campaigns and results. Roll back only scoped source changes; do not migrate old executable plans.
+
+#### Done Definition
+
+Source and installed skill agree with the five-script interface, relevant deterministic and distribution checks pass, and static/installed/runtime evidence limits are recorded.
+
+#### Implementation Evidence
+
+Implemented launcher-derived preparation inventories, private prepared-root bindings for course-slug campaign copies, native activation proof before preflight, source-owned adapter rebasing, explicit optional container course mounts and native-jobs/v2 rejection of earlier executable plans. Updated guidance, evals, focused tests, README, changelog and six shared runtime copies. The documented npx command installs the aligned project-local skill; public actions, native jobs, claims, recovery and evidence ownership remain.
+
+#### Verification Evidence
+
+452 focused tests pass, including all 110 recipe selections, optional launcher coverage, real local remote-sync execution, repeated sync, missing/stale/skipped records, source drift, unsafe bindings, adapter rebasing, exact container bind arguments and installed payload parity. All eight native course validators, generated build/freshness, helper parity and scoped lint pass. Portable/Codex/Claude structure and strict frontmatter pass with only the intentional docs-folder warning. Canonical evals contain 18 trigger and 22 quality definitions. Disposable pinned npx installation passes both hosts; the README command using skills 1.7.0 installs 27 matching payload files. Read-only code/security review found no blocker. Clean native trigger/model-quality runs are unavailable without isolated runner API credentials; no live cluster or preparation installation was run. See docs/run-labs-preparation-alignment.md in the enclosing courses project for evidence and limits.
+
+<!-- /FEATURE: FEAT-008 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

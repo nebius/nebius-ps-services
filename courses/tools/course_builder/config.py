@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 COURSES = (
     "soperator",
-    "gpu-fundamentals",
     "gpu-performance-tools",
+    "gpu-fundamentals",
     "gpu-optimizations",
     "llm-training",
     "llm-inference",
@@ -30,7 +30,7 @@ CATALOG_GROUPS = (
         "GPU foundations",
         "Take these in order",
         "foundations",
-        ("gpu-fundamentals", "gpu-performance-tools", "gpu-optimizations"),
+        ("gpu-performance-tools", "gpu-fundamentals", "gpu-optimizations"),
     ),
     (
         "Specializations",
@@ -198,6 +198,7 @@ LAB_SECTIONS = (
 
 SHARED_GUIDE_SECTIONS = (
     "How to set up the lab",
+    "Lab Preparation Scripts",
     "How to run the labs",
     "Browsing Grafana and Nsight Profilers",
 )

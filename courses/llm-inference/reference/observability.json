@@ -230,7 +230,7 @@
       "dashboard": "reference/grafana/10_vllm_offline.json",
       "baseline_command": "sbatch slurm/10_vllm_offline.sbatch --workload small",
       "systems_command": "sbatch slurm/10_vllm_offline.nsys.sbatch --workload small --in-process",
-      "compute_command": "sbatch slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
+      "compute_command": "sbatch --mem=256G slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
       "tuning_control": "`--enforce-eager`",
       "evidence_views": [
         "Selected comparison generation",
@@ -258,7 +258,7 @@
       },
       "gpu_telemetry": true,
       "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_vllm_offline/logs/%j.out\" \\\n  --error=\"$PWD/results/10_vllm_offline/logs/%j.err\" slurm/10_vllm_offline.nsys.sbatch --workload small --in-process",
-      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_vllm_offline/logs/%j.out\" \\\n  --error=\"$PWD/results/10_vllm_offline/logs/%j.err\" slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
+      "learner_compute_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/10_vllm_offline/logs/%j.out\" \\\n  --error=\"$PWD/results/10_vllm_offline/logs/%j.err\" \\\n  --mem=256G slurm/10_vllm_offline.ncu.sbatch --workload small --in-process",
       "jobs": {
         "run": "slurm/10_vllm_offline.sbatch",
         "nsys": "slurm/10_vllm_offline.nsys.sbatch",
@@ -332,7 +332,7 @@
       "workload_parameters": [
         "concurrency"
       ],
-      "guided_comparison": "Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
+      "guided_comparison": "Vary the launcher's second positional argument, `CONCURRENCY`, while holding its first argument, `MODEL`, and third argument, `REVISION`, fixed. Inspect `bash slurm/11_serving_client.sbatch --help` for the `[MODEL] [CONCURRENCY] [REVISION]` order and append those values after the script path in the existing submission command. The launcher passes concurrency to the client; it does not accept a `--concurrency` launcher flag. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value, repeat unprofiled, and explain whether the result supports the prediction. Changing concurrency changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.",
       "systems": {
         "applicable": true,
         "target": "server",
@@ -1525,8 +1525,8 @@
       "question": "Does acceptance reduce target work enough to offset draft execution and verification? Compare actual output lengths, latency, and throughput under the same load. Keep startup memory and initialization separate from steady serving.",
       "interpretation": "This helper records response equivalence. Performance evidence belongs to the separately collected campaign results; no latency or throughput is inferred from response digests.",
       "dashboard": "reference/grafana/33_speculative_engine_client.json",
-      "baseline_command": "sbatch slurm/33_speculative_engine_client.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
-      "systems_command": "sbatch slurm/33_speculative_engine_client.nsys.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "baseline_command": "sbatch slurm/33_speculative_engine_client.sbatch",
+      "systems_command": "sbatch slurm/33_speculative_engine_client.nsys.sbatch",
       "compute_command": null,
       "tuning_control": "Compare the real serving engine with speculation disabled/enabled using identical prompts and bounded greedy responses",
       "evidence_views": [
@@ -1546,7 +1546,7 @@
         "view": "Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity with the matching unprofiled AIPerf exports. Use this lab's Grafana panels to check paired greedy-equivalence evidence."
       },
       "gpu_telemetry": true,
-      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_speculative_engine_client/logs/%j.out\" \\\n  --error=\"$PWD/results/33_speculative_engine_client/logs/%j.err\" slurm/33_speculative_engine_client.nsys.sbatch \"${CLUSTER_TARGET_MODEL:?set target model}\" \"${CLUSTER_TARGET_REVISION:?set immutable target revision}\" \"${COURSE_DRAFT_MODEL:?set draft model}\" \"${COURSE_DRAFT_REVISION:?set immutable draft revision}\"",
+      "learner_systems_command": "sbatch --chdir=\"$PWD\" \\\n  --output=\"$PWD/results/33_speculative_engine_client/logs/%j.out\" \\\n  --error=\"$PWD/results/33_speculative_engine_client/logs/%j.err\" slurm/33_speculative_engine_client.nsys.sbatch",
       "jobs": {
         "run": "slurm/33_speculative_engine_client.sbatch",
         "nsys": "slurm/33_speculative_engine_client.nsys.sbatch"

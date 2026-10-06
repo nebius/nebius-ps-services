@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(
-    "mode", ["success", "bad-response", "startup-failure", "foreign-server"]
+    "mode",
+    ["success", "surviving-child", "bad-response", "startup-failure", "foreign-server"],
 )
 def test_openai_launcher_owns_server_and_preserves_probe(mode, tmp_path):
     course = tmp_path / "course with spaces"
@@ -23,7 +24,7 @@ def test_openai_launcher_owns_server_and_preserves_probe(mode, tmp_path):
     runner = tmp_path / "engine-fixture"
     runner.write_text(
         f"#!{sys.executable}\n"
-        """import json, os, signal, sys
+        """import json, os, signal, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 base = Path(os.environ["FIXTURE_DIR"])
@@ -32,6 +33,13 @@ if os.environ["FIXTURE_MODE"] == "startup-failure":
     raise SystemExit(7)
 assert os.environ["HF_HUB_OFFLINE"] == "1"
 assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+if os.environ["FIXTURE_MODE"] == "surviving-child":
+    child = os.fork()
+    if child == 0:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        (base / "child.pid").write_text(str(os.getpid()))
+        time.sleep(12)
+        os._exit(0)
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
@@ -42,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         (base / "request.json").write_text(json.dumps(request))
         self.send_response(200); self.end_headers()
-        text = "fixture generation" if os.environ["FIXTURE_MODE"] == "success" else ""
+        text = "fixture generation" if os.environ["FIXTURE_MODE"] in {"success", "surviving-child"} else ""
         self.wfile.write(json.dumps({"choices": [{"text": text}]}).encode())
 def stop(*args):
     (base / "stopped").write_text("terminated")
@@ -70,8 +78,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         "COURSE_RUN_ID": "123456789abc",
         "COURSE_WORKLOAD": "large",
         "COURSE_PYTHON": sys.executable,
-        "COURSE_CONTAINER_RUNNER": str(runner),
-        "VLLM_IMAGE_DIGEST": "docker://example.invalid/vllm@sha256:" + "a" * 64,
+        "COURSE_VLLM": str(runner),
         "FIXTURE_DIR": str(tmp_path),
         "FIXTURE_MODE": mode,
     }
@@ -89,7 +96,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         timeout=15,
     )
     argv = json.loads((tmp_path / "argv.json").read_text())
-    assert argv[1:4] == ["vllm", "serve", "test/model"]
+    assert argv[:2] == ["serve", "test/model"]
     assert argv[argv.index("--host") + 1] == "127.0.0.1"
     for flag in ["--revision", "--tokenizer-revision"]:
         assert argv[argv.index(flag) + 1] == "b" * 40
@@ -108,7 +115,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         request = json.loads((tmp_path / "request.json").read_text())
         assert request["model"] == "test/model"
         assert request["max_tokens"] == 16
-        if mode == "success":
+        if mode in {"success", "surviving-child"}:
             assert result.returncode == 0, result.stderr
             assert len(outputs) == 1
             evidence = json.loads(outputs[0].read_text())
@@ -118,7 +125,15 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         else:
             assert result.returncode != 0
             assert "did not contain generated text" in result.stderr
-    if mode != "success":
+    if mode == "surviving-child":
+        child = (tmp_path / "child.pid").read_text()
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", child], capture_output=True, text=True
+        ).stdout.strip()
+        assert not state or state.startswith("Z"), (
+            "server worker survived process-group cleanup"
+        )
+    if mode not in {"success", "surviving-child"}:
         assert not outputs
 
 
@@ -157,7 +172,7 @@ def test_triton_launcher_initializes_mpi_and_owns_server(mode, tmp_path):
     runner = tmp_path / "triton-fixture"
     runner.write_text(
         f"#!{sys.executable}\n"
-        '''import json, os, signal, sys
+        """import json, os, signal, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 base = Path(os.environ["FIXTURE_DIR"])
@@ -185,7 +200,7 @@ def stop(*args):
 signal.signal(signal.SIGTERM, stop)
 port = int(next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--http-port=")))
 HTTPServer(("127.0.0.1", port), Handler).serve_forever()
-'''
+"""
     )
     runner.chmod(0o700)
     for port in range(28000, 29000):
@@ -207,6 +222,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
             "COURSE_WORKLOAD": "large",
             "COURSE_PYTHON": sys.executable,
             "COURSE_CONTAINER_RUNNER": str(runner),
+            "COURSE_VLLM": str(runner),
             "TRTLLM_IMAGE_DIGEST": "docker://example.invalid/triton@sha256:" + "a" * 64,
             "MODEL_REPOSITORY": str(repository.parent),
             "TRITON_REPOSITORY_PROFILE": "llmapi",
@@ -220,12 +236,22 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
         timeout=15,
     )
     argv = json.loads((tmp_path / "argv.json").read_text())
-    assert argv[1:7] == ["mpirun", "--allow-run-as-root", "--oversubscribe", "-n", "1", "tritonserver"]
+    assert argv[1:7] == [
+        "mpirun",
+        "--allow-run-as-root",
+        "--oversubscribe",
+        "-n",
+        "1",
+        "tritonserver",
+    ]
     assert "--disable-auto-complete-config" in argv
     assert "--model-repository=" + str(repository.parent) in argv
     for service in ["http", "grpc", "metrics"]:
         assert "--" + service + "-address=127.0.0.1" in argv
-    log = course / f"results/30_engine_profile/jobs/{port - 20000}/logs/trtllm-triton-run-123456789abc.log"
+    log = (
+        course
+        / f"results/30_engine_profile/jobs/{port - 20000}/logs/trtllm-triton-run-123456789abc.log"
+    )
     assert "fixture MPI startup" in log.read_text()
     outputs = list((course / "results").rglob("*.json"))
     if mode == "startup-failure":

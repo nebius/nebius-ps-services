@@ -215,6 +215,7 @@ def test_dynamo_service_requires_batch_invariant_workers(
         inherited_path = str(tmp_path / "other tools")
         monkeypatch.setenv("PATH", inherited_path)
         monkeypatch.setenv("COURSE_DYNAMO_PYTHON", str(python))
+        monkeypatch.setenv("COURSE_DYNAMO_LIBRARY_PATH", "/fixture/dynamo/lib")
         monkeypatch.setenv("COURSE_PROFILE_TOOL", "none")
         monkeypatch.setenv("VLLM_BATCH_INVARIANT", "0")
         monkeypatch.setattr(lab, "allocated_nodes", lambda: ["worker-a", "worker-b"])
@@ -423,7 +424,7 @@ def test_bridge_launcher_uses_selected_python_without_venv_console_script(tmp_pa
         [
             "bash",
             "-c",
-            'source env/vendor-environment.sh; exec "$COURSE_BRIDGE_TORCHRUN" "$@"',
+            'exec env/bridge-torchrun "$@"',
             "bridge-test",
             *arguments,
         ],
@@ -431,6 +432,7 @@ def test_bridge_launcher_uses_selected_python_without_venv_console_script(tmp_pa
         env={
             **os.environ,
             "COURSE_TOOLS": str(tools),
+            "COURSE_BRIDGE_PYTHON": str(python),
             "UCX_PREFIX": str(tmp_path / "ucx"),
             "COURSE_ETCD": str(tmp_path / "etcd"),
         },

@@ -4,7 +4,7 @@ NVIDIA NCCL Tests separates collective performance from model computation. In th
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -12,29 +12,16 @@ Qualify the benchmark's own MPI and NCCL libraries. Its MPI-enabled binary uses 
 
 Use an MPI-enabled `all_reduce_perf` built from the reviewed nccl-tests v2.20.0 source, commit `b4d5beebca8a76cf01335f724d154b9b9d394d96`. This is a researched candidate, not a build qualified by this course. The same executable and compatible CUDA/NCCL/MPI libraries must be available on both nodes. Keep its per-node binary hashes, build configuration and loaded-library identities in a private qualification record. The runner records only the local binary hash; that does not prove the remote copy matches.
 
-The build below prepares the vendor benchmark with `MPI=1` and explicit MPI_HOME, CUDA_HOME and NCCL_HOME paths. Verify that qualified build is the one used here. Do not install drivers or replace system MPI as part of this lab. A non-MPI build launched twice can misleadingly run two isolated benchmarks, which is not one collective spanning the allocation.
+The selected preparation from the Lab Guide builds the pinned benchmark with `MPI=1`, an isolated CUDA
+compiler and the selected NCCL development files. It records `COURSE_NCCL_TESTS`
+and an available PMIx `COURSE_MPI` mode for the launcher. Listing a Slurm plugin
+is an installation check; this lab must still establish that MPI, Slurm and NCCL
+work together across both allocated workers.
 
-The site must qualify its MPI/Slurm integration. `srun --mpi=list` lists available modes, but listing PMIx does not prove that the benchmark's MPI build is compatible with it. Use the mode provided by the owner. Eight processes per node, one thread/process and one GPU/thread produce eight ranks on one node or sixteen across two nodes. Under one-device-per-task visibility, the correct visible ordinal is zero on each node—not the cluster-wide rank number.
-
-The installer records pinned revisions and hashes. Build the MPI-enabled NCCL Tests binary with the owner’s library paths and Slurm MPI mode:
-
-```bash
-git clone https://github.com/NVIDIA/nccl-tests.git "$COURSE_TOOLS/fabric/nccl-tests"
-git -C "$COURSE_TOOLS/fabric/nccl-tests" checkout --detach b4d5beebca8a76cf01335f724d154b9b9d394d96
-make -C "$COURSE_TOOLS/fabric/nccl-tests" -j4 MPI=1 \
-  MPI_HOME="${MPI_HOME:?qualified MPI path}" CUDA_HOME="${CUDA_HOME:?CUDA path}" \
-  NCCL_HOME="${NCCL_HOME:?qualified NCCL path}"
-export COURSE_NCCL_TESTS="$COURSE_TOOLS/fabric/nccl-tests/build/all_reduce_perf"
-export COURSE_MPI="${COURSE_MPI:?owner-qualified Slurm MPI mode}"
-```
-
-Retain exports privately. Containers need the same shared paths, tools, libraries, GPUs and IB devices. Resolve counter permissions with the owner.
-
-Save these settings without overwriting the shared Python runtime:
-
-```bash
-declare -p COURSE_NCCL_TESTS COURSE_MPI >> "$HOME/courses/.runtime/$COURSE.sh"
-```
+Eight processes per worker, one thread/process and one GPU/thread produce sixteen
+ranks across the allocation. Under one-device-per-task visibility, the visible
+GPU ordinal is zero for every task. Preserve the actual library identities and
+correctness output before interpreting bandwidth.
 
 ## Concepts and code path
 
@@ -104,6 +91,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 10_nccl_tests_report --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 10_nccl_tests_report \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -116,7 +104,7 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ### Workload variations
 
-Submit from the `advanced-gpu-communication` course directory. Replace the generic path and MPI mode with the owner's qualified values. The default maximum is 64 MiB; `--max-bytes` can extend a separately declared experiment up to 256 MiB. There is no automatic tool download or cluster repair.
+Submit from the `advanced-gpu-communication` course directory. The launcher restores the prepared benchmark and MPI selection; qualify their integration with Slurm before measuring. The default maximum is 64 MiB; `--max-bytes` can extend a separately declared experiment up to 256 MiB. Jobs do not download tools or repair the cluster.
 
 Soperator's NCCL-debug SPANK plugin can override `NCCL_DEBUG` at step launch.
 The timing shell below keeps both controls at `WARN`; the separate diagnostic
@@ -124,8 +112,6 @@ submission sets `SNCCLD_LOG_LEVEL=INFO`, matching the runner's `--diagnostic`
 setting. Confirm the plugin's `--nccld-log-level` support in `srun --help`.
 
 ```bash
-export COURSE_NCCL_TESTS=/path/to/nccl-tests/build/all_reduce_perf
-export COURSE_MPI=pmix
 export NCCL_DEBUG=WARN
 export SNCCLD_LOG_LEVEL=WARN
 SNCCLD_LOG_LEVEL=INFO sbatch --chdir="$PWD" \

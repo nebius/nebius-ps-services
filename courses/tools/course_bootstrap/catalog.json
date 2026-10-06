@@ -1,0 +1,1910 @@
+{
+  "schema": "course-runtime-catalog/v1",
+  "components": {
+    "build-tools": {
+      "kind": "python",
+      "packages": [
+        "uv==0.12.22",
+        "meson==1.12.1",
+        "ninja==1.13.2",
+        "huggingface-hub==2.1.1",
+        "build==1.6.1",
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ]
+    },
+    "python-gpu-fundamentals": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "requirements": "gpu-fundamentals/requirements.txt"
+    },
+    "python-advanced-gpu-communication": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "requirements": "advanced-gpu-communication/requirements.txt"
+    },
+    "python-llm-inference": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "requirements": "llm-inference/requirements-mechanics.txt"
+    },
+    "python-llm-training": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "requirements": "llm-training/requirements.txt"
+    },
+    "python-gpu-optimizations": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "requirements": "gpu-optimizations/requirements.txt"
+    },
+    "python-cuda": {
+      "kind": "python",
+      "packages": [
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ]
+    },
+    "cuda-image": {
+      "kind": "image",
+      "uri": "docker://docker.io/nvidia/cuda@sha256:69e9e39eb8fe2cda271654a0f5eac2f1bb946b2fb9c460eb19c7c3c155f4e64e",
+      "artifacts": [
+        "image.sif",
+        "origin.json"
+      ],
+      "definition": "cuda.def"
+    },
+    "trtllm-image": {
+      "kind": "image",
+      "uri": "docker://nvcr.io/nvidia/tritonserver@sha256:36cfac7324ee39306327b69945789b54519130c5669b30fc90ef7e81101fff1f",
+      "artifacts": [
+        "image.sif",
+        "origin.json"
+      ]
+    },
+    "toolchain": {
+      "kind": "recipe",
+      "recipe": "toolchain",
+      "version": "13.3.0",
+      "archives": [
+        {
+          "name": "cccl",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cccl/linux-x86_64/cccl-linux-x86_64-13.3.3.3.1-archive.tar.xz",
+          "sha256": "67746da12f16229ac4ebde78ce7895e42b069d1d3e2ae2d2d25f90bc43679d68"
+        },
+        {
+          "name": "cuda_crt",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-x86_64/cuda_crt-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "4755d36d24c6ef7697a2d3e1dbb23c4562c9c0d97d48390d4cbd8ab32dec5b5f"
+        },
+        {
+          "name": "cuda_cudart",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-13.3.29-archive.tar.xz",
+          "sha256": "1e59c4888267d27ba1a9bd0f3669a6439db1334a96e754cd9013c7c73e18dc9d"
+        },
+        {
+          "name": "cuda_culibos",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_culibos/linux-x86_64/cuda_culibos-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "db36b1381bb3105f2f13591393131d93f501958ebd44e9d0d52234cbbaf8cbd0"
+        },
+        {
+          "name": "cuda_nvcc",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "93b098bda4a562ebf3541523ce82adc43f106a81dcf28bcbf8f0d8e093d1c66f"
+        },
+        {
+          "name": "cuda_nvrtc",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/linux-x86_64/cuda_nvrtc-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "9e8f78278215babd1236b137252424ca7912c185bd093201f5d97f7dd763b74a"
+        },
+        {
+          "name": "cuda_nvtx",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvtx/linux-x86_64/cuda_nvtx-linux-x86_64-13.3.29-archive.tar.xz",
+          "sha256": "7c7c2567e35de98b5bf92bef06b97ccc90cd472ca44b9b1558b25812a54df64e"
+        },
+        {
+          "name": "libcublas",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/linux-x86_64/libcublas-linux-x86_64-13.5.1.27-archive.tar.xz",
+          "sha256": "35a898360520d6101ffcaf36c0d04496b54d4fc2afb82f7fce44218c54513808"
+        },
+        {
+          "name": "cuda_cuobjdump",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-13.3.29-archive.tar.xz",
+          "sha256": "9ac891072c4f9c2079cff8fdc3939ac97c5c5bcdf7cb5cca5a351354c7a8ff21"
+        },
+        {
+          "name": "cuda_nvdisasm",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/linux-x86_64/cuda_nvdisasm-linux-x86_64-13.3.29-archive.tar.xz",
+          "sha256": "95b7f617ea11bb983a7150827a14ff4488cba10f0171fa8ae2e845bd58823456"
+        },
+        {
+          "name": "cuda_sanitizer_api",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_sanitizer_api/linux-x86_64/cuda_sanitizer_api-linux-x86_64-13.3.27-archive.tar.xz",
+          "sha256": "bed47e6b465653a8d4138bce412733131536f1a0e8ab306bb2b0a15f92fc68ff"
+        },
+        {
+          "name": "cuda_nvml_dev",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvml_dev/linux-x86_64/cuda_nvml_dev-linux-x86_64-13.3.29-archive.tar.xz",
+          "sha256": "b62508923dadc0ac79fb1846eeb444296813cb077964e0c8348ba051bc0160aa"
+        },
+        {
+          "name": "libnvvm",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-x86_64/libnvvm-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "fc9c1fd5844e44c0e5eeb051378c1b13cf0e3bb3fe4966d5103c38885424f802"
+        },
+        {
+          "name": "libnvjitlink",
+          "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvjitlink/linux-x86_64/libnvjitlink-linux-x86_64-13.3.33-archive.tar.xz",
+          "sha256": "f79e25bb1ef2f22f26c09897f6cb8719634f38e7330bd4700a1ea9ec9591eaff"
+        }
+      ],
+      "artifacts": [
+        "toolkit/bin/nvcc",
+        "toolkit/include/cuda.h",
+        "toolkit/lib/libcudart.so.13",
+        "toolkit/bin/compute-sanitizer"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "xz-utils"
+      ]
+    },
+    "cutlass": {
+      "kind": "git",
+      "url": "https://github.com/NVIDIA/cutlass.git",
+      "revision": "e05f953a5b3d38adc240df2ff928e0421c2abba3",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "ucx-source": {
+      "kind": "git",
+      "url": "https://github.com/openucx/ucx.git",
+      "revision": "8a6b06fb880accbb933a79cda893883872c68d9d",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "ucx-nixl": {
+      "kind": "recipe",
+      "recipe": "ucx",
+      "depends": [
+        "ucx-source",
+        "toolchain",
+        "build-tools"
+      ],
+      "artifacts": [
+        "ucx/include/ucp/api/ucp.h",
+        "ucx/lib/libucp.so"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "autoconf",
+        "automake",
+        "libtool",
+        "libtool-bin",
+        "libnuma-dev",
+        "libibverbs-dev",
+        "librdmacm-dev"
+      ]
+    },
+    "ucx-dynamo": {
+      "kind": "recipe",
+      "recipe": "ucx",
+      "depends": [
+        "ucx-source",
+        "toolchain",
+        "build-tools"
+      ],
+      "artifacts": [
+        "ucx/include/ucp/api/ucp.h",
+        "ucx/lib/libucp.so"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "autoconf",
+        "automake",
+        "libtool",
+        "libtool-bin",
+        "libnuma-dev",
+        "libibverbs-dev",
+        "librdmacm-dev"
+      ]
+    },
+    "nccl-source": {
+      "kind": "git",
+      "url": "https://github.com/NVIDIA/nccl-tests.git",
+      "revision": "b4d5beebca8a76cf01335f724d154b9b9d394d96",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "nccl-tests": {
+      "kind": "recipe",
+      "recipe": "nccl-tests",
+      "depends": [
+        "nccl-source",
+        "toolchain",
+        "build-tools",
+        "python-advanced-gpu-communication"
+      ],
+      "artifacts": [
+        "source/build/all_reduce_perf",
+        "mpi.json"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "libopenmpi-dev",
+        "openmpi-bin"
+      ]
+    },
+    "nixl-source": {
+      "kind": "git",
+      "url": "https://github.com/ai-dynamo/nixl.git",
+      "revision": "778edd1d1a50936b12c264879e12ef465e629002",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "submodules": true,
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "nixl": {
+      "kind": "recipe",
+      "recipe": "nixl",
+      "depends": [
+        "nixl-source",
+        "ucx-nixl",
+        "build-tools",
+        "toolchain",
+        "etcd-client"
+      ],
+      "artifacts": [
+        "nixlbench/bin/nixlbench",
+        "nixlbench/include/nixlbench/config.h",
+        "nixl/lib/libnixl.so"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "autoconf",
+        "automake",
+        "libtool",
+        "libtool-bin",
+        "libnuma-dev",
+        "libibverbs-dev",
+        "librdmacm-dev"
+      ]
+    },
+    "bridge-source": {
+      "kind": "git",
+      "url": "https://github.com/NVIDIA-NeMo/Megatron-Bridge.git",
+      "revision": "51885cf132b2814188b6855c25a8588254274c2a",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "submodules": true,
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "bridge": {
+      "kind": "recipe",
+      "recipe": "bridge",
+      "depends": [
+        "bridge-source",
+        "build-tools",
+        "toolchain"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "source/uv.lock"
+      ],
+      "base_packages": [
+        "torch==2.14.0",
+        "torchvision==0.29.0",
+        "triton==3.8.0",
+        "nvidia-cutlass-dsl[cu13]==4.8.0"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "libssl-dev",
+        "libffi-dev",
+        "zlib1g-dev",
+        "libaio-dev",
+        "libcurl4-openssl-dev",
+        "libevent-dev",
+        "libhwloc-dev"
+      ]
+    },
+    "aiperf": {
+      "kind": "python",
+      "packages": [
+        "aiperf==0.12.0",
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ]
+    },
+    "dynamo": {
+      "kind": "python",
+      "packages": [
+        "ai-dynamo[vllm]==1.4.2",
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "pip_options": [
+        "--pre"
+      ],
+      "depends": [
+        "ucx-dynamo",
+        "toolchain",
+        "build-tools"
+      ],
+      "source": "advanced-gpu-communication/tools/install_dynamo_native.py",
+      "commands": [
+        {
+          "argv": [
+            "{prefix}/venv/bin/python",
+            "{course.advanced-gpu-communication}/tools/install_dynamo_native.py",
+            "--python",
+            "{prefix}/venv/bin/python",
+            "--ucx-prefix",
+            "{ucx-dynamo}/ucx",
+            "--prefix",
+            "{prefix}/native"
+          ],
+          "env": {
+            "PATH": "{toolchain}/toolkit/bin:{build-tools}/venv/bin:/usr/local/bin:/usr/bin:/bin",
+            "CUDA_HOME": "{toolchain}/toolkit",
+            "LD_LIBRARY_PATH": "{toolchain}/toolkit/lib64"
+          }
+        }
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "libssl-dev",
+        "libffi-dev",
+        "zlib1g-dev",
+        "libaio-dev",
+        "libcurl4-openssl-dev",
+        "libevent-dev",
+        "libhwloc-dev"
+      ]
+    },
+    "training-te": {
+      "kind": "python",
+      "packages": [
+        "torch==2.14.0",
+        "setuptools==80.9.0",
+        "packaging==26.3",
+        "ninja==1.13.2",
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ],
+      "depends": [
+        "toolchain",
+        "build-tools"
+      ],
+      "commands": [
+        {
+          "argv": [
+            "{prefix}/venv/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "--no-build-isolation",
+            "transformer_engine[core-cu13,pytorch]==2.19.0"
+          ],
+          "env": {
+            "PATH": "{toolchain}/toolkit/bin:{build-tools}/venv/bin:/usr/local/bin:/usr/bin:/bin",
+            "CUDA_HOME": "{toolchain}/toolkit",
+            "LD_LIBRARY_PATH": "{toolchain}/toolkit/lib64"
+          }
+        }
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git"
+      ]
+    },
+    "etcd": {
+      "kind": "archive",
+      "url": "https://github.com/etcd-io/etcd/releases/download/v3.7.2/etcd-v3.7.2-linux-amd64.tar.gz",
+      "sha256": "3a3679bc51a4ee9d30bccea1da7cd4fe62c6fc1d2ca1255068d2c53bf3026135",
+      "artifacts": [
+        "etcd-v3.7.2-linux-amd64/etcd"
+      ]
+    },
+    "models-small": {
+      "kind": "models",
+      "depends": [
+        "build-tools"
+      ],
+      "python": "{build-tools.python}",
+      "models": [
+        {
+          "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+          "revision": "7ae557604adf67be50417f59c2c2f167def9a775"
+        }
+      ],
+      "artifacts": [
+        "models.json",
+        "inventory.json"
+      ],
+      "values": {
+        "hub": "{root}/.runtime/cache/huggingface/hub"
+      }
+    },
+    "models-dynamo": {
+      "kind": "models",
+      "depends": [
+        "build-tools"
+      ],
+      "python": "{build-tools.python}",
+      "models": [
+        {
+          "repo": "Qwen/Qwen3-8B",
+          "revision": "b968826d9c46dd6066d109eabc6255188de91218"
+        }
+      ],
+      "artifacts": [
+        "models.json",
+        "inventory.json"
+      ],
+      "values": {
+        "hub": "{root}/.runtime/cache/huggingface/hub"
+      }
+    },
+    "trtllm-source": {
+      "kind": "git",
+      "url": "https://github.com/NVIDIA/TensorRT-LLM.git",
+      "revision": "376f7e1bd8ed543f75014309e3fd4b237e9b0e73",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "triton-repository": {
+      "kind": "triton",
+      "depends": [
+        "trtllm-source",
+        "models-small",
+        "trtllm-image"
+      ],
+      "repository": "{trtllm-source}/source/triton_backend/all_models/llmapi",
+      "model": "{models-small.hub}/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775",
+      "artifacts": [
+        "repository/tensorrt_llm/config.pbtxt",
+        "repository/tensorrt_llm/1/model.py",
+        "repository/tensorrt_llm/1/model.yaml",
+        "repository/tensorrt_llm/1/helpers.py"
+      ]
+    },
+    "dynamo-image": {
+      "kind": "image",
+      "uri": "docker://nvcr.io/nvidia/ai-dynamo/vllm-runtime@sha256:d95e97babe5a4893a66fb5e4a810de78335ca6873e85e31d337e915d5ae92b5d",
+      "artifacts": [
+        "image.sif",
+        "origin.json"
+      ]
+    },
+    "etcd-client-source": {
+      "kind": "git",
+      "url": "https://github.com/etcd-cpp-apiv3/etcd-cpp-apiv3.git",
+      "revision": "ba6216385fc332b23d95683966824c2b86c2474e",
+      "artifacts": [
+        "source/.git/HEAD"
+      ],
+      "system_packages": [
+        "git",
+        "ca-certificates"
+      ]
+    },
+    "etcd-client": {
+      "kind": "recipe",
+      "recipe": "etcd-client",
+      "depends": [
+        "etcd-client-source"
+      ],
+      "artifacts": [
+        "installed/lib/libetcd-cpp-api-core.so"
+      ],
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "libssl-dev",
+        "libgrpc++-dev",
+        "libprotobuf-dev",
+        "protobuf-compiler",
+        "protobuf-compiler-grpc",
+        "libcpprest-dev",
+        "libgflags-dev",
+        "libasio-dev",
+        "libtomlplusplus-dev"
+      ]
+    },
+    "python-serving": {
+      "kind": "python",
+      "requirements": "llm-inference/requirements-serving.txt",
+      "packages": [
+        "PyYAML==6.0.3",
+        "prometheus-client==0.23.1"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "packages.json"
+      ]
+    },
+    "fabric-nvbandwidth": {
+      "kind": "recipe",
+      "recipe": "fabric",
+      "depends": [
+        "toolchain",
+        "build-tools"
+      ],
+      "artifacts": [
+        "fabric/builds.json",
+        "fabric/nvbandwidth-source/build/nvbandwidth"
+      ],
+      "tool": "nvbandwidth",
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "autoconf",
+        "automake",
+        "libtool",
+        "libtool-bin",
+        "libnuma-dev",
+        "libibverbs-dev",
+        "librdmacm-dev"
+      ]
+    },
+    "fabric-perftest": {
+      "kind": "recipe",
+      "recipe": "fabric",
+      "depends": [
+        "toolchain",
+        "build-tools"
+      ],
+      "artifacts": [
+        "fabric/builds.json",
+        "fabric/perftest/bin/ib_write_bw",
+        "fabric/perftest/bin/ib_read_lat"
+      ],
+      "tool": "perftest",
+      "system_packages": [
+        "build-essential",
+        "cmake",
+        "ninja-build",
+        "pkg-config",
+        "python3.12-dev",
+        "git",
+        "autoconf",
+        "automake",
+        "libtool",
+        "libtool-bin",
+        "libnuma-dev",
+        "libibverbs-dev",
+        "librdmacm-dev",
+        "libpci-dev",
+        "libibumad-dev"
+      ]
+    },
+    "vllm": {
+      "kind": "python",
+      "packages": [
+        "vllm==0.28.0",
+        "prometheus-client==0.23.1",
+        "PyYAML==6.0.3"
+      ],
+      "artifacts": [
+        "venv/pyvenv.cfg",
+        "venv/bin/vllm",
+        "packages.json"
+      ]
+    },
+    "models-speculative": {
+      "kind": "models",
+      "depends": [
+        "build-tools"
+      ],
+      "python": "{build-tools.python}",
+      "models": [
+        {
+          "repo": "Qwen/Qwen2.5-1.5B-Instruct",
+          "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+        }
+      ],
+      "artifacts": [
+        "models.json",
+        "inventory.json"
+      ],
+      "values": {
+        "hub": "{root}/.runtime/cache/huggingface/hub"
+      }
+    },
+    "cuda-build-01_vector_add": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "01_vector_add",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/01_vector_add.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/01_vector_add"
+      ]
+    },
+    "cuda-build-02_fused_elementwise": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "02_fused_elementwise",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/02_fused_elementwise.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/02_fused_elementwise"
+      ]
+    },
+    "cuda-build-03_tiled_transpose": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "03_tiled_transpose",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/03_tiled_transpose.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/03_tiled_transpose"
+      ]
+    },
+    "cuda-build-04_reduction": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "04_reduction",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/04_reduction.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/04_reduction"
+      ]
+    },
+    "cuda-build-05_tiled_stencil": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "05_tiled_stencil",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/05_tiled_stencil.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/05_tiled_stencil"
+      ]
+    },
+    "cuda-build-06_divergence_tail": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "06_divergence_tail",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/06_divergence_tail.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/06_divergence_tail"
+      ]
+    },
+    "cuda-build-07_resource_sweep": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "07_resource_sweep",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/07_resource_sweep.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/07_resource_sweep"
+      ]
+    },
+    "cuda-build-08_async_pipeline": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "08_async_pipeline",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/08_async_pipeline.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/08_async_pipeline"
+      ]
+    },
+    "cuda-build-09_library_epilogue": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "09_library_epilogue",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/09_library_epilogue.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/09_library_epilogue"
+      ]
+    },
+    "cuda-build-10_hopper_cluster": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "10_hopper_cluster",
+      "architecture": "sm90a",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/10_hopper_cluster.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90a/10_hopper_cluster"
+      ]
+    },
+    "cuda-build-11_residual_rmsnorm": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "11_residual_rmsnorm",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/11_residual_rmsnorm.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/11_residual_rmsnorm"
+      ]
+    },
+    "cuda-build-12_capstone": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "12_capstone",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/12_capstone.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/12_capstone"
+      ]
+    },
+    "cuda-build-13_h100_preflight": {
+      "kind": "recipe",
+      "recipe": "cuda",
+      "target": "13_h100_preflight",
+      "architecture": "sm90",
+      "depends": [
+        "toolchain",
+        "cutlass"
+      ],
+      "source_tree": "custom-cuda-kernels",
+      "source_files": [
+        "CMakeLists.txt",
+        "labs/13_h100_preflight.cu",
+        "labs/common.cuh",
+        "labs/arguments.hpp"
+      ],
+      "artifacts": [
+        "sm90/13_h100_preflight"
+      ]
+    }
+  },
+  "runtimes": {
+    "shared-tools": {
+      "components": [
+        "build-tools",
+        "models-small"
+      ],
+      "environment": {
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}"
+      },
+      "group": "regular"
+    },
+    "gpu-fundamentals.01_cpu_gpu_crossover.ncu": {
+      "components": [
+        "build-tools",
+        "python-gpu-fundamentals"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-gpu-fundamentals.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-gpu-fundamentals.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-gpu-fundamentals.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-gpu-fundamentals.cudnn}/lib"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "llm-inference.08_kv_cache.ncu": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "python-llm-inference"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-llm-inference.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-llm-inference.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-llm-inference.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-llm-inference.cudnn}/lib",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "llm-inference.10_vllm_offline.ncu": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "python-serving",
+        "vllm"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{vllm.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_VLLM": "{vllm}/venv/bin/vllm",
+        "COURSE_VLLM_PYTHON": "{vllm.python}",
+        "COURSE_LIBRARY_PATH": "{vllm.cudnn}/lib:{vllm.nccl}/lib"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "serving"
+    },
+    "llm-inference.15_streaming_client.aiperf": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "python-serving",
+        "vllm",
+        "aiperf"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-serving.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_VLLM": "{vllm}/venv/bin/vllm",
+        "COURSE_VLLM_PYTHON": "{vllm.python}",
+        "COURSE_LIBRARY_PATH": "{vllm.cudnn}/lib:{vllm.nccl}/lib",
+        "COURSE_AIPERF": "{aiperf}/venv/bin/aiperf"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "serving"
+    },
+    "llm-inference.30_engine_profile.trtllm": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "triton-repository",
+        "python-serving"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-serving.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "TRTLLM_IMAGE_DIGEST": "{trtllm-image.identity}",
+        "MODEL_REPOSITORY": "{triton-repository}/repository",
+        "TRITON_MODEL_NAME": "tensorrt_llm",
+        "TRITON_REPOSITORY_PROFILE": "llmapi",
+        "TRITON_MAX_TOKEN_FIELD": "sampling_param_max_tokens",
+        "COURSE_CONTAINER_RUNNER": "{course.llm-inference}/slurm/container_runner.example.sh"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "serving",
+      "optional": true
+    },
+    "llm-inference.33_speculative_engine_client.nsys": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "python-serving",
+        "vllm",
+        "aiperf",
+        "models-speculative"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-serving.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_TARGET_MODEL": "Qwen/Qwen2.5-1.5B-Instruct",
+        "COURSE_TARGET_REVISION": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+        "COURSE_DRAFT_MODEL": "Qwen/Qwen2.5-0.5B-Instruct",
+        "COURSE_DRAFT_REVISION": "7ae557604adf67be50417f59c2c2f167def9a775",
+        "COURSE_VLLM": "{vllm}/venv/bin/vllm",
+        "COURSE_VLLM_PYTHON": "{vllm.python}",
+        "COURSE_LIBRARY_PATH": "{vllm.cudnn}/lib:{vllm.nccl}/lib",
+        "COURSE_AIPERF": "{aiperf}/venv/bin/aiperf"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "serving"
+    },
+    "llm-training.01_tiny_transformer_train.ncu": {
+      "components": [
+        "build-tools",
+        "python-llm-training"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-llm-training.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-llm-training.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-llm-training.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-llm-training.cudnn}/lib"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "llm-training.05_lora_sft.ncu": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "python-llm-training"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-llm-training.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-llm-training.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-llm-training.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-llm-training.cudnn}/lib",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "llm-training.22_transformer_engine_fp8.ncu": {
+      "components": [
+        "build-tools",
+        "training-te"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{training-te.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{training-te.torchrun}",
+        "COURSE_CUDNN_LIB": "{training-te.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{training-te.cudnn}/lib:{toolchain}/toolkit/lib64",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "NVRTC_HOME": "{toolchain}/toolkit"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "group": "transformer-engine"
+    },
+    "gpu-optimizations.01_timing_basics.ncu": {
+      "components": [
+        "build-tools",
+        "python-gpu-optimizations"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-gpu-optimizations.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-gpu-optimizations.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-gpu-optimizations.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-gpu-optimizations.cudnn}/lib"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "llm-inference.dynamo-preflight": {
+      "components": [
+        "build-tools",
+        "models-small",
+        "dynamo-image",
+        "python-serving"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-serving.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "HF_HOME": "{models-small}",
+        "HF_HUB_CACHE": "{models-small.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "DYNAMO_IMAGE_DIGEST": "{dynamo-image.identity}",
+        "COURSE_CONTAINER_RUNNER": "{course.llm-inference}/slurm/container_runner.example.sh"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 2
+      },
+      "group": "communication",
+      "optional": true
+    },
+    "llm-inference.artifact-audit": {
+      "components": [
+        "build-tools",
+        "python-llm-inference"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-llm-inference.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-llm-inference.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-llm-inference.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-llm-inference.cudnn}/lib",
+        "HF_HUB_OFFLINE": "0",
+        "TRANSFORMERS_OFFLINE": "0"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1
+      },
+      "group": "regular"
+    },
+    "custom-cuda-kernels.01_vector_add": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-01_vector_add"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-01_vector_add}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-01_vector_add}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.02_fused_elementwise": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-02_fused_elementwise"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-02_fused_elementwise}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-02_fused_elementwise}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.03_tiled_transpose": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-03_tiled_transpose"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-03_tiled_transpose}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-03_tiled_transpose}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.04_reduction": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-04_reduction"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-04_reduction}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-04_reduction}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.05_tiled_stencil": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-05_tiled_stencil"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-05_tiled_stencil}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-05_tiled_stencil}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.06_divergence_tail": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-06_divergence_tail"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-06_divergence_tail}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-06_divergence_tail}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.07_resource_sweep": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-07_resource_sweep"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-07_resource_sweep}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-07_resource_sweep}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.08_async_pipeline": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-08_async_pipeline"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-08_async_pipeline}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-08_async_pipeline}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.09_library_epilogue": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-09_library_epilogue"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-09_library_epilogue}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-09_library_epilogue}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.10_hopper_cluster": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-10_hopper_cluster"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-10_hopper_cluster}/sm90a",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-10_hopper_cluster}/sm90a",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.11_residual_rmsnorm": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-11_residual_rmsnorm"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-11_residual_rmsnorm}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-11_residual_rmsnorm}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.12_capstone": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-12_capstone"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-12_capstone}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-12_capstone}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.13_h100_preflight": {
+      "group": "cuda",
+      "components": [
+        "build-tools",
+        "python-cuda",
+        "cuda-build-13_h100_preflight"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "COURSE_EXECUTABLE_PATH": "{toolchain}/toolkit/bin",
+        "COURSE_LIBRARY_PATH": "{toolchain}/toolkit/lib",
+        "COURSE_BUILD_DIR": "{cuda-build-13_h100_preflight}/sm90",
+        "COURSE_CLUSTER_BUILD_DIR": "{cuda-build-13_h100_preflight}/sm90",
+        "CUTLASS_ROOT": "{cutlass}/source"
+      }
+    },
+    "custom-cuda-kernels.container": {
+      "group": "cuda",
+      "optional": true,
+      "components": [
+        "cuda-image",
+        "python-cuda",
+        "build-tools",
+        "cutlass"
+      ],
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "environment": {
+        "COURSE_PYTHON": "{python-cuda.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "CUDA_IMAGE_DIGEST": "{cuda-image.identity}",
+        "CUTLASS_ROOT": "{cutlass}/source",
+        "COURSE_CONTAINER_RUNNER": "{course.custom-cuda-kernels}/slurm/container_runner.example.sh"
+      }
+    },
+    "advanced-gpu-communication.regular": {
+      "components": [
+        "build-tools",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "regular"
+    },
+    "advanced-gpu-communication.06_nvlink_bandwidth": {
+      "components": [
+        "build-tools",
+        "python-advanced-gpu-communication",
+        "fabric-nvbandwidth"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64",
+        "COURSE_TOOLS": "{fabric-nvbandwidth}"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.07_rdma_bandwidth": {
+      "components": [
+        "build-tools",
+        "python-advanced-gpu-communication",
+        "fabric-perftest"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64:{fabric-perftest}/fabric/perftest/lib",
+        "COURSE_TOOLS": "{fabric-perftest}"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.10_nccl_tests_report": {
+      "components": [
+        "build-tools",
+        "nccl-tests",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{python-advanced-gpu-communication.nccl}/lib:{toolchain}/toolkit/lib64",
+        "COURSE_NCCL_TESTS": "{nccl-tests}/source/build/all_reduce_perf",
+        "COURSE_MPI": "{nccl-tests.mpi}"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.27_rdma_latency": {
+      "components": [
+        "build-tools",
+        "python-advanced-gpu-communication",
+        "fabric-perftest"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64:{fabric-perftest}/fabric/perftest/lib",
+        "COURSE_TOOLS": "{fabric-perftest}"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.29_nixl_transfer": {
+      "components": [
+        "build-tools",
+        "etcd",
+        "nixl",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{etcd-client}/installed/lib:{toolchain}/toolkit/lib64",
+        "COURSE_ETCD": "{etcd}/etcd-v3.7.2-linux-amd64/etcd",
+        "COURSE_NIXLBENCH": "{course.advanced-gpu-communication}/env/nixlbench",
+        "COURSE_NIXLBENCH_BINARY": "{nixl}/nixlbench/bin/nixlbench",
+        "COURSE_NIXL_PREFIX": "{nixl}/nixl",
+        "UCX_PREFIX": "{ucx-nixl}/ucx"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.30_megatron_overlap": {
+      "components": [
+        "bridge",
+        "build-tools",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{bridge}/venv/bin/python",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{course.advanced-gpu-communication}/env/bridge-torchrun",
+        "COURSE_CUDNN_LIB": "{bridge}/venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+        "COURSE_LIBRARY_PATH": "{bridge}/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:{toolchain}/toolkit/lib64",
+        "COURSE_BASE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_BASE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_BRIDGE_PYTHON": "{bridge}/venv/bin/python",
+        "COURSE_BRIDGE_TORCHRUN": "{course.advanced-gpu-communication}/env/bridge-torchrun",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "NVRTC_HOME": "{toolchain}/toolkit"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.31_context_parallel": {
+      "components": [
+        "bridge",
+        "build-tools",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{bridge}/venv/bin/python",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{course.advanced-gpu-communication}/env/bridge-torchrun",
+        "COURSE_CUDNN_LIB": "{bridge}/venv/lib/python3.12/site-packages/nvidia/cudnn/lib",
+        "COURSE_LIBRARY_PATH": "{bridge}/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:{toolchain}/toolkit/lib64",
+        "COURSE_BASE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_BASE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_BRIDGE_PYTHON": "{bridge}/venv/bin/python",
+        "COURSE_BRIDGE_TORCHRUN": "{course.advanced-gpu-communication}/env/bridge-torchrun",
+        "CUDA_HOME": "{toolchain}/toolkit",
+        "NVRTC_HOME": "{toolchain}/toolkit"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.32_dynamo_disaggregation": {
+      "components": [
+        "aiperf",
+        "build-tools",
+        "dynamo",
+        "etcd",
+        "models-dynamo",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64",
+        "COURSE_ETCD": "{etcd}/etcd-v3.7.2-linux-amd64/etcd",
+        "HF_HOME": "{models-dynamo}",
+        "HF_HUB_CACHE": "{models-dynamo.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_DYNAMO_PYTHON": "{dynamo.python}",
+        "COURSE_AIPERF": "{aiperf}/venv/bin/aiperf",
+        "COURSE_MODEL_DIR": "{models-dynamo.hub}/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218",
+        "DYNAMO_UCX_PREFIX": "{ucx-dynamo}/ucx",
+        "COURSE_DYNAMO_LIBRARY_PATH": "{dynamo.cudnn}/lib:{dynamo.nccl}/lib:{ucx-dynamo}/ucx/lib:{toolchain}/toolkit/lib64"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.33_dynamo_routing": {
+      "components": [
+        "aiperf",
+        "build-tools",
+        "dynamo",
+        "etcd",
+        "models-dynamo",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64",
+        "COURSE_ETCD": "{etcd}/etcd-v3.7.2-linux-amd64/etcd",
+        "HF_HOME": "{models-dynamo}",
+        "HF_HUB_CACHE": "{models-dynamo.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_DYNAMO_PYTHON": "{dynamo.python}",
+        "COURSE_AIPERF": "{aiperf}/venv/bin/aiperf",
+        "COURSE_MODEL_DIR": "{models-dynamo.hub}/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218",
+        "DYNAMO_UCX_PREFIX": "{ucx-dynamo}/ucx",
+        "COURSE_DYNAMO_LIBRARY_PATH": "{dynamo.cudnn}/lib:{dynamo.nccl}/lib:{ucx-dynamo}/ucx/lib:{toolchain}/toolkit/lib64"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.34_serving_goodput": {
+      "components": [
+        "aiperf",
+        "build-tools",
+        "dynamo",
+        "etcd",
+        "models-dynamo",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib:{toolchain}/toolkit/lib64",
+        "COURSE_ETCD": "{etcd}/etcd-v3.7.2-linux-amd64/etcd",
+        "HF_HOME": "{models-dynamo}",
+        "HF_HUB_CACHE": "{models-dynamo.hub}",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "COURSE_DYNAMO_PYTHON": "{dynamo.python}",
+        "COURSE_AIPERF": "{aiperf}/venv/bin/aiperf",
+        "COURSE_MODEL_DIR": "{models-dynamo.hub}/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218",
+        "DYNAMO_UCX_PREFIX": "{ucx-dynamo}/ucx",
+        "COURSE_DYNAMO_LIBRARY_PATH": "{dynamo.cudnn}/lib:{dynamo.nccl}/lib:{ucx-dynamo}/ucx/lib:{toolchain}/toolkit/lib64"
+      },
+      "needs": {
+        "gpus": 8,
+        "nodes": 2,
+        "hopper": true
+      },
+      "group": "communication"
+    },
+    "advanced-gpu-communication.scaling-one-node": {
+      "components": [
+        "build-tools",
+        "python-advanced-gpu-communication"
+      ],
+      "environment": {
+        "COURSE_PYTHON": "{python-advanced-gpu-communication.python}",
+        "COURSE_PUBLISH_PYTHON": "{build-tools.python}",
+        "COURSE_TORCHRUN": "{python-advanced-gpu-communication.torchrun}",
+        "COURSE_CUDNN_LIB": "{python-advanced-gpu-communication.cudnn}/lib",
+        "COURSE_LIBRARY_PATH": "{python-advanced-gpu-communication.cudnn}/lib"
+      },
+      "needs": {
+        "gpus": 1,
+        "nodes": 1,
+        "hopper": true
+      },
+      "group": "regular"
+    }
+  }
+}

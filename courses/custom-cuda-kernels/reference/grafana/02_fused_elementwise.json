@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Draw the intermediate write/read removed by fusion. Which cost matters more for a tiny array: bytes or launches? What extra live values could increase register pressure if many more operations were fused? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Draw the intermediate write/read removed by fusion. Which cost matters more for a tiny array: bytes or launches? What extra live values could increase register pressure if many more operations were fused? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

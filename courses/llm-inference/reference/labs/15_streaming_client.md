@@ -4,7 +4,7 @@ Users experience streamed generation as a wait for first content followed by a s
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Qualify the engine and client environments and use the supplied streaming launcher. It owns the local server lifecycle. Keep prompts, responses, and raw streaming logs private and preserve the immutable model revision.
 
@@ -18,7 +18,7 @@ The supplied client runs a finite closed-loop workload: each thread starts anoth
 
 Reconcile client boundaries with server metrics. AIPerf's inter-token latency (ITL) is a request average, while inter-chunk latency (ICL) describes chunk gaps. Synthetic batch-row updates per second are not output tokens per second, and a recurrent tensor operation is not a service time-to-first-token (TTFT) measurement.
 
-For the initial token-aware AIPerf exercise, qualify the image/model prerequisites and use the supplied `slurm/15_streaming_client.aiperf.sbatch` launcher. It owns the bounded loopback server, readiness, workload and cleanup. Compare requested and observed token counts, denominators and errors before broadening the workload. Set `VLLM_IMAGE_DIGEST` and `AIPERF_IMAGE_DIGEST` to the qualified images, and `COURSE_CONTAINER_RUNNER` to the reviewed executable runner. These are the same image and runner prerequisites used by the engine exercises.
+For the initial token-aware AIPerf exercise, qualify the native runtime/model prerequisites and use the supplied `slurm/15_streaming_client.aiperf.sbatch` launcher. It owns the bounded loopback server, readiness, workload and cleanup. Compare requested and observed token counts, denominators and errors before broadening the workload. The prepared runtime selects `COURSE_VLLM` and `COURSE_AIPERF` automatically; each runs in its isolated native environment.
 
 ## Practice
 
@@ -81,6 +81,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 15_streaming_client --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 15_streaming_client \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -102,7 +103,7 @@ sbatch --chdir="$PWD" \
   --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/15_streaming_client.sbatch
 ```
 
-For token-aware metrics, run the separate AIPerf campaign with the qualified images and runner described above. Its supplied workload fixes concurrency at four; it accepts model and revision arguments, not the streaming launcher's request-count and concurrency arguments.
+For token-aware metrics, run the separate AIPerf campaign with the qualified native vLLM and AIPerf runtimes described above. Its supplied workload fixes concurrency at four; it accepts model and revision arguments, not the streaming launcher's request-count and concurrency arguments.
 
 ```bash
 bash slurm/15_streaming_client.aiperf.sbatch --help

@@ -4,9 +4,9 @@ A useful profile connects application regions to GPU activity so that you can ex
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Complete the [diagnostic tooling setup](../../../README.md#how-to-set-up-the-lab) on the compute node. Use one H100. Trace files may contain paths or environment details and must remain private until reviewed.
+Complete the diagnostic tooling readiness checks from the Lab Guide inside a compute-node allocation. Use one H100. Trace files may contain paths or environment details and must remain private until reviewed.
 
 Discover installed section sets and permissions on the target rather than hard-coding another Nsight version. Use NVTX to select a stable semantic phase and profile the exact SM90 kernel chosen for the real shape.
 
@@ -67,6 +67,7 @@ Select two successful, equivalent diagnostic runs in the same workload preset. F
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 07_profile_workload --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 07_profile_workload \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \

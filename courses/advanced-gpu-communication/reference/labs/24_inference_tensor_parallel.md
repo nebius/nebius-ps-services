@@ -4,7 +4,7 @@ Tensor parallelism can split a layer's weights across GPUs, but partial outputs 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -74,6 +74,7 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 24_inference_tensor_parallel --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 24_inference_tensor_parallel \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -86,7 +87,7 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ### Workload variations
 
-Run the two partition patterns together using the course launcher. Profiles select width 2,048/batch 32 for small and width 8,192/batch 128 for H100. The optional positive `--batch-size` changes input rows while keeping the selected width fixed. Use batch one as a small-message comparison, not as a simulation of a complete autoregressive decode step. Repeat each comparison in at least three independent jobs with distinct output directories under `results/`, where the result inspector searches, and preserve the topology and workload settings.
+Run the two partition patterns together using the course launcher. Profiles select width 2,048/batch 32 for small and width 8,192/batch 128 for large. The optional positive `--batch-size` changes input rows while keeping the selected width fixed. Use batch one as a small-message comparison, not as a simulation of a complete autoregressive decode step. Repeat each comparison in at least three independent jobs with distinct output directories under `results/`, where the result inspector searches, and preserve the topology and workload settings.
 
 ```bash
 sbatch --chdir="$PWD" \

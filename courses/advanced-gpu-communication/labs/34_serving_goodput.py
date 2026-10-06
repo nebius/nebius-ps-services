@@ -350,7 +350,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.set_defaults(iterations=128, warmup=0)
-    parser.add_argument("--model-dir", type=Path, required=True)
+    parser.add_argument("--model-dir", type=Path, default=os.environ.get("COURSE_MODEL_DIR"),
+                        required=not bool(os.environ.get("COURSE_MODEL_DIR")))
     parser.add_argument("--concurrency", type=int, choices=(4, 8, 16, 32), default=8)
     parser.add_argument("--ttft-slo-ms", type=float, default=1000)
     parser.add_argument("--itl-slo-ms", type=float, default=50)

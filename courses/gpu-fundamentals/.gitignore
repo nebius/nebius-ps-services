@@ -9,3 +9,9 @@ logs/
 *.nsys-rep
 *.qdrep
 *.sqlite
+
+# Private automatic course installation and worker connection settings.
+.runtime/
+.profiling-tools/
+.venvs/
+.course-environment.sh

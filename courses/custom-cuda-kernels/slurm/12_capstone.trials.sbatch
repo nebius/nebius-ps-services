@@ -31,10 +31,12 @@ export COURSE_WORKLOAD=$workload
 [[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
   printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
+# Load this launcher's persistent installation inside the allocated job.
+source tools/course_env.sh 12_capstone.trials.sbatch
 umask 077
 for directory in results results/12_capstone results/12_capstone/logs results/12_capstone/jobs; do
   [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run course_setup.py prepare; require private owned directory: %s\n' "$directory" >&2; exit 2;
+    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
   }
 done
 export COURSE_JOB_DIR="$PWD/results/12_capstone/jobs/$SLURM_JOB_ID"
@@ -45,6 +47,7 @@ export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
 export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
 export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
 printf 'Job results: %s\n' "$COURSE_JOB_DIR"
+source tools/course_job_cache.sh
 
 set -euo pipefail
 set -o noclobber
@@ -56,12 +59,6 @@ if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
 fi
 if [[ -z ${SLURM_JOB_ID:-} || ! ${SLURM_JOB_ID} =~ ^[0-9]+$  ]]; then
   printf 'ERROR: submit with sbatch and provide the built Lab 12 executable.\n' >&2
-  exit 2
-fi
-: "${CUDA_IMAGE_DIGEST:?set the exact qualified CUDA development image digest}"
-: "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"
-if [[ ${CUDA_IMAGE_DIGEST} != *@sha256:* || ! -x ${COURSE_CONTAINER_RUNNER} ]]; then
-  printf 'ERROR: immutable image and executable runner required.\n' >&2
   exit 2
 fi
 executable="${COURSE_BUILD_DIR:?select the completed build directory}/12_capstone"
@@ -91,10 +88,10 @@ for trial in 1 2 3; do
   trial_log="${result_dir}/trial-${trial}.txt"
   started=$(date +%s)
   srun --ntasks=1 --gpus-per-task=1 \
-    "${COURSE_CONTAINER_RUNNER}" "${CUDA_IMAGE_DIGEST}" "${executable_resolved}" \
+    "${executable_resolved}" \
     --workload "$workload" "$@" --variant-order "${order}" >"${trial_log}"
   ended=$(date +%s)
-  "${COURSE_PYTHON:-python3}" tools/cuda_result.py --input "$trial_log" --started "$started" --ended "$ended" "$executable_resolved" --workload "$workload" "$@" --variant-order "$order"
+  "${COURSE_PYTHON}" tools/cuda_result.py --input "$trial_log" --started "$started" --ended "$ended" "$executable_resolved" --workload "$workload" "$@" --variant-order "$order"
   if ! grep -qx 'schema=gpu-course-result/v1' "${trial_log}" || \
      ! grep -qx 'lab_id=12_capstone' "${trial_log}" || \
      ! grep -qx 'trial_kind=one-fresh-process' "${trial_log}" || \
@@ -108,7 +105,7 @@ for trial in 1 2 3; do
 done
 
 summary="${result_dir}/summary.txt"
-awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
+awk -F= -v runtime_id="${COURSE_RUNTIME_ID}" \
   -v executable_path="${executable_resolved}" \
   -v executable_sha256="${executable_sha256}" '
   FNR == 1 { trial++ }
@@ -161,7 +158,7 @@ awk -F= -v image_digest="${CUDA_IMAGE_DIGEST}" \
     print "all_correctness_gates_passed=true"
     print "elements=" elements
     print "gpu_name=" gpu_name
-    print "cuda_image_digest=" image_digest
+    print "course_runtime_id=" runtime_id
     print "executable_path=" executable_path
     print "executable_sha256=" executable_sha256
     print "baseline_median_of_medians_ms=" bm

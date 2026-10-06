@@ -13,18 +13,11 @@ profiler reports, and environment metadata private. Share only a sanitized
 summary that follows [evidence-security.md](evidence-security.md). A profiler
 run explains behavior; its instrumented duration is not acceptance timing.
 
-Before submitting jobs, restrict files created by the submitting shell:
-
-```bash
-```
-
-The launchers repeat this setting for child-process artifacts. It does not
-replace the cluster's storage and access-control policy.
-
-Confirm that the cluster owner supplied a platform-specific hash-locked
-environment or immutable image digest. `requirements.txt` is only a direct
-compatibility constraint. Stop before live execution if the approved lock or
-image identity is unavailable.
+Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for this
+course before submitting. Preparation creates private result/log directories
+and records installed runtime identities; launchers restore that runtime.
+Retain its receipts with the qualification evidence. Directory permissions do
+not replace the cluster's storage and access-control policy.
 
 ## Gate 1: compute-node tooling
 
