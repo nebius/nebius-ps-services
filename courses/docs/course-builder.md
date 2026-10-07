@@ -1,7 +1,7 @@
 # Building and publishing the course website
 
 The site remains static HTML generated with Python's standard library. There is
-no JavaScript application, package installation or server-side runtime. All eight
+no JavaScript application, package installation or server-side runtime. All nine
 courses keep their existing content, layout and styling.
 
 ## Authoring architecture
@@ -39,8 +39,24 @@ course. The generated pages embed CSS, teaching images, diagrams and complete
 source listings, so saving one HTML file preserves offline reading. Downloading
 ZIPs requires the companion files or the website. Soperator remains text-only
 and has no lab downloads. GPU Performance Tools is a reference-only course with
-contextual diagrams and no exercises or result archives. The build produces ten
-HTML pages: eight courses, the catalog and the shared Lab Guide.
+contextual diagrams and no exercises or result archives. PyTorch for GPU Performance
+Engineering uses a lessons-only profile with eighteen diagram-equipped lessons,
+commented examples and no Practice sections, labs, runtime files or archives.
+Its metadata declares the ordered lesson identities and 3 guided hours;
+the native reading validator checks that profile without weakening the other
+reading contracts. The build produces eleven HTML pages: nine courses, the
+catalog and the shared Lab Guide.
+
+The PyTorch course reserves bold monospace for exact API names and keeps
+application-assigned meanings in plain text. Headings and callout labels may
+remain bold. The shared stylesheet preserves inherited emphasis inside inline
+code; verify the rendered font weight as well as the generated HTML structure.
+
+The reader-resource order is Soperator, Lab Guide, GPU Performance Tools,
+PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance
+Optimization, LLM Training, LLM Inference, Custom CUDA Kernels and Advanced Labs.
+The shared registry owns display numbers; existing lesson and lab numbers remain
+unchanged. Reading packages never enter the six-course runtime/preparation registry.
 
 ## Diagram placement
 

@@ -34,7 +34,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
     for metadata in ROOT.glob("*/reference/course.json"):
         name = metadata.parent.parent.name
         course(tmp_path, name, **json.loads(metadata.read_text()))
-        if json.loads(metadata.read_text()).get("profile") not in ("text-only", "reference-only"):
+        if json.loads(metadata.read_text()).get("profile") not in ("text-only", "reference-only", "lessons-only"):
             expected[name] = len(json.loads(metadata.read_text())["labs"])
     assert sum(expected.values()) == 110
     assert setup.prepare(courses_root=tmp_path) == expected
@@ -49,7 +49,19 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
                 path = tmp_path / name / "results" / Path(row["path"]).stem / leaf
                 assert path.stat().st_mode & 0o777 == 0o700
                 assert path.stat().st_uid == os.geteuid()
-    assert not (tmp_path / "soperator/results").exists()
+    for name in ("soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering"):
+        assert not (tmp_path / name / "results").exists()
+
+
+@pytest.mark.parametrize("profile", ["text-only", "reference-only", "lessons-only"])
+def test_preparation_skips_reading_profile_without_lab_inventory(tmp_path, profile):
+    course(tmp_path, "practical")
+    reading = course(tmp_path, "reading", profile=profile)
+    (reading / "reference/course.json").write_text(
+        json.dumps({"slug": "reading", "profile": profile})
+    )
+    assert setup.prepare(courses_root=tmp_path) == {"practical": 1}
+    assert not (reading / "results").exists()
 
 
 @pytest.mark.parametrize(

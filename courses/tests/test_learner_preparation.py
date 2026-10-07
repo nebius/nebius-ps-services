@@ -51,7 +51,7 @@ def test_course_number_lookup_matches_every_runtime_binding():
     }
     assert len(expected) == len(GUIDES) == 110
     assert documented == expected
-    assert "Soperator and GPU Performance Tools are reading courses" in lookup
+    assert "Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering are reading courses" in lookup
     assert "#optional-container-exercises" in lookup
 
 

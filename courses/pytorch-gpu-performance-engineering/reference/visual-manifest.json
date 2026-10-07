@@ -1,0 +1,184 @@
+{
+  "diagrams": [
+    {
+      "path": "reference/diagrams/tensor-description.svg",
+      "title": "One tensor, three attributes and an element count",
+      "lessons": [
+        1
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/random-values.svg",
+      "title": "Same shape, different sampling rules",
+      "lessons": [
+        1
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/shape-axes.svg",
+      "title": "Choose a grid, a row and a column",
+      "lessons": [
+        2
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/index-versus-slice.svg",
+      "title": "One grid and a group containing one grid",
+      "lessons": [
+        2
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/broadcast.svg",
+      "title": "One bias row serves two input rows",
+      "lessons": [
+        3
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/multiply.svg",
+      "title": "The same inputs can mean different arithmetic",
+      "lessons": [
+        4
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/reduction.svg",
+      "title": "Keep one mean per row",
+      "lessons": [
+        5
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/views-strides.svg",
+      "title": "Two index maps share the same storage",
+      "lessons": [
+        6
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/dtype-bytes.svg",
+      "title": "Same shape, different byte counts",
+      "lessons": [
+        7
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/device-execution.svg",
+      "title": "Submission is separate from completion",
+      "lessons": [
+        8
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/module-shapes.svg",
+      "title": "A linear layer transforms the last dimension",
+      "lessons": [
+        9
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/autograd.svg",
+      "title": "Forward values lead to gradients and an update",
+      "lessons": [
+        10
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/inference-controls.svg",
+      "title": "Two independent controls for inference",
+      "lessons": [
+        11
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/input-pipeline.svg",
+      "title": "A batch crosses preparation, copy and compute",
+      "lessons": [
+        12
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/allocator.svg",
+      "title": "Live allocations occupy part of the reserved pool",
+      "lessons": [
+        13
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/batching.svg",
+      "title": "Independent rows can share one batched expression",
+      "lessons": [
+        14
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/timing.svg",
+      "title": "Mark the device interval, then wait before reading it",
+      "lessons": [
+        15
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/operator-evidence.svg",
+      "title": "Follow an expression through the execution layers",
+      "lessons": [
+        16
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/compilation.svg",
+      "title": "Compilation may avoid intermediate storage",
+      "lessons": [
+        17
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    },
+    {
+      "path": "reference/diagrams/read-a-step.svg",
+      "title": "Trace shape and device through one inference step",
+      "lessons": [
+        18
+      ],
+      "after": "How it works",
+      "home": "lesson"
+    }
+  ]
+}

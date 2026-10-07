@@ -140,6 +140,8 @@ backward kernel on one H100 without collectives. Use its fixed NCU launcher
 for diagnostic counters and Systems for the distributed schedule. The course
 still has 34 numbered labs; native Compute qualification remains pending.
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## Runtime preparation
 
 The Lab Guide's course/lab-number lookup selects the regular or specialized

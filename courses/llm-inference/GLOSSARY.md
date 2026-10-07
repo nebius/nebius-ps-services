@@ -14,11 +14,14 @@
 - **Decode** — autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
 - **Dequantization** — Reconstructing approximate numerical values from quantized codes and their scale metadata.
 - **Disaggregated serving** — separate prefill and decode worker pools connected by request and KV-state handoff.
+- **DMA** — Direct memory access; transfer hardware moves bytes without CPU instructions copying each byte.
 - **DP** — Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
+- **DRAM** — Dynamic random-access memory; in the host-offload examples, CPU-side memory that trades GPU capacity relief for transfer and reconstruction costs.
 - **E2E latency** — end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
 - **EOS** — end-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
 - **EP** — expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
 - **Execution engine** — The component that performs model computation and manages execution resources.
+- **FP8** — Eight-bit floating-point formats requiring a supported format, scaling recipe and execution path; the name alone does not establish accuracy or speed.
 - **Fragmentation** — Storage wasted by an allocation layout, including unused slots in a partially filled block.
 - **Free list** — A collection of reusable cache blocks available for allocation.
 - **GDS** — GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
@@ -27,19 +30,24 @@
 - **GQA/MQA** — grouped-query attention / multi-query attention; layouts with fewer key/value heads than query heads.
 - **Greedy decoding** — choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
 - **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **HTTP** — Hypertext Transfer Protocol; carries service requests and responses, with protocol completion distinct from the first generated content.
 - **ICL** — inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
-- **Idle TTL** — an expiry interval renewed on access in the supplied cache model; capacity can evict an entry sooner.
+- **Idle TTL** — Idle time-to-live; an expiry interval renewed on access in the supplied cache model, with capacity eviction able to remove an entry sooner.
 - **Inference** — using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
+- **INT8** — Eight-bit integer representation used by supported quantization schemes together with scale and, where applicable, zero-point metadata.
 - **ISL/OSL** — input and output sequence lengths used to describe request work.
 - **ITL** — inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
+- **JSON** — JavaScript Object Notation; the structured text format used for request bodies and result artifacts.
 - **KV cache** — cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
 - **KV-aware routing** — worker selection that combines reusable-prefix state with projected active load.
 - **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
 - **Logit** — an unnormalized model score; softmax converts logits to probabilities.
 - **LoRA** — low-rank adaptation; a task-specific weight update represented by two small matrix factors and added to a fixed base transformation.
-- **LRU eviction** — discarding or demoting the least recently used eligible cache entry under capacity pressure.
+- **LRU eviction** — Least recently used eviction; discarding or demoting the eligible cache entry with the oldest access under capacity pressure.
+- **MHA** — Multi-head attention; each query head has corresponding key/value heads, unlike the sharing used in GQA or MQA.
 - **Model artifact bundle** — the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
 - **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **MTP** — Multi-token prediction; a model capability that predicts multiple future positions and may supply proposals for target-verified speculative generation.
 - **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
 - **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
 - **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
@@ -52,6 +60,7 @@
 - **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
 - **Quantization** — Representing values using a smaller set of numerical levels, with metadata that maps stored codes to approximate original values.
 - **Radix tree** — a compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
+- **RDMA** — Remote direct memory access; supported network hardware transfers data between registered memory regions.
 - **Readiness** — The ability of a service to accept the intended requests, beyond merely having a running process.
 - **Reference count** — A count of owners that still require a shared block or object.
 - **Remote model code** — Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
@@ -60,6 +69,7 @@
 - **Service correctness** — correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
 - **SLO** — service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
 - **Speculative decoding** — proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
+- **SSE** — Server-Sent Events; an HTTP event-stream format that can carry generated content in chunks, which need not correspond one-to-one to tokens.
 - **Temperature** — positive divisor applied to logits before softmax; lower values sharpen the distribution.
 - **Throughput** — completed requests or tokens per second for a declared workload and boundary.
 - **Token** — a model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.

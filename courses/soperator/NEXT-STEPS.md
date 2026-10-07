@@ -4,7 +4,9 @@ Choose an optional direction that matches the work you want to do next.
 
 - **Continue with a GPU course**
 
-  Use the course switcher to read GPU Performance Tools, then GPU Fundamentals.
+  Use the course switcher to read GPU Performance Tools, then
+  [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+  before GPU Fundamentals.
   The tools reference introduces the profiler commands and evidence used in labs.
   Follow the
   [shared environment setup](../lab-guide.html#lab-preparation-scripts), then use its lab

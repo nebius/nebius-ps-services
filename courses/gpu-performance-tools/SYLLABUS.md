@@ -6,6 +6,7 @@
 4. PyTorch operator profiling
 5. Grafana and VictoriaMetrics
 
-One guided hour. Read after Soperator and before GPU Fundamentals or any practical
-labs. No cluster is required for reading. Return here for command and flag
+One guided hour. Read after Soperator, then continue with
+[PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+before GPU Fundamentals or practical labs. No cluster is required for reading. Return here for command and flag
 meanings while following the practical courses.

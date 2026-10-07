@@ -40,7 +40,7 @@ def discover(script):
         data = json.loads(metadata.read_text())
         if data.get("slug") != course.name or not NAME.fullmatch(course.name):
             raise ValueError("Course metadata identity does not match its directory")
-        if data.get("profile") in {"text-only", "reference-only"}:
+        if data.get("profile") in {"text-only", "reference-only", "lessons-only"}:
             continue
         result[course.name] = course
     return root, result

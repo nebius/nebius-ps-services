@@ -17,6 +17,8 @@ within one GPU. Optional extensions retain their own prerequisites. Start with
 the shared Lab Guide's [environment setup](../lab-guide.html#lab-preparation-scripts),
 then follow the course's runtime preparation and lab order.
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## 1. Custom kernel decision making
 
 **Objective**
@@ -387,7 +389,7 @@ Threads, warps, registers, shared memory, and block slots constrain occupancy. E
 
 **Objective**
 
-Create and repair three different sources of unused parallel capacity.
+Distinguish warp divergence, task imbalance and tail waves, then evaluate the supplied work-regrouping experiment.
 
 **How it works**
 
@@ -565,7 +567,7 @@ Suppose a kernel accounts for 40% of a 10-millisecond application step. Making t
 
 **Practice**
 
-Complete Lab 12’s three independent acceptance trials with counterbalanced order, numerical checks and both kernel and end-to-end timings.
+Complete Lab 12’s three independent kernel acceptance trials with counterbalanced order and numerical checks. Keep end-to-end acceptance pending until you implement and time the separate application integration described in the guide.
 
 - [Lab 12: Assemble a kernel acceptance report](reference/labs/12_capstone.md)
 

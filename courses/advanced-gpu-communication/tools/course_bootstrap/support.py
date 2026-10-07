@@ -640,7 +640,7 @@ def course_labs(root):
             os.close(reference_fd)
         if not isinstance(metadata, dict):
             raise TypeError("Course metadata must be an object")
-        if metadata.get("profile") in ("text-only", "reference-only"):
+        if metadata.get("profile") in ("text-only", "reference-only", "lessons-only"):
             return []
         labs = metadata.get("labs")
         if not isinstance(labs, list) or not labs:

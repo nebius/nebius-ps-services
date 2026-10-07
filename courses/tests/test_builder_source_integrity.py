@@ -46,7 +46,7 @@ def test_fenced_lesson_syntax_remains_literal_source(tmp_path, intro):
     )
 
 
-@pytest.mark.parametrize("course", ["soperator", "gpu-performance-tools"])
+@pytest.mark.parametrize("course", ["soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering"])
 @pytest.mark.parametrize(
     "payload",
     [

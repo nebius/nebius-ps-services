@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 402.0" role="img" aria-labelledby="pt-multiply-title pt-multiply-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-multiply-title">The same inputs can mean different arithmetic</title>
+  <desc id="pt-multiply-desc">For the first output, element-wise multiplication uses one pair: 1 times 5. Matrix multiplication combines a row [1, 2] and column [5, 7]: 1 times 5 plus 2 times 7 equals 19.</desc>
+  <defs>
+    <marker id="pt-multiply-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="14" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="45" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>a * b</tspan></text>
+    <text x="160" y="76" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Pair corresponding entries</tspan></text>
+    <text x="160" y="130" font-size="22" font-weight="400" fill="#245880" text-anchor="middle"><tspan>1 × 5 = 5</tspan></text>
+    <rect x="16" y="166" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="197" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>a @ b</tspan></text>
+    <text x="160" y="228" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Combine row and column</tspan></text>
+    <text x="160" y="286" font-size="22" font-weight="400" fill="#206757" text-anchor="middle"><tspan>1 × 5 + 2 × 7 = 19</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All inputs: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2, 2]</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>

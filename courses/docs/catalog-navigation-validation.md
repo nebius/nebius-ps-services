@@ -1,7 +1,79 @@
 # Catalog navigation validation
 
-The subsequent [catalog badge consistency review](course-format-validation.md#consistent-catalog-badges--2026-10-05)
-records the current catalog artifact and focused browser checks. The navigation
+The latest [nine-course alignment](course-format-validation.md#nine-course-alignment--2026-10-05)
+records the current artifact hashes and final source/browser verification.
+Earlier sections below retain their own reviewed revisions.
+
+## PyTorch foundation before GPU Fundamentals — 2026-10-05
+
+The current catalog has nine course packages and ten reader resources:
+Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance
+Engineering, GPU Fundamentals, GPU Performance Optimization, LLM Training,
+LLM Inference, Custom CUDA Kernels and Advanced Labs. Cards and the learning
+path are numbered 01–10; PyTorch is 04 and GPU Fundamentals is 05. README,
+the generated guide, all nine course menus, prerequisite and onward links
+share the route. Existing lab identities and practical runtime registries
+are unchanged.
+
+The new lessons-only course has 16 lessons, 16 original passive SVG diagrams,
+19 commented examples and a 1.75-hour reading estimate. It adds no labs,
+Practice sections, setup helpers or result archives. The existing reading
+profiles keep their fixed identities and constraints.
+
+**306 focused tests**, all nine native validators, the full build and
+HTML/archive freshness, scoped Ruff, configured Markdown lint and whitespace
+checks pass. Comparison with the task-start commit confirms all 3,191 protected
+lab, result, runtime, diagram and archive files retain their bytes, including
+all six result ZIPs. Independent read-only code/security review found
+no concrete defect. All 19 new Python examples parse; 12 CPU blocks and
+independent numeric assertions passed under existing PyTorch 2.13.0. Six CUDA
+examples and the optional compiler example remain unexecuted. The course
+references current PyTorch 2.14 documentation; local CPU execution does not
+qualify that version or a GPU environment.
+
+**33 isolated browser checks pass** across all eleven HTML pages at 1440×1000,
+390×1000 and 320×1000 using Playwright Test 1.57.0 and owned headless Chrome
+154.0.8037.98 with page JavaScript disabled. Assertions cover exact catalog and
+menu order/destinations, one current identity, keyboard navigation, fragment
+targets, local code scrolling, page containment and doubled-text reflow. Every
+new SVG label fits its viewbox and renders at least 13px high. All 16 figures
+were inspected on desktop and phone captures; catalog, course entry and
+reflow captures were also reviewed. Owned contexts and browser closed. A final catalog overview copy alignment
+was followed by three passing catalog browser cases, 91 passing catalog
+regressions and another publication freshness check.
+
+Initial browser runs exposed test assumptions about menu attributes and
+nested summary elements. Their logs remain separate; correcting the harness
+did not change the product or acceptance criteria. The generic skill checker
+retains standard-profile/shared-markup diagnostics; native profile-aware
+checks are the static acceptance gate. No deployment or live workload was
+performed.
+
+Local evidence group `pytorch-course-01a10ebe` contains
+`browser-results-verified.json`, `browser.spec.cjs`, `browser.config.cjs`,
+`browser-results-catalog-final.json`, `cpu-examples.json`, `preservation.json`,
+native and freshness logs, and generic
+checker reports. `browser-verified/` contains screenshots, browser metadata,
+SVG text geometry and exact HTML hashes. `browser-catalog-final/` records the
+final catalog artifact. The earlier dated sections below
+retain their historical counts and artifact identities.
+
+| Reviewed artifact | SHA-256 |
+| --- | --- |
+| `index.html` | `2d3605946c3975eb6faa555d272ededc98fb366fe0c27e9710a67bbfe4c5964e` |
+| `lab-guide.html` | `1f09fc34a8866dddab0b69ca5e8bac94c5719f05bc68f69d5ff4b2c3512e951f` |
+| `soperator/index.html` | `1b48d60f78544c8eb51d3f50022edea2dd7564013676e7bc5ca5035f5972b96f` |
+| `gpu-performance-tools/index.html` | `68a02c5f4476df6fd32daadd7524c198f4427a59bd46e674dcef5bac9f6b119f` |
+| `pytorch-gpu-performance-engineering/index.html` | `017677508b3a1ae275c612c179511134a11e452760c6959ed1679fcbb480897a` |
+| `gpu-fundamentals/index.html` | `68369df4fb125b061b99e28fa79ac8c94c55200927bd75f4d51f2a37ac64f568` |
+| `gpu-optimizations/index.html` | `7ab9ef5f6e764a47958254f49f1ae329e5be45e9a70df3250a8ce19f7fb55bda` |
+| `llm-training/index.html` | `e4952a2baeb473c6560e669fb3c29ceed04f7f53f09cb03e92a642e29c0cf1f6` |
+| `llm-inference/index.html` | `c3cc7b21e7cfbdc1c5a2bcb146e182731106b3050ee9d5b2e12ad31a03b251d6` |
+| `custom-cuda-kernels/index.html` | `363891cda36060822ca5b69380abd7de4387736b1510c94a0df1251eef1382b3` |
+| `advanced-gpu-communication/index.html` | `0cbea3c72584c5f107e7d8c0cc7cefc4a5df79007ab9f271d245ba09f72219ee` |
+
+The earlier [catalog badge consistency review](course-format-validation.md#consistent-catalog-badges--2026-10-05)
+records its catalog artifact and focused browser checks. The navigation
 audit below retains its original artifact hashes.
 
 ## Catalog consistency — 2026-10-05

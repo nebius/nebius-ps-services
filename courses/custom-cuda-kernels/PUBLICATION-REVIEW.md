@@ -1,5 +1,17 @@
 # Publication review
 
+## Nine-course alignment — 2026-10-05
+
+Reviewed `index.html` SHA-256: `0b3950e0bc6a4a4025b92b487a3bcba2abed3c2f6b4edc73ef4709b93b750cc2`.
+
+The complete nine-package alignment passes 2,503 offline tests, all nine native
+validators, build/helper parity and the align review/lint/security lanes.
+Responsive checks cover every page at desktop, 390px and 320px; final guide and
+PyTorch overview edits have fresh focused checks. See the
+[current alignment evidence](../docs/course-format-validation.md#nine-course-alignment--2026-10-05)
+for fixes, exact browser artifacts, preserved assets and remaining generic-checker,
+dense-diagram and live-qualification limits. Earlier entries retain their own scope.
+
 ## Teaching consistency review — 2026-10-05
 
 Reviewed `index.html` SHA-256: `8e6c811e979c10d7c721dbb5f5781e6e348f07a8f82ab538c6c519db672a051b`.

@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COURSE_NAMES = (
     "soperator",
     "gpu-performance-tools",
+    "pytorch-gpu-performance-engineering",
     "gpu-fundamentals",
     "gpu-optimizations",
     "llm-training",
@@ -452,6 +453,7 @@ class Parser(html.parser.HTMLParser):
         elif tag == "a" and href in {
             "../lab-guide.html",
             "../gpu-performance-tools/index.html",
+            "../pytorch-gpu-performance-engineering/index.html",
             "../lab-guide.html#how-to-set-up-the-lab",
             "../lab-guide.html#lab-preparation-scripts",
             "../lab-guide.html#how-to-run-the-labs",

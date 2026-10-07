@@ -32,7 +32,7 @@ def main() -> None:
         cwd=ROOT,
         check=True,
     )
-    print("PASS: six practical and two reading course validators")
+    print("PASS: six practical and three reading course validators")
 
 
 if __name__ == "__main__":

@@ -20,13 +20,13 @@ The L2 norm is the square root of the sum of squared elements: it measures the l
 
 The lab constructs matrix inputs and an FP32 highest-policy reference, then runs FP32 with highest matmul precision, FP32 with high precision, BF16, and FP16. That reference matches the FP32-highest baseline; it is not an independent FP64 accuracy oracle. Warmed CUDA-event samples measure each mode. The conventional square GEMM numerator is approximately `2*N^3` FLOPs; achieved TFLOP/s is an accounting rate, not proof of a particular emitted instruction.
 
-Given an aligned matrix multiply with BF16 inputs, FP32 accumulation, and a trusted FP32 reference result, measure kernel dispatch and error. Change only the hidden width to an irregular shape. Expected observation: the dtype remains BF16 while kernel choice and time may change; neither result is accepted unless its output stays within the declared tolerance.
+Given an aligned square matrix multiply with BF16 inputs and the FP32-highest reference, inspect dispatch and error. Use `--matrix-size` to compare an irregular square size; this changes all matrix dimensions and the amount of work, so it is a shape survey rather than an equal-work speedup comparison. The dtype remains BF16 while kernel choice and time may change; each result must stay within the declared tolerance. Changing only one dimension requires a separate source extension.
 
 The four implemented modes are FP32 with highest matmul precision, FP32 with high precision, BF16, and FP16. All modes use the same FP32-highest reference. FP8 is outside this experiment.
 
 ## Practice
 
-`labs/02_tensor_core_precision.py` benchmarks matrix multiplication using FP32, TF32, BF16, and FP16. It records timing, throughput, and relative error against FP32, rejecting results outside the lab's teaching tolerance.
+`labs/02_tensor_core_precision.py` benchmarks FP32 with highest precision, FP32 with high precision, BF16, and FP16. The result label `tf32_high` identifies the FP32 high policy; it does not prove TF32 dispatch. The script records timing, throughput, and relative error against the FP32-highest reference, rejecting results outside the lab's teaching tolerance.
 
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 

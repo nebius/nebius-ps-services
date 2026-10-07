@@ -17,6 +17,8 @@ separately qualified fabric experiments in
 Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
 to prepare for practice.
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## 1. Controlled GPU optimization
 
 **Objective**
@@ -404,7 +406,7 @@ A mathematically smaller shape can run slower when it selects a poor kernel, was
 
 **Practice**
 
-Run the Lab 10 shape and precision comparisons, preserving the numerical contract and including any conversion or padding cost.
+Run the supplied Lab 10 shape and precision survey, preserving each case's numerical contract. For the optional fixed-work padding extension, implement and include conversion, padding and cropping costs before comparing total time.
 
 - [Lab 10: Survey library behavior across shapes and dtypes](reference/labs/10_shape_precision.md)
 

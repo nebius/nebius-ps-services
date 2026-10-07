@@ -35,7 +35,7 @@ def test_exactly_one_course_glossary_preserves_every_definition(course):
     for lesson in lessons:
         headings = re.findall(r'<div class="[^"]+"><h3>(.*?)</h3>', lesson)
         expected = ["Objective", "How it works", "Practice", "Mental model"]
-        if course == "gpu-performance-tools":
+        if cb_metadata.course_metadata(ROOT / course).get("profile") in ("reference-only", "lessons-only"):
             expected.remove("Practice")
         assert headings in (expected, [*expected, "References"])
     for path in (

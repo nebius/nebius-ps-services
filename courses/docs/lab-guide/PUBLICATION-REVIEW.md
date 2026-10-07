@@ -1,5 +1,16 @@
 # Lab Guide publication review
 
+## Nine-course alignment — 2026-10-05
+
+Reviewed `lab-guide.html` SHA-256: `1e536d93d4503059645c93c64f5fe21f0320a95329271a0523da8c22404f6725`.
+
+Shared preparation now skips all three reading profiles. The final guide passes
+three isolated headless Chrome checks at 1440, 390 and 320 pixels. Source/build
+checks and the complete 2,503-test offline suite pass; no actual installation or
+live-target qualification was performed. See the
+[complete alignment record](../course-format-validation.md#nine-course-alignment--2026-10-05)
+for artifact identities, preservation, browser evidence and remaining limits.
+
 ## Catalog presentation audit — 2026-10-05
 
 Reviewed `lab-guide.html` SHA-256:

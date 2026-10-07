@@ -1,22 +1,39 @@
 # Glossary
 
 - **AIPerf** — the workload and measurement client used here to report request latency, throughput and service-objective results.
+- **All-to-all (a2a)** — An exchange in which each participating rank sends a portion of its data to every rank, used here for token or state redistribution.
+- **BF16** — Bfloat16; a 16-bit floating-point format with FP32-like exponent range and fewer significand bits.
 - **Collective** — A coordinated operation such as all-reduce, all-gather or all-to-all across a process group.
+- **CP** — Context parallelism; partitioning sequence context or attention work across ranks with communication of the needed state.
 - **DDP** — DistributedDataParallel; replicated model training with gradient synchronization across processes.
+- **DMA** — Direct memory access; transfer hardware moves bytes without CPU instructions copying each byte.
+- **EP** — Expert parallelism; assigning mixture-of-experts networks to ranks and routing tokens to their owning experts.
 - **Exposed communication** — Communication that remains on the critical path after useful overlap.
+- **FP16** — 16-bit floating point; its narrower exponent range can require gradient scaling during training.
+- **FP32** — 32-bit floating point; used for reference calculations and selected model, gradient or optimizer state.
 - **FSDP2** — fully sharded data parallelism, second-generation PyTorch interface; shards training state and materializes parameters for computation.
+- **GEMM** — General matrix multiplication; a major compute operation in model layers and local expert processing.
 - **Goodput** — Completed requests per second that meet every declared latency objective.
 - **GPUDirect RDMA** — A device path allowing the network adapter to access registered GPU memory without staging each transfer through host memory.
 - **HCA** — Host channel adapter connecting a worker to the InfiniBand fabric.
 - **InfiniBand** — The inter-node fabric used by the eight-GPU platform; link state and selected transport need separate evidence.
 - **ITL** — inter-token latency; AIPerf reports a per-request average under its declared token-count and timestamp conventions, rather than the distribution of individual token gaps.
 - **KV cache** — Attention keys and values retained for previously processed tokens.
+- **MoE** — Mixture of experts; a layer routes each token to a selected subset of expert networks.
+- **MSE** — Mean squared error; the average squared difference between predictions and targets in a training objective.
 - **NCCL** — NVIDIA Collective Communications Library; provides GPU collective and point-to-point communication operations.
+- **NIC** — Network interface controller; the adapter connecting a worker to the network fabric.
 - **NIXL** — NVIDIA Inference Xfer Library, used to transfer cache and other data between memory regions.
 - **NVLink / NVSwitch** — GPU links and switching that connect GPUs within the selected H100 node. A topology label alone does not prove switch health.
+- **NVSHMEM** — NVIDIA’s GPU-oriented shared-memory programming library, providing communication and synchronization over a partitioned global address space.
 - **NVTX** — NVIDIA Tools Extension Library; annotations that name diagnostic markers and ranges without synchronizing or timing GPU execution by themselves.
+- **Point-to-point (p2p)** — Communication between a source and destination rank; unlike a collective, it does not by itself prescribe a whole-group exchange.
+- **PowerSGD** — Low-rank gradient compression for stochastic gradient descent (SGD), with approximation error and configurable feedback state.
+- **PP** — Pipeline parallelism; placing layer ranges on different ranks and scheduling microbatches through the stages.
 - **Rank** — One process participating in a distributed group; global rank identifies the process across workers.
 - **RDMA** — Remote direct memory access between registered memory regions.
+- **SGD** — Stochastic gradient descent; parameter updates driven by gradients estimated from sampled data.
 - **SLO** — service-level objective; a declared threshold, such as a latency bound, used to determine whether completed work counts toward goodput.
-- **Tensor / context / expert parallelism** — Partitioning model operations, sequence context or routed experts across ranks.
+- **TP** — Tensor parallelism; partitioning tensor operations within model layers across ranks, with communication of intermediate results.
 - **TTFT** — Time from submitting a request until the client sees its first generated content.
+- **UCX** — Unified Communication X; a communication framework used by supported transfer backends to access available network and memory transports.

@@ -7,11 +7,11 @@
 
 #### User Story
 
-Engineers need a Slurm and Soperator introduction and a shared performance-tools reference before the GPU courses that use those tools in labs, followed by GPU foundations, optimization, LLM and CUDA-kernel specializations, and advanced communication labs.
+Engineers need a Slurm and Soperator introduction, a shared performance-tools reference and a PyTorch tensor foundation before GPU foundations, optimization, LLM and CUDA-kernel specializations, and advanced communication labs.
 
 #### Acceptance Criteria
 
-- AC-001: The catalog, learning path, README reading route and all course/guide menus present nine resources in this order: Soperator, Lab Guide, GPU Performance Tools, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Keep eight course packages; Lab Guide is the shared README-derived page, not a course package. Soperator is the first course because it teaches the Slurm concepts used throughout the GPU courses; it remains independently readable with basic Linux knowledge. GPU Performance Tools is prerequisite reading before lab-bearing courses and remains available as a reference during practice; it does not require GPU Fundamentals or a running cluster to read. The advanced course package is a labs-only route requiring two eight-H100 workers.
+- AC-001: The catalog, learning path, README reading route and all course/guide menus present ten resources in this order: Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs. Keep nine course packages; Lab Guide is the shared README-derived page, not a course package. Soperator is the first course because it teaches the Slurm concepts used throughout the GPU courses; it remains independently readable with basic Linux knowledge. GPU Performance Tools is prerequisite reading before lab-bearing courses and remains available as a reference during practice; it does not require GPU Fundamentals or a running cluster to read. The advanced course package is a labs-only route requiring two eight-H100 workers.
 - AC-002: Each course is a new standalone package with one canonical implementation.
 - AC-003: Fundamentals and Optimizations are prerequisites for the three specialized courses; neither LLM course is a prerequisite for Custom Kernels.
 - AC-004: Each complete teaching topic and experiment has a course owner selected by its learning objective. Move misplaced content together with its labs, guides, diagrams, references and launch/test wiring; retain standalone setup helpers where each environment needs them.
@@ -23,7 +23,7 @@ Engineers need a Slurm and Soperator introduction and a shared performance-tools
 
 #### Validation Method
 
-Inspect the eight-course catalog, five practical conceptual GPU packages, the text-only introduction, the reference-only tools course and the advanced lab package.
+Inspect the nine-course catalog, five practical conceptual GPU packages, the text-only introduction, the reference-only tools course, the PyTorch lessons-only course and the advanced lab package.
 
 #### Test Method
 
@@ -44,7 +44,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 
 #### Acceptance Criteria
 
-- AC-001: Every GPU course keeps maintainer-only mission and syllabus sources and provides detailed lessons, self-contained HTML, glossary, resources, versions, publication review, labs, Slurm launchers, validation, and cluster-smoke guidance. REQ-024 defines the reference-only performance tools course without labs or exercises. REQ-020 defines an explicit labs-only profile without conceptual lessons. REQ-019 defines the explicit text-only profile; its no-lab, no-diagram scope supersedes GPU-specific requirements for that package only.
+- AC-001: Every GPU course keeps maintainer-only mission and syllabus sources and provides detailed lessons, self-contained HTML, glossary, resources, versions, publication review, labs, Slurm launchers, validation, and cluster-smoke guidance. REQ-024 defines the reference-only performance tools course without labs or exercises. REQ-027 defines the visual PyTorch lessons-only course without labs or practice. REQ-020 defines an explicit labs-only profile without conceptual lessons. REQ-019 defines the explicit text-only profile; its no-lab, no-diagram scope supersedes GPU-specific requirements for that package only.
 - AC-002: Except for the explicit reading-profile exceptions, every GPU lesson uses a concise conceptual title and the ordered sections Objective, How it works, Practice, Mental model, followed only by optional References. How it works integrates definitions, useful prerequisite connections, purpose and causal explanation, with at least one relevant diagram inside that section. The final Mental model summarizes already-explained concepts. The linked labs own hardware context, worked practice, trade-offs, evidence, interpretation, troubleshooting, answers and review.
 - AC-003: Outside the explicitly diagram-free reading profiles, every GPU-course topology, execution, memory, scheduling, or parallelism concept has an accessible responsive inline diagram.
 - AC-004: Public course claims use legitimate current official/vendor references collected at the end of each HTML course.
@@ -80,7 +80,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
   course maintainers carry a concise audience label. Keep learner setup,
   lab execution and shared guidance distinct from maintainer-only work.
 
-- AC-014: All eight course packages share the same typography, spacing, readable TOC markers, section-label vocabulary and responsive reflow. Numbered lesson and lab identities remain stable. Soperator remains text-only and the advanced course remains labs-only; alignment must not fabricate missing lessons, labs or diagrams for those explicit profiles.
+- AC-014: All nine course packages share the same typography, spacing, readable TOC markers, section-label vocabulary and responsive reflow. Numbered lesson and lab identities remain stable. Soperator remains text-only and the advanced course remains labs-only; alignment must not fabricate missing lessons, labs or diagrams for those explicit profiles.
 
 - AC-015: Standardization preserves complete explanations, worked examples, lesson/lab identities, executable behavior and evidence boundaries. Each conceptual Practice section states the activity at that stage, including previews and purposeful revisits; diagrams depict the taught relationship and Mental model introduces no new mechanism. Preserve the distinct text-only and labs-only profiles.
 
@@ -88,7 +88,7 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 
 - AC-017: Learner pages and navigation omit Syllabus and Course mission sections and links. Preserve their unique audience, scope, readiness and completion guidance in course overviews and existing guides; retain authoring sources for maintainers. Each course has its own top-level Glossary section. Official references use numbered lists. Where to Go Next uses one bullet per complete onward-learning direction, with its explanation and caveats preserved. Every course has exactly one top-level Where to Go Next section, sourced from NEXT-STEPS.md, followed by exactly one Glossary and final Official references. Lessons and performance-tool guides contain neither appendix. Consolidation retains distinct optional learning directions, explanations and limits; simple next-lesson pointers may be removed when their purpose is already expressed by the destination objective and ordered TOC. Optional lesson References follow Mental model. All profiles share semantic heading levels, fonts, sizes and spacing for equivalent content.
 
-- AC-018: All eight Course overviews use three short, course-specific paragraphs: purpose and outcomes; audience and prerequisites; practical scope and the next step. Retain brief hardware and safety boundaries, including Soperator's cluster-free reading and Advanced Labs' sixteen-GPU fabric requirement. Shared setup, submission, logs, workload profiles and access procedures belong in the shared Lab Guide. Preserve unique interpretation, qualification and completion guidance in the embedded course guide or owning lab before removing overview repetitions. Do not imply ordinary one-GPU labs require a separate cluster when qualified advanced hardware can be reused.
+- AC-018: All nine Course overviews use three short, course-specific paragraphs: purpose and outcomes; audience and prerequisites; practical scope and the next step. Retain brief hardware and safety boundaries, including Soperator's cluster-free reading and Advanced Labs' sixteen-GPU fabric requirement. Shared setup, submission, logs, workload profiles and access procedures belong in the shared Lab Guide. Preserve unique interpretation, qualification and completion guidance in the embedded course guide or owning lab before removing overview repetitions. Do not imply ordinary one-GPU labs require a separate cluster when qualified advanced hardware can be reused.
 
 #### Negative Criteria
 
@@ -577,19 +577,19 @@ Keep source/CPU, installed environment, CUDA/NCCL/GDS, live H100 and browser lan
 
 #### User Story
 
-Learners need an attractive central course catalog, direct navigation between the eight courses, and clear Nebius attribution and licensing on a publicly browsable website.
+Learners need an attractive central course catalog, direct navigation between the nine courses, and clear Nebius attribution and licensing on a publicly browsable website.
 
 #### Acceptance Criteria
 
-- AC-001: A self-contained light editorial catalog at `courses/index.html` introduces seven courses, Advanced Labs and Lab Guide as nine numbered entries in REQ-001 order, each with a concise introduction and a working relative link. All nine catalog card number badges use the same mint background (#edf6f0) and teal text (#206757), without course-specific color overrides. Preserve source-derived course titles, hours, prerequisites and outcomes; the guide has no invented hours or course metadata. The courses README prominently links to the published catalog with the visible text Explore the courses and labels its relative `index.html` link Browse the courses catalog. Keep hosting-provider names out of the visible introduction.
-- AC-002: The learning path starts with Soperator and the shared Lab Guide, then GPU Performance Tools before Fundamentals and Optimization followed by three independent specializations and Advanced Labs. Every course and the guide has the same ordered nine-entry menu, a separate catalog backlink and exactly one current-page marker. Resolve destinations relative to each page; retain current-course identity and label the current guide appropriately. The tools reference prepares learners for the native commands used in labs; the three specialization prerequisites remain Fundamentals and Optimization.
+- AC-001: A self-contained light editorial catalog at `courses/index.html` introduces nine courses and Lab Guide as ten numbered entries in REQ-001 order, each with a concise introduction and a working relative link. All ten catalog card number badges use the same mint background (#edf6f0) and teal text (#206757), without course-specific color overrides. Preserve source-derived course titles, hours, prerequisites and outcomes; the guide has no invented hours or course metadata. The courses README prominently links to the published catalog with the visible text Explore the courses and labels its relative `index.html` link Browse the courses catalog. Keep hosting-provider names out of the visible introduction.
+- AC-002: The learning path starts with Soperator and the shared Lab Guide, then GPU Performance Tools and PyTorch for GPU Performance Engineering before Fundamentals and Optimization followed by three independent specializations and Advanced Labs. Every course and the guide has the same ordered ten-entry menu, a separate catalog backlink and exactly one current-page marker. Resolve destinations relative to each page; retain current-course identity and label the current guide appropriately. The tools reference prepares learners for the native commands used in labs; the three specialization prerequisites remain Fundamentals and Optimization.
 - AC-003: The catalog and courses carry a readable small-print Nebius B.V. copyright, free educational resource statement and Apache-2.0 license link with the complete license embedded. Preserve third-party notices; do not impose noncommercial or resale restrictions.
 - AC-004: The existing Python builder owns the generated catalog and course pages. The executable `courses/build-courses.sh` entry point rebuilds the shared guide, catalog, every registered course and each combined results ZIP, then checks HTML/ZIP source parity. Its help and status messages describe both output types. It works independently of the caller's directory, including checkout paths containing spaces, preserves builder failures, and provides help without requiring Python. Repeated runs with unchanged inputs produce identical HTML and ZIP content; file modification times may change. The wrapper separates checking from building with a cyan heading; current results are green and stale or missing output diagnostics and build/preflight failures are red on terminals. Check results retain stdout/stderr routing and stop at the first failed page. Redirected streams, `TERM=dumb` and any defined `NO_COLOR` use plain text. Rendering retains embedded reading resources, keyboard navigation, readable responsive layouts and standalone course validation.
 - AC-005: A minimal repository welcome page links to the catalog and GitHub. GitHub Pages publishes all eligible repository files from `main` `/` with `.nojekyll`, HTTPS and no custom workflow file.
-- AC-006: Preserve all eight courses' narrative, code listings, CSS, diagrams, teaching images, identifiers and reading behavior. Keep reading assets embedded; externalize only downloads. Each practical course has a Practical labs section with a Download results subsection. Separate labels from the links beneath them: Download all lab results: links through Grafana dashboards, Small and Large results to the sole external lab-results ZIP; Setup the lab environment: links through Lab setup guide to ../lab-guide.html. Do not generate or publish lab-kit ZIPs; original scripts, launchers, dependency files and displayed source remain intact and sync-labs.sh supplies cluster files. The download introduction replaces the redundant shared-setup/online-guide paragraph and introductory dashboard reminder; retain lab-specific dashboard teaching; prerequisite sections use one shared Lab Guide link. Soperator and GPU Performance Tools have no lab downloads. Lab results contain grafana-dashboards/, `small/<lab>/` and `large/<lab>/`, with original manifest-owned bytes and no nested ZIPs. Preserve existing dashboard anchors and replace repetitive download/file lists with concise pointers.
+- AC-006: Preserve all nine courses' narrative, code listings, CSS, diagrams, teaching images, identifiers and reading behavior. Keep reading assets embedded; externalize only downloads. Each practical course has a Practical labs section with a Download results subsection. Separate labels from the links beneath them: Download all lab results: links through Grafana dashboards, Small and Large results to the sole external lab-results ZIP; Setup the lab environment: links through Lab setup guide to ../lab-guide.html. Do not generate or publish lab-kit ZIPs; original scripts, launchers, dependency files and displayed source remain intact and sync-labs.sh supplies cluster files. The download introduction replaces the redundant shared-setup/online-guide paragraph and introductory dashboard reminder; retain lab-specific dashboard teaching; prerequisite sections use one shared Lab Guide link. Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering have no lab downloads. Lab results contain grafana-dashboards/, `small/<lab>/` and `large/<lab>/`, with original manifest-owned bytes and no nested ZIPs. Preserve existing dashboard anchors and replace repetitive download/file lists with concise pointers.
 - AC-007: Keep the stdlib Python CLI and static HTML architecture. Separate metadata, Markdown, asset validation, rendering and build orchestration into focused modules. One deterministic archive assembler serves the builder and evidence exporter. Validate the complete selected output set before replacing files; replacements are individually atomic. Check mode writes nothing and verifies both HTML and ZIP bytes.
 - AC-008: Reject unsupported nested Markdown lists and single emphasis outside code. Every Markdown destination has an explicit rendered-link or source-scoped plain-text outcome; unknown destinations fail. Apply one passive SVG policy to all authored embedded SVGs.
-- AC-009: Rename the six combined downloads to `<slug>-lab-results.zip` with identical contents and no aliases. Remove obsolete filename retirement logic; preserve canonical result and dashboard files. Verify all eight course contents and styles.
+- AC-009: Rename the six combined downloads to `<slug>-lab-results.zip` with identical contents and no aliases. Remove obsolete filename retirement logic; preserve canonical result and dashboard files. Verify all nine course contents and styles.
 - AC-010: Normal build and read-only check preflight the complete repository-root publication inventory plus planned outputs before replacement, with exact caps of 104857600 bytes per file and 1000000000 bytes total. Report sizes, limits and headroom in decimal MB (1 MB = 1,000,000 bytes), with two decimal places and thousands separators; overflow diagnostics show excess amounts with six decimal places so one-byte violations remain visible. Keep exact integer-byte comparisons, fail on incomplete inventory or overflow, and never silently drop content. File, site and archive-limit failures use the same stream-specific red terminal diagnostics in build and check. Archive export enforces the same per-file cap under its existing transaction.
 - AC-011: Every successful built/current HTML or ZIP line displays its exact serialized byte length in an aligned decimal-MB column before the path. After successful processing, print an aligned publication summary with listed-output and other-file subtotals, estimated site size, site limit, remaining capacity and per-file limit; omit largest-file reporting. The shell wrapper prints this summary exactly once at the end after verification, replacing its trailing success sentence. The Python builder supports --no-summary to suppress only that summary; preflight enforcement and failure diagnostics remain active. Selected-course subtotals cover only that run's planned outputs. Totals use exact bytes before independent display rounding, which may differ by 0.01 MB. Failed builds/checks emit no success summary.
 
@@ -608,7 +608,7 @@ Exercise stale and missing catalog output, metadata changes, all navigation edge
 
 #### Evaluation Method
 
-Navigate from the repository welcome page through the catalog and between all eight courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
+Navigate from the repository welcome page through the catalog and between all nine courses using pointer and keyboard. Assess small-screen layout and readable attribution independently of static checks.
 
 <!-- /REQUIREMENT: REQ-013 -->
 
@@ -816,12 +816,12 @@ lab without following a mandatory reading detour; basic setup ends with a tiny G
 
 #### User Story
 
-Learners need an executable, evidence-led GPU optimization workflow across all six practical courses in the seven-course catalog.
+Learners need an executable, evidence-led GPU optimization workflow across all six practical courses in the nine-course catalog.
 
 #### Acceptance Criteria
 
 - AC-001: All executable labs have a versioned dashboard, supported local capture and comparison recipes, guided one-variable tuning and independent investigation, with explicit CPU/model/qualification exceptions.
-- AC-002: The shared README contains cluster creation, connection/copy, cxcli-managed Nsight installation, cxcli-managed Grafana and Pushgateway installation and unnumbered environment readiness checks. Explain the measurement-to-dashboard flow with the existing inline diagram, distinguishing immutable benchmark results from sampled telemetry. A concise unnumbered tools lesson precedes experiments without renumbering existing lessons.
+- AC-002: The shared README contains cluster creation, connection/copy, cxcli-managed Nsight installation, cxcli-managed Grafana and Pushgateway installation and unnumbered environment readiness checks. Explain the measurement-to-dashboard flow with the existing inline diagram, distinguishing immutable benchmark results from sampled telemetry. The GPU Performance Tools reference precedes experiments without renumbering practical lessons or labs.
 - AC-003: Publish selected baseline/candidate numeric summaries after timing through one serialized PUT per fixed workspace/course/lab/profile; validate equivalent workloads and exact-generation readback, with bounded labels and separate publication failures.
 - AC-004: Initial private monitoring setup uses `nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway`. Course setup only discovers and verifies the installed services and writes private connection files; it never creates a catalog or installs infrastructure. Shared setup imports every selected course dashboard directory using the current immediate cxcli import command with explicit config, target, existing course-folder UID and an explicitly selected datasource in the interactive import wizard; automation supplies its prepared datasource UID. Inspect the rendered dashboard separately. Sampled telemetry does not replace benchmark timers or establish exclusive job attribution.
 - AC-005: Qualify the actual installed Nsight versions, shared worker/container availability, private access and both workers through executed canaries and matching report inspection. All executable labs and applicable documented variants require independent live workload, profiler-content and Grafana verification before an all-lab qualification claim; static checks, an installed binary and a nonempty report are insufficient.
@@ -830,7 +830,7 @@ Learners need an executable, evidence-led GPU optimization workflow across all s
 - AC-007: Lab 19 provides an unnumbered single-H100 Compute companion for one selected local backward kernel, with exact companion admission and diagnostic-only artifacts. Its distributed workload retains Systems capture; the advanced course keeps 34 numbered labs.
 
 - AC-010: Discover exactly one accepted cxcli-owned private Grafana and Pushgateway on the explicit target. Resolve the installed local metrics datasource and native VMAgent scrape job from current rendered and live state. Reject ambiguous, foreign, stale or unready owners and unavailable local metrics before writing connection files. No course-owned infrastructure, legacy installer flags or receipt compatibility path is retained.
-- AC-011: In GPU Fundamentals, the unnumbered tools lesson gives Nsight Systems, Nsight Compute, NVTX and Grafana a worked example with an original contextual diagram or permitted frontend image. Define NVTX markers and ranges with a concise inline PyTorch example, show timeline interpretation and range-based kernel selection, and explain annotation versus synchronization and timing. Label synthetic values and preserve separate diagnostic and unprofiled evidence. The concluding mental model connects the tools into one investigation, from an unprofiled baseline through NVTX-labeled diagnosis to checking a measured change. The first four tool diagrams use landscape layouts with left-to-right timelines or reading order, readable labels and matching visible explanations and accessible descriptions.
+- AC-011: In GPU Performance Tools, the reference lessons give Nsight Systems, Nsight Compute, NVTX and Grafana a worked example with an original contextual diagram or permitted frontend image. Define NVTX markers and ranges with a concise inline PyTorch example, show timeline interpretation and range-based kernel selection, and explain annotation versus synchronization and timing. Label synthetic values and preserve separate diagnostic and unprofiled evidence. The concluding mental model connects the tools into one investigation, from an unprofiled baseline through NVTX-labeled diagnosis to checking a measured change. The first four tool diagrams use landscape layouts with left-to-right timelines or reading order, readable labels and matching visible explanations and accessible descriptions.
 
 #### Negative Criteria
 
@@ -1280,6 +1280,43 @@ Test ordinary-root behavior, jail transitions, missing capabilities, failed sysc
 A fresh SSH session completes setup and a second fresh invocation reuses completed state with no historical data changes.
 
 <!-- /REQUIREMENT: REQ-026 -->
+
+<!-- REQUIREMENT: REQ-027 status=satisfied priority=P1 type=feature -->
+### REQ-027: Visual PyTorch foundation for GPU performance engineering
+
+#### User Story
+
+Students who can read basic Python need to recognize tensor work, memory movement and completion boundaries before reading GPU Fundamentals and performance lab code.
+
+#### Acceptance Criteria
+
+- AC-001: Provide a standalone course titled PyTorch for GPU Performance Engineering directly before GPU Fundamentals in all catalog, guide and course navigation surfaces. Renumber reader resources consistently while preserving existing lab identities and technical prerequisites.
+- AC-002: Provide an estimated three-hour, eighteen-lesson reading route with definition-first explanations, contextual small diagrams and commented worked examples. Every lesson has an observable objective and a substantive Performance connection. Teach tensor attributes, shapes, indexing, broadcasting, arithmetic, reductions, matrix multiplication, layout, dtype, device, modules, autograd, inference, transfers, memory and correct timing before an integrated code-reading example.
+- AC-003: Use a lessons-only profile with Objective, How it works and Mental model. No labs, Practice sections, exercises, setup scripts, execution dependencies or result archives. Reading requires only basic Python, not a running GPU or cluster. Shared lab discovery and preparation skip this reading profile and create no job or result directories for it.
+- AC-004: Use original passive inline SVGs with consistent shared fonts, readable labels and deliberate shapes; preserve visible explanations and inspect desktop, 390px and 320px layouts. Keep complete canonical Markdown, source metadata, syllabus, glossary and generated self-contained HTML in parity.
+- AC-005: Support technical claims with current official PyTorch references. Treat supplied topic material as reference data; simplify useful lab ideas into examples without copying operational instructions or manufacturing measurements.
+- AC-006: Distinguish exact PyTorch API names from application examples throughout explanations, tables, captions and diagrams. API names use bold monospace; example variables and values use ordinary monospace; application-assigned axis meanings and general concepts use plain text. Headings and callout labels may remain bold. Explain the convention at entry; preserve normal executable code formatting.
+- AC-007: Define dimensions as indexed axes with sizes and application-assigned meaning; distinguish axis index, size and meaning with concrete 2-by-3-by-4 grids. Explain shape, dtype, device and element count separately, and constructor shape arguments independently of rand/randn distributions. Explicitly label batch/position/feature as an example interpretation. Remove the requested opening Tools-nearby referral while preserving relevant optional references.
+- AC-008: Retain existing unique explanations and caveats, consolidate genuine duplication, and add focused batching/vectorization and compilation/fusion lessons. Teach equivalent-work correctness, memory/latency tradeoffs, compilation overhead and evidence boundaries without promised speedups.
+- AC-009: Define concepts affirmatively through what they are and how they work. Define index and its plural indices before notation, and map each coordinate to a grid, row or column with zero-based positions. Keep lesson 2 indexing, slicing and reshaping examples short and grounded in the same grids. Teach the linear layer's feature-axis contract in lesson 9; teach inferred reshape sizes and axis reordering in lesson 6. Preserve technical constraints with clear conditions and consequences.
+
+#### Negative Criteria
+
+- NC-001: No installation, live GPU execution, publication, compatibility alias or advanced kernel/distributed-training syllabus is required by this reading course.
+
+#### Validation Method
+
+Inspect full teaching and diagram semantics, exact catalog order, lesson identities, safe resources and source/render parity.
+
+#### Test Method
+
+Run focused reading-profile and catalog regressions, all native course validators, shared build/freshness, syntax checks of examples and isolated responsive browser assertions.
+
+#### Evaluation Method
+
+Read the route as a Python-literate beginner: example comments and diagram labels must expose shapes, values, memory implications and what remains a performance hypothesis. The duration is an estimate, not a learner-outcome measurement.
+
+<!-- /REQUIREMENT: REQ-027 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

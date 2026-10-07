@@ -2,17 +2,20 @@
 
 **[Explore the courses](https://nebius.github.io/nebius-ps-services/courses/index.html)**
 
-The website introduces seven courses, an Advanced Labs collection, and one shared
+The website introduces eight courses, an Advanced Labs collection, and one shared
 Lab Guide, with a suggested reading order and direct links to every resource.
 Soperator uses text and worked questions, GPU Performance Tools is a reference
-without exercises, and Advanced Labs teaches through its practical guides.
+without exercises, PyTorch for GPU Performance Engineering uses visual worked
+examples without labs or practice, and Advanced Labs teaches through its practical guides.
 
 Start with [Soperator](soperator/index.html), use the [Lab Guide](lab-guide.html)
 to prepare for practice, then read [GPU Performance Tools](gpu-performance-tools/index.html)
+and [PyTorch for GPU Performance Engineering](pytorch-gpu-performance-engineering/index.html)
 before [GPU Fundamentals](gpu-fundamentals/index.html) and
 [GPU Performance Optimization](gpu-optimizations/index.html). The tools course
-introduces the commands and evidence used in practical labs; no cluster is needed
-to read it. Continue with
+introduces the commands and evidence used in practical labs. The three-hour PyTorch reading course
+builds tensor-reading and optimization reasoning with small commented examples;
+neither reading course needs a cluster. Continue with
 [LLM Training](llm-training/index.html), [LLM Inference](llm-inference/index.html),
 or [Custom CUDA Kernels](custom-cuda-kernels/index.html); these specializations
 are independent. [Advanced Labs](advanced-gpu-communication/index.html)
@@ -20,6 +23,9 @@ owns the multi-GPU, multi-node experiments.
 
 Where a course includes diagrams, they appear immediately after the passage
 they explain, within the owning lesson or practical guide.
+Practice identifies what the supplied experiment measures and labels conceptual
+comparisons or source extensions separately; each course glossary collects its
+taught terms and abbreviations.
 
 Every course ends with one Where to Go Next, one A–Z Glossary, and then
 Official references when sources are used. Lessons and performance-tool guides share these course-wide
@@ -204,7 +210,9 @@ labs; they are not the lesson order. A range such as `01–05` includes both end
 | Advanced Labs: Multi-GPUs Multi-Nodes communication optimization | 01–05, 08–09, 11–26, 28 | [Regular labs](#regular-labs) |
 | Advanced Labs: Multi-GPUs Multi-Nodes communication optimization | 06–07, 10, 27, 29–34 | [Communication labs](#communication-labs) |
 
-Soperator and GPU Performance Tools are reading courses with no executable labs or preparation script of their own.
+Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering are reading courses with no executable labs or preparation script of their own.
+Shared preparation skips these reading profiles and creates job directories only
+for practical courses.
 The lookup covers all 110 default labs. For the optional CUDA container exercise,
 Inference Lab 30's TensorRT-LLM variant, or Dynamo container preflight, follow
 [Optional container exercises](#optional-container-exercises) after choosing that

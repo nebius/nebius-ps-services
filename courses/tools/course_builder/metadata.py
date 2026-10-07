@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NamedTuple
 import json
+import math
 import re
 from .markdown import slug
 from .config import (
@@ -232,6 +233,8 @@ def course_metadata(course: Path) -> dict:
     )
     if metadata.get("profile") == "reference-only":
         return reference_course_metadata(metadata)
+    if course.name == "pytorch-gpu-performance-engineering":
+        return lessons_course_metadata(course, metadata)
     if course.name == "soperator":
         return text_course_metadata(metadata)
     if course.name == "advanced-gpu-communication":
@@ -434,12 +437,49 @@ def reference_course_metadata(metadata: dict) -> dict:
     return metadata
 
 
+def lessons_course_metadata(course: Path, metadata: dict) -> dict:
+    """A visual reading course declares lessons, never executable lab inventory."""
+    expected = {
+        "slug", "title", "profile", "estimated_guided_hours", "lessons",
+        "visual_manifest",
+    }
+    if (
+        set(metadata) != expected
+        or metadata["profile"] != "lessons-only"
+        or metadata["slug"] != course.name
+        or course.name not in COURSES
+        or not isinstance(metadata["title"], str)
+        or not metadata["title"].strip()
+        or type(metadata["estimated_guided_hours"]) not in (int, float)
+        or not math.isfinite(metadata["estimated_guided_hours"])
+        or metadata["estimated_guided_hours"] <= 0
+        or metadata["visual_manifest"] != "reference/visual-manifest.json"
+    ):
+        raise ValueError("invalid lessons-only course metadata")
+    lessons = metadata["lessons"]
+    if not isinstance(lessons, list) or not lessons or any(
+        not isinstance(row, dict)
+        or set(row) != {"id", "title"}
+        or type(row["id"]) is not int
+        or row["id"] != number
+        or not isinstance(row["title"], str)
+        or not row["title"].strip()
+        for number, row in enumerate(lessons, 1)
+    ):
+        raise ValueError("lessons-only course requires ordered lesson identities")
+    if len({row["title"] for row in lessons}) != len(lessons):
+        raise ValueError("lessons-only course requires unique lesson titles")
+    return metadata
+
+
 def parse_text_course(path: Path, profile: str = "text-only") -> tuple[str, str, list[dict[str, str]]]:
     """Parse the standard heading-based lesson format without lab assumptions."""
     text = path.read_text(encoding="utf-8")
     parts = re.split(r"^## (\d+)\. (.+)$", text, flags=re.MULTILINE)
-    count = 5 if profile == "reference-only" else 6
-    if len(parts) != 1 + 3 * count or not parts[0].startswith("# "):
+    if profile not in ("text-only", "reference-only", "lessons-only"):
+        raise ValueError("unknown reading course profile")
+    count = (len(parts) - 1) // 3 if profile == "lessons-only" else 5 if profile == "reference-only" else 6
+    if count < 1 or len(parts) != 1 + 3 * count or not parts[0].startswith("# "):
         raise ValueError(f"reading course must have a title and {count} numbered lessons")
     title, preamble = parts[0][2:].split("\n", 1)
     lessons = []
@@ -449,11 +489,11 @@ def parse_text_course(path: Path, profile: str = "text-only") -> tuple[str, str,
         if (
             int(identity) != number
             or fields[0].strip()
-            or not (tuple(fields[1::2]) in (("Objective", "How it works", "Mental model"), ("Objective", "How it works", "Mental model", "References")) if profile == "reference-only" else valid_lesson_fields(fields[1::2]))
+            or not (tuple(fields[1::2]) in (("Objective", "How it works", "Mental model"), ("Objective", "How it works", "Mental model", "References")) if profile in ("reference-only", "lessons-only") else valid_lesson_fields(fields[1::2]))
             or any(not value.strip() for value in fields[2::2])
         ):
             raise ValueError(
-                "text lessons require ordered, nonempty Objective, How it works, Practice, Mental model and optional References sections"
+                "reading lessons require ordered, nonempty sections for their profile"
             )
         lessons.append({"title": heading, **dict(zip(fields[1::2], fields[2::2]))})
     return title, preamble.strip(), lessons

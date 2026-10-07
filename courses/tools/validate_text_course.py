@@ -97,7 +97,7 @@ class TextPage(HTMLParser):
 
 
 def validate_document(document: str, course_name="soperator") -> None:
-    reference = course_name == "gpu-performance-tools"
+    reference = course_name in {"gpu-performance-tools", "pytorch-gpu-performance-engineering"}
     page = TextPage(document, allow_diagrams=reference)
     if page.errors or len(page.ids) != len(set(page.ids)):
         raise ValueError(f"invalid text page resources or duplicate IDs: {page.errors}")
@@ -111,6 +111,8 @@ def validate_document(document: str, course_name="soperator") -> None:
                 raise ValueError(f"missing local anchor: {target}")
         elif target in expected and in_navigation:
             found.append(target)
+        elif target in expected:
+            continue
         elif target in {
             "../lab-guide.html#how-to-set-up-the-lab",
             "../lab-guide.html#lab-preparation-scripts",
@@ -164,7 +166,7 @@ def validate_document(document: str, course_name="soperator") -> None:
 
 def validate(course_name="soperator") -> None:
     course = cb_config.ROOT / course_name
-    reference = course_name == "gpu-performance-tools"
+    reference = course_name in {"gpu-performance-tools", "pytorch-gpu-performance-engineering"}
     metadata = cb_metadata.course_metadata(course)
     required = {
         "COURSE.md",
@@ -184,6 +186,7 @@ def validate(course_name="soperator") -> None:
         "labs",
         "slurm",
         "env",
+        "reference/labs",
         "reference/setup.md",
         "reference/grafana",
     ):
@@ -198,6 +201,12 @@ def validate(course_name="soperator") -> None:
     validate_course_glossary(document, (course / "GLOSSARY.md").read_text())
     syllabus = (course / "SYLLABUS.md").read_text(encoding="utf-8")
     _, _, lessons = cb_metadata.parse_text_course(course / "COURSE.md", metadata["profile"])
+    if metadata["profile"] == "lessons-only":
+        identities = [f"{number}. {lesson['title']}" for number, lesson in enumerate(lessons, 1)]
+        if re.findall(r"^\d+\. .+$", syllabus, re.MULTILINE) != identities:
+            raise ValueError("syllabus must preserve exact lesson order")
+        if (course / "tools").exists() or list(course.rglob("*-lab-results.zip")):
+            raise ValueError("lessons-only course must not contain runtime tools or lab archives")
     for number, lesson in enumerate(lessons, 1):
         if f"{number}. {lesson['title']}" not in syllabus:
             raise ValueError("syllabus lesson identity differs from canonical prose")
@@ -217,7 +226,7 @@ def validate(course_name="soperator") -> None:
 
 if __name__ == "__main__":
     try:
-        for name in ("soperator", "gpu-performance-tools"):
+        for name in ("soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering"):
             validate(name)
     except ValueError as error:
         raise SystemExit(f"FAIL: {error}") from error

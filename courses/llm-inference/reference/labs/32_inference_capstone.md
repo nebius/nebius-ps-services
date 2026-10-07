@@ -16,7 +16,7 @@ The lab builds corresponding baseline and SDPA callables, compares outputs, warm
 
 Given a mixed workload whose baseline reaches 12,000 tokens/s but violates p95 ITL during long prefills, enable chunking and observe 11,500 tokens/s with ITL inside the SLO and unchanged quality. Change to a short-prompt-only workload where chunking adds overhead. Expected observation: keep a workload-specific profile rather than a universal setting; pending live campaigns remain explicitly pending.
 
-Required mechanics deliverable: submit :
+For the required mechanics deliverable, submit:
 
 ```bash
 sbatch --chdir="$PWD" \

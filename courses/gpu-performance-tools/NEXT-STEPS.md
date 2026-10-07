@@ -1,7 +1,9 @@
 # Where to Go Next
 
-Continue with GPU Fundamentals, then GPU Performance Optimization. Use the course
-switcher to follow this route and revisit the tools reference during practice.
+Continue with [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+for a concise visual foundation in tensor operations, then GPU Fundamentals and
+GPU Performance Optimization. Use the course switcher to follow this route and
+revisit the tools reference during practice.
 
 - **Apply the references**
 

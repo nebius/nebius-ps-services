@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 338" role="img" aria-labelledby="pt-inference-controls-title pt-inference-controls-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-inference-controls-title">Two independent controls for inference</title>
+  <desc id="pt-inference-controls-desc">Evaluation mode changes module behavior, such as disabling dropout. Inference mode controls gradient recording and tracking. Neither control automatically sets the other.</desc>
+  <defs>
+    <marker id="pt-inference-controls-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="16" y="14" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="45" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">eval</tspan><tspan>()</tspan></text>
+    <text x="160" y="76" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Select evaluation behavior</tspan></text>
+    <text x="160" y="125" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">Dropout</tspan><tspan> passes values through</tspan></text>
+    <rect x="16" y="173" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="204" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode</tspan><tspan>()</tspan></text>
+    <text x="160" y="235" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Disable gradient tracking</tspan></text>
+    <text x="160" y="287" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>No backward graph here</tspan></text>
+    <text x="160" y="326" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Use both for this inference path</tspan></text>
+  </g>
+</svg>

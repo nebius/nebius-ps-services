@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 534" role="img" aria-labelledby="pt-operator-evidence-title pt-operator-evidence-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-operator-evidence-title">Follow an expression through the execution layers</title>
+  <desc id="pt-operator-evidence-desc">Python requests tensor operators. The dispatcher selects implementations; CUDA libraries and kernel launches submit device work. The number of kernels is not fixed by the number of Python lines.</desc>
+  <defs>
+    <marker id="pt-operator-evidence-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Python expression</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>transform(x, bias)</tspan></text>
+    <path d="M160 99 V130" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="142" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="173" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Tensor operators</tspan></text>
+    <text x="160" y="204" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">add</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">relu</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
+    <path d="M160 231 V262" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="274" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="305" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Dispatcher / backend</tspan></text>
+    <text x="160" y="336" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Choose implementations</tspan></text>
+    <path d="M160 363 V394" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="406" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="437" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>GPU execution</tspan></text>
+    <text x="160" y="468" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Libraries and kernels</tspan></text>
+    <text x="160" y="526" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Mapping is not one-to-one</tspan></text>
+  </g>
+</svg>

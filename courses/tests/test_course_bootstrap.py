@@ -75,6 +75,21 @@ def test_archive_attribute_failure_is_fatal(tmp_path, monkeypatch):
         installer.archive(spec, prefix, "compiler")
 
 
+@pytest.mark.parametrize("profile", ["text-only", "reference-only", "lessons-only"])
+def test_discovery_excludes_reading_courses_without_runtime_bindings(tmp_path, profile):
+    for slug, metadata in (
+        ("reading", {"profile": profile}),
+        ("practical", {}),
+    ):
+        reference = tmp_path / slug / "reference"
+        reference.mkdir(parents=True)
+        (reference / "course.json").write_text(json.dumps({"slug": slug, **metadata}))
+    root, courses = catalog.discover(tmp_path / "tools/regular-lab-setup.py")
+    assert root == tmp_path
+    assert courses == {"practical": tmp_path / "practical"}
+    assert not (tmp_path / "reading/results").exists()
+
+
 def test_every_catalog_lab_and_launcher_has_one_runtime():
     root, courses = catalog.discover(ROOT / "tools/regular-lab-setup.py")
     definitions = catalog.load_catalog()

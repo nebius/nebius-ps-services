@@ -9,6 +9,148 @@ declared profiles. Each course closes with one Where to Go Next, one Glossary
 and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Nine-course alignment — 2026-10-05
+
+Audited all nine current course packages, ten catalog resources and eleven HTML
+pages with create-learning-course, followed by align. The learning route remains
+Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance
+Engineering, GPU Fundamentals, GPU Performance Optimization, the three independent
+specializations and Advanced Labs. The course packages retain their declared
+text-only, reference-only, lessons-only and labs-only exceptions.
+
+Coverage includes all 105 lesson/reference chapters and the identities, concept
+explanations and takeaways of all 110 lab guides. Changed practical claims were
+traced to the supplied implementation and result fields. Command/result sections
+also receive native contract checks; this is not an exhaustive line-by-line
+execution audit of every guide or runtime source.
+
+| Course | Chapters | Local labs | Alignment outcome |
+| --- | ---: | ---: | --- |
+| Soperator | 6 | 0 | Text-only teaching and current route retained. |
+| GPU Performance Tools | 5 | 0 | Reference-only teaching retained; active specs now assign its tools primer to the correct owner. |
+| PyTorch for GPU Performance Engineering | 16 | 0 | Lessons-only profile excluded from shared runtime preparation; overview grouped into purpose, audience/readiness and reading route. |
+| GPU Fundamentals | 12 | 11 | Mission distinguishes local hardware from Advanced Labs; precision guide matches actual policies and supported square-size control; glossary expanded. |
+| GPU Performance Optimization | 16 | 14 | Supplied shape/dtype survey distinguished from optional padding/cropping extension. |
+| LLM Training | 17 | 16 | GQA, operator-level recomputation and sharding examples identified as conceptual extensions; objective lab no longer promises unavailable timing/policy outputs; glossary expanded. |
+| LLM Inference | 17 | 22 | Capstone instruction corrected and taught abbreviations collected in the glossary. |
+| Custom CUDA Kernels | 16 | 13 | Objectives and capstone claims match supplied grouping/kernel trials; application integration remains separate; glossary expanded. |
+| Advanced Labs | 0 | 34 | Catalog prerequisites match the owning overview; glossary gains communication, precision and parallelism terminology. |
+
+### Confirmed gaps and repairs
+
+The shared setup discovery and private-directory preparation recognized text-only
+and reference-only metadata but treated lessons-only metadata as practical.
+Adding the PyTorch course therefore caused discovery to request a nonexistent
+runtime manifest, and preparation to reject its intentionally absent lab list.
+Both canonical owners now exclude all three reading profiles before practical
+inventory processing. All six standalone copies are synchronized. Unknown and
+practical profiles still fail on a missing inventory; no compatibility path or
+fallback was added.
+
+Six isolated reading-profile regressions established the negative control:
+the two lessons-only cases failed before the fix while the existing four profile
+cases passed. All six pass afterward. The actual catalog still resolves exactly
+six practical packages, 110 labs and 288 launchers. All five preparation groups
+exclude the reading course. Tests that assumed every course except the two older
+reading packages needed downloads or Practice now use the declared profiles and
+practical inventory. README and active requirements/design describe the same
+boundary.
+
+The content fixes preserve learner capabilities while distinguishing supplied
+experiments from separately implemented extensions. Five glossaries gained 55
+lookup entries and clarified existing expansions; splitting one combined Advanced
+parallelism entry gives a net increase of 54 keys. Each glossary remains one
+alphabetical course appendix. The PyTorch overview retains every sentence while
+matching the shared three-part orientation pattern.
+
+### Verification and review
+
+Source/static: the fresh full offline suite passes **2,503 tests** with no skips or failures. One existing environment warning reports unavailable NumPy. After the final prose-only overview regroup, 193 focused publication/profile tests also pass. All nine native course validators, complete
+HTML/ZIP freshness, helper parity, changed Python syntax/Ruff, configured Markdown
+lint and whitespace checks pass. The five focused preparation/profile test files
+pass 274 cases. Independent review additionally passes the six new regressions
+and 24 private-path/error cases. No serious code-review or security finding remains;
+the duplicate test import found during review was removed. No performance or
+architectural rewrite was warranted.
+
+The initial exploratory full run reported 18 failures and 2,480 passes. Those
+failures exposed the two missing runtime exclusions and stale reading-profile
+test assumptions; the fresh post-repair run supersedes it. No checker was relaxed
+to invent labs, downloads or Practice for the reading course.
+
+Browser/visual: 33 isolated Playwright Test 1.57.0 cases passed for all eleven
+pages at 1440×1000, 390×1000 and 320×1000 using owned headless Chrome
+154.0.8037.98, with page JavaScript disabled. The final guide wording received
+three additional passing cases; the final PyTorch overview likewise received three passing cases. Checks cover exact resource
+order, destinations/current identity, fragments, keyboard menus, applicable local
+scrollers, no page-width overflow, doubled-text reflow and no automatic HTTP
+requests. PyTorch's sixteen unchanged figures retain their font-fit assertions.
+Visual inspection covered all five changed glossaries at phone width and
+representative desktop, course-entry, catalog, guide and enlarged-text views.
+Owned contexts and browser processes closed after each run.
+
+The generic skill checker ran unchanged on all nine HTML courses using exact
+source and companion-link manifests in an isolated publication fixture. It
+retains five diagnostics per standard conceptual course, six for Soperator and
+PyTorch, and seven for Tools and Advanced Labs. These are the documented shared
+favicon/footer, resulting structure/link diagnostics and explicit profile/CSS
+differences. This checker is not recorded as passing; profile-aware native
+validation and source parity remain separate evidence.
+
+Preservation: all 3,387 inventoried lab implementations, launchers, diagram assets,
+result files and archives retain their task-start bytes. No baseline file was
+removed. The intentional runtime-source change is limited to two canonical shared
+helpers and their twelve standalone copies. Existing dirty work was preserved;
+there was no Git staging, commit, push, dependency installation or publication.
+
+### Evidence and limits
+
+Local evidence group `courses-align-u__m62w_` contains baseline hashes, task diffs,
+`pytest-final.log`, `regressions-after.log`, native/build/lint logs,
+`checker-results.json`, `preservation.json`, the browser harnesses and JSON results.
+`browser/`, `browser-guide-final/` and `browser-pytorch-final/` contain screenshots,
+actual browser identity and HTML hashes. Passing runs produced no failure traces;
+the configured trace policy retains traces only on failure. The table below binds
+the final generated artifacts. Historical entries below retain their original
+scope, counts and hashes.
+
+Installed-environment, runtime-activation and live-target qualification were not
+refreshed. The setup repair is established by source/fixture tests and read-only
+plans, not an actual package installation or Slurm/GPU run. The existing dense
+legacy-diagram readability limitation at 320px remains; page containment does not
+prove every diagram label is comfortably readable. These limits and the generic
+checker diagnostics prevent an unrestricted publication-readiness claim.
+
+Context came from the current registry, canonical sources/specs, existing dirty
+diff, relevant prior review notes and scoped memory. Older references to a GPU
+Performance Engineering package were superseded by the current nine-package
+inventory; that absent package was not restored. Skills used: create-learning-course,
+global-context-management, maintain-project-specs and align, including nested
+report-only code-review, linter and apply-security. All bounded read-only helpers
+finished; this host exposes no agent-close control. Reusable skill sources needed
+no change.
+
+Terminology checks used current primary sources: [PyTorch matmul precision](https://docs.pytorch.org/docs/2.14/generated/torch.set_float32_matmul_precision.html),
+[NVIDIA Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html),
+[CUDA Core Compute Libraries](https://nvidia.github.io/cccl/),
+[NVIDIA RoCE guidance](https://docs.nvidia.com/networking-ethernet-software/cumulus-linux/Layer-1-and-Switch-Ports/Quality-of-Service/RDMA-over-Converged-Ethernet-RoCE/),
+[NVIDIA SHARP](https://docs.nvidia.com/networking/display/sharpv3110/Using%2BNVIDIA%2BSHARP%2Bwith%2BNVIDIA%2BNCCL)
+and [UCX](https://openucx.github.io/ucx/index).
+
+| Final artifact | SHA-256 |
+| --- | --- |
+| `index.html` | `29d2301dc08803c204a10dacb6a3c9e4c6ce0485fa7c879aa5f8c6e41dc13d1c` |
+| `lab-guide.html` | `1e536d93d4503059645c93c64f5fe21f0320a95329271a0523da8c22404f6725` |
+| `soperator/index.html` | `1b48d60f78544c8eb51d3f50022edea2dd7564013676e7bc5ca5035f5972b96f` |
+| `gpu-performance-tools/index.html` | `68a02c5f4476df6fd32daadd7524c198f4427a59bd46e674dcef5bac9f6b119f` |
+| `pytorch-gpu-performance-engineering/index.html` | `bb7fa40b14a62c425a216c9301acf254e57487c7c5bfa8c22c58271ab162a373` |
+| `gpu-fundamentals/index.html` | `a04cf29283efd699818af8c9d008e3faa6d72ddd0f4250ffb09a5ede65d5dcda` |
+| `gpu-optimizations/index.html` | `3cfadd6218d236c0303f4f044ef9928a583f709f000c473dd8156f94ce82d8ea` |
+| `llm-training/index.html` | `07641ac6b767b551029c26855bac0b4d9d8c2d5cd717a603f75adee92e67e44f` |
+| `llm-inference/index.html` | `d5250b62764ccec93cb069be33e55ce451234727108653e171cb03382d91dbe5` |
+| `custom-cuda-kernels/index.html` | `0b3950e0bc6a4a4025b92b487a3bcba2abed3c2f6b4edc73ef4709b93b750cc2` |
+| `advanced-gpu-communication/index.html` | `2e9713272ea6b862b07f74beac12d3d59f22a7e10f433756e5df6ba545df7876` |
+
 ## Complete teaching consistency review — 2026-10-05
 
 Reviewed the current eight course packages, shared Lab Guide and catalog against

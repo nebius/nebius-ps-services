@@ -16,7 +16,7 @@ H100 accelerates the dense work, making optimizer, launch, and communication pha
 
 `tiny_lm.py` owns the decoder model and synthetic batch construction; `common.py` owns device checks and result handling. The lab orchestrates BF16 forward computation, cross-entropy, backward, and optimizer updates. It tracks parameter movement and gradient norms, then separates baseline allocation from the incremental peak of the timed region. This is a plumbing and performance exercise, not a useful pretrained language model.
 
-Given `B=2`, `S=1024`, `H=4096`, and 32 query heads, each head dimension is 128 and the hidden activation holds about 16 MiB in BF16. Change to eight KV heads for GQA. Expected observation: Q keeps 32 heads while K/V projection and cache dimensions shrink fourfold; the model’s logits and loss contract must remain valid.
+As a hypothetical architecture comparison, `B=2`, `S=1024`, `H=4096`, and 32 query heads give a head dimension of 128 and about 16 MiB of BF16 hidden activations. Grouped-query attention (GQA) with eight key/value (KV) heads would retain 32 query heads while reducing K/V projection and retained-state dimensions fourfold. The supplied model uses equal-head multi-head attention and exposes no GQA control; implementing that extension would also require verifying the logits and loss contract.
 
 Trace the shape and dtype from token IDs to logits, then inspect loss, backward, and the parameter update. The script performs the complete training step; it has no forward-only mode.
 
@@ -60,9 +60,7 @@ Record shapes, parameter counts, activations, logits, loss, and finite gradients
 
 Shape traces expose which dimensions drive compute, memory, and parallel partition choices.
 
-Retain pre/post parameters, loss, gradient norms, accumulation steps, effective tokens, and update count.
-
-Numerical closeness is required before timing accumulation strategies.
+Retain the reported loss, gradient norms, tracked parameter-update magnitude and step/memory measurements with the run configuration. Gradient-accumulation equivalence and its effective-batch accounting belong to Lab 02; this lab performs one complete update per batch.
 
 The dashboard reads these completed artifact fields. Each row retains its case and selected slot; the original JSON retains configurations and distributions.
 

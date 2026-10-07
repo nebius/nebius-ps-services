@@ -17,6 +17,8 @@ Serving experiments require qualified runtimes and model artifacts before making
 performance claims. Use the shared Lab Guide's
 [environment setup](../lab-guide.html#lab-preparation-scripts) before practice.
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## 1. Model inference and artifact preparation
 
 **Objective**

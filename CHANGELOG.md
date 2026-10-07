@@ -6,6 +6,31 @@ project folder.
 
 ## [Unreleased]
 
+- Simplify PyTorch indexing with positive definitions, explicit grid/row/column
+  indices and short slicing/reshape examples. Label the selected diagram cell,
+  teach the linear layer's feature-axis rule in lesson 9, and keep advanced
+  reshape/layout details in lesson 6. Refresh glossary and generated teaching.
+
+- Clarify all PyTorch reading lessons with definition-first explanations, exact
+  API-name notation, concrete tensor-axis and random-sampling diagrams, and a
+  Performance connection in every lesson. Expand the estimated route to three
+  hours and eighteen lessons, including batching/vectorization and compilation.
+  Preserve the lessons-only profile and align sources, diagrams and publication.
+  Preserve bold API emphasis inside inline code in the shared course stylesheet.
+  Distinguish dataset tuple samples from the loader's default list batches.
+
+- Align all nine course packages and 110 lab guides with the current catalog.
+  Reconcile active prerequisite and topic-ownership specs, distinguish supplied
+  measurements from conceptual extensions, and complete taught glossary terms.
+  Keep the lessons-only PyTorch course out of shared runtime discovery and lab
+  directory preparation, with synchronized standalone helpers and regression tests.
+
+- Add PyTorch for GPU Performance Engineering as a visual, lessons-only foundation
+  immediately before GPU Fundamentals: sixteen concise lessons, sixteen original
+  diagrams and nineteen commented examples in an estimated 105-minute reading
+  route. Align the ten-resource catalog, course numbers, shared Lab Guide and
+  all course menus; preserve existing labs and their identities.
+
 - Review all eight course packages and 110 lab guides against their supplied
   implementations. Correct log/report paths, launcher arguments, workload names,
   optional-exercise and CUDA qualification claims; consolidate and expand taught

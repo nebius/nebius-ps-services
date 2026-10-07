@@ -16,6 +16,8 @@ These bounded, often synthetic workloads do not establish production convergence
 or large-model scaling. Prepare with the shared Lab Guide's
 [environment setup](../lab-guide.html#lab-preparation-scripts).
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## 1. Model learning and training objectives
 
 **Objective**

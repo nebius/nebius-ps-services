@@ -4,8 +4,9 @@ GPU Performance Tools introduces the native commands and evidence used by the
 practical GPU courses. Learn how to read Slurm jobs, select a profiler and
 interpret timelines, kernel counters, operator summaries and dashboard metrics.
 
-Read this course after Soperator and before GPU Fundamentals or any practical
-labs. Basic Linux knowledge and the ability to read small Python examples are
+Read this course after Soperator, then continue with
+[PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+before GPU Fundamentals or practical labs. Basic Linux knowledge and the ability to read small Python examples are
 sufficient; GPU Fundamentals is not a prerequisite. Return here for command and
 flag explanations while following the practical courses.
 

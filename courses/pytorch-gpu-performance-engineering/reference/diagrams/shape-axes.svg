@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 730" role="img" aria-labelledby="pt-shape-axes-title pt-shape-axes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-shape-axes-title">Choose a grid, a row and a column</title>
+  <desc id="pt-shape-axes-desc">An index chooses an entry, counting from zero. In x[1, 2, 3], 1 chooses the second grid, 2 its third row and 3 its fourth column. The highlighted cell contains 23. Each grid has three rows and four columns. The tensor contains 64-bit integers on the CPU.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" fill="#24343d" text-anchor="middle">x · <tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan>: [2, 3, 4]</text>
+    <text x="160" y="58" font-size="20" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan>: int64 · <tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan>: CPU</text>
+    <text x="160" y="100" font-size="20" fill="#24343d" text-anchor="middle">Grid index 0 · first grid</text>
+    <text x="160" y="126" font-size="20" fill="#24343d" text-anchor="middle">Column indices</text>
+    <text transform="translate(26 236) rotate(-90)" font-size="20" fill="#24343d" text-anchor="middle">Row indices</text>
+    <text x="88" y="154" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <text x="136" y="154" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <text x="184" y="154" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <text x="232" y="154" font-size="20" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="196" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="64" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="196" font-size="22" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="112" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="196" font-size="22" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="160" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="196" font-size="22" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="208" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="196" font-size="22" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="244" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="64" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="244" font-size="22" fill="#24343d" text-anchor="middle">4</text>
+    <rect x="112" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="244" font-size="22" fill="#24343d" text-anchor="middle">5</text>
+    <rect x="160" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="244" font-size="22" fill="#24343d" text-anchor="middle">6</text>
+    <rect x="208" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="244" font-size="22" fill="#24343d" text-anchor="middle">7</text>
+    <text x="43" y="292" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="64" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="292" font-size="22" fill="#24343d" text-anchor="middle">8</text>
+    <rect x="112" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="292" font-size="22" fill="#24343d" text-anchor="middle">9</text>
+    <rect x="160" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="292" font-size="22" fill="#24343d" text-anchor="middle">10</text>
+    <rect x="208" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="292" font-size="22" fill="#24343d" text-anchor="middle">11</text>
+    <text x="160" y="346" font-size="20" fill="#24343d" text-anchor="middle">Grid index 1 · second grid</text>
+    <text x="160" y="372" font-size="20" fill="#24343d" text-anchor="middle">Column indices</text>
+    <text transform="translate(26 482) rotate(-90)" font-size="20" fill="#24343d" text-anchor="middle">Row indices</text>
+    <text x="88" y="400" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <text x="136" y="400" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <text x="184" y="400" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <text x="232" y="400" font-size="20" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="442" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="64" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="442" font-size="22" fill="#24343d" text-anchor="middle">12</text>
+    <rect x="112" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="442" font-size="22" fill="#24343d" text-anchor="middle">13</text>
+    <rect x="160" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="442" font-size="22" fill="#24343d" text-anchor="middle">14</text>
+    <rect x="208" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="442" font-size="22" fill="#24343d" text-anchor="middle">15</text>
+    <text x="43" y="490" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="64" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="490" font-size="22" fill="#24343d" text-anchor="middle">16</text>
+    <rect x="112" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="490" font-size="22" fill="#24343d" text-anchor="middle">17</text>
+    <rect x="160" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="490" font-size="22" fill="#24343d" text-anchor="middle">18</text>
+    <rect x="208" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="490" font-size="22" fill="#24343d" text-anchor="middle">19</text>
+    <text x="43" y="538" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="64" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="538" font-size="22" fill="#24343d" text-anchor="middle">20</text>
+    <rect x="112" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="538" font-size="22" fill="#24343d" text-anchor="middle">21</text>
+    <rect x="160" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="538" font-size="22" fill="#24343d" text-anchor="middle">22</text>
+    <rect x="208" y="506" width="48" height="48" rx="4" fill="#fff0cf" stroke="#805818" stroke-width="3" />
+    <text x="232" y="538" font-size="22" fill="#24343d" text-anchor="middle">23</text>
+    <rect x="16" y="582" width="288" height="132" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="610" font-size="20" fill="#206757" text-anchor="middle">x[1, 2, 3] = 23</text>
+    <text x="160" y="640" font-size="20" fill="#24343d" text-anchor="middle">1: second grid</text>
+    <text x="160" y="668" font-size="20" fill="#24343d" text-anchor="middle">2: third row</text>
+    <text x="160" y="696" font-size="20" fill="#24343d" text-anchor="middle">3: fourth column</text>
+  </g>
+</svg>

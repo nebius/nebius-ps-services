@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 470.0" role="img" aria-labelledby="pt-module-shapes-title pt-module-shapes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-module-shapes-title">A linear layer transforms the last dimension</title>
+  <desc id="pt-module-shapes-desc">Six four-feature vectors enter a linear layer with four inputs and two outputs. Each becomes a two-feature vector, giving axis sizes [2, 3, 2]. ReLU preserves those sizes while replacing negative values with zero.</desc>
+  <defs>
+    <marker id="pt-module-shapes-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input: [2, 3, 4]</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2 × 3 input vectors</tspan></text>
+    <path d="M160 99 V133" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-module-shapes-arrow)" />
+    <rect x="16" y="145" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="176" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">nn.Linear</tspan><tspan>(4, 2)</tspan></text>
+    <text x="160" y="207" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>weights [2, 4] + bias [2]</tspan></text>
+    <path d="M160 234 V268" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-module-shapes-arrow)" />
+    <rect x="16" y="280" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="311" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>ReLU: [2, 3, 2]</tspan></text>
+    <text x="160" y="342" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Same </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>; negatives → 0</tspan></text>
+    <text x="160" y="408" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Only the last size changes</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>

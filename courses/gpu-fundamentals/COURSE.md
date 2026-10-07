@@ -17,6 +17,8 @@ Distributed concepts lead to practical work in
 Use the [environment setup](../lab-guide.html#lab-preparation-scripts) in the shared Lab Guide
 before running experiments.
 
+For the tensor foundation, read [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## 1. CPU–GPU cooperation
 
 **Objective**

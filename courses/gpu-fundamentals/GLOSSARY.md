@@ -16,10 +16,14 @@
 - **DMA** — direct memory access; transfer hardware moves data without CPU instructions copying each byte.
 - **Dot product** — The sum of products of matching entries in two sequences; matrix multiplication combines one row and one column this way.
 - **ECC** — error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
-- **ECN / CNP / PFC** — congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
+- **ECN / CNP / PFC** — Explicit congestion notification / congestion notification packet / priority flow control; respectively, congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
 - **Eligible warp** — a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
 - **Fabric** — the connected links and switches carrying traffic among endpoints.
 - **FMA** — fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
+- **FP16** — 16-bit floating point with a smaller exponent range than BF16; numerical range and rounding affect which workloads can use it safely.
+- **FP32** — 32-bit floating point, commonly used for parameters, accumulations and numerical references; storage dtype alone does not identify the arithmetic path.
+- **FP64** — 64-bit floating point, offering greater precision and range at a different storage and hardware-throughput cost.
+- **FP8** — Eight-bit floating-point formats whose range and precision depend on the selected format and scaling recipe.
 - **GEMM** — general matrix multiplication, often expressed as C = alpha × A × B + beta × C.
 - **Global memory** — CUDA device-wide address space for data accessible to threads across blocks, normally backed by HBM and serviced through caches.
 - **GPC** — graphics processing cluster, also called GPU processing cluster in the Hopper architecture description; a top-level hardware group containing TPCs, with enabled counts varying by H100 product.

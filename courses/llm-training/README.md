@@ -1,5 +1,7 @@
 # LLM Training
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## Runtime preparation
 
 Lab 22 uses an isolated Transformer Engine runtime for its FP8 experiments.

@@ -1,0 +1,81 @@
+{
+  "slug": "pytorch-gpu-performance-engineering",
+  "title": "PyTorch for GPU Performance Engineering",
+  "profile": "lessons-only",
+  "estimated_guided_hours": 3,
+  "lessons": [
+    {
+      "id": 1,
+      "title": "A tensor is data with a description"
+    },
+    {
+      "id": 2,
+      "title": "Dimensions are indexed axes with sizes"
+    },
+    {
+      "id": 3,
+      "title": "Broadcasting reuses values across axes"
+    },
+    {
+      "id": 4,
+      "title": "Element-wise work and matrix multiplication differ"
+    },
+    {
+      "id": 5,
+      "title": "Reductions remove information and axes"
+    },
+    {
+      "id": 6,
+      "title": "Views change interpretation; copies move values"
+    },
+    {
+      "id": 7,
+      "title": "Dtype changes storage and numerical behavior"
+    },
+    {
+      "id": 8,
+      "title": "Device placement selects where work happens"
+    },
+    {
+      "id": 9,
+      "title": "A model is a sequence of tensor operations"
+    },
+    {
+      "id": 10,
+      "title": "Training saves information for a backward pass"
+    },
+    {
+      "id": 11,
+      "title": "Evaluation mode and gradient mode are separate"
+    },
+    {
+      "id": 12,
+      "title": "Transfers are part of the input pipeline"
+    },
+    {
+      "id": 13,
+      "title": "Live tensors and reserved memory are different"
+    },
+    {
+      "id": 14,
+      "title": "Batching expresses repeated work as tensor operations"
+    },
+    {
+      "id": 15,
+      "title": "A timer must include completion"
+    },
+    {
+      "id": 16,
+      "title": "Code suggests a hypothesis; a profile supplies evidence"
+    },
+    {
+      "id": 17,
+      "title": "Compilation can reduce launches and intermediate storage"
+    },
+    {
+      "id": 18,
+      "title": "Read a complete step like a performance engineer"
+    }
+  ],
+  "visual_manifest": "reference/visual-manifest.json"
+}

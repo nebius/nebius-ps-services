@@ -14,9 +14,9 @@ H100 accelerates policy inference and training differently. Variable decode leng
 
 The code generates reward groups and old, new and reference log probabilities. It normalizes each group's rewards, forms the clipped new-to-old surrogate and minimizes its negative plus `0.02 * (exp(d)-d-1)`, where `d = reference_log_probability - new_log_probability`. Backward differentiates this toy loss with respect to new log probabilities. There is no language model, rollout engine or optimizer update, and the sampled penalty is not a full-policy KL measurement.
 
-Given four rewards `[1, 1, 2, 4]`, the mean is 2 and centered advantages are `[-1,-1,0,2]`; normalize only with a declared epsilon and deviation rule. Change to `[3,3,3,3]`. Expected observation: zero variance produces zero or otherwise explicitly handled advantages, not NaNs; the report also shows rollout and reward time before claiming trainer optimization. For a separate clipping calculation with epsilon=0.2 and A=+1, ratio=1.5 gives min(1.5,1.2)=1.2: increasing the already-favored action beyond the upper clip adds no surrogate reward. With A=-1 and ratio=0.5, min(-0.5,-0.8)=-0.8: decreasing the disfavored action below the lower clip likewise stops improving this term. Opposite-direction changes can remain unclipped. Walk through these terms before interpreting gradients or the optional reference penalty.
+Given four rewards `[1, 1, 2, 4]`, the mean is 2 and centered advantages are `[-1,-1,0,2]`; normalize only with a declared epsilon and deviation rule. Change to `[3,3,3,3]`. Expected observation: zero variance produces zero or otherwise explicitly handled advantages, not NaNs. This is a hand calculation, not a report of rollout or reward time. For a separate clipping calculation with epsilon=0.2 and A=+1, ratio=1.5 gives min(1.5,1.2)=1.2: increasing the already-favored action beyond the upper clip adds no surrogate reward. With A=-1 and ratio=0.5, min(-0.5,-0.8)=-0.8: decreasing the disfavored action below the lower clip likewise stops improving this term. Opposite-direction changes can remain unclipped. Walk through these terms before interpreting gradients or the optional reference penalty.
 
-Verify finite gradients before interpreting objective timing. A synthetic reward pattern checks the update plumbing; it does not establish model quality.
+Verify finite gradients before interpreting the objective scalars. This script records no objective, rollout or reward timings. A synthetic reward pattern checks the loss and gradient plumbing; it does not establish model quality.
 
 ## Practice
 
@@ -52,7 +52,7 @@ Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_jo
 
 Require zero-mean group advantages within the implemented tolerance and finite gradients. Inspect `loss`, `mean_approximate_kl`, and `max_group_advantage_mean_error`. These checks do not establish that rewards represent quality or that a learned policy improves.
 
-Record candidate groups, rewards, normalized advantages, ratios, clipping, KL term, gradients, and policy version.
+Use the code and hand calculation to trace rewards, normalized advantages, ratios, clipping and the penalty term. Retain the reported group size, loss, approximate divergence and correctness checks. Recording policy versions and rollout/reward phase timings requires a separate full-loop experiment with actual model policies; they are not outputs of this lab.
 
 Generation often dominates elapsed time, while the objective determines whether the update is meaningful. A synthetic reward can validate mechanics but cannot support a policy-quality claim.
 

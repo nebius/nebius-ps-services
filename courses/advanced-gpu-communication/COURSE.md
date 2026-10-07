@@ -17,3 +17,5 @@ NVLink/NVSwitch and inter-worker InfiniBand. Prepare through the shared Lab Guid
 [environment setup](../lab-guide.html#lab-preparation-scripts), then qualify placement and
 fabric in Labs 01–07. Bounded experiments support scoped decisions; they do not
 establish production convergence or large-model scaling.
+
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.

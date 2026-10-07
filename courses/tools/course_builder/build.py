@@ -73,7 +73,7 @@ def plan_outputs(
     for name in courses:
         course = ROOT / name
         outputs[course / "index.html"] = render_course(name).encode("utf-8")
-        if course_metadata(course).get("profile") in ("text-only", "reference-only"):
+        if course_metadata(course).get("profile") in ("text-only", "reference-only", "lessons-only"):
             continue
         resources = result_entries(course)
         outputs[course / "reference" / f"{name}-lab-results.zip"] = archive_bytes(
