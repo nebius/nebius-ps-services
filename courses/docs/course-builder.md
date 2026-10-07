@@ -51,6 +51,8 @@ The PyTorch course reserves bold monospace for exact API names and keeps
 application-assigned meanings in plain text. Headings and callout labels may
 remain bold. The shared stylesheet preserves inherited emphasis inside inline
 code; verify the rendered font weight as well as the generated HTML structure.
+Reading lessons preserve authored subsection levels with and without diagrams:
+course topics use `h2`, lesson fields use `h3`, and `####` subsections use `h4`.
 
 The reader-resource order is Soperator, Lab Guide, GPU Performance Tools,
 PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance

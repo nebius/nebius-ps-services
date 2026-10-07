@@ -1,5 +1,22 @@
 # Publication review
 
+## Reading subsection hierarchy — 2026-10-07
+
+Reviewed `index.html` SHA-256:
+`75118c21ef3ed8648f079595543d04167352a352c10deb9c0c9bc789b9fd2892`.
+
+The full offline suite exposed one heading-hierarchy regression: the diagram
+rendering path added two levels to authored reading-course subsections. The
+renderer now preserves their levels, matching the path without diagrams.
+The regenerated page differs only in four `h6` to `h4` tag pairs; all prose,
+examples, diagrams and fragment identities remain unchanged.
+
+All 203 focused reading, source-integrity, catalog and shared-format tests pass,
+including the previously failing cross-profile check. The three native reading
+validators, selected publication freshness, scoped Ruff, Markdown lint and
+whitespace checks pass. No browser, CUDA, Slurm or compiler execution was rerun
+for this correction. Earlier reviews retain their own artifact identities.
+
 ## Indexing clarity revision — 2026-10-06
 
 Reviewed `index.html` SHA-256:

@@ -71,6 +71,7 @@ def test_complete_reading_route_and_exact_source_publication():
                 for figure in lesson_figures
             ],
             prefix=f"lesson-{number}-",
+            heading_offset=0,
         )
         assert rendered in section
     validate(SLUG)

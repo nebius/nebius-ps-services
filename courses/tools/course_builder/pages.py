@@ -202,6 +202,7 @@ def render_text_course(course: Path, metadata: dict) -> str:
                     ],
                     links,
                     prefix=f"lesson-{number}-",
+                    heading_offset=0,
                 )
                 if figures
                 else block(lesson[field], links, heading_offset=0)

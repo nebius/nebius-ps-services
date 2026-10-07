@@ -6,6 +6,9 @@ project folder.
 
 ## [Unreleased]
 
+- Preserve reading-course subsection heading levels when rendering diagrams,
+  so PyTorch lesson subsections use `h4` beneath lesson fields instead of `h6`.
+
 - Simplify PyTorch indexing with positive definitions, explicit grid/row/column
   indices and short slicing/reshape examples. Label the selected diagram cell,
   teach the linear layer's feature-axis rule in lesson 9, and keep advanced

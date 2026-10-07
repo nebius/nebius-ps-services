@@ -24,6 +24,8 @@ Canonical teaching is in `COURSE.md`; lesson identities and reading duration are
 in `reference/course.json` and `SYLLABUS.md`. Original diagrams are registered in
 `reference/visual-manifest.json` and placed explicitly in the owning explanation.
 The course has no execution environment or runtime package.
+Use `####` for subsections within a lesson field; the renderer preserves them
+as `h4` beneath the field's `h3` heading, including fields with diagrams.
 
 From the courses root, run `./build-courses.sh` to rebuild the shared catalog,
 guide and course publications. `python3 -B tools/validate_text_course.py` checks
