@@ -9,7 +9,8 @@ or environment details even when the labs use synthetic data.
 
 1. Use synthetic or explicitly public inputs. Do not benchmark customer data,
    credentials, proprietary inputs, or regulated data.
-2. Complete the one-time `course_setup.py prepare` step in the shared Lab Guide.
+2. Complete the preparation for your course and lab number in the
+   [Lab Guide](../../lab-guide.html#lab-preparation-scripts).
    Its private parent directories protect scheduler logs even when Slurm opens
    them before the job body starts.
 3. Keep `results/`, traces, and Slurm output in storage that only the learner or

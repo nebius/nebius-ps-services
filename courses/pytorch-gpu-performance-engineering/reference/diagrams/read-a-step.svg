@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 614.0" role="img" aria-labelledby="pt-read-a-step-title pt-read-a-step-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-read-a-step-title">Trace shape and device through one inference step</title>
+  <desc id="pt-read-a-step-desc">The CUDA input has axis sizes [2, 3, 4]; the linear layer changes them to [2, 3, 8]. ReLU retains those sizes, averaging returns a CUDA scalar, and extraction obtains a completed Python number.</desc>
+  <defs>
+    <marker id="pt-read-a-step-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input: [2, 3, 4]</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>CUDA · FP32</tspan></text>
+    <path d="M160 99 V124" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="136" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="167" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">Linear</tspan><tspan> output: [2, 3, 8]</tspan></text>
+    <text x="160" y="198" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>6 vectors · 8 features</tspan></text>
+    <path d="M160 225 V250" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="262" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="293" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>ReLU: [2, 3, 8]</tspan></text>
+    <text x="160" y="324" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan>() → scalar []</tspan></text>
+    <path d="M160 351 V376" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="388" width="288" height="82" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="419" font-size="22.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">item</tspan><tspan>() → Python number</tspan></text>
+    <text x="160" y="450" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Obtain result on CPU</tspan></text>
+    <text x="160" y="515" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Shape → state → work → wait</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All tensors: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> FP32</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CUDA until host extraction</tspan></text>
+  </g>
+</svg>

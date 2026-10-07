@@ -24,9 +24,9 @@ from course_evidence import (
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--profile",
+        "--workload",
         choices=("small", "large"),
-        default=os.environ.get("COURSE_WORKLOAD_PROFILE", "small"),
+        default=os.environ.get("COURSE_WORKLOAD", "small"),
         help="Use small correctness sizes or larger benchmark sizes.",
     )
     parser.add_argument("--seed", type=int, default=17, help="Random seed.")
@@ -35,7 +35,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("results"),
+        default=Path(os.environ.get("COURSE_RESULTS_DIR", "results")),
         help="Directory for sanitized JSON results.",
     )
 
@@ -158,7 +158,7 @@ def write_result(
     payload = {
         "schema": "gpu-course-result/v1",
         "lab_id": lab_id,
-        "profile": args.profile,
+        "profile": args.workload,
         "run_id": run_id,
         "seed": args.seed,
         "environment": environment,

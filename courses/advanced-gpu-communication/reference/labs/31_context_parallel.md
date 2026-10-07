@@ -4,27 +4,22 @@ Context parallelism partitions a long token sequence across ranks while preservi
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
-Prepare the [joint vendor runtime](../../README.md) once, then source
-`env/vendor-environment.sh` in this submission shell. The installer requires
-the Bridge, NIXLBench and Dynamo prerequisites together; installation alone does
-not qualify both workers for this experiment.
+The selected preparation from the Lab Guide provides this lab's isolated vendor runtime. The native launcher restores its saved selectors. Qualify both workers before interpreting performance.
 
 Reference preparation (complete before the measured baseline):
 
 Submit the reference job first and wait for successful completion. Retain its printed job number and reference path.
 
-Select the prepared Bridge runtime before submission and create one reference with the baseline control. Export `CONTEXT_REFERENCE` as the printed `final-weights.pt` path after that job completes. Keep that same file for both measured runs.
+The launcher selects the prepared Bridge runtime. Create one reference with the baseline control. Export `CONTEXT_REFERENCE` as the printed `final-weights.pt` path after that job completes. Keep that same file for both measured runs.
 
 ```bash
-export COURSE_PYTHON="$COURSE_BRIDGE_PYTHON"
-export COURSE_TORCHRUN="$COURSE_BRIDGE_TORCHRUN"
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/31_context_parallel/logs/%j.out" \
-  --error="$PWD/results/31_context_parallel/logs/%j.err" slurm/fabric.sbatch labs/31_context_parallel.py --profile small --reference-only
+  --error="$PWD/results/31_context_parallel/logs/%j.err" slurm/31_context_parallel.sbatch --workload small --reference-only
 ```
 
 Logs stay under `results/31_context_parallel/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -47,15 +42,15 @@ of DataLoader shared memory.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/31_context_parallel/logs/%j.out" \
   --error="$PWD/results/31_context_parallel/logs/%j.err" \
-  slurm/fabric.sbatch \
-  labs/31_context_parallel.py --profile small --layout flat --reference "$CONTEXT_REFERENCE"
+  slurm/31_context_parallel.sbatch --workload small --layout flat --reference "$CONTEXT_REFERENCE"
 ```
 
 ## Check your results
+
+Each new job owns `results/31_context_parallel/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/31_context_parallel/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -77,6 +72,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 31_context_parallel --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 31_context_parallel \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -97,7 +93,7 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Run the candidate after the baseline passes, preserving the same reference weights and profile.
 
 ```bash
-sbatch labs/31_context_parallel.py --profile small --layout hierarchical --reference "$CONTEXT_REFERENCE"
+sbatch labs/31_context_parallel.py --workload small --layout hierarchical --reference "$CONTEXT_REFERENCE"
 ```
 
 Capture flat and hierarchical layouts in separate diagnostic jobs, using the same reference for both. Wait for each capture to finish before submitting the next.
@@ -105,18 +101,12 @@ Capture flat and hierarchical layouts in separate diagnostic jobs, using the sam
 In Systems correlate attention and communication lanes across ranks 0–7 and 8–15. Verify rank placement rather than assuming [8,2] names a physical topology. Compare the exposed cross-node tail for the two layouts. Independently vary workload profile in a new matched campaign; explain why additional hierarchy overhead may hurt a short sequence.
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/31_context_parallel/logs/capture-%J-%t.out" \
-  --error="results/31_context_parallel/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 8 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/31_context_parallel/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/31_context_parallel.py --profile small --layout flat --reference "$CONTEXT_REFERENCE"
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/31_context_parallel/logs/%j.out" \
+  --error="$PWD/results/31_context_parallel/logs/%j.err" slurm/31_context_parallel.nsys.sbatch --workload small --layout flat --reference "$CONTEXT_REFERENCE"
 ```
+
+The native Systems command is in `slurm/31_context_parallel.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Keep diagnostic captures separate from acceptance timings. For distributed work, retain each rank's report and placement record; compare the same application phase across ranks. Nsight Compute replay is inappropriate for live collectives: investigate a separately isolated local kernel when kernel-level evidence is needed.
 

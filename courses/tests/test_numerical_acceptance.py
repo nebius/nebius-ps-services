@@ -215,7 +215,7 @@ def test_padding_main_rejects_invalid_prompt_before_publishing(
         monkeypatch.setattr(
             lab, "write_result", lambda *args, **kwargs: records.append(kwargs)
         )
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--workload", "small"])
         if fault is None:
             lab.main()
             assert records[0]["correctness"]["equivalent_last_token_logits"] is True

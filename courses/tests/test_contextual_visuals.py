@@ -115,24 +115,7 @@ def test_every_figure_is_inline_in_its_declared_home(course: str) -> None:
                 entry["home"],
             )
         )
-    primer = re.search(
-        r'<section id="using-gpu-performance-tools".*?</section>',
-        document,
-        re.DOTALL,
-    ).group()
-    tool_figures = re.findall(
-        r"(?m)^!\[[^]]+\]\(diagrams/(tools-[a-z0-9-]+)\.svg\)$",
-        (root / "reference/performance-tools.md").read_text(),
-    )
-    assert primer.count("<figure ") == 1 + len(tool_figures)
-    for target in tool_figures:
-        assert primer.count(f'id="{target}"') == 1
-    assert primer.count('id="tools-measurement-loop"') == 1
-    explanation = primer.split('class="tools-field tools-how-it-works"')[1].split(
-        'class="tools-field tools-practice-labs"'
-    )[0]
-    assert 'id="tools-measurement-loop"' in explanation
-    assert document.count("<figure ") == len(placements) + 1 + len(tool_figures)
+    assert document.count("<figure ") == len(placements)
     labs = {
         match[1]: match[0]
         for match in re.finditer(

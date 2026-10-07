@@ -9,7 +9,8 @@ model names, prompts, or environment details.
 
 1. Use synthetic or explicitly public prompts, datasets, and models. Do not use
    customer prompts, credentials, proprietary model inputs, or regulated data.
-2. Complete the one-time `course_setup.py prepare` step in the shared Lab Guide.
+2. Complete the preparation for your course and lab number in the
+   [Lab Guide](../../lab-guide.html#lab-preparation-scripts).
    Its private parent directories protect scheduler logs even when Slurm opens
    them before the job body starts.
 3. Keep `results/`, checkpoints, model caches, metrics, server logs, and Slurm

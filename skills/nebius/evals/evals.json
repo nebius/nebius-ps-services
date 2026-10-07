@@ -48,6 +48,30 @@
         "Separates device exposure from real GPU/RDMA workload proof.",
         "Identifies active diagnostic effects and does not claim all services are available in every region."
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use $nebius as a design-only adviser to an active design workflow for a fictional GPU application. Nebius is fixed, but region and resource IDs are unresolved; no credentials or project access are available. Return provider constraints and storage, network and IAM integration prerequisites. The application framework and AI runtime are already approved.",
+      "expected_output": "Credential-free provider advice returns to the owning design without stack reselection or operational execution.",
+      "files": [],
+      "assertions": [
+        "Uses the design-only path and matching category references without demanding credentials, exact resource IDs or live inventory.",
+        "Returns provider constraints, service options, prerequisites, lifecycle owners, evidence and later validation needs.",
+        "Preserves the approved framework and AI runtime and returns to the active owner without re-entering design.",
+        "Does not execute inspectors, provisioning preflight, auth setup or cloud changes."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $nebius for documentation-only integration advice for a fictional service whose application and AI component decisions are fixed. Documentation does not establish available GPU capacity or effective project quota in the desired region. Describe the remaining validation and Terraform, Helm and cxcli ownership; do not inspect or change a live target.",
+      "expected_output": "Bounded advice separates documented service support from unknown project state and retains lifecycle owners.",
+      "files": [],
+      "assertions": [
+        "Does not equate published support, quota and actual available capacity or invent live resource identities.",
+        "Records unresolved region, quota, capacity and compatibility facts as later validation needs.",
+        "Preserves Terraform, Helm and cxcli ownership instead of recommending bypass through SDK writes.",
+        "Does not reopen fixed AI/application decisions, request authentication setup or perform live discovery or mutation."
+      ]
     }
   ]
 }

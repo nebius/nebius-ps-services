@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 418" role="img" aria-labelledby="pt-allocator-title pt-allocator-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-allocator-title">Live allocations occupy part of the reserved pool</title>
+  <desc id="pt-allocator-desc">The reserved allocator pool contains live tensor allocations plus unused cached blocks. Emptying the cache can release unused blocks but cannot release live tensors. Areas are schematic.</desc>
+  <defs>
+    <marker id="pt-allocator-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="8" y="12" width="304" height="302" rx="12" fill="#f7f9f7" stroke="#24343d" stroke-width="2" />
+    <text x="160" y="48" font-size="22" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Reserved pool</tspan></text>
+    <rect x="24" y="69" width="272" height="94" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="105" font-size="22" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Allocated</tspan></text>
+    <text x="160" y="137" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Live tensor storage</tspan></text>
+    <rect x="24" y="182" width="272" height="109" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="221" font-size="22" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>Cached capacity</tspan></text>
+    <text x="160" y="257" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Available for reuse</tspan></text>
+    <text x="160" y="359" font-size="21.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Other GPU allocations</tspan></text>
+    <text x="160" y="390" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>can exist outside this pool</tspan></text>
+  </g>
+</svg>

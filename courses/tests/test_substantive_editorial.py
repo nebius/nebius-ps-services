@@ -103,7 +103,7 @@ def test_optimization_extensions_name_baselines_and_limitations() -> None:
 def test_inference_capstone_separates_mechanics_from_serving() -> None:
     practice = lab_section("llm-inference", 32, "Concepts and code path")
     assert "Lab 32" in practice and "mechanics" in practice.lower()
-    assert "vllm_chunked_prefill_ab.sbatch" in practice
+    assert "34_policy_equivalence_client.sbatch" in practice
     assert "three" in practice
     first_token = lesson("llm-inference", "Autoregressive generation")[
         "Mental model"

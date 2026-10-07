@@ -262,7 +262,7 @@ def verify_host_copy(unit, stage, report):
     size_mib = {"baseline": 64, "candidate": 128}[stage["variant"]]
     # These are the reviewed recipe's explicit sizes and the frozen source's
     # defaults, independent of the small/large label.
-    expected = {"--size-mib": str(size_mib), "--profile": unit["profile"]}
+    expected = {"--size-mib": str(size_mib), "--workload": unit["profile"]}
     for flag, value in {**expected, "--warmup": "5", "--iterations": "20"}.items():
         count = argv.count(flag)
         if (

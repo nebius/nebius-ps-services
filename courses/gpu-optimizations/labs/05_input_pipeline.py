@@ -27,7 +27,7 @@ def main() -> None:
     validate_common_args(args)
     batches = resolve_int_override(
         args.batches,
-        20 if args.profile == "small" else 100,
+        20 if args.workload == "small" else 100,
         option="--batches",
     )
     torch = load_torch()

@@ -18,7 +18,10 @@ def inspect(lab: str, job: int) -> list[str]:
         inventory["setup"] if lab == "environment_readiness" else inventory["labs"][lab]
     )
     reports = []
-    for path in sorted((ROOT / "results").rglob("*.json")):
+    base = ROOT / "results" / lab / "jobs" / str(job)
+    if any(p.is_symlink() for p in (base, *base.parents)):
+        raise ValueError("Job output must not follow symlinks")
+    for path in sorted(base.rglob("*.json")):
         if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
             continue
         try:
@@ -33,7 +36,7 @@ def inspect(lab: str, job: int) -> list[str]:
         validate_result(document, lab, diagnostic=recipe["kind"] == "diagnostic")
         lines = [
             f"Completed artifact: {path}",
-            f"Profile: {document['profile']}; job: {job}; correctness: passed",
+            f"Workload: {document['profile']}; job: {job}; correctness: passed",
         ]
         for metric in recipe["metrics"]:
             try:
@@ -65,11 +68,11 @@ def main() -> None:
         "--job",
         required=True,
         type=int,
-        help="Submitted Slurm job number; 0 for a direct CPU run.",
+        help="Submitted Slurm job number.",
     )
     args = parser.parse_args()
-    if args.job < 0:
-        parser.error("job must be nonnegative")
+    if args.job < 1:
+        parser.error("job must be positive")
     try:
         reports = inspect(args.lab, args.job)
     except (ValueError, KeyError, OSError) as exc:

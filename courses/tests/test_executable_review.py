@@ -80,7 +80,7 @@ def test_library_decision_accepts_independent_bf16_rounding(monkeypatch, fixture
         monkeypatch.setattr(lab, "require_course_gpu", lambda _: {})
         monkeypatch.setattr(lab, "cuda_times_ms", time_operation)
         monkeypatch.setattr(lab, "write_result", write_result)
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--workload", "small"])
         lab.main()
     assert len(timings) == 2
     assert len(records) == 1
@@ -151,7 +151,7 @@ def test_library_decision_rejects_corruption_before_timing(monkeypatch, target, 
             "write_result",
             lambda *a, **kw: pytest.fail("published invalid output"),
         )
-        monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
+        monkeypatch.setattr(sys, "argv", ["lab", "--workload", "small"])
         with pytest.raises(SystemExit, match="Invalid BF16|error budget exceeded"):
             lab.main()
 

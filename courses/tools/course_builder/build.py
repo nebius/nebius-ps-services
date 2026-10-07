@@ -73,7 +73,7 @@ def plan_outputs(
     for name in courses:
         course = ROOT / name
         outputs[course / "index.html"] = render_course(name).encode("utf-8")
-        if course_metadata(course).get("profile") == "text-only":
+        if course_metadata(course).get("profile") in ("text-only", "reference-only", "lessons-only"):
             continue
         resources = result_entries(course)
         outputs[course / "reference" / f"{name}-lab-results.zip"] = archive_bytes(
@@ -88,19 +88,29 @@ def plan_outputs(
 
 def publication_preflight(outputs: dict[Path, bytes]) -> dict:
     root = ROOT.parent
-    report = check_budget(
+    return check_budget(
         root,
         {p.relative_to(root).as_posix(): data for p, data in outputs.items()},
         max_file_bytes=MAX_FILE_BYTES,
         max_site_bytes=1_000_000_000,
     )
-    print(
-        f"Publication estimate: {format_mb(report['total_bytes'])}; largest {report['largest_path']} "
-        f"({format_mb(report['largest_bytes'])}); site headroom {format_mb(report['headroom_bytes'])}; "
-        f"limits {format_mb(report['max_file_bytes'])}/file, {format_mb(report['max_site_bytes'])}/site",
-        flush=True,
+
+
+def report_publication(report: dict, outputs: dict[Path, bytes]) -> None:
+    listed_bytes = sum(len(content) for content in outputs.values())
+    rows = (
+        ("Listed HTML/ZIP outputs:", listed_bytes),
+        ("Other publication files:", report["total_bytes"] - listed_bytes),
+        ("Estimated site size:", report["total_bytes"]),
+        None,
+        ("Site limit:", report["max_site_bytes"]),
+        ("Remaining capacity:", report["headroom_bytes"]),
+        ("Per-file limit:", report["max_file_bytes"]),
     )
-    return report
+    lines = ["", "Publication summary"]
+    for row in rows:
+        lines.append(f"  {row[0]:<25} {format_mb(row[1]):>13}" if row else "")
+    print("\n".join(lines), flush=True)
 
 
 def report_check(message: str, *, current: bool) -> None:
@@ -136,10 +146,15 @@ def main() -> None:
         action="store_true",
         help="check the shared guide, catalog, selected course pages and ZIPs against canonical sources without writing",
     )
+    parser.add_argument(
+        "--no-summary",
+        action="store_true",
+        help="omit the final publication summary; size limits and per-file MB output remain active",
+    )
     args = parser.parse_args()
     try:
         outputs = plan_outputs(args.courses or COURSES)
-        publication_preflight(outputs)
+        report = publication_preflight(outputs)
         if args.check:
             for path, expected in outputs.items():
                 if not path.is_file() or path.read_bytes() != expected:
@@ -148,11 +163,19 @@ def main() -> None:
                         f"stale or missing generated {kind}: {output_label(path)}",
                         current=False,
                     )
-                report_check(f"current {output_label(path)}", current=True)
-            return
-        # Preflight completed. Atomicity is per file, not across the whole build.
-        for path, content in outputs.items():
-            write_atomic(path, content)
-            print(f"built {output_label(path)}", flush=True)
+                report_check(
+                    f"current {format_mb(len(expected)):>11} {output_label(path)}",
+                    current=True,
+                )
+        else:
+            # Preflight completed. Atomicity is per file, not across the whole build.
+            for path, content in outputs.items():
+                write_atomic(path, content)
+                print(
+                    f"built   {format_mb(len(content)):>11} {output_label(path)}",
+                    flush=True,
+                )
+        if not args.no_summary:
+            report_publication(report, outputs)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         report_check(str(error), current=False)

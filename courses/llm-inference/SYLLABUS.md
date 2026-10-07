@@ -1,14 +1,16 @@
 # Syllabus
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
 ## Hardware routes
 
 The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
-Before the first experiment, complete shared environment setup and read the unnumbered **Using GPU performance tools** lesson. Existing lesson IDs remain stable; distributed lab links use their new advanced-course identities. Each lab applies measure → inspect → predict → change one variable → measure again → explain.
+Before the first experiment, read the [GPU Performance Tools](../gpu-performance-tools/index.html) course. Existing lesson IDs remain stable; distributed lab links use their new advanced-course identities. Each lab applies measure → inspect → predict → change one variable → measure again → explain.
 
 Estimated guided time: **52 hours**, for the conceptual and local practical route; provisioning and queue time are excluded.
 
@@ -16,7 +18,7 @@ Estimated guided time: **52 hours**, for the conceptual and local practical rout
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../README.md#how-to-set-up-the-lab) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
 
 First understand fixed-parameter prediction and the token-generation loop in Lab 35. Audit artifacts before loading them, follow generation and fix sampling semantics, then calculate cache capacity and define the workload. Learn basic engine lifecycle before client metrics or live policy experiments. Establish scheduling and an uncompressed attention baseline before quantization, speculation, parallelism and advanced serving.
 
@@ -53,7 +55,7 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | 14 | Distributed inference placement | Partition models or requests and measure the resulting serving behavior | [Advanced Lab 04](../advanced-gpu-communication/reference/labs/04_inference_readiness.md); [Advanced Lab 23](../advanced-gpu-communication/reference/labs/23_inference_expert_parallel.md); [Advanced Lab 24](../advanced-gpu-communication/reference/labs/24_inference_tensor_parallel.md) |
 | 15 | Serving workloads and phase separation | Design matched campaigns and distinguish placement, routing and goodput | Local Lab 30 revisit; [Advanced Lab 32](../advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md), [33](../advanced-gpu-communication/reference/labs/33_dynamo_routing.md) and [34](../advanced-gpu-communication/reference/labs/34_serving_goodput.md) on the fabric cluster |
 | 16 | Evidence-based inference optimization | Distinguish attention microbenchmarks from end-to-end serving acceptance | Lab 32 |
-| 17 | Parallel generation and serving placement | Compare request replication with sharding, then inspect real server layouts | [Advanced Lab 25](../advanced-gpu-communication/reference/labs/25_fabric_inference.md) |
+| 17 | Parallel generation and serving placement | Compare request replication with sharding in a recurrent projection model and explain its limits for real serving | [Advanced Lab 25](../advanced-gpu-communication/reference/labs/25_fabric_inference.md) |
 
 ## Readiness checkpoints
 

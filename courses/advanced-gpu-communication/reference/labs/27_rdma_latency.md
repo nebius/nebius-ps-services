@@ -4,7 +4,7 @@ Remote direct memory access, or RDMA, lets a network adapter access registered m
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
@@ -19,15 +19,15 @@ The coordinator starts one owned ib_read_lat endpoint on each worker. The client
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
   --error="$PWD/results/27_rdma_latency/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
+  slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
 ```
 
 ## Check your results
+
+Each new job owns `results/27_rdma_latency/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/27_rdma_latency/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -49,6 +49,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 27_rdma_latency --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 27_rdma_latency \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -68,12 +69,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
-  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host
+sbatch --chdir="$PWD" \
   --output="$PWD/results/27_rdma_latency/logs/%j.out" \
-  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/vendor_job.sbatch labs/27_rdma_latency.py --profile small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
+  --error="$PWD/results/27_rdma_latency/logs/%j.err" slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory cuda-dmabuf
 ```
 
 Logs stay under `results/27_rdma_latency/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.

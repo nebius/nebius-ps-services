@@ -5185,7 +5185,7 @@ verified. Temporary working-byte comparison copies are task-owned and removed
 after verification; no generated trial artifacts enter reusable skill sources.
 
 <!-- /FEATURE: FEAT-026 -->
-<!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-027 reqs=REQ-028 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-027: Six-domain Nebius skill and reusable SDK foundation
 
 #### Requirements Covered
@@ -5212,6 +5212,15 @@ explicit clients and requests and perform no import-time operations. IAM reuse
 requires explicit identity and expected membership; partial writes retain safe
 resource/operation identifiers for reconciliation. Replace privileged host
 inspection execution with an explicitly active diagnostic guide.
+
+Version 4 adds a bounded design-only advisory path before the operational
+workflow. Read matching category references and current provider evidence;
+return constraints, service options, integration prerequisites, ownership,
+assumptions and later validation to the active design owner. Documentation-only
+planning does not establish credentials, run inspectors or execute provisioning
+preflight. Preserve known selectors as constraints; mark unresolved capacity,
+identity and availability as later checks. Preserve operational authorization
+and Terraform/Helm/cxcli/vpngw ownership; do not choose the AI/application stack.
 
 #### Selected Option
 
@@ -5263,6 +5272,15 @@ findings are resolved and evidence boundaries are explicit.
 
 #### Implementation Evidence
 
+Version 4 adds a credential-free design-only consultation before the unchanged
+operational workflow. It returns provider constraints, service options,
+prerequisites, owners, sources, uncertainty and later validation to the active
+design owner, including fixed-provider requests. Metadata, README and catalog
+expose the distinction. Three additional trigger cases bring coverage to 28;
+two additional quality cases bring it to six. Existing operational workflow,
+guardrails, help, prior evals, SDK assets, inspectors and tests are preserved.
+Earlier implementation evidence below remains historical.
+
 Implemented a 127-line category router, six domain landing guides, service
 coverage/maturity catalog and focused integration/diagnostic/adoption references.
 The standalone assets provide typed compute, Kubernetes, storage, network and
@@ -5289,6 +5307,21 @@ budgets validate before cloud access. These repairs restore the existing
 partial-failure and fail-fast contracts without changing authorization scope.
 
 #### Verification Evidence
+
+Version 4 STATIC_PASS: portable/core and repository/Codex/Claude validators,
+eval/payload checks, scoped Markdown lint, canonical specs and diff checks
+passed. The existing tests-folder structure warning was reviewed and retained.
+All four offline portability tests passed, including side-effect-free imports,
+inspector help/argument checks, local reference closure and eval definitions.
+Working-byte comparisons preserve operational behavior and existing cases.
+Independent nested code/security review found no actionable issues. Disposable
+skills CLI 1.5.26 discovery, payload parity, repeat installation and isolation
+passed on Codex and Claude.
+
+Version 4 RUNTIME and comparative QUALITY are UNAVAILABLE because isolated
+native authentication is absent; multi-skill trace cases are NOT_RUN. No live
+inventory, credential setup, provisioning or cloud validation was performed.
+REQ-028 remains active and FEAT-027 delivery implemented, not verified.
 
 STATIC_PASS: 39 offline unittest tests pass in the source tree and again from
 an isolated copied skill with no donor projects. Tests include pinned real
@@ -6677,7 +6710,7 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-037: Code-grounded software and portable artifact design
 
 #### Requirements Covered
@@ -6745,6 +6778,22 @@ a standalone portable artifact is part of its scope. No new generator or
 starter artifact is needed. Fixed native web technologies require no stack
 selection or AI subsystem handoff.
 
+Version 4 makes specialist activation operational: load each relevant SKILL.md
+and required resources, apply its bounded advisory workflow and incorporate the
+result. Keep the core routing concise and detailed handoff rules in the existing
+workflow reference. Nebius guidance informs provider-dependent choices before
+finalization even when the provider is fixed. Resolve AI behavior and then its
+components before app-stack selection; pass the AI result as fixed rather than
+selecting it again. Reuse completed handoffs and never recurse into an owner.
+
+When a required specialist is unavailable, research owns the bounded evidence
+request and design synthesizes the fallback decision. Official vendor sources
+come first; established community sources fill missing coverage with explicit
+provenance and uncertainty. If research is unavailable, design applies the same
+source hierarchy directly. This grants no execution or authorization fallback.
+Report each applicable skill as used, skipped with a reason, or unavailable with
+research fallback; never infer actual loading from names in an answer.
+
 #### Selected Option
 
 Add focused core directives and conditional detail in the existing workflow
@@ -6766,9 +6815,10 @@ the offline artifact contract. Reject these in favor of three native profiles.
 
 #### Implementation Boundaries
 
-Change only the design skill and its evaluations, catalog, changelog and this
-canonical pair. Keep installers, shared validators, other skills and real host
-configuration unchanged; preserve unrelated working changes.
+Change design and its evaluations plus the narrow nebius design-only advisory
+boundary and its docs/metadata/evals, catalog, changelog and this canonical pair.
+Keep ai-agent-design, ai-stack, app-stack, research, installers, shared validators
+and real host configuration unchanged; preserve unrelated working changes.
 
 #### Test-First Success Criteria
 
@@ -6788,6 +6838,14 @@ configuration unchanged; preserve unrelated working changes.
 - TDD-008: Native process checks prove conditional HTML-reference loading and
   preserve unrelated-design and Help boundaries; all ten artifact checks remain
   required for future delivered HTML, not claimed from instruction validation.
+
+- TDD-009: Combined designs consult nebius, freeze AI behavior, obtain one AI
+  stack result and reuse it in app-stack; fixed choices and deterministic-only
+  outcomes skip unnecessary selection.
+- TDD-010: Missing specialists route through research with official-first
+  evidence, marked community fallback and no fabricated specialist invocation.
+- TDD-011: Nebius-only designs work without credentials, discovery or cloud
+  changes; Help, implementation-only and SDLC ownership remain unchanged.
 
 #### Validation Plan
 
@@ -6822,6 +6880,18 @@ checks pass and executed failures are resolved. Runtime and quality limitations
 remain distinct from source or installation evidence.
 
 #### Implementation Evidence
+
+Version 4 specialist routing is implemented in the source skill and workflow
+reference. Actual skill loading, bounded advisory handoffs, Nebius constraints
+before dependent choices, AI decision reuse and official-first research fallback
+are explicit. The core is 492 lines; detailed routing stays in the existing
+reference. Metadata, README, catalog and changelog agree. Six new trigger cases
+bring the total to 47 (28 positive, 19 negative); six new quality cases bring it
+to 20. Multi-skill process cases require successful native loading traces.
+Existing help, execution/document ownership, implementation continuation,
+guardrails, Learning Loop, old evals and fixture bytes are preserved. No
+specialist framework, shared runner or real installed catalog was modified.
+Earlier version evidence below remains historical.
 
 Version 3 portable-HTML extension is implemented in source. The 258-line focused
 reference owns one portability contract, the exact approved theme defaults,
@@ -6859,6 +6929,21 @@ No shared validators, installers, real host configuration or installed skill
 copies were modified by this task.
 
 #### Verification Evidence
+
+Version 4 STATIC_PASS: portable/core and repository/Codex/Claude validators
+passed with required evals; all trigger/quality definitions and fixture/payload
+containment checks passed. Scoped Markdown lint, diff whitespace, preservation
+checks and canonical pair validation passed. Independent nested code-review and
+advisory apply-security found no actionable issues. Disposable skills CLI 1.5.26
+discovery, full copied-payload parity, repeat installation and isolation passed
+for both changed skills on Codex and Claude. Real host configuration is unchanged.
+
+Version 4 RUNTIME and comparative QUALITY are UNAVAILABLE: neither native runner
+has supported isolated authentication. The existing runner installs one skill
+and cannot prove multi-skill routing/order or result reuse. The new trace matrix
+is defined but NOT_RUN; no existing account credentials were copied. Source,
+installation and review evidence do not prove actual model-driven consultation.
+REQ-038 remains active and FEAT-037 delivery implemented, not verified.
 
 Version 3 STATIC_PASS: Portable/core and repository/Codex/Claude structure checks
 passed with strict frontmatter, required repository evals and no warnings.
@@ -7385,6 +7470,120 @@ installation or real branch update occurred. REQ-041 remains active and delivery
 implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
+
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-041: Resumable end-to-end GitHub Release publication
+
+#### Requirements Covered
+
+- REQ-042: Publish a release in one resumable invocation.
+
+#### Context Evidence
+
+Before this change, complete mode was documented but the shell helper required
+clean entry and owned raw changelog-only commits. merge-pr already supports caller authority, guarded
+merges and exact resulting-commit proof. The tag workflow already permits commits
+in default history. Existing canonical/template regression tests pass (16 tests).
+
+#### Design Details
+
+The existing host agent orchestrates create-pr, merge-pr, deterministic release
+helpers and tag-triggered CI. Preparation becomes content-only; create-pr owns
+branch selection, complete reviewed tree commits and synchronization. A private
+Python helper owns atomic release checkpoints, identity-bound GitHub observations
+and bounded wait deadlines. It never commits, merges, approves or creates grants.
+
+Bare invocation means complete and wait. --resume selects one project checkpoint;
+a tag disambiguates multiple releases. Explicit partial modes remain scoped.
+Human approval waits use 600 seconds, 15-second polling and minute progress;
+checks, queues and release workflow waits use separate 3600-second budgets.
+A deliberate resume opens a fresh waiting attempt, with all identities rechecked.
+
+Pin the verified method-specific merge result; prove remote-default ancestry.
+An isolated clone permits SCM checks without changing the user's checkout or
+local tag namespace. Annotate, verify runtime, record the tag object, then push.
+An uncertain push is reconciled against remote object and peeled commit identities.
+CI owns artifact publication; success requires matching workflow and complete
+published assets. Missing assets or failed checks remain blocked, never repaired
+through tag replacement or silent workflow reruns.
+
+#### Selected Option
+
+Reuse the fixed Git, gh, Bash, Python standard library and existing skill owners.
+All identity, checkpoint and timeout logic is deterministic; the existing agent
+interprets repository inputs and prepares release notes. No new AI subsystem.
+
+#### Alternatives Considered
+
+Manual handoffs retain friction. Feature-head tagging breaks the selected default
+branch policy. A new GitHub App/background service adds authority and operational
+scope unnecessarily. Latest-default tagging risks including unrelated later work.
+
+#### Implementation Boundaries
+
+publish-release source/templates/tests/docs/metadata/evals, create-pr caller
+contract, GitHub workflow guidance, catalog/changelog and this canonical pair.
+No existing project helper migration, installed-home sync or real release.
+
+#### Test-First Success Criteria
+
+- TDD-001: Dirty entry includes all reviewed work once.
+- TDD-002: Approval timeout resumes without repeating completed effects.
+- TDD-003: Advancing default never changes the frozen tag SHA.
+
+#### Validation Plan
+
+Run deterministic helper/orchestration tests, Bash syntax, ShellCheck, Python
+lint, strict skill structure, changed Markdown checks and final align review.
+
+#### Test Plan
+
+Cover GitHub approvals and environment gates, exact head and merge results,
+queues, failed CI, missing assets, interruption after effects, remote tag conflicts,
+concurrency, source/template parity and cross-session recovery.
+
+#### Evaluation Plan
+
+Keep explicit-only trigger cases and executable fake-GitHub scenarios. Native
+activation and actual protected-repository publication remain separate evidence.
+
+#### Rollout And Rollback
+
+Source-only distribution through the existing installer. No compatibility shim
+for removed raw-commit helper behavior. Never undo real merges or published tags;
+roll back only implementation changes if required, preserving unrelated edits.
+
+#### Done Definition
+
+Source, helpers, help, docs and evaluations agree; focused checks and review pass.
+Report native/live lanes as unverified until independently observed.
+
+#### Implementation Evidence
+
+Implemented the complete/resume public contract, content-only preparation,
+create-pr caller handoff and exact-result merge-pr continuation. Added private
+atomic checkpoints, bounded GitHub observation, stable approval deadlines and
+cross-session tag-object restoration. Canonical and generated shell helpers
+share exact-commit tagging, runtime checks and one-object push behavior.
+Updated instructions, README, workflow guidance, help metadata and evaluations.
+Existing project helper copies and installed skills were not changed.
+
+#### Verification Evidence
+
+All 38 executable tests passed using disposable local Git repositories, mocked
+GitHub responses and a virtual clock. Coverage includes dirty preparation,
+source/template parity, exact merged tagging, SCM runtime mismatch cleanup,
+extra-tag push suppression, origin drift, approval deadlines, queue races,
+private-state recovery and downloaded-asset verification.
+
+Bash syntax, ShellCheck, Ruff, Codex/Claude stateful skill validation, scoped
+Markdown and diff checks passed. The catalog changelog retains its pre-existing
+MD024 duplicate heading, independently reproduced from HEAD. Final read-only
+risk review approved the changes with no remaining blockers. Source alignment
+is complete; installation, native owner invocation and live protected-repository
+publication remain unverified and require separate target evidence.
+
+<!-- /FEATURE: FEAT-041 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

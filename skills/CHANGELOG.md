@@ -4,6 +4,17 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+### Publish release continuation
+
+- Made `publish-release` default to complete publication with waiting, including
+  current repository changes through create-pr's canonical commit owner.
+- Added private resumable checkpoints, visible ten-minute approval waits,
+  bounded CI/queue waits, exact merged-commit tagging from an isolated clone,
+  recoverable annotated tag objects and downloaded-asset verification.
+- Replaced raw-commit shell preparation with content-only primitives and aligned
+  generated helpers, owner handoffs, public help and deterministic regressions.
+  Existing project-local helper copies and personal installations are unchanged.
+
 ### Branch update skill
 
 - Add the small, explicit-only `update-branch` skill to merge origin’s live
@@ -28,6 +39,13 @@ All notable changes to the reusable Agent Skills are tracked here.
   Testmon feedback intersects affected tests with the same safety exclusions.
 
 ### Changed
+
+- Make `design` load and apply relevant `nebius`, `ai-agent-design`, `ai-stack`
+  and `app-stack` workflows, reusing AI component decisions before application
+  selection. Add Nebius design-only advice for fixed or undecided providers
+  without credentials or cloud preflight. Missing specialists use `research`
+  with official sources first, marked reputable community fallback and explicit
+  uncertainty; add routing, fallback and non-mutation evaluation cases.
 
 - Extend `design` with conditional standalone HTML guidance: one offline
   single-file contract, a shared warm-neutral theme and document/report/presentation

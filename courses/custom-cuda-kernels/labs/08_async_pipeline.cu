@@ -57,7 +57,7 @@ __global__ void pipelined_transform(const float* input, float* output, std::size
 
 int main(int argc, char** argv) {
   if (wants_help(argc, argv)) {
-    std::cout << "Usage: 08_async_pipeline [--profile small|large] [--work-iterations N]\n"
+    std::cout << "Usage: 08_async_pipeline [--workload small|large] [--work-iterations N]\n"
               << "Default: sweep 0,8,32,128 FMAs per element. N: integer 0..1024.\n"
               << "One block; logical intensity excludes shared traffic and loop overhead.\n";
     return 0;
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     std::vector<int> work_sweep{0, 8, 32, 128};
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
-      if (argument == "--profile") { small = parse_small_profile(argc, argv, index, profile_seen); }
+      if (argument == "--workload") { small = parse_small_profile(argc, argv, index, profile_seen); }
       else if (argument == "--work-iterations" && !work_seen && index + 1 < argc) {
         const std::string value(argv[++index]);
         int work = 0;

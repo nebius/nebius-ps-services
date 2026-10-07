@@ -4,9 +4,9 @@ This first exercise makes learning visible without a transformer, downloaded mod
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Activate the course's PyTorch environment. CPU is the default and is sufficient for this conceptual exercise; CUDA is an explicit option on a full H100 allocation. No data or model is downloaded. Read the opening definitions of parameter, prediction, loss, gradient, optimizer and held-out evaluation. Both profile labels run the same tiny example; neither is a performance benchmark. The seed field is shared result metadata, but this deterministic example does not sample training data.
+The launcher restores the prepared course PyTorch runtime automatically. CPU is the default and is sufficient for this conceptual exercise; CUDA is an explicit option on a full H100 allocation. No data or model is downloaded. Read the opening definitions of parameter, prediction, loss, gradient, optimizer and held-out evaluation. Both profile labels run the same tiny example; neither is a performance benchmark. The seed field is shared result metadata, but this deterministic example does not sample training data.
 
 H100 changes the feasible batch, precision, and parallel execution, not the definition of the objective. Tiny course models demonstrate mechanics and performance measurement, never production model quality.
 
@@ -23,15 +23,15 @@ After learning, inference mode computes the remaining loss and the prediction fo
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_learning_basics/logs/%j.out" \
   --error="$PWD/results/32_learning_basics/logs/%j.err" \
-  slurm/cpu.sbatch \
-  labs/32_learning_basics.py --device cpu
+  slurm/32_learning_basics.sbatch --device cpu
 ```
 
 ## Check your results
+
+Each new job owns `results/32_learning_basics/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/32_learning_basics/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -61,9 +61,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Loss after | `loss_after` | `none` |
 | Held out prediction | `held_out_prediction` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 32_learning_basics --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 32_learning_basics \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -79,32 +80,27 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Submit the CPU example again and inspect the first gradient, learned weight, and held-out prediction. The second submission is an optional CUDA alternative. Save each job number for the result checks above.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_learning_basics/logs/%j.out" \
-  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/cpu.sbatch labs/32_learning_basics.py --device cpu
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/32_learning_basics.sbatch --device cpu
+sbatch --chdir="$PWD" \
   --output="$PWD/results/32_learning_basics/logs/%j.out" \
-  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/single_gpu.sbatch labs/32_learning_basics.py --device cuda
+  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/32_learning_basics.cuda.sbatch --device cuda
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Hand-calculate the first update before reading the result. Why does a negative gradient increase the weight when SGD subtracts it? Why would omitting gradient clearing change the update rule? As an explicit source-edit extension, try a smaller learning rate and compare update count; do not invent a command-line flag. Explain why one successful held-out point on this synthetic linear rule does not prove generalization on language, noisy data or an unrelated task.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/32_learning_basics/logs/capture-%J-%t.out" \
-  --error="results/32_learning_basics/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/32_learning_basics/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/32_learning_basics.py --device cuda
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/32_learning_basics/logs/%j.out" \
+  --error="$PWD/results/32_learning_basics/logs/%j.err" slurm/32_learning_basics.nsys.sbatch --device cuda
 ```
+
+The native Systems command is in `slurm/32_learning_basics.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** The documented --device cuda run executes GPU work; the optional CPU run does not. For --device cuda only, expand lab_workload and CUDA API/GPU rows. Observe short elementwise/reduction launches and synchronization from scalar reads. Relate them to the 30 updates and held-out result; this scalar exercise is not a training-throughput benchmark. CPU mode has no GPU profiling. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

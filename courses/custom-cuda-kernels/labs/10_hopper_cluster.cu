@@ -7,7 +7,7 @@ __global__ void cluster_probe(unsigned int* observed) {
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 10_hopper_cluster [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 10_hopper_cluster [--workload small|large]\n"; return 0; }
   try {
     validate_simple_arguments(argc, argv);
     require_course_gpu();

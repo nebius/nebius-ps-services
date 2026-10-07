@@ -1,6 +1,6 @@
 interface:
   display_name: "Design"
   short_description: "Plan software changes and standalone portable HTML"
-  default_prompt: "Use $design to plan this software change or standalone portable HTML artifact. Read relevant project documents and implemented code when present, give code precedence and report discrepancies, and resolve proposal conflicts. For portable HTML, choose the document, report or presentation profile and specify offline, accessible and print behavior. Return a plan without implementing by default. Keep canonical documents owned by $maintain-project-specs. Preserve research and specialist handoffs; implement only when explicitly requested and host mode permits."
+  default_prompt: "Use $design to plan this software change or standalone portable HTML artifact. Ground it in project documents and code, resolve conflicts, and preserve $maintain-project-specs ownership. Load and apply $nebius for relevant provider constraints, $ai-agent-design for unsettled AI behavior, $ai-stack for remaining AI choices, and $app-stack for remaining application choices; reuse returned decisions. If a specialist is unavailable, use $research with official sources first and marked reputable community fallback. For portable HTML, specify the profile, offline, accessible and print behavior. Plan by default; implement only when explicitly requested and host mode permits."
 policy:
   allow_implicit_invocation: true

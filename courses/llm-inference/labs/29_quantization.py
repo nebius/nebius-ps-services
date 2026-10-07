@@ -25,15 +25,15 @@ def main() -> None:
     torch = load_torch()
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
-    width = 512 if args.profile == "small" else 4096
+    width = 512 if args.workload == "small" else 4096
     x = torch.randn((64, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
     weight_scale = weight.abs().max().clamp_min(1e-12) / 127
     quantized_weight = torch.clamp((weight / weight_scale).round(), -127, 127).to(
         torch.int8
     )
-    layers = 8 if args.profile == "small" else 32
-    sequence = 512 if args.profile == "small" else 2_048
+    layers = 8 if args.workload == "small" else 32
+    sequence = 512 if args.workload == "small" else 2_048
     kv = torch.randn((layers, 2, 8, sequence, 64), device="cuda", dtype=torch.bfloat16)
     kv_scale = kv.abs().max().clamp_min(1e-12) / 127
     quantized_kv = torch.clamp((kv / kv_scale).round(), -127, 127).to(torch.int8)

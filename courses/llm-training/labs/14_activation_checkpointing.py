@@ -142,9 +142,9 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    sequence = 256 if args.profile == "small" else 1_024
-    hidden = 512 if args.profile == "small" else 1_024
-    layers = 4 if args.profile == "small" else 8
+    sequence = 256 if args.workload == "small" else 1_024
+    hidden = 512 if args.workload == "small" else 1_024
+    layers = 4 if args.workload == "small" else 8
     vocab_size = 2_048
     base = build_tiny_lm(
         torch,

@@ -28,12 +28,12 @@ DEFAULT_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
 def add_common_args(
     parser: argparse.ArgumentParser, *, include_measurement: bool = True
 ) -> None:
-    parser.add_argument("--profile", choices=("small", "large"), default=os.environ.get("COURSE_WORKLOAD_PROFILE", "small"))
+    parser.add_argument("--workload", choices=("small", "large"), default=os.environ.get("COURSE_WORKLOAD", "small"))
     parser.add_argument("--seed", type=int, default=17)
     if include_measurement:
         parser.add_argument("--warmup", type=int, default=3)
         parser.add_argument("--iterations", type=int, default=10)
-    parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument("--output-dir", type=Path, default=Path(os.environ.get("COURSE_RESULTS_DIR", "results")))
 
 
 def validate_common_args(args: argparse.Namespace) -> None:
@@ -162,7 +162,7 @@ def write_result(
     payload = {
         "schema": "gpu-course-result/v1",
         "lab_id": lab_id,
-        "profile": args.profile,
+        "profile": args.workload,
         "run_id": run_id,
         "seed": args.seed,
         "environment": environment,

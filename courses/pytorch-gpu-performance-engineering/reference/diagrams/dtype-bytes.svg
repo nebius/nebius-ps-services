@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 332.0" role="img" aria-labelledby="pt-dtype-bytes-title pt-dtype-bytes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-dtype-bytes-title">Same shape, different byte counts</title>
+  <desc id="pt-dtype-bytes-desc">Six FP32 elements occupy 24 logical bytes. Six BF16 elements occupy 12. The bars encode bytes at the same scale; they do not encode execution time or total process memory.</desc>
+  <defs>
+    <marker id="pt-dtype-bytes-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <text x="16" y="30" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="start"><tspan>6 elements in each tensor</tspan></text>
+    <text x="16" y="80" font-size="22.0" font-weight="400" fill="#245880" text-anchor="start"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> FP32: 24 bytes</tspan></text>
+    <rect x="16" y="96" width="288" height="40" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="16" y="186" font-size="22.0" font-weight="400" fill="#206757" text-anchor="start"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> BF16: 12 bytes</tspan></text>
+    <rect x="16" y="202" width="144" height="40" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="278" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Fewer bytes ≠ same precision</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3] · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>

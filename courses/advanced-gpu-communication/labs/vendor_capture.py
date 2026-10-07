@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 
@@ -66,7 +65,7 @@ def add_worker_prefix(parser):
     )
 
 
-def validate_worker_prefix(args, *, server=False):
+def validate_worker_prefix(args, *, server=False, ucx=True):
     prefix = args.worker_prefix
     if prefix is None:
         return
@@ -76,7 +75,7 @@ def validate_worker_prefix(args, *, server=False):
         )
     if server and args.capture != "systems":
         raise ValueError("Native server prefix requires --capture systems")
-    native_systems_prefix(prefix, Path("report"), server=server, ucx=not server)
+    native_systems_prefix(prefix, Path("report"), server=server, ucx=ucx and not server)
     os.environ["COURSE_CAPTURE"] = "1"
     if not server:
         os.environ["COURSE_PROFILE_TOOL"] = "nsys"
@@ -89,58 +88,16 @@ def worker_command(
     tool = os.environ.get("COURSE_PROFILE_TOOL", "none")
     if tool not in ("none", "nsys"):
         raise ValueError("Vendor communication captures support Nsight Systems only")
-    wrapped = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "--stdout",
-        str(output.resolve()),
-        "--",
-        *command,
-    ]
+    # Native redirection isolates the vendor's machine-readable stdout from
+    # profiler diagnostics. There is no intervening Python worker process.
+    native = ["bash", "-c", 'set -euo pipefail; umask 077; set -o noclobber; output=$1; shift; exec "$@" >"$output"',
+              "vendor-stdout", str(output.resolve()), *command]
     if prefix is not None:
         return [
+            "timeout", "--signal=TERM", "--kill-after=15s", "900s",
             *native_systems_prefix(prefix, output.resolve().with_suffix(""), ucx=ucx),
-            *wrapped,
+            *native,
         ]
     if tool == "none":
-        return wrapped
-    if not os.environ.get("SLURM_JOB_ID"):
-        raise ValueError("Vendor capture requires a Slurm allocation")
-    return [
-        "env",
-        "-u",
-        "DEBUGINFOD_URLS",
-        "nsys",
-        "profile",
-        "--trace=cuda,nvtx,osrt,ucx" if ucx else "--trace=cuda,nvtx,osrt",
-        "--cuda-trace-scope=process-tree",
-        "--sample=none",
-        "--cpuctxsw=none",
-        "--discard-environment=true",
-        "--force-overwrite=false",
-        "--duration=300",
-        "--kill=none",
-        "--wait=all",
-        "--output",
-        str(output.resolve().with_suffix("")),
-        *wrapped,
-    ]
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stdout", type=Path, required=True)
-    parser.add_argument("command", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
-    command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    if not command:
-        parser.error("provide a vendor executable after --")
-    os.umask(0o077)
-    # Exclusive creation protects authoritative output from retries and collisions.
-    with args.stdout.open("x") as output:
-        os.dup2(output.fileno(), sys.stdout.fileno())
-    os.execvpe(command[0], command, os.environ.copy())
-
-
-if __name__ == "__main__":
-    main()
+        return native
+    raise ValueError("Supply the native --worker-prefix from the lab's Systems job")

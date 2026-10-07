@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import tempfile
@@ -129,6 +131,8 @@ class GitFixture:
         version: str,
         *,
         package_import_name: str = "",
+        release_commit: str = "",
+        tag_object: str = "",
     ) -> subprocess.CompletedProcess[str]:
         args = [
             "bash",
@@ -148,6 +152,25 @@ class GitFixture:
         ]
         if package_import_name:
             args.extend(("--package-import-name", package_import_name))
+        if release_commit:
+            args.extend(("--release-commit", release_commit))
+        if tag_object:
+            args.extend(("--tag-object", tag_object))
+        if mode == "push":
+            urls = [
+                self.git_output(
+                    self.work, "remote", "get-url", "--all", "origin"
+                ).splitlines(),
+                self.git_output(
+                    self.work, "remote", "get-url", "--push", "--all", "origin"
+                ).splitlines(),
+            ]
+            args.extend(
+                (
+                    "--origin-digest",
+                    hashlib.sha256(json.dumps(urls).encode()).hexdigest(),
+                )
+            )
         return run_command(*args, cwd=self.root, check=False)
 
     def write_tag_derived_package(self, *, version_without_tag: str) -> str:
@@ -221,453 +244,247 @@ else:
 
 
 class PublishReleaseDoerTests(unittest.TestCase):
-    def helper_variants(self, fixture: GitFixture) -> tuple[tuple[str, Path], ...]:
-        return (
-            ("canonical", CANONICAL_HELPER),
-            ("rendered-template", fixture.render_template()),
-        )
-
-    def for_each_helper(self, assertion) -> None:  # type: ignore[no-untyped-def]
-        for variant in ("canonical", "rendered-template"):
+    def for_each_helper(self, assertion):
+        for variant in ("canonical", "template"):
             with self.subTest(helper=variant):
                 fixture = GitFixture()
                 try:
-                    helper = dict(self.helper_variants(fixture))[variant]
+                    helper = (
+                        CANONICAL_HELPER
+                        if variant == "canonical"
+                        else fixture.render_template()
+                    )
                     assertion(fixture, helper)
                 finally:
                     fixture.close()
 
-    def test_main_prep_creates_release_branch(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            original_main = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            result = fixture.run_helper(helper, "prep", "1.2.3")
+    def test_dirty_feature_prep_only_changes_content(self):
+        def check(f, helper):
+            f.git(f.work, "switch", "-c", "feature/current")
+            (f.work / "untracked.txt").write_text("user work")
+            (f.work / "staged.txt").write_text("staged work")
+            f.git(f.work, "add", "staged.txt")
+            head = f.git_output(f.work, "rev-parse", "HEAD")
+            index = f.git_output(f.work, "write-tree")
+            result = f.run_helper(helper, "prep", "1.2.3")
             self.assertEqual(result.returncode, 0, result.stderr)
-            release_branch = f"release/{TAG_PREFIX}-v1.2.3"
+            self.assertEqual(f.git_output(f.work, "rev-parse", "HEAD"), head)
+            self.assertEqual(f.git_output(f.work, "write-tree"), index)
             self.assertEqual(
-                fixture.git_output(fixture.work, "branch", "--show-current"),
-                release_branch,
+                f.git_output(f.work, "branch", "--show-current"), "feature/current"
             )
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD^"),
-                original_main,
-            )
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "main"),
-                original_main,
-            )
-            self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/heads/{release_branch}"),
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-            )
-            self.assertEqual(
-                fixture.git_output(
-                    fixture.work,
-                    "diff-tree",
-                    "--no-commit-id",
-                    "--name-only",
-                    "-r",
-                    "HEAD",
-                ),
-                "CHANGELOG.md",
-            )
-            fixture.assert_initial_change_released(
-                self,
-                f"{TAG_PREFIX}-v1.2.3",
-            )
+            self.assertEqual((f.work / "untracked.txt").read_text(), "user work")
+            f.assert_no_local_or_remote_ref(self, "refs/heads/release/demo-v1.2.3")
+            f.assert_initial_change_released(self, "demo-v1.2.3")
+            first = (f.work / "CHANGELOG.md").read_bytes()
+            self.assertEqual(f.run_helper(helper, "prep", "1.2.3").returncode, 0)
+            self.assertEqual((f.work / "CHANGELOG.md").read_bytes(), first)
 
-        self.for_each_helper(assertion)
+        self.for_each_helper(check)
 
-    def test_feature_prep_reuses_current_branch(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/release"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            (fixture.work / "feature.txt").write_text("feature\n", encoding="utf-8")
-            fixture.git(fixture.work, "add", "feature.txt")
-            fixture.git(fixture.work, "commit", "-m", "Feature change")
-            result = fixture.run_helper(helper, "prep", "2.0.0")
+    def test_default_and_detached_prep_refused(self):
+        def check(f, helper):
+            before = (f.work / "CHANGELOG.md").read_bytes()
+            for detached in (False, True):
+                if detached:
+                    f.git(f.work, "switch", "--detach")
+                self.assertNotEqual(f.run_helper(helper, "prep", "1.2.3").returncode, 0)
+                self.assertEqual((f.work / "CHANGELOG.md").read_bytes(), before)
+
+        self.for_each_helper(check)
+
+    def test_empty_payload_and_remote_tag_prevent_prep(self):
+        def check(f, helper):
+            f.git(f.work, "switch", "-c", "feature/current")
+            f.write_changelog(f.work)
+            before = (f.work / "CHANGELOG.md").read_bytes()
+            self.assertNotEqual(f.run_helper(helper, "prep", "1.2.3").returncode, 0)
+            self.assertEqual((f.work / "CHANGELOG.md").read_bytes(), before)
+            f.write_changelog(f.work, unreleased="- New work")
+            f.git(f.seed, "tag", "demo-v1.2.3")
+            f.git(f.seed, "push", "origin", "refs/tags/demo-v1.2.3")
+            self.assertNotEqual(f.run_helper(helper, "prep", "1.2.3").returncode, 0)
+
+        self.for_each_helper(check)
+
+    def ready(self, f, *, mismatch=False):
+        f.write_changelog(f.work, release_tag="demo-v1.2.3")
+        package = (
+            f.write_fixed_version_package(version="0.0.0")
+            if mismatch
+            else f.write_tag_derived_package(version_without_tag="1.2.3.dev0")
+        )
+        f.git(f.work, "add", "-A")
+        f.git(f.work, "commit", "-m", "Release content")
+        f.git(f.work, "push", "origin", "HEAD:refs/heads/main")
+        sha = f.git_output(f.work, "rev-parse", "HEAD")
+        f.git(f.work, "switch", "--detach", sha)
+        return sha, package
+
+    def test_exact_merged_commit_tag_and_idempotent_push(self):
+        def check(f, helper):
+            sha, package = self.ready(f)
+            f.git(f.seed, "pull", "--ff-only", "origin", "main")
+            (f.seed / "later.txt").write_text("not part of release")
+            f.git(f.seed, "add", "later.txt")
+            f.git(f.seed, "commit", "-m", "Advance default")
+            f.git(f.seed, "push", "origin", "main")
+            result = f.run_helper(
+                helper, "tag", "1.2.3", package_import_name=package, release_commit=sha
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
+            obj = f.git_output(f.work, "rev-parse", "refs/tags/demo-v1.2.3")
+            self.assertEqual(f.git_output(f.work, "cat-file", "-t", obj), "tag")
+            self.assertNotEqual(
+                f.git(
+                    f.root,
+                    "--git-dir",
+                    str(f.origin),
+                    "show-ref",
+                    "--verify",
+                    "refs/tags/demo-v1.2.3",
+                    check=False,
+                ).returncode,
+                0,
+            )
+            for _ in range(2):
+                result = f.run_helper(
+                    helper, "push", "1.2.3", release_commit=sha, tag_object=obj
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
-                fixture.git_output(fixture.work, "branch", "--show-current"),
-                branch,
+                f.bare_git_output("rev-parse", "refs/tags/demo-v1.2.3^{}"), sha
             )
+
+        self.for_each_helper(check)
+
+    def test_runtime_mismatch_removes_only_created_tag(self):
+        def check(f, helper):
+            sha, package = self.ready(f, mismatch=True)
+            f.git(f.work, "tag", "unrelated")
+            result = f.run_helper(
+                helper, "tag", "1.2.3", package_import_name=package, release_commit=sha
+            )
+            self.assertNotEqual(result.returncode, 0)
+            f.assert_no_local_or_remote_ref(self, "refs/tags/demo-v1.2.3")
             self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/heads/{branch}"),
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
+                f.git(f.work, "show-ref", "--verify", "refs/tags/unrelated").returncode,
+                0,
             )
-            fixture.assert_no_local_or_remote_ref(
-                self,
-                f"refs/heads/release/{TAG_PREFIX}-v2.0.0",
-            )
+
+        self.for_each_helper(check)
+
+    def test_feature_only_commit_and_wrong_head_cannot_tag(self):
+        def check(f, helper):
+            sha, _ = self.ready(f)
+            f.git(f.work, "switch", "-c", "feature/unmerged")
+            (f.work / "extra.txt").write_text("unmerged")
+            f.git(f.work, "add", "extra.txt")
+            f.git(f.work, "commit", "-m", "Unmerged work")
+            for commit in (sha, f.git_output(f.work, "rev-parse", "HEAD")):
+                result = f.run_helper(helper, "tag", "1.2.3", release_commit=commit)
+                self.assertNotEqual(result.returncode, 0)
+            f.assert_no_local_or_remote_ref(self, "refs/tags/demo-v1.2.3")
+
+        self.for_each_helper(check)
+
+    def test_push_does_not_follow_unrelated_annotated_tags(self):
+        def check(f, helper):
+            sha, package = self.ready(f)
+            f.git(f.work, "tag", "-a", "unrelated-v9.0.0", "-m", "Unrelated")
+            f.git(f.work, "config", "push.followTags", "true")
             self.assertEqual(
-                fixture.git_output(
-                    fixture.work,
-                    "diff-tree",
-                    "--no-commit-id",
-                    "--name-only",
-                    "-r",
-                    "HEAD",
-                ),
-                "CHANGELOG.md",
+                f.run_helper(
+                    helper,
+                    "tag",
+                    "1.2.3",
+                    release_commit=sha,
+                    package_import_name=package,
+                ).returncode,
+                0,
             )
-            fixture.assert_initial_change_released(
-                self,
-                f"{TAG_PREFIX}-v2.0.0",
+            obj = f.git_output(f.work, "rev-parse", "refs/tags/demo-v1.2.3")
+            result = f.run_helper(
+                helper, "push", "1.2.3", release_commit=sha, tag_object=obj
             )
-
-        self.for_each_helper(assertion)
-
-    def test_pushed_feature_prep_fast_forwards_current_branch(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/pushed-release"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            (fixture.work / "feature.txt").write_text("feature\n", encoding="utf-8")
-            fixture.git(fixture.work, "add", "feature.txt")
-            fixture.git(fixture.work, "commit", "-m", "Feature change")
-            fixture.git(fixture.work, "push", "-u", "origin", branch)
-            (fixture.work / "follow-up.txt").write_text("follow-up\n", encoding="utf-8")
-            fixture.git(fixture.work, "add", "follow-up.txt")
-            fixture.git(fixture.work, "commit", "-m", "Feature follow-up")
-
-            result = fixture.run_helper(helper, "prep", "2.0.1")
-
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(
+                f.git(
+                    f.root,
+                    "--git-dir",
+                    str(f.origin),
+                    "show-ref",
+                    "--verify",
+                    "refs/tags/unrelated-v9.0.0",
+                    check=False,
+                ).returncode,
+                0,
+            )
+
+        self.for_each_helper(check)
+
+    def test_wrong_tag_object_cannot_push(self):
+        def check(f, helper):
+            sha, package = self.ready(f)
             self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/heads/{branch}"),
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
+                f.run_helper(
+                    helper,
+                    "tag",
+                    "1.2.3",
+                    release_commit=sha,
+                    package_import_name=package,
+                ).returncode,
+                0,
             )
-            fixture.assert_initial_change_released(
-                self,
-                f"{TAG_PREFIX}-v2.0.1",
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_ref_like_feature_name_pushes_an_exact_remote_head(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "refs/tags/release-prep"
-            fixture.git(fixture.work, "switch", "-c", branch)
-
-            result = fixture.run_helper(helper, "prep", "2.0.2")
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/heads/{branch}"),
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-            )
-            remote_tag = fixture.git(
-                fixture.root,
-                "--git-dir",
-                str(fixture.origin),
-                "show-ref",
-                "--verify",
-                "--quiet",
-                "refs/tags/release-prep",
-                check=False,
-            )
-            self.assertNotEqual(remote_tag.returncode, 0)
-
-        self.for_each_helper(assertion)
-
-    def test_empty_unreleased_prep_fails_before_branch_or_commit(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            fixture.write_changelog(fixture.work)
-            fixture.git(fixture.work, "add", "CHANGELOG.md")
-            fixture.git(fixture.work, "commit", "-m", "Empty unreleased notes")
-            fixture.git(fixture.work, "push", "origin", "main")
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-
-            result = fixture.run_helper(helper, "prep", "2.0.3")
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("No changelog content is available", result.stderr)
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                fixture.git_output(fixture.work, "branch", "--show-current"),
-                "main",
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
-            fixture.assert_no_local_or_remote_ref(
-                self,
-                f"refs/heads/release/{TAG_PREFIX}-v2.0.3",
+            self.assertNotEqual(
+                f.run_helper(
+                    helper, "push", "1.2.3", release_commit=sha, tag_object=sha
+                ).returncode,
+                0,
             )
 
-        self.for_each_helper(assertion)
+        self.for_each_helper(check)
 
-    def test_dirty_feature_prep_fails_before_mutation(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/dirty"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-            (fixture.work / "untracked.txt").write_text("dirty\n", encoding="utf-8")
-            result = fixture.run_helper(helper, "prep", "2.1.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Working tree is not clean", result.stderr)
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
-            fixture.assert_no_local_or_remote_ref(
-                self,
-                f"refs/heads/release/{TAG_PREFIX}-v2.1.0",
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_detached_prep_fails_before_mutation(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            fixture.git(fixture.work, "switch", "--detach")
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-            result = fixture.run_helper(helper, "prep", "2.2.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("detached HEAD", result.stderr)
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_stale_feature_prep_fails_before_mutation(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/stale"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            (fixture.seed / "main-change.txt").write_text("new main\n", encoding="utf-8")
-            fixture.git(fixture.seed, "add", "main-change.txt")
-            fixture.git(fixture.seed, "commit", "-m", "Advance main")
-            fixture.git(fixture.seed, "push", "origin", "main")
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-            result = fixture.run_helper(helper, "prep", "2.3.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("does not contain the latest origin/main", result.stderr)
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_diverged_remote_feature_fails_before_mutation(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/diverged"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            (fixture.work / "shared.txt").write_text("base\n", encoding="utf-8")
-            fixture.git(fixture.work, "add", "shared.txt")
-            fixture.git(fixture.work, "commit", "-m", "Feature base")
-            fixture.git(fixture.work, "push", "-u", "origin", branch)
-
-            peer = fixture.root / "peer"
-            fixture.git(fixture.root, "clone", str(fixture.origin), str(peer))
-            fixture._configure_identity(peer)
-            fixture.git(peer, "switch", branch)
-            (peer / "remote.txt").write_text("remote\n", encoding="utf-8")
-            fixture.git(peer, "add", "remote.txt")
-            fixture.git(peer, "commit", "-m", "Remote feature change")
-            fixture.git(peer, "push", "origin", branch)
-
-            (fixture.work / "local.txt").write_text("local\n", encoding="utf-8")
-            fixture.git(fixture.work, "add", "local.txt")
-            fixture.git(fixture.work, "commit", "-m", "Local feature change")
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-            result = fixture.run_helper(helper, "prep", "2.4.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("would not fast-forward", result.stderr)
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_feature_publish_is_rejected_without_a_tag(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            branch = "feature/publish"
-            fixture.git(fixture.work, "switch", "-c", branch)
-            fixture.write_changelog(
-                fixture.work,
-                release_tag=f"{TAG_PREFIX}-v3.0.0",
-            )
-            fixture.git(fixture.work, "add", "CHANGELOG.md")
-            fixture.git(fixture.work, "commit", "-m", "Prepare release")
-            result = fixture.run_helper(helper, "publish", "3.0.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("must run from main", result.stderr)
-            fixture.assert_no_local_or_remote_ref(
-                self,
-                f"refs/tags/{TAG_PREFIX}-v3.0.0",
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_clean_synced_main_publish_pushes_annotated_tag(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.1.0"
-            fixture.write_changelog(fixture.work, release_tag=tag)
-            fixture.git(fixture.work, "add", "CHANGELOG.md")
-            fixture.git(fixture.work, "commit", "-m", "Prepare release")
-            fixture.git(fixture.work, "push", "origin", "main")
-            expected_commit = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            result = fixture.run_helper(helper, "publish", "3.1.0")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                fixture.git_output(
-                    fixture.work,
-                    "cat-file",
-                    "-t",
-                    f"refs/tags/{tag}",
-                ),
-                "tag",
-            )
-            self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/tags/{tag}^{{}}"),
-                expected_commit,
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_publish_verifies_tag_derived_runtime_version_before_push(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.1.1"
-            fixture.write_changelog(fixture.work, release_tag=tag)
-            package_import_name = fixture.write_tag_derived_package(
-                version_without_tag="3.1.0.dev1",
-            )
-            fixture.git(fixture.work, "add", "CHANGELOG.md", "src")
-            fixture.git(fixture.work, "commit", "-m", "Prepare tag-derived release")
-            fixture.git(fixture.work, "push", "origin", "main")
-            expected_commit = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-
-            result = fixture.run_helper(
-                helper,
-                "publish",
-                "3.1.1",
-                package_import_name=package_import_name,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("Runtime version resolved to 3.1.1.", result.stdout)
-            self.assertEqual(
-                fixture.bare_git_output("rev-parse", f"refs/tags/{tag}^{{}}"),
-                expected_commit,
-            )
-
-        self.for_each_helper(assertion)
-
-    def test_runtime_version_mismatch_removes_unpushed_local_tag(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.1.2"
-            fixture.write_changelog(fixture.work, release_tag=tag)
-            package_import_name = fixture.write_fixed_version_package(
-                version="9.9.9",
-            )
-            fixture.git(fixture.work, "add", "CHANGELOG.md", "src")
-            fixture.git(fixture.work, "commit", "-m", "Prepare mismatched release")
-            fixture.git(fixture.work, "push", "origin", "main")
-
-            result = fixture.run_helper(
-                helper,
-                "publish",
-                "3.1.2",
-                package_import_name=package_import_name,
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Runtime version", result.stderr)
-            self.assertIn("Removed unpushed local tag", result.stdout)
-            fixture.assert_no_local_or_remote_ref(self, f"refs/tags/{tag}")
-
-        self.for_each_helper(assertion)
-
-    def test_diverged_main_publish_fails_without_a_tag(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.2.0"
-            fixture.write_changelog(fixture.work, release_tag=tag)
-            fixture.git(fixture.work, "add", "CHANGELOG.md")
-            fixture.git(fixture.work, "commit", "-m", "Local release only")
-            result = fixture.run_helper(helper, "publish", "3.2.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("is not at origin/main", result.stderr)
-            fixture.assert_no_local_or_remote_ref(self, f"refs/tags/{tag}")
-
-        self.for_each_helper(assertion)
-
-    def test_publish_refreshes_main_without_configured_fetch_refspec(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.2.1"
-            fixture.write_changelog(fixture.work, release_tag=tag)
-            fixture.git(fixture.work, "add", "CHANGELOG.md")
-            fixture.git(fixture.work, "commit", "-m", "Prepare release")
-            fixture.git(fixture.work, "push", "origin", "main")
-
-            fixture.git(fixture.seed, "pull", "--ff-only", "origin", "main")
-            (fixture.seed / "remote-main.txt").write_text(
-                "remote main advanced\n",
-                encoding="utf-8",
-            )
-            fixture.git(fixture.seed, "add", "remote-main.txt")
-            fixture.git(fixture.seed, "commit", "-m", "Advance remote main")
-            fixture.git(fixture.seed, "push", "origin", "main")
-            fixture.git(
-                fixture.work,
+    def test_multiple_push_destinations_fail_before_tag_creation(self):
+        def check(f, helper):
+            sha, package = self.ready(f)
+            f.git(f.work, "config", "--add", "remote.origin.pushurl", str(f.origin))
+            f.git(
+                f.work,
                 "config",
-                "--unset-all",
-                "remote.origin.fetch",
+                "--add",
+                "remote.origin.pushurl",
+                str(f.root / "unrelated.git"),
             )
-
-            result = fixture.run_helper(helper, "publish", "3.2.1")
-
+            result = f.run_helper(
+                helper, "tag", "1.2.3", release_commit=sha, package_import_name=package
+            )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("is not at origin/main", result.stderr)
-            fixture.assert_no_local_or_remote_ref(self, f"refs/tags/{tag}")
+            self.assertIn("exactly one", result.stderr)
+            f.assert_no_local_or_remote_ref(self, "refs/tags/demo-v1.2.3")
 
-        self.for_each_helper(assertion)
+        self.for_each_helper(check)
 
-    def test_duplicate_tag_blocks_prep_before_mutation(self) -> None:
-        def assertion(fixture: GitFixture, helper: Path) -> None:
-            tag = f"{TAG_PREFIX}-v3.3.0"
-            fixture.git(fixture.work, "tag", "-a", tag, "-m", f"Release {tag}")
-            fixture.git(fixture.work, "push", "origin", f"refs/tags/{tag}")
-            before_head = fixture.git_output(fixture.work, "rev-parse", "HEAD")
-            before_changelog = (fixture.work / "CHANGELOG.md").read_bytes()
-            result = fixture.run_helper(helper, "prep", "3.3.0")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("tag already exists", result.stderr.lower())
-            self.assertEqual(
-                fixture.git_output(fixture.work, "rev-parse", "HEAD"),
-                before_head,
-            )
-            self.assertEqual(
-                (fixture.work / "CHANGELOG.md").read_bytes(),
-                before_changelog,
-            )
+    def test_missing_flag_value_and_retired_mode_fail(self):
+        with GitFixtureContext() as f:
+            for helper in (CANONICAL_HELPER, f.render_template()):
+                self.assertNotEqual(
+                    run_command(
+                        "bash", str(helper), "--tag", cwd=f.root, check=False
+                    ).returncode,
+                    0,
+                )
+                self.assertNotEqual(
+                    f.run_helper(helper, "publish", "1.2.3").returncode, 0
+                )
 
-        self.for_each_helper(assertion)
+
+class GitFixtureContext(GitFixture):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
 
 
 if __name__ == "__main__":

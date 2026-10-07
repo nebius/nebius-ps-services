@@ -23,8 +23,8 @@ COURSES = (
     "custom-cuda-kernels",
     "advanced-gpu-communication",
 )
+READING_COURSES = ("soperator", "gpu-performance-tools")
 RSYNC = shutil.which("rsync")
-SSH = shutil.which("ssh")
 KUBECTL = shutil.which("kubectl")
 pytestmark = pytest.mark.skipif(RSYNC is None, reason="real rsync is required")
 
@@ -39,7 +39,14 @@ def workspace(tmp_path):
     (source / "README.md").write_text("shared source\n")
     (source / "lab-guide.html").write_text("shared guide\n")
     (source / "tools").mkdir()
-    (source / "tools/course_setup.py").write_text("# shared setup\n")
+    for group in ("regular", "cuda", "communication", "serving", "transformer-engine"):
+        shutil.copy2(ROOT / "tools" / f"{group}-lab-setup.py", source / "tools" / f"{group}-lab-setup.py")
+    shutil.copy2(ROOT / "tools/verify_source_sync.py", source / "tools/verify_source_sync.py")
+    shutil.copy2(ROOT / "tools/ensure_python312.sh", source / "tools/ensure_python312.sh")
+    for name in ("course_runtime.py", "course_env.sh", "course_job_cache.sh"):
+        shutil.copy2(ROOT / "tools" / name, source / "tools" / name)
+    shutil.copytree(ROOT / "tools/course_bootstrap", source / "tools/course_bootstrap",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     (source / "docs").mkdir()
     (source / "docs/grafana.png").write_bytes(b"fixture diagram")
     (repo / "unrelated.txt").write_text("outside selected courses\n")
@@ -70,11 +77,12 @@ def workspace(tmp_path):
         (advanced / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "advanced-gpu-communication" / relative, advanced / relative)
     (source / "custom-cuda-kernels/CMakeLists.txt").write_text("# build metadata\n")
-    text_course = source / "soperator"
-    (text_course / "reference").mkdir(parents=True)
-    (text_course / "reference/course.json").write_text('{"slug":"soperator"}')
-    (text_course / "COURSE.md").write_text("Text-only lessons\n")
-    (text_course / "index.html").write_text("Text-only course\n")
+    for name in READING_COURSES:
+        reading_course = source / name
+        (reading_course / "reference").mkdir(parents=True)
+        (reading_course / "reference/course.json").write_text(json.dumps({"slug": name}))
+        (reading_course / "COURSE.md").write_text(f"{name} reading source\n")
+        (reading_course / "index.html").write_text(f"{name} reading page\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
 
@@ -84,10 +92,12 @@ def workspace(tmp_path):
     binaries.mkdir()
     (binaries / "bash").symlink_to("/bin/bash")
     (binaries / "rsync").symlink_to(RSYNC)
+    # Successful existing-interpreter probe; never permit test handoff to apt.
+    for name, code in (("python3.12", 'printf "probed\\n" >> "$TEST_PYTHON_BOOTSTRAP_LOG"\nexit 0\n'),
+                       ("apt-get", "exit 99\n"), ("sudo", "exit 99\n")):
+        (binaries / name).write_text("#!/bin/sh\n" + code)
+        (binaries / name).chmod(0o755)
     log = tmp_path / "ssh.jsonl"
-    config_log = tmp_path / "ssh-config.jsonl"
-    ssh_config = tmp_path / "ssh_config"
-    ssh_config.write_text("Host course-alias\n  HostName 192.0.2.10\n  Port 2222\n")
     kube_log = tmp_path / "kubectl.jsonl"
     shell_log = tmp_path / "shell.json"
     fake_kubectl = binaries / "kubectl"
@@ -133,14 +143,6 @@ sys.exit(int(os.environ.get('TEST_SHELL_STATUS', '0')))
         + """import json, os, subprocess, sys
 from pathlib import Path
 args = sys.argv[1:]
-if '-G' in args:
-    with open(os.environ['TEST_SSH_CONFIG_LOG'], 'a') as stream:
-        stream.write(json.dumps(args) + '\\n')
-    if 'TEST_SSH_CONFIG_OUTPUT' in os.environ:
-        print(os.environ['TEST_SSH_CONFIG_OUTPUT'])
-        sys.exit(int(os.environ.get('TEST_SSH_CONFIG_STATUS', '0')))
-    sys.exit(subprocess.call([os.environ['TEST_REAL_SSH'], '-F',
-                             os.environ['TEST_SSH_CONFIG'], *args]))
 options = []
 user = None
 while args and args[0].startswith('-'):
@@ -157,7 +159,7 @@ if '@' in target:
 command = ' '.join(args)
 transfer = '--server' in command
 interactive = '-t' in options
-phase = 'login' if interactive else 'transfer' if transfer else 'preflight'
+phase = 'login' if interactive else 'transfer' if transfer else 'verify' if 'verify_source_sync.py' in command else 'preflight'
 with open(os.environ['TEST_SSH_LOG'], 'a') as stream:
     stream.write(json.dumps(dict(host=target, user=user, options=options,
                                  transfer=transfer, interactive=interactive,
@@ -190,14 +192,12 @@ sys.exit(subprocess.call(['/bin/sh', '-c', command], env=env))
         **os.environ,
         "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
         "TEST_SSH_LOG": str(log),
-        "TEST_SSH_CONFIG_LOG": str(config_log),
-        "TEST_SSH_CONFIG": str(ssh_config),
-        "TEST_REAL_SSH": SSH or "ssh",
         "TEST_KUBE_LOG": str(kube_log),
         "TEST_SHELL_LOG": str(shell_log),
         "TEST_REMOTE_SHELL": str(fake_shell),
         "TEST_REMOTE_HOME": str(remote),
         "TEST_REMOTE_BIN": str(remote_bin),
+        "TEST_PYTHON_BOOTSTRAP_LOG": str(tmp_path / "python-bootstrap.log"),
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "NO_COLOR": "",
@@ -253,7 +253,6 @@ sys.exit(subprocess.call(['/bin/sh', '-c', command], env=env))
     result = Workspace()
     result.repo, result.source, result.remote = repo, source, remote
     result.log, result.binaries = log, binaries
-    result.config_log = config_log
     result.kube_log, result.shell_log = kube_log, shell_log
     yield result
     for process in processes:
@@ -310,19 +309,23 @@ def test_initial_complete_working_tree_transfer(workspace):
     (build / "artifact").write_text("compiled\n")
     result = workspace.run("login.example.com")
     assert_ok(result)
+    assert "Synced 8 courses" in result.stdout
     dest = workspace.remote / "courses"
     assert {p.name for p in dest.iterdir()} == {
         *COURSES,
-        "soperator",
+        *READING_COURSES,
         "index.html",
         "README.md",
         "lab-guide.html",
         "docs",
         "tools",
     }
-    assert (dest / "soperator/COURSE.md").read_text() == "Text-only lessons\n"
-    assert (dest / "soperator/index.html").read_text() == "Text-only course\n"
-    assert not (dest / "soperator/labs").exists()
+    for name in READING_COURSES:
+        for relative in ("reference/course.json", "COURSE.md", "index.html"):
+            assert (dest / name / relative).read_bytes() == (
+                workspace.source / name / relative
+            ).read_bytes()
+        assert not (dest / name / "labs").exists()
     for name in COURSES:
         for relative in (
             "labs/01_example.py",
@@ -361,8 +364,8 @@ def test_initial_complete_working_tree_transfer(workspace):
     assert not (dest / "custom-cuda-kernels/build-debug").exists()
     assert not list(dest.rglob(".git"))
     assert "\x1b" not in result.stdout + result.stderr
-    assert [call["transfer"] for call in workspace.calls()] == [False, True, False]
-    assert [call["interactive"] for call in workspace.calls()] == [False, False, True]
+    assert [call["transfer"] for call in workspace.calls()] == [False, True, False, False]
+    assert [call["interactive"] for call in workspace.calls()] == [False, False, False, True]
 
 
 def test_incremental_local_wins_and_remote_only_survives(workspace):
@@ -400,6 +403,37 @@ def test_incremental_local_wins_and_remote_only_survives(workspace):
     assert_ok(repeated)
     assert transferred(repeated) == []
     assert snapshot(workspace.remote) == settled
+
+
+def test_removed_local_course_is_excluded_and_remote_copy_survives(workspace):
+    assert_ok(workspace.run("--sync-only", "host", terminal=False))
+    removed = "gpu-performance-tools"
+    remote_course = workspace.remote / "courses" / removed
+    (remote_course / "student-notes.txt").write_text("Keep remote work\n")
+    before = snapshot(remote_course)
+    shutil.rmtree(workspace.source / removed)
+    # The course is still in Git's index: simulate an unstaged folder removal.
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "--", removed], cwd=workspace.source, text=True
+    )
+    assert f"{removed}/COURSE.md" in tracked
+
+    result = workspace.run("--sync-only", "host", terminal=False)
+    assert_ok(result)
+    assert "Synced 7 courses" in result.stdout
+    assert not any(path.startswith(f"{removed}/") for path in transferred(result))
+    assert snapshot(remote_course) == before
+
+    fresh = workspace.run(
+        "--sync-only", "--dest", "fresh-courses", "host", terminal=False
+    )
+    assert_ok(fresh)
+    destination = workspace.remote / "fresh-courses"
+    assert not (destination / removed).exists()
+    assert {p.name for p in destination.iterdir() if (p / "COURSE.md").is_file()} == {
+        *COURSES,
+        "soperator",
+    }
 
 
 def test_permission_only_change_converges_without_content_transfer(workspace):
@@ -467,7 +501,7 @@ def test_target_and_ssh_settings(workspace, target, host, user):
     )
     assert_ok(result)
     calls = workspace.calls()
-    assert len(calls) == 3
+    assert len(calls) == 4
     for call in calls:
         assert call["host"] == host
         assert call["user"] == user
@@ -495,7 +529,7 @@ def test_discovers_new_course_with_original_folder_name(workspace):
     (new / "labs/example.py").write_text("# future course\n")
     result = workspace.run("slurm-login")
     assert_ok(result)
-    assert f"Synced {len(COURSES) + 2} courses" in result.stdout
+    assert f"Synced {len(COURSES) + len(READING_COURSES) + 1} courses" in result.stdout
     assert (workspace.remote / "courses" / new.name / "labs/example.py").is_file()
 
 
@@ -626,7 +660,7 @@ def test_partial_transfer_retry_converges_and_then_changes_nothing(workspace):
         relative = source.relative_to(workspace.source)
         if source.is_file() and (
             relative.parts[0] in COURSES
-            or relative.as_posix() in {"index.html", "README.md", "lab-guide.html", "docs/grafana.png", "tools/course_setup.py"}
+            or relative.as_posix() in {"index.html", "README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"}
         ):
             destination = workspace.remote / "courses" / relative
             assert destination.read_bytes() == source.read_bytes()
@@ -690,7 +724,8 @@ def test_help_without_dependencies_and_missing_tool_error(workspace):
     empty.mkdir()
     result = workspace.run("--help", extra_env={"PATH": str(empty)})
     assert_ok(result)
-    for option in ("--dry-run", "--dest", "--port", "--identity", "IPv4/IPv6"):
+    assert "receipt" not in result.stdout.lower()
+    for option in ("--dry-run", "--sync-only", "--dest", "--port", "--identity", "IPv4/IPv6"):
         assert option in result.stdout
     result = workspace.run("host", extra_env={"PATH": str(empty)})
     assert result.returncode != 0
@@ -718,7 +753,7 @@ def test_discovers_endpoint_and_service_port(workspace, ingress, host, override)
     result = workspace.run(*args, extra_env={"TEST_KUBE_SERVICES": services})
     assert_ok(result)
     calls = workspace.calls()
-    assert len(calls) == 3
+    assert len(calls) == 4
     for call in calls:
         assert call["user"] == "root"
         assert call["host"] == host
@@ -804,7 +839,7 @@ def test_empty_context_never_connects(workspace):
 def test_missing_kubectl_only_blocks_discovery(workspace):
     # Restrict PATH to fixture tools and symlink ordinary dependencies explicitly.
     (workspace.binaries / "kubectl").unlink()
-    for name in ("git", "mktemp", "find", "dirname", "cat", "chmod", "sh"):
+    for name in ("git", "mktemp", "find", "dirname", "cat", "chmod", "sh", "python3"):
         (workspace.binaries / name).symlink_to(shutil.which(name))
     env = {"PATH": str(workspace.binaries)}
     result = workspace.run(extra_env=env)
@@ -1011,112 +1046,31 @@ def test_real_kubectl_projection_against_local_api(workspace, pending):
     )
 
 
-def test_sync_only_writes_private_receipt_without_shell(workspace, tmp_path):
+@pytest.mark.parametrize("mode", [[], ["--sync-only"], ["--dry-run"]])
+def test_removed_receipt_option_fails_before_effects(workspace, tmp_path, mode):
     receipt = tmp_path / "connection.json"
-    result = workspace.run(
-        "--sync-only", "--receipt", str(receipt), "192.0.2.10", terminal=False
-    )
-    assert_ok(result)
-    record = json.loads(receipt.read_text())
-    assert record["schema"] == "course-sync/v1"
-    assert record["target"] == "root@192.0.2.10"
-    assert record["port"] == 22
-    assert receipt.stat().st_mode & 0o077 == 0
-    assert not workspace.shell_log.exists()
-    assert (workspace.remote / "courses/gpu-fundamentals/labs/01_example.py").is_file()
-    before = receipt.read_bytes()
-    result = workspace.run(
-        "--sync-only", "--receipt", str(receipt), "192.0.2.10", terminal=False
-    )
+    result = workspace.run(*mode, "--receipt", str(receipt), terminal=False)
     assert result.returncode != 0
-    assert receipt.read_bytes() == before
+    assert "Unknown option: --receipt" in result.stderr
+    assert not receipt.exists()
+    assert not workspace.log.exists()
+    assert not workspace.kube_log.exists()
+    assert not list(workspace.remote.iterdir())
 
 
 @pytest.mark.parametrize("sync_only", [False, True])
-def test_receipt_pins_ssh_alias_port_across_all_phases(workspace, tmp_path, sync_only):
-    receipt = tmp_path / "connection.json"
-    identity = tmp_path / "identity"
-    identity.touch(mode=0o600)
+def test_ssh_configuration_stays_with_transport(workspace, sync_only):
     result = workspace.run(
         *(["--sync-only"] if sync_only else []),
-        "--identity", str(identity), "--receipt", str(receipt), "student@course-alias",
+        "course-alias",
         terminal=not sync_only,
     )
     assert_ok(result)
-    record = json.loads(receipt.read_text())
-    assert record["target"] == "student@course-alias"
-    assert record["port"] == 2222
-    assert record["identity_file"] == str(identity)
-    calls = workspace.calls()
-    assert len(calls) == (2 if sync_only else 3)
-    for call in calls:
-        options = call["options"]
-        assert options[options.index("-p") + 1] == "2222"
-        assert options[options.index("-i") + 1] == str(identity)
-        assert call["host"] == "course-alias" and call["user"] == "student"
-    config_calls = [json.loads(line) for line in workspace.config_log.read_text().splitlines()]
-    assert len(config_calls) == 1
-    assert config_calls[0][-1] == "student@course-alias"
-    assert config_calls[0][config_calls[0].index("-i") + 1] == str(identity)
-    assert ("BatchMode=yes" in config_calls[0]) == sync_only
-
-
-@pytest.mark.parametrize("discovery,override", [(False, True), (True, False), (True, True)])
-def test_receipt_preserves_explicit_and_discovered_port_precedence(
-    workspace, tmp_path, discovery, override
-):
-    receipt = tmp_path / "connection.json"
-    result = workspace.run(
-        "--sync-only", "--receipt", str(receipt),
-        *(["--port", "2200"] if override else []),
-        *([] if discovery else ["student@course-alias"]),
-        extra_env={"TEST_KUBE_SERVICES": "login|LoadBalancer|TCP:2222,|192.0.2.10/,"},
-        terminal=False,
-    )
-    assert_ok(result)
-    expected = 2200 if override else 2222
-    assert json.loads(receipt.read_text())["port"] == expected
-    assert not workspace.config_log.exists()
-    for call in workspace.calls():
-        assert call["options"][call["options"].index("-p") + 1] == str(expected)
-
-
-@pytest.mark.parametrize("output,status", [
-    ("port 2222", "255"), ("", "0"), ("hostname example", "0"),
-    ("port 22\nport 2222", "0"), ("port 22\nport 22", "0"),
-    ("port 0", "0"), ("port 65536", "0"), ("port -1", "0"),
-    ("port invalid", "0"), ("port 22 extra", "0"),
-])
-def test_receipt_rejects_unresolved_port_before_remote_effects(workspace, tmp_path, output, status):
-    receipt = tmp_path / "connection.json"
-    result = workspace.run(
-        "--sync-only", "--receipt", str(receipt), "course-alias", terminal=False,
-        extra_env={"TEST_SSH_CONFIG_OUTPUT": output, "TEST_SSH_CONFIG_STATUS": status},
-    )
-    assert result.returncode != 0
-    assert "SSH port" in result.stderr
-    assert not workspace.log.exists()
-    assert not list(workspace.remote.iterdir())
-    assert not receipt.exists()
-
-
-def test_no_receipt_keeps_ssh_configuration_with_transport(workspace):
-    assert_ok(workspace.run("--sync-only", "course-alias", terminal=False))
-    assert not workspace.config_log.exists()
     assert all("-p" not in call["options"] for call in workspace.calls())
+    assert workspace.shell_log.exists() is (not sync_only)
 
 
-def test_dry_run_receipt_rejected_before_configuration_or_remote_access(workspace, tmp_path):
-    receipt = tmp_path / "connection.json"
-    result = workspace.run("--dry-run", "--receipt", str(receipt), "course-alias", terminal=False)
-    assert result.returncode != 0
-    assert "--receipt is unavailable with --dry-run" in result.stderr
-    assert not workspace.config_log.exists()
-    assert not workspace.log.exists()
-    assert not receipt.exists()
-
-
-@pytest.mark.parametrize("name", ["README.md", "lab-guide.html", "docs/grafana.png", "tools/course_setup.py"])
+@pytest.mark.parametrize("name", ["README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"])
 @pytest.mark.parametrize("defect", ["missing", "symlink"])
 def test_shared_guide_must_be_a_regular_file_before_transfer(workspace, name, defect):
     path = workspace.source / name
@@ -1131,7 +1085,7 @@ def test_shared_guide_must_be_a_regular_file_before_transfer(workspace, name, de
 
 def test_shared_guide_updates_incrementally_and_dry_run_preserves_it(workspace):
     assert_ok(workspace.run("host"))
-    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/course_setup.py"):
+    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"):
         assert (workspace.remote / "courses" / name).read_bytes() == (
             workspace.source / name
         ).read_bytes()
@@ -1140,7 +1094,7 @@ def test_shared_guide_updates_incrementally_and_dry_run_preserves_it(workspace):
     assert_ok(workspace.run("--dry-run", "host", terminal=False))
     assert snapshot(workspace.remote) == before
     assert_ok(workspace.run("host"))
-    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/course_setup.py"):
+    for name in ("README.md", "lab-guide.html", "docs/grafana.png", "tools/regular-lab-setup.py"):
         assert (
             workspace.remote / "courses" / name
         ).read_text() == "updated shared content\n"

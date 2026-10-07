@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 430.0" role="img" aria-labelledby="pt-broadcast-title pt-broadcast-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-broadcast-title">One bias row serves two input rows</title>
+  <desc id="pt-broadcast-desc">Each row of x receives the same bias values 10, 20 and 30. Bias reuse does not require storing a repeated input, but addition produces a six-element output.</desc>
+  <defs>
+    <marker id="pt-broadcast-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <text x="160" y="28" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>x </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <rect x="88" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <rect x="136" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2</tspan></text>
+    <rect x="184" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>3</tspan></text>
+    <rect x="88" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>4</tspan></text>
+    <rect x="136" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>5</tspan></text>
+    <rect x="184" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>6</tspan></text>
+    <text x="160" y="165" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>+ bias [10, 20, 30]</tspan></text>
+    <path d="M160 180 V215" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-broadcast-arrow)" />
+    <text x="160" y="241" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>y </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <rect x="88" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>11</tspan></text>
+    <rect x="136" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>22</tspan></text>
+    <rect x="184" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>33</tspan></text>
+    <rect x="88" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>14</tspan></text>
+    <rect x="136" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>25</tspan></text>
+    <rect x="184" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>36</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>

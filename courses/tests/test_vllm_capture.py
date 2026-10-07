@@ -51,7 +51,7 @@ def test_offline_engine_process_and_measured_range(monkeypatch, capture):
         monkeypatch.setattr(lab, "annotated_operation", annotate)
         records = []
         monkeypatch.setattr(lab, "write_result", lambda *a, **kw: records.append(kw))
-        argv = ["lab", "--profile", "small", "--warmup", "1", "--iterations", "2"]
+        argv = ["lab", "--workload", "small", "--warmup", "1", "--iterations", "2"]
         monkeypatch.setattr(sys, "argv", argv + (["--in-process"] if capture else []))
         lab.main()
     assert events[0] == ("engine", "0" if capture else "1")
@@ -65,7 +65,7 @@ def test_offline_engine_process_and_measured_range(monkeypatch, capture):
 
 def test_offline_capture_rejects_child_process_before_engine_start(monkeypatch):
     monkeypatch.setenv("COURSE_CAPTURE", "1")
-    monkeypatch.setattr(sys, "argv", ["lab", "--profile", "small"])
+    monkeypatch.setattr(sys, "argv", ["lab", "--workload", "small"])
     with load_lab("llm-inference/labs/10_vllm_offline.py") as lab:
         monkeypatch.setattr(lab, "load_torch", lambda: pytest.fail("GPU setup ran"))
         with pytest.raises(SystemExit, match="--in-process"):

@@ -15,8 +15,8 @@ from test_course_content_contract import COURSES as GPU_COURSES
 from test_course_content_contract import ROOT
 from test_practice_integration import load_validator
 
-COURSES = ("soperator", *GPU_COURSES, "advanced-gpu-communication")
-RESOURCES = ("soperator", "lab-guide", *GPU_COURSES, "advanced-gpu-communication")
+COURSES = ("soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering", *GPU_COURSES, "advanced-gpu-communication")
+RESOURCES = ("soperator", "lab-guide", "gpu-performance-tools", "pytorch-gpu-performance-engineering", *GPU_COURSES, "advanced-gpu-communication")
 
 
 class PageLinks(HTMLParser):
@@ -52,9 +52,9 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     cards = re.findall(
         r'<article class="course-card .*?</article>', document, re.DOTALL
     )
-    assert len(cards) == 8
+    assert len(cards) == 10
     assert re.findall(r'<article[^>]+id="([^"]+)"', document) == list(RESOURCES)
-    assert re.findall(r'class="course-number">(\d+)<', document) == [f"{n:02d}" for n in range(1, 9)]
+    assert re.findall(r'class="course-number">(\d+)<', document) == [f"{n:02d}" for n in range(1, 11)]
     guide = cards[1]
     assert '<h3>Lab Guide</h3>' in guide
     assert 'href="lab-guide.html"' in guide
@@ -70,9 +70,14 @@ def test_catalog_matches_sources_and_metadata_updates_reach_readers(monkeypatch)
     assert "Start here" in cards[0]
     assert "Fundamentals + Optimization" not in cards[0]
     assert "Text only · No labs" in cards[0]
+    assert "Read before GPU Fundamentals and practical labs; no cluster required" in cards[2]
+    assert "Prerequisite: GPU Fundamentals" not in cards[2]
+    assert "Basic Python; read before GPU Fundamentals; no GPU required" in cards[3]
+    assert "Lessons only · No labs" in cards[3]
+    assert "Read GPU Performance Tools and PyTorch for GPU Performance Engineering before the labs" in cards[4]
     learning_path = document.split('<aside class="learning-map"', 1)[1].split('</aside>', 1)[0]
     assert re.findall(r'<li[^>]*>.*?<a href="#([^"]+)"', learning_path) == list(RESOURCES)
-    assert '<strong>6</strong> courses' in document
+    assert '<strong>8</strong> courses' in document
     assert '<strong>1</strong> Advanced Labs collection' in document
     assert '<strong>1</strong> Lab Guide' in document
     metadata["gpu-fundamentals"]["title"] = 'GPU <execution> & "memory"'
@@ -115,6 +120,7 @@ def test_readme_leads_to_the_published_catalog_and_keeps_local_access():
         '**[Explore the courses](https://nebius.github.io/nebius-ps-services/courses/index.html)**'
     )
     assert '[Browse the courses catalog](index.html)' in introduction
+    assert "eight courses, an Advanced Labs collection" in introduction
     destinations = re.findall(r'\]\(([^)]+)\)', introduction)
     route = [target for target in destinations if target in {"lab-guide.html", *[f"{name}/index.html" for name in COURSES]}]
     assert route == ["lab-guide.html" if name == "lab-guide" else f"{name}/index.html" for name in RESOURCES]
@@ -301,7 +307,9 @@ def test_selected_course_build_also_refreshes_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(cb_build, "render_catalog", lambda: "current catalog")
     monkeypatch.setattr(cb_build, "render_shared_guide", lambda: "current guide")
     monkeypatch.setattr(cb_build, "render_course", lambda course: f"current {course}")
-    monkeypatch.setattr(sys, "argv", ["build_course_html.py", "gpu-fundamentals"])
+    monkeypatch.setattr(
+        sys, "argv", ["build_course_html.py", "gpu-fundamentals", "--no-summary"]
+    )
     cb_build.main()
     assert (tmp_path / "index.html").read_text() == "current catalog"
     assert (selected / "index.html").read_text() == "current gpu-fundamentals"

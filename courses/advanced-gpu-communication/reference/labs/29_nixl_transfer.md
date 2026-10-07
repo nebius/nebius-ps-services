@@ -4,14 +4,11 @@ NVIDIA Inference Xfer Library, or NIXL, moves data between memory regions using 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the dedicated two-worker, sixteen-H100 cluster prepared in shared environment setup. Verify local NVLink/NVSwitch and inter-node InfiniBand readiness. Keep driver, software, allocation and other workloads fixed; the two one-GPU TCP workers cannot establish this fabric's performance. The `small` and `large` names select workload sizes, not optimization or profiling modes.
 
-Prepare the [joint vendor runtime](../../README.md) once, then source
-`env/vendor-environment.sh` in this submission shell. The installer requires
-the Bridge, NIXLBench and Dynamo prerequisites together; installation alone does
-not qualify both workers for this experiment.
+The selected preparation from the Lab Guide provides this lab's isolated vendor runtime. The native launcher restores its saved selectors. Qualify both workers before interpreting performance.
 
 ## Concepts and code path
 
@@ -24,15 +21,15 @@ The pairwise scatter-gather benchmark uses UCX, GPU memory at both endpoints, WR
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
   --error="$PWD/results/29_nixl_transfer/logs/%j.err" \
-  slurm/vendor_job.sbatch \
-  labs/29_nixl_transfer.py --profile small --progress-thread off
+  slurm/29_nixl_transfer.sbatch --workload small --progress-thread off
 ```
 
 ## Check your results
+
+Each new job owns `results/29_nixl_transfer/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/29_nixl_transfer/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -60,6 +57,7 @@ instrumentation fields. Retain every original/aggregate required by this lab.
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 29_nixl_transfer --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 29_nixl_transfer \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; reviewed current generation otherwise}"
@@ -80,12 +78,12 @@ Select workspace and profile in Grafana. Require **Correctness of selected resul
 Submit the two unprofiled jobs from the login node, one after the other after completion, and retain their printed job numbers.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
-  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.sbatch --workload small --progress-thread off
+sbatch --chdir="$PWD" \
   --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
-  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread on
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.sbatch --workload small --progress-thread on
 ```
 
 Logs stay under `results/29_nixl_transfer/logs/`. A submission receipt is not a measurement; wait for successful completion before selecting artifacts.
@@ -99,17 +97,12 @@ Capture a separate diagnostic run:
 This coordinated diagnostic uses the native `sbatch` launcher to reserve both nodes and keep the coordinator on a worker. The lifecycle driver launches the visible `nsys profile` prefix on each GPU worker through `srun`; it also manages rendezvous, readiness and cleanup. `{report}` becomes a private per-rank path. Put `--worker-prefix` last. Inspect the printed worker reports, then repeat the clean baseline for acceptance measurements.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=1 \
-  --chdir="$PWD" --output="results/29_nixl_transfer/logs/capture-%j.out" \
-  --error="results/29_nixl_transfer/logs/capture-%j.err" \
-  slurm/vendor_job.sbatch labs/29_nixl_transfer.py --profile small --progress-thread off \
-  --worker-prefix env -u DEBUGINFOD_URLS nsys profile \
-  --trace=cuda,nvtx,osrt,ucx \
-  --cuda-trace-scope=process-tree --sample=none \
-  --discard-environment=true --force-overwrite=false --kill=none \
-  --cpuctxsw=none --duration=300 --wait=all \
-  '--output={report}'
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/29_nixl_transfer/logs/%j.out" \
+  --error="$PWD/results/29_nixl_transfer/logs/%j.err" slurm/29_nixl_transfer.nsys.sbatch --workload small --progress-thread off
 ```
+
+The native Systems command is in `slurm/29_nixl_transfer.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture the actual vendor executable inside each allocated worker; preserve raw numerical output separately. Open rank0.nsys-rep and rank1.nsys-rep beside the private vendor output. Inspect UCX, CUDA API and OS runtime rows around buffer preparation and progress. GPU payload DMA may have no CUDA kernel event; use clean NIXL transfer_us and bandwidth for the network result. No course NVTX range is emitted by the vendor executable. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

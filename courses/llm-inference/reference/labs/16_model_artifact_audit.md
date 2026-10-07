@@ -4,7 +4,7 @@ A model name alone does not fully identify an inference workload. Weights, token
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 and the approved mechanics environment with access to the selected public artifact. Review its license separately; reading license metadata is not legal approval. Never place credentials in commands or reports.
 
@@ -29,15 +29,15 @@ The artifact list and immutable revision are queried through the Hub API. Run th
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/16_model_artifact_audit/logs/%j.out" \
   --error="$PWD/results/16_model_artifact_audit/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/16_model_artifact_audit.py --profile small
+  slurm/16_model_artifact_audit.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/16_model_artifact_audit/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/16_model_artifact_audit/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -70,9 +70,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Key value heads | `key_value_heads` | `none` |
 | Maximum positions | `maximum_positions` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 16_model_artifact_audit --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 16_model_artifact_audit \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -89,12 +90,12 @@ Inspect the model/revision options and run the pinned default. Any replacement m
 
 ```bash
 "$COURSE_PYTHON" labs/16_model_artifact_audit.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/16_model_artifact_audit/logs/%j.out" \
-  --error="$PWD/results/16_model_artifact_audit/logs/%j.err" slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small
+  --error="$PWD/results/16_model_artifact_audit/logs/%j.err" slurm/16_model_artifact_audit.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which fields affect memory capacity, attention layout, and tokenization? Explain why identical prompt text with a different tokenizer or chat template is not necessarily identical model input.
 

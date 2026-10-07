@@ -419,7 +419,7 @@ def host_copy_fixture(profile="small", variant="baseline"):
         "dispatch": {"job": 13},
         "argv": [
             "labs/03_transfer_and_pinning.py",
-            "--profile",
+            "--workload",
             profile,
             "--size-mib",
             str(size // 2**20),
@@ -697,8 +697,8 @@ def test_profiles_do_not_mutate_recipe_and_references_stay_separate():
     small = catalog.actions(row, "small", {"MODEL_PATH": "/prepared/model"})
     for stages, profile in [(large, "large"), (small, "small")]:
         for stage in stages:
-            if "--profile" in stage.get("argv", []):
-                assert stage["argv"][stage["argv"].index("--profile") + 1] == profile
+            if "--workload" in stage.get("argv", []):
+                assert stage["argv"][stage["argv"].index("--workload") + 1] == profile
     assert json.dumps(row, sort_keys=True) == old
     ref = catalog.actions(
         recipes["advanced-gpu-communication:30_megatron_overlap"], "large", {}
@@ -717,10 +717,10 @@ def test_vllm_offline_diagnostics_keep_process_and_memory_scope(profile):
         assert ("--in-process" in argv) == (stage["kind"] == "profile")
         memory = stage["environment"].get("SBATCH_MEM_PER_NODE")
         assert memory == ("262144" if stage["id"] == "compute-baseline" else None)
-        assert stage["environment"]["COURSE_WORKLOAD_PROFILE"] == profile
+        assert stage["environment"]["COURSE_WORKLOAD"] == profile
         if argv:
-            assert argv[:2] == ["python3", "tools/submit_lab.py"]
-            assert argv[argv.index("--profile") + 1] == profile
+            assert argv[:1] == ["sbatch"]
+            assert argv[argv.index("--workload") + 1] == profile
     assert json.dumps(recipe, sort_keys=True) == original
 
 
@@ -802,7 +802,7 @@ def test_optimization_acceptance_keeps_three_independent_jobs_per_variant(
         assert len(trials) == 3
         assert all(stage["argv"] == trials[0]["argv"] for stage in trials)
         assert all(
-            stage["argv"][stage["argv"].index("--profile") + 1] == profile
+            stage["argv"][stage["argv"].index("--workload") + 1] == profile
             for stage in trials
         )
     assert recipe["result_count"] == 1
@@ -821,8 +821,8 @@ def test_engine_qualification_keeps_distinct_equivalent_runs_per_protocol(profil
     ]
     by_variant = {stage["variant"]: stage for stage in executions}
     for protocol, launcher in (
-        ("openai", "slurm/openai_engine.sbatch"),
-        ("triton", "slurm/trtllm_triton.sbatch"),
+        ("openai", "slurm/30_engine_profile.sbatch"),
+        ("triton", "slurm/30_engine_profile.trtllm.sbatch"),
     ):
         baseline = by_variant[protocol]
         repeat = by_variant[protocol + "-repeat"]
@@ -830,7 +830,7 @@ def test_engine_qualification_keeps_distinct_equivalent_runs_per_protocol(profil
         assert baseline["argv"] == repeat["argv"]
         assert launcher in baseline["argv"]
         assert baseline["environment"] == repeat["environment"]
-        assert baseline["environment"]["COURSE_WORKLOAD_PROFILE"] == profile
+        assert baseline["environment"]["COURSE_WORKLOAD"] == profile
     assert not any(stage["kind"] == "profile" for stage in stages)
     assert recipe["result_count"] == 1
 
@@ -850,7 +850,7 @@ def test_inference_basics_repeats_each_configuration_and_profiles_only_cuda(prof
         assert baseline["id"] != repeat["id"]
         assert baseline["argv"] == repeat["argv"]
         assert baseline["environment"] == repeat["environment"]
-        assert baseline["argv"][baseline["argv"].index("--profile") + 1] == profile
+        assert baseline["argv"][baseline["argv"].index("--workload") + 1] == profile
         assert baseline["argv"][baseline["argv"].index("--device") + 1] == (
             "cuda" if name == "cuda" else "cpu"
         )
@@ -864,7 +864,7 @@ def test_inference_basics_repeats_each_configuration_and_profiles_only_cuda(prof
         "systems-cuda", "systems", "cuda"
     )
     assert capture["argv"][capture["argv"].index("--device") + 1] == "cuda"
-    assert capture["argv"][capture["argv"].index("--profile") + 1] == profile
+    assert capture["argv"][capture["argv"].index("--workload") + 1] == profile
     assert capture["expected_reports"] == 1
     assert recipe["profilers"]["systems"] == recipe["profiling_runs"][0]["argv"]
     assert recipe["profilers"]["compute"] is None
@@ -884,14 +884,14 @@ def test_profile_workload_keeps_internal_and_external_profilers_separate(profile
     for stage in captures:
         assert "--external-only" in stage["argv"]
         assert "--export-trace" not in stage["argv"]
-        assert stage["argv"][stage["argv"].index("--profile") + 1] == profile
-        export = next(arg for arg in stage["argv"] if arg.startswith("--export="))
+        assert stage["argv"][stage["argv"].index("--workload") + 1] == profile
         if stage["tool"] == "compute":
-            assert "COURSE_PROFILE_RANGE=projection" in export.split(",")
+            job = ROOT / recipe["course"] / stage["argv"][1]
+            assert "--nvtx-include projection/" in job.read_text()
         else:
             assert not any("COURSE_PROFILE_RANGE=" in arg for arg in stage["argv"])
         template = list(recipe["profilers"][stage["tool"]])
-        template[template.index("--profile") + 1] = profile
+        template[template.index("--workload") + 1] = profile
         assert stage["argv"] == template
 
 
@@ -900,19 +900,14 @@ def test_tail_compute_uses_measured_probe_in_both_profiles(profile):
     recipe = catalog.catalog(ROOT)["gpu-optimizations:15_tail_load_balance"]
     stages = catalog.actions(recipe, profile, {})
     compute = next(stage for stage in stages if stage.get("tool") == "compute")
-    export = next(arg for arg in compute["argv"] if arg.startswith("--export="))
-    assert set(export.split(",")) == {
-        "--export=ALL",
-        "COURSE_PROFILE_TOOL=ncu",
-        "COURSE_PROFILE_RANGE=tail_measure",
-        "COURSE_PROFILE_KERNEL=uniform_tail_probe",
-    }
-    template = list(recipe["profilers"]["compute"])
-    template[template.index("--profile") + 1] = profile
-    assert compute["argv"] == template
-    for stage in stages:
-        if stage["kind"] in ("execute", "profile") and stage is not compute:
-            assert not any("COURSE_PROFILE_RANGE=" in arg for arg in stage["argv"])
+    region, kernel = "tail_measure", "uniform_tail_probe"
+    job = ROOT / recipe["course"] / next(a for a in compute["argv"] if a.endswith(".sbatch"))
+    source = job.read_text()
+    assert "--nvtx-include " + region + "/" in source
+    if kernel is not None:
+        assert "${COURSE_PROFILE_KERNEL:-" + kernel + "}" in source
+    assert compute["argv"][compute["argv"].index("--workload") + 1] == profile
+
 
 
 @pytest.mark.parametrize("profile", ("small", "large"))
@@ -927,21 +922,13 @@ def test_pipeline_compute_selects_workload_gemm(profile, lab, region, kernel):
     recipe = catalog.catalog(ROOT)["gpu-optimizations:" + lab]
     stages = catalog.actions(recipe, profile, {})
     compute = next(stage for stage in stages if stage.get("tool") == "compute")
-    export = next(arg for arg in compute["argv"] if arg.startswith("--export="))
-    expected = {
-        "--export=ALL",
-        "COURSE_PROFILE_TOOL=ncu",
-        "COURSE_PROFILE_RANGE=" + region,
-    }
+    job = ROOT / recipe["course"] / next(a for a in compute["argv"] if a.endswith(".sbatch"))
+    source = job.read_text()
+    assert "--nvtx-include " + region + "/" in source
     if kernel is not None:
-        expected.add("COURSE_PROFILE_KERNEL=" + kernel)
-    assert set(export.split(",")) == expected
-    template = list(recipe["profilers"]["compute"])
-    template.extend(["--profile", profile])
-    assert compute["argv"] == template
-    for stage in stages:
-        if stage["kind"] in ("execute", "profile") and stage is not compute:
-            assert not any("COURSE_PROFILE_RANGE=" in arg for arg in stage["argv"])
+        assert "${COURSE_PROFILE_KERNEL:-" + kernel + "}" in source
+    assert compute["argv"][compute["argv"].index("--workload") + 1] == profile
+
 
 
 @pytest.mark.parametrize("profile", ("small", "large"))
@@ -952,14 +939,10 @@ def test_cuda_capstone_memcheck_precedes_three_acceptance_children(profile):
     assert dependency["id"] == "dependency-memcheck"
     assert dependency["kind"] == "dependency"
     assert dependency["argv"] == [
-        "python3",
-        "tools/submit_lab.py",
-        "--lab",
-        "12_capstone",
-        "slurm/sanitizer.sbatch",
+        "sbatch",
+        "slurm/12_capstone.sanitizer.sbatch",
         "memcheck",
-        "/prepared/build/12_capstone",
-        "--profile",
+        "--workload",
         profile,
         "--variant-order",
         "baseline-first",
@@ -1066,7 +1049,7 @@ def test_all_profiles_freeze_unique_stage_sets():
             ]
             for stage in stages:
                 if stage["kind"] in ("execute", "dependency", "profile"):
-                    assert stage["argv"][:2] == ["python3", "tools/submit_lab.py"]
+                    assert stage["argv"][:1] == ["sbatch"]
 
 
 def test_partial_preparation_collision_leaves_no_orphan_incoming(tmp_path):
@@ -1530,7 +1513,8 @@ def test_direct_systems_capture_matches_named_variant(lab, profile):
     variants = {s["variant"]: s for s in stages if s["kind"] == "execute"}
     for capture in (s for s in stages if s["kind"] == "profile"):
         command = [a for a in capture["argv"] if not a.startswith("--export=")]
-        assert command == variants[capture["variant"]]["argv"]
+        assert command[2:] == variants[capture["variant"]]["argv"][2:]
+        assert command[1].endswith((".nsys.sbatch", ".ncu.sbatch"))
 
 
 @pytest.fixture
@@ -1545,15 +1529,134 @@ def controller_modules():
         sys.path.remove(str(SCRIPTS))
 
 
+@pytest.mark.parametrize("overrides", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "transfer-failure", "source-mismatch", "proof-mismatch"])
+def test_campaign_sync_owns_connection_and_verified_proof(
+    tmp_path, monkeypatch, controller_modules, overrides, outcome
+):
+    import shlex
+    import shutil
+
+    import prepare
+
+    controller, stages = controller_modules
+    private = skill_common.directory(tmp_path / "private")
+    campaign = skill_common.directory(private / "campaigns/test")
+    from test_run_labs_preparation import managed_fixture
+
+    remote_home = tmp_path / "remote"
+    remote_home.mkdir()
+    prepared = remote_home / ("prepared override" if overrides else "courses")
+    managed_fixture(prepared)
+    root = tmp_path / "courses"
+    shutil.copytree(prepared, root, ignore=shutil.ignore_patterns(".runtime"))
+    source = root / "example/labs/01_example.py"
+    ssh = {"target": "student@course-alias"}
+    if overrides:
+        ssh.update(port=2222, identity_file=str(tmp_path / "key with spaces"))
+    env = {"private_root": str(private), "target_id": "target", "ssh": ssh}
+    if overrides:
+        env["prepared_root"] = str(prepared)
+    state = {
+        "schema": "run-labs-campaign/v1",
+        "id": "test",
+        "status": "running",
+        "courses_root": str(root),
+        "environment": env,
+        "environment_sha256": skill_common.canonical(env),
+        "plan": {
+            "source": catalog.source_identity(root, ["example"]),
+            "source_sha256": "a" * 64,
+            "units": [{
+                "key": "example:01_example",
+                "course": "example",
+                "lab": "01_example",
+                "profile": "small",
+                "stages": [{"id": "execute", "argv": ["${REMOTE_WORKSPACE}/run.sh"]}],
+                "preparation": [{"launcher": "01_example.sbatch", "runtime": "sample"}],
+            }],
+        },
+    }
+    controller.save(campaign, state)
+    before = (campaign / "campaign.json").read_bytes()
+    calls = []
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == str(root / "sync-labs.sh"):
+            assert argv[1:5] == ["--sync-only", "--dest", "run-labs-test", "--port"]
+            assert argv[5] == str(ssh.get("port", 22))
+            assert argv[-1] == ssh["target"]
+            assert "--receipt" not in argv
+            if overrides:
+                assert argv[6:8] == ["--identity", ssh["identity_file"]]
+            else:
+                assert "--identity" not in argv
+            if outcome == "transfer-failure":
+                raise subprocess.CalledProcessError(23, argv)
+            shutil.copytree(root, remote_home / "run-labs-test", dirs_exist_ok=True)
+            if outcome == "source-mismatch":
+                (remote_home / "run-labs-test/example/labs/01_example.py").write_text("changed\n")
+            return subprocess.CompletedProcess(argv, 0)
+        assert argv[0] == "ssh"
+        assert argv[argv.index("-p") + 1] == str(ssh.get("port", 22))
+        assert argv[-2] == ssh["target"]
+        if overrides:
+            assert argv[argv.index("-i") + 1] == ssh["identity_file"]
+        else:
+            assert "-i" not in argv
+        # Execute the real remote verifier against a disposable local home.
+        remote = shlex.split(argv[-1])
+        assert remote[:5] == ["python3.12", "-B", "-E", "-s", "-c"]
+        result = real_run(
+            [sys.executable, *remote[1:]],
+            env={**os.environ, "HOME": str(remote_home)},
+            **kwargs,
+        )
+        if outcome == "proof-mismatch":
+            proof = json.loads(result.stdout)
+            proof["source_sha256"] = "b" * 64
+            result.stdout = json.dumps(proof)
+        return result
+
+    monkeypatch.setattr(stages, "verify_frozen", lambda state: None)
+    monkeypatch.setattr(prepare.subprocess, "run", run)
+    if outcome == "success":
+        for _ in range(2):
+            result = stages.run(campaign, "sync")
+            saved = controller.load(campaign)
+            assert saved["environment"] == env
+            assert saved["sync"]["schema"] == "run-labs-sync/v1"
+            assert saved["sync"]["environment_sha256"] == state["environment_sha256"]
+            assert saved["sync"]["source_sha256"] == state["plan"]["source_sha256"]
+            workspace = Path(saved["sync"]["units"][0]["remote_root"])
+            assert workspace.name == "example"
+            assert not (workspace / ".runtime").exists()
+            assert saved["sync"]["units"][0]["runtimes"][0]["runtime"] == "sample"
+            assert (workspace / "labs/01_example.py").read_bytes() == source.read_bytes()
+            assert saved["plan"]["units"][0]["stages"][0]["argv"] == [str(workspace / "run.sh")]
+            assert result["next_action"]["kind"] == "preflight"
+        assert len(calls) == 4
+    else:
+        error = subprocess.CalledProcessError if outcome == "transfer-failure" else ValueError
+        with pytest.raises(error):
+            stages.run(campaign, "sync")
+        assert (campaign / "campaign.json").read_bytes() == before
+        assert "sync" not in controller.load(campaign)
+        assert len(calls) == (1 if outcome == "transfer-failure" else 2)
+    assert not (campaign / "sync.json").exists()
+
+
 @pytest.fixture
 def transport_request(monkeypatch, controller_modules):
     transport = module("transport")
-    stage = {"id": "run", "argv": ["python3", "tools/submit_lab.py"],
+    stage = {"id": "run", "argv": ["sbatch"],
              "dispatch": {"job": 123, "name": "owned-job"}}
-    unit = {"key": "example:01_example", "profile": "small",
+    unit = {"key": "example:01_example", "lab": "01_example", "profile": "small",
             "remote_root": "/fixture/workspace", "stages": [stage]}
     state = {"id": "test", "environment": {"ssh": {"target": "student@example"}},
-             "plan": {"source_sha256": "a" * 64}}
+             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64}}
     calls = []
 
     def invoke(outcomes, action="query"):
@@ -1635,7 +1738,7 @@ def test_terminal_job_failure_preserves_evidence_and_finishes_claims(
     state = {"schema": "run-labs-campaign/v1", "id": "test", "status": "running",
              "courses_root": str(tmp_path / "courses"), "preflight": {"passed": True},
              "environment": {"private_root": str(private), "target_id": "target"},
-             "plan": {"source_sha256": "a" * 64, "units": units}}
+             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": units}}
     controller.save(path, state)
     controller.ensure_claims(path.resolve(), state)
     claims = [controller.claim_path(state, unit) for unit in units]
@@ -1782,7 +1885,7 @@ def test_interrupted_claim_acquisition_recovers_before_effects(
         course=[],
         lab=[],
         all_courses=True,
-        profile="small",
+        workload="small",
         environment=tmp_path / "env.json",
         dry_run=False,
     )
@@ -1835,7 +1938,7 @@ def test_export_resumes_cleanup_without_republishing(
         "courses_root": str(tmp_path / "courses"),
         "preflight": {"passed": True},
         "environment": {"private_root": str(private), "target_id": "target"},
-        "plan": {"source_sha256": "a" * 64, "units": [unit]},
+        "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": [unit]},
     }
     controller.save(path, state)
     skill_common.write(
@@ -1949,16 +2052,13 @@ def test_llm_compute_selects_scoped_operation(profile, key, region, kernel):
     }
     if kernel is not None:
         expected.add("COURSE_PROFILE_KERNEL=" + kernel)
-    export = next(arg for arg in compute["argv"] if arg.startswith("--export="))
-    assert set(export.split(",")) == expected
-    template = list(recipe["profilers"]["compute"])
-    assert (
-        set(next(arg for arg in template if arg.startswith("--export=")).split(","))
-        == expected
-    )
-    for stage in stages:
-        if stage["kind"] in ("execute", "profile") and stage is not compute:
-            assert not any("COURSE_PROFILE_RANGE=" in arg for arg in stage["argv"])
+    job = ROOT / recipe["course"] / next(a for a in compute["argv"] if a.endswith(".sbatch"))
+    source = job.read_text()
+    assert "--nvtx-include " + region + "/" in source
+    if kernel is not None:
+        assert "${COURSE_PROFILE_KERNEL:-" + kernel + "}" in source
+    assert compute["argv"][compute["argv"].index("--workload") + 1] == profile
+
 
 
 @pytest.mark.parametrize("profile", ("small", "large"))
@@ -1988,8 +2088,8 @@ def test_capstone_preserves_two_independent_three_child_groups(profile, key):
     assert len({s["id"] for s in jobs}) == 2
     assert jobs[0]["argv"] == jobs[1]["argv"]
     assert jobs[0]["environment"] == jobs[1]["environment"]
-    assert jobs[0]["environment"]["COURSE_WORKLOAD_PROFILE"] == profile
-    assert jobs[0]["argv"][4] == "slurm/capstone_three_trials.sbatch"
+    assert jobs[0]["environment"]["COURSE_WORKLOAD"] == profile
+    assert jobs[0]["argv"][1] == f"slurm/{recipe['lab']}.trials.sbatch"
     assert recipe["repetitions"] == 1 and recipe["result_count"] == 3
     assert recipe["trial_contract"] == "capstone" and recipe["comparisons"] == []
     captures = [s for s in stages if s["kind"] == "profile"]
@@ -1997,7 +2097,7 @@ def test_capstone_preserves_two_independent_three_child_groups(profile, key):
         ("systems-trials", "trials", 1),
         ("compute-trials", "trials", 1),
     ]
-    assert all("slurm/single_gpu.sbatch" in s["argv"] for s in captures)
+    assert all(s["argv"][1].endswith((".nsys.sbatch", ".ncu.sbatch")) for s in captures)
 
 
 @pytest.mark.parametrize("profile", ["small", "large"])
@@ -2013,7 +2113,7 @@ def test_training_learning_pairs_repeat_each_device_without_cpu_capture(profile)
             left["argv"] == right["argv"]
             and left["environment"] == right["environment"]
         )
-        assert left["argv"][left["argv"].index("--profile") + 1] == profile
+        assert left["argv"][left["argv"].index("--workload") + 1] == profile
         assert left["argv"][left["argv"].index("--device") + 1] == left["variant"]
     captures = [s for s in stages if s["kind"] == "profile"]
     assert len(captures) == 1 and captures[0]["id"] == "systems-cuda"
@@ -2047,7 +2147,7 @@ def test_tiering_preserves_five_single_control_policy_pairs(profile):
     }
     controls = {}
     for s in jobs:
-        assert s["argv"][s["argv"].index("--profile") + 1] == profile
+        assert s["argv"][s["argv"].index("--workload") + 1] == profile
         controls[s["variant"]] = {
             k: s["argv"][s["argv"].index(k) + 1] if k in s["argv"] else v
             for k, v in defaults.items()

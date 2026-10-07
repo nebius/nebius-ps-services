@@ -258,7 +258,7 @@ def main() -> None:
 
     model_shape = (
         {"hidden": 384, "layers": 3, "heads": 6, "sequence": 128, "batch": 4}
-        if args.profile == "small"
+        if args.workload == "small"
         else {
             "hidden": 1_024,
             "layers": 6,
@@ -267,7 +267,7 @@ def main() -> None:
             "batch": 8,
         }
     )
-    vocab_size = 2_048 if args.profile == "small" else 8_192
+    vocab_size = 2_048 if args.workload == "small" else 8_192
     base = build_tiny_lm(
         torch,
         vocab_size=vocab_size,

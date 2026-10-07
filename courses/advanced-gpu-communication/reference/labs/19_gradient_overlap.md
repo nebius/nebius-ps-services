@@ -4,7 +4,7 @@ Backward produces parameter gradients at different times, creating opportunities
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -35,15 +35,15 @@ Run Lab 19 with several bucket schedules and draw the critical path.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_gradient_overlap/logs/%j.out" \
   --error="$PWD/results/19_gradient_overlap/logs/%j.err" \
-  slurm/training_two_rank.sbatch \
-  labs/19_gradient_overlap.py --profile small
+  slurm/19_gradient_overlap.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/19_gradient_overlap/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/19_gradient_overlap/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -81,9 +81,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Schedules / ascending / overlapped step median (seconds) | `schedules.ascending.overlapped_step_median_ms` | `s` |
 | Schedules / descending / overlapped step median (seconds) | `schedules.descending.overlapped_step_median_ms` | `s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 19_gradient_overlap --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 19_gradient_overlap \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -100,12 +101,12 @@ Begin with 8 and 24 MiB buckets. Within each artifact, the serialized and overla
 
 ```bash
 "$COURSE_PYTHON" labs/19_gradient_overlap.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_gradient_overlap/logs/%j.out" \
-  --error="$PWD/results/19_gradient_overlap/logs/%j.err" slurm/training_two_rank.sbatch labs/19_gradient_overlap.py --profile small --bucket-mib 8 24
+  --error="$PWD/results/19_gradient_overlap/logs/%j.err" slurm/19_gradient_overlap.sbatch --workload small --bucket-mib 8 24
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Why may gradient readiness reverse forward construction order? Draw the first communication that can begin and the final exposed tail. Explain how bucket size trades collective startup overhead against earlier readiness.
 
@@ -114,40 +115,28 @@ Overlap can slow both operations through contention even while hiding wall time.
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/19_gradient_overlap/logs/capture-%J-%t.out" \
-  --error="results/19_gradient_overlap/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/19_gradient_overlap/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/19_gradient_overlap.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/19_gradient_overlap/logs/%j.out" \
+  --error="$PWD/results/19_gradient_overlap/logs/%j.err" slurm/19_gradient_overlap.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/19_gradient_overlap.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. This course uses Systems for the live collective schedule and a separate local companion for Compute counters.
 
 To inspect one local backward kernel, submit the unnumbered companion on one
 H100. It shares the lab's BF16 bucket sizes and loss but creates no process
-group, hooks, or collectives. Defaults are `--profile small`, `--seed 17`,
+group, hooks, or collectives. Defaults are `--workload small`, `--seed 17`,
 `--warmup 3`, and buckets `8 24` MiB (`64 192` for `large`). At least two
 positive bucket sizes are required. It supports these four options only.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/19_gradient_overlap/logs/capture-%J-%t.out" \
-  --error="results/19_gradient_overlap/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --config-file off --nvtx-push-pop-scope process --replay-mode kernel --kill no --target-processes all --nvtx --nvtx-include gradient_backward/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/19_gradient_overlap/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/gradient_overlap_compute.py --profile small --bucket-mib 8 24
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/19_gradient_overlap/logs/%j.out" \
+  --error="$PWD/results/19_gradient_overlap/logs/%j.err" slurm/19_gradient_overlap.ncu.sbatch --workload small --bucket-mib 8 24
 ```
+
+The native Compute command is in `slurm/19_gradient_overlap.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Warmup and forward construction happen before the `gradient_backward` NVTX
 range. Compute uses process-scoped NVTX to include autograd worker threads,
@@ -165,7 +154,7 @@ with those sections. A missing or empty report fails capture. Native H100
 capture qualification remains pending until this check succeeds on the target.
 This is one selected kernel, not the whole backward cost or evidence of
 communication overlap. Reports and receipts remain private under
-`results/19_gradient_overlap/profiles/`; they exclude acceptance timing and
+`results/19_gradient_overlap/jobs/$JOB_ID/profiles/`; they exclude acceptance timing and
 are not result files for the dashboard or capstone aggregator.
 
 Guided comparison: Use `--bucket-mib` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction.

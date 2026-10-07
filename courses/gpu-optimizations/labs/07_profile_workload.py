@@ -30,7 +30,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 2_048 if args.profile == "small" else 8_192
+    width = 2_048 if args.workload == "small" else 8_192
     x = torch.randn((64, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
 
@@ -51,6 +51,7 @@ def main() -> None:
             loss = workload()
         torch.cuda.synchronize()
     else:
+        os.environ["COURSE_PROFILE_TOOL"] = "torch"
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,

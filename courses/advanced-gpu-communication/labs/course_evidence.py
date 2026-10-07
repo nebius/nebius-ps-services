@@ -102,14 +102,19 @@ def begin_experiment(args: Any) -> None:
                 str(value).encode()
             ).hexdigest()
         else:
-            PARAMETERS[key] = value
+            stored_key = (
+                "profile"
+                if key == "workload" and value in ("small", "large")
+                else key
+            )
+            PARAMETERS[stored_key] = value
 
 
 def enrich_result(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("schema") != "gpu-course-result/v1":
         return payload
     result = dict(payload)
-    result.setdefault("profile", os.environ.get("COURSE_WORKLOAD_PROFILE", "small"))
+    result.setdefault("profile", os.environ.get("COURSE_WORKLOAD", "small"))
     result.setdefault("seed", None)
     result.setdefault(
         "environment",
@@ -167,6 +172,9 @@ def atomic_result(path: Path, document: str) -> None:
     """Publish a complete immutable file; never expose a half-written JSON result."""
     import secrets
 
+    job = os.environ.get("COURSE_JOB_DIR")
+    if job and (not path.resolve().is_relative_to(Path(job).resolve()) or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError("Job evidence must stay inside its own regular output tree")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = path.parent / ("." + path.name + "." + secrets.token_hex(6))
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

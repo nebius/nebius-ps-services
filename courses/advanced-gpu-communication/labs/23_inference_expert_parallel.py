@@ -29,8 +29,8 @@ def main() -> None:
     try:
         if world_size != 2:
             raise SystemExit("This bounded mechanics lab requires exactly two ranks.")
-        hidden = 1_024 if args.profile == "small" else 8_192
-        tokens_per_rank = 32 if args.profile == "small" else 512
+        hidden = 1_024 if args.workload == "small" else 8_192
+        tokens_per_rank = 32 if args.workload == "small" else 512
         send_counts = [3 * tokens_per_rank // 4, tokens_per_rank // 4]
         receive_counts = [send_counts[rank]] * world_size
         routed = torch.empty(

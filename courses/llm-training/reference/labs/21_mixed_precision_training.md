@@ -4,7 +4,7 @@ A precision change affects more than forward logits: gradients and optimizer upd
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 in the Training environment. The script runs complete precision variants and has no memory-only mode. The FP16 path uses dynamic gradient scaling; the BF16 path does not require the same scaling behavior by default.
 
@@ -18,7 +18,7 @@ The program creates matched model/optimizer state and a fixed numerical-test bat
 
 An L2 norm measures overall magnitude as the square root of the sum of squared elements. Relative L2 error divides the norm of candidate-minus-reference by the reference norm. This lab sums over matching named gradient or update tensors as if their elements formed one vector; it does not concatenate them in memory. The denominator is at least `1e-12`, preserving the implementation's near-zero guard. The measure reports aggregate discrepancy, not the largest individual-element error. For reference `[3, 4]` and candidate `[3, 4.1]`, it is `0.1 / 5 = 0.02`. Scalar loss error instead uses the absolute loss difference divided by the larger of the absolute reference loss and `1e-12`.
 
-Given 1 billion parameters with BF16 model weights and gradients plus two FP32 Adam moments and an FP32 master copy, those states alone approach 16 GB before activations and temporaries. Change to a sharded optimizer across two ranks. Expected observation: ideal persistent state per rank falls, but transient gathers, communication buffers, allocator reserve, and phase peaks remain in the measured ledger.
+For a hypothetical memory-ledger comparison, consider 1 billion parameters with BF16 model weights and gradients plus two FP32 Adam moments and an FP32 master copy, those states alone approach 16 GB before activations and temporaries. If optimizer state were sharded across two ranks, the expected effect would be: ideal persistent state per rank falls, but transient gathers, communication buffers, allocator reserve, and phase peaks remain in the measured ledger. This single-GPU lab does not implement sharding; use Advanced Lab 16 for the distributed experiment.
 
 Predict which model, activation, gradient and optimizer allocations must coexist, then compare the memory ledger with measured allocated and reserved peaks. These counters describe different quantities; neither is interchangeable with the sum of tensor sizes.
 
@@ -37,15 +37,15 @@ Run Lab 21 and, after qualifying Transformer Engine, optional Lab 22. Each lab c
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
   --error="$PWD/results/21_mixed_precision_training/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/21_mixed_precision_training.py --profile small
+  slurm/21_mixed_precision_training.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/21_mixed_precision_training/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/21_mixed_precision_training/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -80,9 +80,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Modes / bf16 / warmed timing / median end to end step (seconds) | `modes.bf16.warmed_timing.median_end_to_end_step_ms` | `s` |
 | Modes / fp16 / warmed timing / median end to end step (seconds) | `modes.fp16.warmed_timing.median_end_to_end_step_ms` | `s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 21_mixed_precision_training --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 21_mixed_precision_training \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -99,12 +100,12 @@ Inspect the numerical-threshold options before running. Keep the defaults unless
 
 ```bash
 "$COURSE_PYTHON" labs/21_mixed_precision_training.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
-  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/single_gpu.sbatch labs/21_mixed_precision_training.py --profile small
+  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/21_mixed_precision_training.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Compare device-region time with end-to-end step time and tokens/s. Explain why gradient scaling can prevent FP16 underflow yet still require unscaled-gradient and update checks. Distinguish a one-step equivalence test from long-run quality.
 
@@ -115,35 +116,24 @@ Lower precision can reduce activation storage, computation time or communication
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/21_mixed_precision_training/logs/capture-%J-%t.out" \
-  --error="results/21_mixed_precision_training/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/21_mixed_precision_training/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/21_mixed_precision_training.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
+  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/21_mixed_precision_training.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/21_mixed_precision_training.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 The Compute command selects the first matrix kernel inside `mixed_precision_step`, excluding batch initialization and the separate numerical-equivalence step. It diagnoses the first FP32 warmup pass; it does not supply counters for the other precision modes or warmed throughput. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/21_mixed_precision_training/logs/capture-%J-%t.out" \
-  --error="results/21_mixed_precision_training/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include mixed_precision_step/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/21_mixed_precision_training/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/21_mixed_precision_training.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/21_mixed_precision_training/logs/%j.out" \
+  --error="$PWD/results/21_mixed_precision_training/logs/%j.err" slurm/21_mixed_precision_training.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/21_mixed_precision_training.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

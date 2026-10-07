@@ -59,10 +59,11 @@ private even when the lab uses synthetic data. Follow
 
 ## Apply the networking tools in lesson order
 
-Lesson 11 and Labs 17/18 turn the tool-selection preview into a bounded
-experiment. First map topology and selected transport, then read the message-size
-curve, then change one job-local setting in a new process. Lesson 12 owns the
-follow-up application scaling and overlap check. NCCL Tests uses its own
+The advanced communication course owns the bounded networking experiments:
+Lab 01 checks topology, Lab 09 measures the NCCL message-size curve and Lab 10
+runs NCCL Tests. First map topology and selected transport, then read the message-size
+curve, then change one job-local setting in a new process. Advanced Labs 12 and 13 own the
+follow-up application scaling and overlap checks. NCCL Tests uses its own
 MPI-enabled binary and launcher; the PyTorch labs use torchrun. The two runtimes
 must record their loaded NCCL versions independently. Optional upstream tuning
 reports and per-iteration columns are diagnostic extensions, not the standard

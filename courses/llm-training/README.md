@@ -1,16 +1,24 @@
 # LLM Training
 
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+
+## Runtime preparation
+
+Lab 22 uses an isolated Transformer Engine runtime for its FP8 experiments.
+Its CUDA/PyTorch ABI and hardware checks remain required; follow the Lab Guide
+linked below to prepare the matching environment before running it.
+
 ## Hardware routes
 
 The **base route** uses two workers with one H100 each. Its TCP/IP inter-node path is not representative of GPU-fabric optimization; run single-GPU exercises there.
 
 Distributed practical work now belongs to [Advanced Labs: Multi-GPUs Multi-Nodes communication optimization](../advanced-gpu-communication/index.html). That course requires a qualified two-worker, sixteen-H100 cluster, which can also run the local labs with one-GPU allocations. The conceptual lessons here remain useful prerequisites.
 
-Each native submission block prepares private log directories before calling `sbatch`; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
+Lab preparation creates private log directories before any `sbatch` submission; Slurm writes `results/<lab>/logs/<job>.out` and `.err`. Result JSON remains the authoritative experiment record. `small` and `large` select workload presets, independently of the baseline/candidate choice. Qualification, modeling and fixed server experiments can use identical effective parameters in both profiles; read the lab guide and result configuration before comparing them.
 
-Start with [shared environment setup](../README.md#how-to-set-up-the-lab) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
+Start with [Lab Guide](../lab-guide.html#lab-preparation-scripts) to prepare the cluster, course runtime, Nsight tools, private Grafana, and readiness checks.
 
-Read [Using GPU performance tools](reference/performance-tools.md) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Install the shared tools once in shared environment setup and keep `small` and `large` as separate workload campaigns.
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before the first experiment. Every lab includes its own Grafana dashboard, local capture commands, a correctness gate, and a selected-result comparison. Keep `small` and `large` as separate workload campaigns.
 
 ## Course guide
 
@@ -59,7 +67,7 @@ Begin with Lesson 1 and [Lab 32’s CPU learning exercise](reference/labs/32_lea
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_tiny_transformer_train/logs/%j.out" \
-  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/single_gpu.sbatch labs/01_tiny_transformer_train.py --profile small
+  --error="$PWD/results/01_tiny_transformer_train/logs/%j.err" slurm/01_tiny_transformer_train.sbatch --workload small
 ```
 
 Transformer Engine is optional and must match the installed PyTorch/CUDA ABI.
@@ -67,7 +75,7 @@ Follow [Lab 22 runtime qualification](reference/labs/22_transformer_engine_fp8.m
 to check its build and FP8 runtime compiler before the full experiment.
 Training and inference-serving dependencies are intentionally not combined.
 
-The final optimization decision uses `slurm/capstone_three_trials.sbatch`.
+The final optimization decision uses `slurm/31_training_capstone.trials.sbatch`.
 It launches three fresh Python processes with distinct seeds, alternates
 baseline/candidate order, validates every result, and writes one scoped
 aggregate keep/reject record for the learner's causal report.

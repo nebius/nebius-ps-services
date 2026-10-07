@@ -4,9 +4,9 @@ Tensor shape does not reveal how neighboring values are arranged in memory. This
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Run on one H100 in the Fundamentals environment. A logical index identifies an element; strides map changes in its indices to storage offsets. For a contiguous 2-by-3 matrix, strides [3, 1] mean one row step skips three stored elements and one column step skips one. Transposing swaps its logical axes, producing shape [3, 2] and strides [1, 3] without copying values. Such a view shares the underlying storage. The small and H100 profiles choose different square sizes; neither exposes an arbitrary stride-layout sweep.
+Run on one H100 in the Fundamentals environment. A logical index identifies an element; strides map changes in its indices to storage offsets. For a contiguous 2-by-3 matrix, strides [3, 1] mean one row step skips three stored elements and one column step skips one. Transposing swaps its logical axes, producing shape [3, 2] and strides [1, 3] without copying values. Such a view shares the underlying storage. The small and large workloads choose different square sizes; neither exposes an arbitrary stride-layout sweep.
 
 Start by identifying shared storage versus new allocations and counting bytes read and written. Then compare transaction efficiency and the number of reuses needed to repay a repack.
 
@@ -33,15 +33,15 @@ For each layout, predict which dimension should be assigned to adjacent lanes.
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
   --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/04_layout_and_coalescing.py --profile small
+  slurm/04_layout_and_coalescing.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/04_layout_and_coalescing/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/04_layout_and_coalescing/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -76,9 +76,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Timings / strided view / median (seconds) | `timings.strided_view.median_ms` | `s` |
 | Repack / break even reuses | `repack.break_even_reuses` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 04_layout_and_coalescing --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 04_layout_and_coalescing \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -94,15 +95,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Use the supplied cases before introducing a new layout. Keep the complete result, including strides and repack timing, so a future reader can reconstruct the trade-off.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
-  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
-  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile large
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.sbatch --workload large
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Use `copy_cost / (strided_time - packed_time)` only when the denominator is positive. If the packed operation is no faster, there is no finite timing break-even. Explain how repeated reuse changes the application decision.
 
@@ -113,35 +114,24 @@ Repacking improves later access and library eligibility but consumes bandwidth, 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/04_layout_and_coalescing/logs/capture-%J-%t.out" \
-  --error="results/04_layout_and_coalescing/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/04_layout_and_coalescing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/04_layout_and_coalescing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/04_layout_and_coalescing.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/04_layout_and_coalescing/logs/capture-%J-%t.out" \
-  --error="results/04_layout_and_coalescing/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/04_layout_and_coalescing/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/04_layout_and_coalescing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/04_layout_and_coalescing.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

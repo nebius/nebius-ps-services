@@ -120,7 +120,6 @@
     }
   ],
   "extensions": [],
-  "performance_tools": "reference/performance-tools.md",
   "observability": "reference/observability.json",
   "advanced_lessons": [],
   "external_labs": [

@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
-    width = 512 if args.profile == "small" else 2048
+    width = 512 if args.workload == "small" else 2048
     compute = torch.cuda.Stream()
     copy = torch.cuda.Stream() if args.mode == "pipeline" else compute
     hosts = [torch.empty((width, width), pin_memory=True) for _ in range(args.slots)]

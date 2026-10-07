@@ -31,7 +31,7 @@ def main() -> None:
     validate_common_args(args)
     size = resolve_int_override(
         args.matrix_size,
-        2_048 if args.profile == "small" else 8_192,
+        2_048 if args.workload == "small" else 8_192,
         option="--matrix-size",
         minimum=256,
     )

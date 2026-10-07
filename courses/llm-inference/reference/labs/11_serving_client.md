@@ -4,9 +4,9 @@ A serving system's performance includes request handling and completion delivery
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
-Qualify the vLLM container, model, and client environment. The supplied launcher owns server startup, readiness, client execution, metric snapshots, and cleanup. Teaching HTTP remains loopback-only; no public endpoint is required.
+Qualify the native vLLM runtime, model, and client environment. The supplied launcher owns server startup, readiness, client execution, metric snapshots, and cleanup. Teaching HTTP remains loopback-only; no public endpoint is required.
 
 ## Concepts and code path
 
@@ -21,13 +21,14 @@ The client schedules requests with a concurrency limit, records completion durat
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/11_serving_client/logs/%j.out" \
-  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/vllm_benchmark.sbatch
+  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/11_serving_client.sbatch
 ```
 
 ## Check your results
+
+Each new job owns `results/11_serving_client/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/11_serving_client/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -55,9 +56,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Request throughput per second | `request_throughput_per_second` | `requests/s` |
 | Output tokens per second | `output_tokens_per_second` | `tokens/s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 11_serving_client --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 11_serving_client \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -70,44 +72,34 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 
 ### Workload variations
 
-Run the launcher after its required image and runner variables are set. Inspect positional model/concurrency/revision options before changing load; a concurrency sweep must preserve the same artifact and prompt policy.
+Run the launcher after its native serving runtime is prepared. Inspect positional model/concurrency/revision options before changing load; a concurrency sweep must preserve the same artifact and prompt policy.
 
 ```bash
-bash slurm/vllm_benchmark.sbatch --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+bash slurm/11_serving_client.sbatch --help
+sbatch --chdir="$PWD" \
   --output="$PWD/results/11_serving_client/logs/%j.out" \
-  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/vllm_benchmark.sbatch
+  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/11_serving_client.sbatch
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 As concurrency grows, does aggregate throughput improve while individual completion latency worsens? Distinguish actual generated tokens from requested maximum tokens. Explain why request throughput alone is misleading when output lengths differ.
 
 Capture a separate diagnostic run:
 
-This diagnostic captures the GPU server while the supplied Python client generates requests. `slurm/capture_server.sh` provides bounded readiness, native `curl` start/stop controls, report paths and process cleanup; read those commands in `slurm/capture_server.sh` in the synced course directory. `@URL@`, `@PORT@` and `@OUTPUT@` receive job-local values. This captures one configuration; retain the full baseline campaign for paired correctness and acceptance timing.
+This diagnostic profiles the GPU server that receives the client requests. Read `slurm/11_serving_client.nsys.sbatch` for the native Nsight command, readiness check, acknowledged start/stop controls and process cleanup. The job waits for report export before checking its results. Keep these diagnostic runs separate from normal timing runs.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 \
-  --mem=64G --time=00:15:00 --chdir="$PWD" \
-  bash slurm/capture_server.sh 11_serving_client \
-  --client "${COURSE_PYTHON:?source the course runtime}" labs/11_serving_client.py --base-url @URL@ \
-    --model Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --output @OUTPUT@ \
-  --server nsys profile --trace=cuda,nvtx,osrt \
-    --cuda-trace-scope=process-tree --trace-fork-before-exec=true \
-    --cuda-graph-trace=node --sample=none --cpuctxsw=none \
-    --discard-environment=true --force-overwrite=false \
-    --capture-range=cudaProfilerApi --capture-range-end=stop \
-    --duration=300 --kill=none --wait=all \
-    --output "results/11_serving_client/profiles/nsys-%q{COURSE_CAPTURE_ID}" \
-    vllm serve Qwen/Qwen2.5-0.5B-Instruct --revision 7ae557604adf67be50417f59c2c2f167def9a775 --tokenizer-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
-    --host 127.0.0.1 --port @PORT@ --dtype bfloat16 --max-model-len 2048 \
-    --profiler-config.profiler cuda
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/11_serving_client/logs/%j.out" \
+  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/11_serving_client.nsys.sbatch
 ```
+
+The native Systems command is in `slurm/11_serving_client.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 The launcher profiles the **GPU server**, while the client measures requests. Open the emitted `.nsys-rep` in Systems; expand CUDA API, GPU kernels, copies, and worker-process rows. The launcher triggers `/start_profile` after server readiness and `/stop_profile` after the request campaign, using the engine’s CUDA profiler API. Match that interval to the client artifact timestamps. Require actual request activity inside the capture; initialization alone is insufficient. Server NVTX availability depends on the pinned engine; use its CUDA kernels and request interval when named phases are absent.
 
-Guided comparison: Use `--concurrency` as the single control in the existing Practice commands. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value of the same control, repeat unprofiled, and explain why the result supports or rejects the prediction. Changing `concurrency` changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
+Guided comparison: Vary the launcher's second positional argument, `CONCURRENCY`, while holding its first argument, `MODEL`, and third argument, `REVISION`, fixed. Inspect `bash slurm/11_serving_client.sbatch --help` for the `[MODEL] [CONCURRENCY] [REVISION]` order and append those values after the script path in the existing submission command. The launcher passes concurrency to the client; it does not accept a `--concurrency` launcher flag. Predict its effect on the measured fields, verify correctness, and inspect the named report views. Independently choose one additional value, repeat unprofiled, and explain whether the result supports the prediction. Changing concurrency changes the workload; compare per-unit cost and capacity as a workload study, not a like-for-like optimization speedup.
 
 **Nsight Systems evidence:** Capture the owned GPU server and its worker descendants while the client supplies requests. Open the server .nsys-rep and expand the GPU worker process tree, CUDA streams and runtime NVTX rows. Inspect the request interval after readiness; client-only activity or startup-only kernels are not sufficient. Compare launch gaps and prefill/decode activity against the clean client latency panels. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

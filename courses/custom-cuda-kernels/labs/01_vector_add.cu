@@ -6,13 +6,13 @@ __global__ void vector_add(const float* left, const float* right, float* output,
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 01_vector_add [--profile small|large] [--threads 128|256|512]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 01_vector_add [--workload small|large] [--threads 128|256|512]\n"; return 0; }
   try {
     bool small = false, profile_seen = false, threads_seen = false;
     int threads = 256;
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
-      if (argument == "--profile") small = parse_small_profile(argc, argv, index, profile_seen);
+      if (argument == "--workload") small = parse_small_profile(argc, argv, index, profile_seen);
       else if (argument == "--threads" && !threads_seen && index + 1 < argc) {
         const std::string value(argv[++index]);
         if (value != "128" && value != "256" && value != "512")

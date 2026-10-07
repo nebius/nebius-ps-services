@@ -45,7 +45,6 @@ def test_neutral_metadata_preserves_core_and_optional_lab_scope(course: str) -> 
         "estimated_guided_hours",
         "labs",
         "extensions",
-        "performance_tools",
         "observability",
         "advanced_lessons",
         "external_labs",
@@ -96,11 +95,11 @@ def test_light_palette_contrast_and_responsive_reading_rules() -> None:
 
 def test_all_course_lessons_labs_and_diagrams_remain_published() -> None:
     counts = {
-        "gpu-fundamentals": (12, 11, 32),
-        "gpu-optimizations": (16, 14, 29),
-        "llm-training": (17, 16, 23),
-        "llm-inference": (17, 22, 29),
-        "custom-cuda-kernels": (16, 13, 17),
+        "gpu-fundamentals": (12, 11, 27),
+        "gpu-optimizations": (16, 14, 28),
+        "llm-training": (17, 16, 22),
+        "llm-inference": (17, 22, 28),
+        "custom-cuda-kernels": (16, 13, 16),
     }
     for course, expected in counts.items():
         root = ROOT / course
@@ -110,7 +109,7 @@ def test_all_course_lessons_labs_and_diagrams_remain_published() -> None:
             len(cb_metadata.executable_sources(root)),
             len(re.findall(r"<svg\b", page)) - 1,
         ) == expected
-        assert page.count('class="performance-workflow"') == 1
+        assert 'id="using-gpu-performance-tools"' not in page
 
 
 def test_tooling_preflight_has_only_current_general_gpu_tools() -> None:

@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from native_job_fixtures import worker_prefix
 from test_course_review_fixes import load_lab
 
 PREFIX = "advanced-gpu-communication/labs/"
@@ -214,6 +215,7 @@ def test_dynamo_service_requires_batch_invariant_workers(
         inherited_path = str(tmp_path / "other tools")
         monkeypatch.setenv("PATH", inherited_path)
         monkeypatch.setenv("COURSE_DYNAMO_PYTHON", str(python))
+        monkeypatch.setenv("COURSE_DYNAMO_LIBRARY_PATH", "/fixture/dynamo/lib")
         monkeypatch.setenv("COURSE_PROFILE_TOOL", "none")
         monkeypatch.setenv("VLLM_BATCH_INVARIANT", "0")
         monkeypatch.setattr(lab, "allocated_nodes", lambda: ["worker-a", "worker-b"])
@@ -278,6 +280,7 @@ def test_dynamo_service_requires_batch_invariant_workers(
             layout=layout,
             run_id="test-run",
             capture=capture,
+            worker_prefix=worker_prefix() if capture == "systems" else None,
             router="round-robin",
         )
         if capture == "systems" and report_state != "valid":
@@ -421,7 +424,7 @@ def test_bridge_launcher_uses_selected_python_without_venv_console_script(tmp_pa
         [
             "bash",
             "-c",
-            'source env/vendor-environment.sh; exec "$COURSE_BRIDGE_TORCHRUN" "$@"',
+            'exec env/bridge-torchrun "$@"',
             "bridge-test",
             *arguments,
         ],
@@ -429,6 +432,7 @@ def test_bridge_launcher_uses_selected_python_without_venv_console_script(tmp_pa
         env={
             **os.environ,
             "COURSE_TOOLS": str(tools),
+            "COURSE_BRIDGE_PYTHON": str(python),
             "UCX_PREFIX": str(tmp_path / "ucx"),
             "COURSE_ETCD": str(tmp_path / "etcd"),
         },
@@ -458,7 +462,7 @@ def test_nixl_parser_requires_one_complete_requested_case():
             "http://node:1",
             "group",
             SimpleNamespace(
-                profile="small", warmup=50, iterations=500, progress_thread="off"
+                workload="small", warmup=50, iterations=500, progress_thread="off"
             ),
         )
         assert "--check_consistency" in command and "--enable_pt=false" in command
@@ -547,7 +551,7 @@ def test_bridge_comparisons_keep_a_supported_seeded_dataloader(
         monkeypatch.setitem(sys.modules, name, module)
     with load_lab(PREFIX + "bridge_experiments.py") as lab:
         args = SimpleNamespace(
-            profile=profile,
+            workload=profile,
             seed=17,
             warmup=5,
             iterations=20,
@@ -586,7 +590,7 @@ def test_goodput_cli_requests_and_verifies_fixed_server_work(
             "argv",
             [
                 "34_serving_goodput.py",
-                "--profile",
+                "--workload",
                 profile,
                 "--model-dir",
                 str(tmp_path),

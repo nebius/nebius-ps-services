@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 496" role="img" aria-labelledby="pt-random-values-title pt-random-values-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-random-values-title">Same shape, different sampling rules</title>
+  <desc id="pt-random-values-desc">Both tensors contain two rows of three FP32 values in CPU memory. Uniform sampling ranges from zero inclusive to one exclusive. Normal sampling clusters near zero and extends in both directions. Curves show probability density schematically.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3] · 6 samples</tspan></text>
+    <text x="160" y="58" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="105" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.rand</tspan></text>
+    <path d="M40 192 H280 M90 192 V135 H230 V192" stroke="#245880" stroke-width="2.5" fill="none" />
+    <text x="90" y="221" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0</tspan></text>
+    <text x="230" y="221" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <text x="160" y="256" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0 included; 1 excluded</tspan></text>
+    <text x="160" y="303" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.randn</tspan></text>
+    <path d="M30 391 H290 M30 388 C92 388 110 325 160 325 C210 325 228 388 290 388" stroke="#206757" stroke-width="2.5" fill="none" />
+    <text x="80" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>−1</tspan></text>
+    <text x="160" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0</tspan></text>
+    <text x="240" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <text x="160" y="457" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Normal: centered at 0</tspan></text>
+    <text x="160" y="487" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Tails extend beyond this sketch</tspan></text>
+  </g>
+</svg>

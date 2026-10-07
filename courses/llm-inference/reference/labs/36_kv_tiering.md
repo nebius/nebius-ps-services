@@ -4,7 +4,7 @@ A reusable prefix is valuable only if compatible cached state survives until the
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Python and the supplied standard-library helpers are sufficient; a GPU and serving dependencies are unnecessary. The profile label is retained for the course result format and does not activate H100 execution. All prefixes are inactive, equally sized and completely reusable inside this model. Active-request pinning and partial-prefix matching are outside its scope.
 
@@ -27,15 +27,15 @@ Vary one of capacity, TTL, reuse gap or storage rate, then model a worker restar
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
   --error="$PWD/results/36_kv_tiering/logs/%j.err" \
-  slurm/cpu.sbatch \
-  labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 0
+  slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 0
 ```
 
 ## Check your results
+
+Each new job owns `results/36_kv_tiering/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/36_kv_tiering/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -67,11 +67,12 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Read bytes | `read_bytes` | `bytes` |
 | Write bytes | `write_bytes` | `bytes` |
 
-Select successful baseline and candidate policy-model artifacts in the same profile that differ in only one declared input. Compare storage capacity against the no-retention baseline, then compare each TTL, transfer-rate, restart or identity control against the retained baseline. These slots describe policy configurations, not independent timing trials. Set the paths to the selected result files and review the current generation (use `0` for the first selection):
+Select successful baseline and candidate policy-model artifacts in the same workload preset that differ in only one declared input. Compare storage capacity against the no-retention baseline, then compare each TTL, transfer-rate, restart or identity control against the retained baseline. These slots describe policy configurations, not independent timing trials. Set the paths to the selected result files and review the current generation (use `0` for the first selection):
 
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 36_kv_tiering --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 36_kv_tiering \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -87,24 +88,24 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 Submit each CPU policy variant from this course directory. Each job writes a new private result. Begin with no slower retention, then change only storage capacity; compare TTL, rate, restart and identity separately against that retained baseline.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 0
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 0
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 8
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 8
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 8 --ttl-ms 100
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 8 --ttl-ms 100
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 8 --storage-gbps 0.2
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 8 --storage-gbps 0.2
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 8 --restart-at 6
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 8 --restart-at 6
+sbatch --chdir="$PWD" \
   --output="$PWD/results/36_kv_tiering/logs/%j.out" \
-  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/cpu.sbatch labs/36_kv_tiering.py --host-prefixes 0 --storage-prefixes 8 --revision-change-at 6
+  --error="$PWD/results/36_kv_tiering/logs/%j.err" slurm/36_kv_tiering.sbatch --host-prefixes 0 --storage-prefixes 8 --revision-change-at 6
 ```
 
 Use `--gap-ms` to vary reuse interval, keeping the cyclic prefix sequence unchanged. With six prefixes and a 50-ms gap, a prefix recurs every 300 ms. The supplied deterministic policy needs no repeated timing benchmark; independent runtime trials belong to a later real-engine experiment.

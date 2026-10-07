@@ -1,6 +1,9 @@
 # Lab route
 
-Complete shared environment setup once. Keep these identities in filenames, dashboards and evidence. Mechanics labs intentionally reserve the fabric while using only the ranks their model requires.
+Read the [GPU Performance Tools](../gpu-performance-tools/index.html) course
+before practical work, then complete shared environment setup once. Keep these identities in filenames, dashboards and evidence. Mechanics labs intentionally reserve the fabric while using only the ranks their model requires.
+
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 
 ## Qualify placement and fabric
 

@@ -4,7 +4,7 @@ Activation checkpointing saves memory by recomputing selected forward work durin
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 with the course's Training environment. The experiment computes a forward pass and parameter gradients. Inputs are integer token IDs, so an input-token gradient is not defined.
 
@@ -14,7 +14,7 @@ Extra H100 compute can make recomputation worthwhile when capacity enables a mor
 
 The program prepares matched model state and batches for no checkpointing, alternate-block checkpointing and all-block checkpointing. The output key `selective` checkpoints complete transformer blocks at odd indices; `full` checkpoints every listed transformer block. These are this script's result labels. NVIDIA Megatron's selective activation recomputation instead targets selected modules within layers, which this lab does not implement. It verifies loss and gradients, then measures forward, loss, and backward time plus incremental peak allocation. The reported `step_time` excludes optimizer work and optimizer state: no optimizer is constructed or updated in this lab.
 
-Given a block saving 6 GiB of activations and costing 12 milliseconds to recompute, full checkpointing enables microbatch two instead of one but adds 12 milliseconds. Change to checkpoint only a 5-GiB attention intermediate costing 4 milliseconds to replay. Expected observation: if microbatch two still fits, selective recomputation retains most capacity benefit with less step-time penalty at fixed global tokens.
+For a hypothetical operator-level extension, consider a block saving 6 GiB of activations and costing 12 milliseconds to recompute, full checkpointing enables microbatch two instead of one but adds 12 milliseconds. Change to checkpoint only a 5-GiB attention intermediate costing 4 milliseconds to replay. Expected observation: if microbatch two still fits, selective recomputation retains most capacity benefit with less step-time penalty at fixed global tokens.
 
 The supplied variants use no checkpointing, alternate-block checkpointing and all-block checkpointing on the same tiny-transformer forward/loss/backward path. Compare checkpoint policies within this workload; durations from a different model are not comparable. There is no optimizer update; complete-update equivalence is a separately implemented extension.
 
@@ -25,15 +25,15 @@ The supplied variants use no checkpointing, alternate-block checkpointing and al
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
   --error="$PWD/results/14_activation_checkpointing/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/14_activation_checkpointing.py --profile small
+  slurm/14_activation_checkpointing.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/14_activation_checkpointing/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/14_activation_checkpointing/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -66,9 +66,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Eager / median incremental peak bytes | `eager.median_incremental_peak_bytes` | `bytes` |
 | Full / median incremental peak bytes | `full.median_incremental_peak_bytes` | `bytes` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 14_activation_checkpointing --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 14_activation_checkpointing \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -84,15 +85,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run all three variants together with the small profile. Use the large profile only after equivalence passes; its larger model/context is a new memory-pressure experiment.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
-  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/14_activation_checkpointing.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
-  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/single_gpu.sbatch labs/14_activation_checkpointing.py --profile large
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/14_activation_checkpointing.sbatch --workload large
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Which forward intermediates must be recreated for each checkpointed block? Compare memory saved per added millisecond. To apply this reasoning to a complete training loop, explain why persistent optimizer state can reduce the percentage saving in total memory; it is absent from this lab's measured allocation.
 
@@ -101,35 +102,24 @@ Smaller microbatches can reduce GEMM efficiency. More accumulation delays update
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/14_activation_checkpointing/logs/capture-%J-%t.out" \
-  --error="results/14_activation_checkpointing/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/14_activation_checkpointing/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/14_activation_checkpointing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/14_activation_checkpointing.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/14_activation_checkpointing.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 The Compute command selects the first matrix kernel inside `checkpoint_step`, excluding model and batch construction. It diagnoses the first baseline pass; compare checkpoint modes with the complete Systems traces, memory measurements and gradient checks. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/14_activation_checkpointing/logs/capture-%J-%t.out" \
-  --error="results/14_activation_checkpointing/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include checkpoint_step/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/14_activation_checkpointing/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/14_activation_checkpointing.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/14_activation_checkpointing/logs/%j.out" \
+  --error="$PWD/results/14_activation_checkpointing/logs/%j.err" slurm/14_activation_checkpointing.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/14_activation_checkpointing.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

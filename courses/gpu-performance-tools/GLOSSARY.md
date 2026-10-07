@@ -1,0 +1,27 @@
+# Glossary
+
+- **Capture** — A diagnostic recording of application activity or hardware counters.
+- **Counter** — a hardware measurement of work or activity, such as bytes transferred or instructions executed.
+- **CUDA** — NVIDIA’s parallel programming platform and software interfaces for submitting GPU work.
+- **CUDA event** — a marker in a CUDA stream used to track completion, order dependent work or measure elapsed device time when timing is enabled.
+- **Datasource** — Grafana's configured connection for querying a backend.
+- **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and sampled telemetry facilities.
+- **Grafana** — a visualization application that queries a data source and displays its results in panels.
+- **Kernel** — a function launched for execution by GPU threads.
+- **Marker** — an annotation identifying one instant in application execution.
+- **Measurement region** — The application phase chosen for observation, often named with an NVTX range.
+- **Nsight Compute** — NVIDIA’s profiler for selected GPU kernels, hardware counters and replay-based analysis.
+- **Nsight Systems** — NVIDIA’s timeline profiler for host activity, GPU work, transfers and their relationships.
+- **NVTX** — NVIDIA Tools Extension Library; an annotation API for named markers and ranges that does not synchronize GPU work by itself.
+- **Occupancy** — resident warps per streaming multiprocessor relative to its supported maximum; occupancy alone does not establish performance.
+- **Operator** — a framework operation on tensors that can invoke CPU work and one or more GPU kernels.
+- **Pushgateway** — a service through which the course publisher exposes validated benchmark gauges for scraping.
+- **PyTorch profiler** — the framework profiler that relates operators to CPU activity and CUDA work.
+- **Range** — an annotation spanning a named application interval; its host duration need not equal GPU execution time.
+- **Replay** — Repeated execution used by a profiler to collect counter groups.
+- **SM** — streaming multiprocessor; the GPU hardware unit that schedules warps and provides execution and storage resources.
+- **Telemetry** — sampled observations of device or node conditions; sampling can miss short activity and does not replace workload timing.
+- **VictoriaMetrics** — the metrics storage and query backend used by these course dashboards.
+- **VMAgent** — the agent that scrapes metric endpoints and forwards samples to metrics storage.
+- **Warp** — a group of 32 CUDA threads on the GPUs covered by the courses, with instructions applied to participating lanes.
+- **Workload** — The problem size and input configuration selected for a run.

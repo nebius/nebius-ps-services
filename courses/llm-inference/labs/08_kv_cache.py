@@ -30,7 +30,7 @@ def main() -> None:
 
     with torch.inference_mode():
         batch, heads, head_dim = 1, 16, 64
-        prompt, generated = (256, 64) if args.profile == "small" else (2_048, 256)
+        prompt, generated = (256, 64) if args.workload == "small" else (2_048, 256)
         hidden = heads * head_dim
         qkv = torch.nn.Linear(
             hidden, 3 * hidden, bias=False, device="cuda", dtype=torch.bfloat16

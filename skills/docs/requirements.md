@@ -2651,6 +2651,11 @@ and reliable inspection helpers reusable outside this monorepo.
 - AC-004: Existing VPC/quota and new compute/Kubernetes/storage inspectors work from an isolated skill copy; practical provisioning examples have offline tests and real SDK schema checks.
 - AC-005: Source tests, SDK compatibility, installation portability, runtime triggers, output quality, and live cloud evidence are reported independently.
 
+- AC-006: A scoped design-only consultation returns provider constraints,
+  service options, integration prerequisites, owners, sources, assumptions and
+  later validation needs without demanding credentials or executing preflight.
+  Return to the active design owner without selecting its AI/application stack.
+
 #### Negative Criteria
 
 - NC-001: Do not modify or depend on donor service projects, copy private automation, invent a cloud orchestration CLI, or retain compatibility shims.
@@ -3157,6 +3162,22 @@ visual theme and layouts appropriate to documents, reports and presentations.
   print, intended browsers and report data. Include relocation and attempted
   request checks; report observed evidence separately from proposed checks.
 
+- AC-016: Load and apply each applicable specialist workflow, consume its
+  scoped result and report used, skipped or research-fallback status. Use
+  app-stack for unsettled application choices, ai-agent-design for unsettled
+  AI behavior/contracts, and ai-stack for AI component choices.
+- AC-017: Consult nebius for material Nebius service/infrastructure/integration
+  constraints even with a fixed provider, before finalizing dependent choices.
+  Preserve design-only authority and operational lifecycle owners.
+- AC-018: Freeze AI behavior before component selection; reuse returned
+  ai-stack decisions and pass them as fixed to app-stack. Deterministic-only
+  outcomes skip AI selection. Do not recurse into active workflows.
+- AC-019: When an applicable specialist is unavailable, use research first:
+  official vendor sources before reputable established community fallback.
+  Distinguish fallback, provenance, assumptions and unverified claims from
+  actual specialist use. If research is unavailable, apply that hierarchy
+  directly; unresolved material facts remain explicit planning limitations.
+
 #### Negative Criteria
 
 - NC-001: Do not substitute a sibling project's design, infer greenfield from
@@ -3175,6 +3196,11 @@ visual theme and layouts appropriate to documents, reports and presentations.
   inspectors, diagram dimensions, paper sizes or a global character shortcut.
 - NC-006: Static skill definitions or a localhost preview must not be reported
   as proof of offline artifact behavior, native triggering or output quality.
+
+- NC-007: Naming a skill or reading its description alone is not specialist
+  execution. Do not reopen fixed choices or duplicate AI component selection.
+- NC-008: Nebius design consultation does not require credentials, cloud
+  inventory or provisioning preflight, and does not authorize live changes.
 
 #### Validation Method
 
@@ -3196,6 +3222,11 @@ Include new-project and changed-usage README plans, routine-edit near misses,
 and conditional reference reads; compare quality with the prior working version.
 Add one portable HTML quality case per profile and trigger near misses. Preserve
 Help short-circuiting and verify that unrelated designs skip the new reference.
+
+Specialist cases cover combined Nebius/AI/application designs, fixed layers,
+deterministic-only outcomes and missing-skill research fallback. Actual
+multi-skill activation and ordering require successful native loading traces;
+the isolated single-skill runner cannot establish these guarantees.
 
 <!-- /REQUIREMENT: REQ-038 -->
 
@@ -3371,6 +3402,58 @@ working bytes where an authenticated isolated runner is available. Report static
 installation, native triggering and quality evidence separately.
 
 <!-- /REQUIREMENT: REQ-041 -->
+
+<!-- REQUIREMENT: REQ-042 status=active priority=P1 type=feature -->
+### REQ-042: Publish a release in one resumable invocation
+
+#### User Story
+
+A maintainer invokes publish-release once to commit current repository work,
+push and merge its PR through repository protections, publish a versioned tag,
+and receive a verified GitHub Release URL.
+
+#### Acceptance Criteria
+
+- AC-001: Complete publication with waiting is the default. Review and validate
+  all existing repository changes plus release metadata, then delegate root
+  staging, commits, synchronization and PR publication to create-pr's canonical
+  transaction. Reuse feature branches; create a release branch from default.
+- AC-002: Use an explicit or unambiguous prepared version; otherwise ask once.
+- AC-003: Show the GitHub approval link, poll every 15 seconds with progress at
+  least once per minute, and wait up to 600 seconds for each human approval gate.
+  Timeout preserves resumable progress. Checks, queue and workflow waits have
+  separate 3600-second limits. Approval never bypasses other readiness checks.
+- AC-004: Resume reconciles repository, PR, merged result, tag and workflow
+  identities with authoritative state, including across native sessions.
+  A checkpoint is evidence, never authorization or a replayable commit grant.
+- AC-005: Tag only the verified merged commit in remote default history from an
+  isolated checkout. Create its annotated tag before SCM runtime verification;
+  push after success. Default advancement cannot change release contents.
+- AC-006: Report published only after the matching workflow succeeds and the
+  published release has all expected artifacts with version/digest verification.
+
+#### Negative Criteria
+
+- NC-001: No admin bypass, feature-head release shortcut, force push, remote-tag rewrite,
+duplicate publication, secret persistence, or automatic rollback of public effects.
+- NC-002: Do not absorb new unrelated work on resume or replay another session's grants.
+
+#### Validation Method
+
+Check source/template parity, public help, owner integration and private-state
+safety; keep source, installation, native invocation and live release proof separate.
+
+#### Test Method
+
+Disposable Git repositories and mocked GitHub evidence cover dirty preparation,
+exact tagging, waits, timeouts, interruption, drift, collision and repeated resume.
+
+#### Evaluation Method
+
+Evaluate one-shot publication and timeout/resume behavior with explicit-only
+routing and unchanged repository gates. Live publication requires its own target.
+
+<!-- /REQUIREMENT: REQ-042 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

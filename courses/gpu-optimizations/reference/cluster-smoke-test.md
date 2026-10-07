@@ -13,18 +13,11 @@ profiler reports, and environment metadata private. Share only a sanitized
 summary that follows [evidence-security.md](evidence-security.md). A profiler
 run explains behavior; its instrumented duration is not acceptance timing.
 
-Before submitting jobs, restrict files created by the submitting shell:
-
-```bash
-```
-
-The launchers repeat this setting for child-process artifacts. It does not
-replace the cluster's storage and access-control policy.
-
-Confirm that the cluster owner supplied a platform-specific hash-locked
-environment or immutable image digest. `requirements.txt` is only a direct
-compatibility constraint. Stop before live execution if the approved lock or
-image identity is unavailable.
+Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for this
+course before submitting. Preparation creates private result/log directories
+and records installed runtime identities; launchers restore that runtime.
+Retain its receipts with the qualification evidence. Directory permissions do
+not replace the cluster's storage and access-control policy.
 
 ## Gate 1: compute-node tooling
 
@@ -52,10 +45,10 @@ Require two distinct nodes, one H100 per rank, world size 2, correct rank/device
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_timing_basics/logs/%j.out" \
-  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/single_gpu.sbatch labs/01_timing_basics.py --profile small
+  --error="$PWD/results/01_timing_basics/logs/%j.err" slurm/01_timing_basics.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/02_sync_trap/logs/%j.out" \
-  --error="$PWD/results/02_sync_trap/logs/%j.err" slurm/single_gpu.sbatch labs/02_sync_trap.py --profile small
+  --error="$PWD/results/02_sync_trap/logs/%j.err" slurm/02_sync_trap.sbatch --workload small
 ```
 
 Stop if the learner cannot explain the timed boundary or locate each synchronization.
@@ -67,19 +60,19 @@ First preserve unprofiled baseline and candidate distributions:
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case sync --mode baseline
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.sbatch --workload small --case sync --mode baseline
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case sync --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.sbatch --workload small --case sync --mode optimized
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case memory --mode baseline
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.sbatch --workload small --case memory --mode baseline
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case memory --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.sbatch --workload small --case memory --mode optimized
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case compute --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.sbatch --workload small --case compute --mode optimized
 ```
 
 Use Nsight Systems to compare synchronization and launch mechanisms:
@@ -87,16 +80,16 @@ Use Nsight Systems to compare synchronization and launch mechanisms:
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case sync --mode baseline
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.nsys.sbatch --workload small --case sync --mode baseline
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case sync --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.nsys.sbatch --workload small --case sync --mode optimized
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case launch --mode baseline
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.nsys.sbatch --workload small --case launch --mode baseline
 sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case launch --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.nsys.sbatch --workload small --case launch --mode optimized
 ```
 
 Use Nsight Compute only after selecting the material range and kernel:
@@ -104,13 +97,13 @@ Use Nsight Compute only after selecting the material range and kernel:
 ```bash
 NCU_SET=roofline NCU_SECTIONS=MemoryWorkloadAnalysis,SchedulerStats,WarpStateStats,Occupancy sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/ncu_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case memory --mode baseline
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.ncu.sbatch --workload small --case memory --mode baseline
 NCU_SET=roofline NCU_SECTIONS=MemoryWorkloadAnalysis,SchedulerStats,WarpStateStats,Occupancy sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/ncu_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case memory --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.ncu.sbatch --workload small --case memory --mode optimized
 NCU_SET=roofline NCU_SECTIONS=MemoryWorkloadAnalysis,SchedulerStats,WarpStateStats,Occupancy sbatch --chdir="$PWD" \
   --output="$PWD/results/14_profiler_bottlenecks/logs/%j.out" \
-  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/ncu_single_gpu.sbatch labs/14_profiler_bottlenecks.py --profile small --case compute --mode optimized
+  --error="$PWD/results/14_profiler_bottlenecks/logs/%j.err" slurm/14_profiler_bottlenecks.ncu.sbatch --workload small --case compute --mode optimized
 ```
 
 Confirm every requested set and section name in the preflight output before submitting the Nsight Compute jobs; names and composition are tool-version dependent. The Nsight Systems evidence must identify timeline gaps, blocking APIs, kernel spacing, copies, or overlap. The Nsight Compute evidence must name the selected kernel and distinguish defensible algorithmic estimates from report-derived arithmetic intensity, achieved throughput, traffic, scheduler, stall, and occupancy evidence. The pointwise case has no portable algorithmic FLOP count. If profiler access is unavailable, record the exact blocker and do not claim those findings.
@@ -120,19 +113,19 @@ Confirm every requested set and section name in the preflight output before subm
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_shape_precision/logs/%j.out" \
-  --error="$PWD/results/10_shape_precision/logs/%j.err" slurm/single_gpu.sbatch labs/10_shape_precision.py --profile small
+  --error="$PWD/results/10_shape_precision/logs/%j.err" slurm/10_shape_precision.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_compile_fusion/logs/%j.out" \
-  --error="$PWD/results/03_compile_fusion/logs/%j.err" slurm/single_gpu.sbatch labs/03_compile_fusion.py --profile small
+  --error="$PWD/results/03_compile_fusion/logs/%j.err" slurm/03_compile_fusion.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/04_cuda_graphs/logs/%j.out" \
-  --error="$PWD/results/04_cuda_graphs/logs/%j.err" slurm/single_gpu.sbatch labs/04_cuda_graphs.py --profile small
+  --error="$PWD/results/04_cuda_graphs/logs/%j.err" slurm/04_cuda_graphs.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/05_input_pipeline/logs/%j.out" \
-  --error="$PWD/results/05_input_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/05_input_pipeline.py --profile small
+  --error="$PWD/results/05_input_pipeline/logs/%j.err" slurm/05_input_pipeline.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/12_allocator_lifetime/logs/%j.out" \
-  --error="$PWD/results/12_allocator_lifetime/logs/%j.err" slurm/single_gpu.sbatch labs/12_allocator_lifetime.py --profile small
+  --error="$PWD/results/12_allocator_lifetime/logs/%j.err" slurm/12_allocator_lifetime.sbatch --workload small
 ```
 
 Keep a change only if its correctness check and the predeclared end-to-end metric pass.
@@ -149,16 +142,16 @@ Qualify complete transfer paths separately from Lab 05's serialized components:
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode serial --slots 2
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.sbatch --mode serial --slots 2
 sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode pipeline --slots 2
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.sbatch --mode pipeline --slots 2
 sbatch --chdir="$PWD" \
   --output="$PWD/results/20_d2h_pipeline/logs/%j.out" \
-  --error="$PWD/results/20_d2h_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/20_d2h_pipeline.py --mode serial --slots 2
+  --error="$PWD/results/20_d2h_pipeline/logs/%j.err" slurm/20_d2h_pipeline.sbatch --mode serial --slots 2
 sbatch --chdir="$PWD" \
   --output="$PWD/results/20_d2h_pipeline/logs/%j.out" \
-  --error="$PWD/results/20_d2h_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/20_d2h_pipeline.py --mode pipeline --slots 2
+  --error="$PWD/results/20_d2h_pipeline/logs/%j.err" slurm/20_d2h_pipeline.sbatch --mode pipeline --slots 2
 ```
 
 Follow the complete Lab 20 guide for the intervening workers, pooled and
@@ -175,7 +168,7 @@ storage-throughput experiment.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_capstone/logs/%j.out" \
-  --error="$PWD/results/09_capstone/logs/%j.err" slurm/single_gpu.sbatch labs/09_capstone.py --profile small
+  --error="$PWD/results/09_capstone/logs/%j.err" slurm/09_capstone.sbatch --workload small
 ```
 
 Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
@@ -187,10 +180,10 @@ Compare the one-node and two-node scaling runs using the same global batch. Use 
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/15_tail_load_balance/logs/%j.out" \
-  --error="$PWD/results/15_tail_load_balance/logs/%j.err" slurm/single_gpu.sbatch labs/15_tail_load_balance.py --profile small
+  --error="$PWD/results/15_tail_load_balance/logs/%j.err" slurm/15_tail_load_balance.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/16_library_first_decision/logs/%j.out" \
-  --error="$PWD/results/16_library_first_decision/logs/%j.err" slurm/single_gpu.sbatch labs/16_library_first_decision.py --profile small
+  --error="$PWD/results/16_library_first_decision/logs/%j.err" slurm/16_library_first_decision.sbatch --workload small
 ```
 
 Distinguish warp divergence, variable block work, rank skew, and a partial final

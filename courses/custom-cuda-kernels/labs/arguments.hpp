@@ -10,17 +10,17 @@ inline bool wants_help(int argc, char** argv) {
 }
 
 inline bool parse_small_profile(int argc, char** argv, int& index, bool& seen) {
-  if (seen || index + 1 >= argc) throw std::runtime_error("duplicate or incomplete --profile");
+  if (seen || index + 1 >= argc) throw std::runtime_error("duplicate or incomplete --workload");
   const std::string value(argv[++index]);
-  if (value != "small" && value != "large") throw std::runtime_error("--profile must be small or large");
+  if (value != "small" && value != "large") throw std::runtime_error("--workload must be small or large");
   seen = true;
   return value == "small";
 }
 
 inline bool small_profile(int argc, char** argv) {
   if (argc == 1) return false;
-  if (argc != 3 || std::string(argv[1]) != "--profile")
-    throw std::runtime_error("expected --profile small|large; use --help for usage");
+  if (argc != 3 || std::string(argv[1]) != "--workload")
+    throw std::runtime_error("expected --workload small|large; use --help for usage");
   int index = 1;
   bool seen = false;
   return parse_small_profile(argc, argv, index, seen);

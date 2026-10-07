@@ -109,7 +109,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify queue membership or resulting-commit ancestry and post-merge CI. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
-| `publish-release` | Explicit only | Publish a GitHub Release end to end: prepare release changes, PR/merge, tag, wait for workflow, verify assets, and report the result. |
+| `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, push/merge its PR, wait for approvals, tag and verify assets. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -128,14 +128,14 @@ measuring performance.
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Plan software changes against project design/code and standalone portable HTML documents, reports and presentations; include README hierarchy when relevant. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
+| `design` | Implicit allowed | Plan software changes and portable HTML artifacts against project docs/code; include README hierarchy when relevant. Use `nebius`, `ai-agent-design`, `ai-stack` and `app-stack` for applicable decisions without duplicate selection; use official-first `research` fallback when a specialist is missing. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
 | `helmchart` | Implicit allowed | Create, review, harden, refactor, lint, template, or standardize Helm charts and chart CI. |
 | `linter` | Implicit allowed | Lint and conservatively auto-fix shell, Markdown, and Python files with tools such as `shellcheck`, `markdownlint`, and Ruff. |
 | `maintain-project-specs` | Implicit allowed | Classify every direct root prompt, reconcile durable intent and delivery evidence through one canonical requirements/design pair, and migrate or validate specs without gating tools, Stop, or workflow completion. |
-| `nebius` | Implicit allowed | Build and inspect Nebius compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
+| `nebius` | Implicit allowed | Advise on Nebius provider constraints without requiring credentials or cloud actions; build and inspect compute, storage, networking, observability, IAM and API/SDK infrastructure with portable Python assets and bounded inspectors. |
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
@@ -1633,13 +1633,13 @@ report.
 
 ### `publish-release`
 
-`publish-release` publishes a package or application release to GitHub Releases
-end to end from the current project folder. It collects package and artifact
-inputs, can create setup assets when missing or explicitly requested, reuses a
-clean current feature branch for release prep or creates a release branch from
-the clean synced default branch, hands off to `create-pr` and `merge-pr`, tags
-only from the clean synced default branch, waits for the tag-triggered workflow,
-verifies the GitHub Release and expected assets, and returns a publish report.
+`publish-release` publishes a package or application release with one resumable
+invocation. It reviews and commits current repository work through `create-pr`,
+reuses the feature branch or creates a release branch from default, and merges
+through `merge-pr`. GitHub approval waits are visible and bounded to ten minutes;
+`--resume` continues after timeout. An isolated clone tags the exact verified
+merge result, and the skill verifies the matching workflow and downloaded assets
+before reporting the release URL. See its [README](publish-release/README.md).
 
 ### `python-project`
 

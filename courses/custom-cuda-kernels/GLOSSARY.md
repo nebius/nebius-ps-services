@@ -1,10 +1,15 @@
 # Glossary
 
 - **Aliasing** — two pointers or tensor views referring to overlapping storage; it changes safe read/write ordering.
+- **Atomic update** — An indivisible update to a memory location at the operation’s supported scope; it does not establish arbitrary ordering for other memory accesses.
 - **Bank conflict** — serialization when lanes access different words in the same bank; supported same-word broadcasts are not bank conflicts.
+- **Barrier** — A synchronization point that coordinates participating threads and the memory visibility guaranteed by that primitive and scope.
 - **Block** — a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
 - **Boundary handling** — Rules for safe and correct computation where a neighborhood or tile extends beyond the input.
+- **Bounds mask** — A condition that excludes out-of-range elements from a load, store or computation, especially in a partial tile.
+- **CCCL** — CUDA Core Compute Libraries; NVIDIA’s collection including Thrust, CUB and libcu++ for CUDA C++ programming.
 - **Coalescing** — combining warp memory requests into efficient transactions.
+- **Compute Sanitizer** — NVIDIA’s CUDA correctness tools for detecting supported memory-access, initialization, synchronization and shared-memory hazards.
 - **CUB** — CUDA C++ library of tuned parallel primitives.
 - **CUDA event** — a marker recorded in a CUDA stream to track completion or establish dependencies; timing-enabled events also record timestamps for elapsed-time measurement.
 - **CUDA stream** — an ordered sequence of device operations; callers must respect dependencies across streams and buffer lifetimes until completion.
@@ -14,16 +19,20 @@
 - **Epilogue** — work applied to matrix-accumulation results before final storage.
 - **Epsilon** — small positive stabilizer added before the RMSNorm inverse square root.
 - **FMA** — fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
+- **FP32** — 32-bit floating point; the input, accumulator and output types must be stated separately when evaluating a kernel.
 - **Fusion** — combining operations so intermediate traffic or launch overhead is reduced.
 - **GEMM** — general matrix multiplication, commonly including alpha/beta scaling of the product and existing output.
 - **Grid-stride loop** — indexing pattern in which each thread processes elements separated by the total grid width.
 - **Halo** — neighboring input values outside a tile's output region needed for a stencil's boundary outputs.
 - **Host / device** — the CPU-side program and the GPU-side execution environment; CUDA applications normally use both.
 - **Host-facing API** — the callable interface through which a consumer supplies data, shapes and an execution stream to a GPU implementation.
+- **ILP** — instruction-level parallelism; independent instructions within one thread that can make progress without waiting on one another’s results.
+- **Initcheck** — Compute Sanitizer’s checker for reads of uninitialized device global memory.
 - **Kernel** — a device function launched as a grid of thread blocks; a library API may launch several kernels and is not itself necessarily one kernel.
 - **Layout** — The mapping from logical tensor indices to storage addresses.
 - **Leading dimension** — the physical stride used to reach the next matrix row or column under the selected layout.
 - **Maintained library** — a supported implementation such as cuBLAS, cuDNN, CUB/CCCL or CUTLASS that should be evaluated before owning a custom implementation.
+- **Memcheck** — Compute Sanitizer’s checker for memory-access errors such as out-of-bounds or misaligned accesses, with allocation/leak diagnostics.
 - **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
 - **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
 - **Numerical tolerance** — The allowed difference between a computed result and its correctness reference.
@@ -33,15 +42,20 @@
 - **PTX / SASS** — Parallel Thread Execution, an intermediate GPU instruction representation / target-specific machine instructions.
 - **PTXAS** — CUDA assembler component that produces target device code and compiler resource reports.
 - **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Racecheck** — Compute Sanitizer’s checker for shared-memory data-access hazards; it is not a general proof of race freedom.
+- **RAII** — Resource Acquisition Is Initialization; C++ resource ownership and cleanup tied to an object’s lifetime, which must outlast asynchronous uses of that resource.
 - **Reduction** — Combining a collection of values into a smaller result, such as a sum.
 - **Register spill** — compiler placement of thread-local values into local memory.
+- **ReLU** — Rectified linear unit; an element-wise activation that returns the larger of zero and its input.
 - **RMSNorm** — normalization by root mean square, followed by learned scaling, without subtracting the mean.
 - **Shared memory** — explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
+- **SIMT** — single instruction, multiple threads; warp instructions operate on participating lanes with per-thread values.
 - **SM** — streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
 - **SM90** — baseline compute capability 9.0 target used for H100; future-device compatibility still depends on the included PTX/cubin and the CUDA compatibility contract.
 - **SM90a** — architecture-accelerated Hopper target with non-forward-compatible features.
 - **Source package** — source, headers, build instructions, tests and licensing that allow a consumer to build an implementation for a documented toolchain and GPU target.
 - **Stencil** — An operation that computes each output using a local neighborhood of input values.
+- **Synccheck** — Compute Sanitizer’s checker for invalid uses of supported synchronization primitives.
 - **Synchronization** — A dependency or wait that ensures required work has completed before dependent work proceeds.
 - **Tail wave** — a final partially filled grid wave; its idle fraction depends on the remaining blocks and resource-limited capacity.
 - **Thread-block cluster** — a group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.

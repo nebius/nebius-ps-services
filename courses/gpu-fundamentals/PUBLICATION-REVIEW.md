@@ -1,5 +1,77 @@
 # Publication review
 
+## Nine-course alignment — 2026-10-05
+
+Reviewed `index.html` SHA-256: `a04cf29283efd699818af8c9d008e3faa6d72ddd0f4250ffb09a5ede65d5dcda`.
+
+The complete nine-package alignment passes 2,503 offline tests, all nine native
+validators, build/helper parity and the align review/lint/security lanes.
+Responsive checks cover every page at desktop, 390px and 320px; final guide and
+PyTorch overview edits have fresh focused checks. See the
+[current alignment evidence](../docs/course-format-validation.md#nine-course-alignment--2026-10-05)
+for fixes, exact browser artifacts, preserved assets and remaining generic-checker,
+dense-diagram and live-qualification limits. Earlier entries retain their own scope.
+
+## Teaching consistency review — 2026-10-05
+
+Reviewed `index.html` SHA-256: `b6363a0ee0b6e3764410c981e49e966533fe60b7a9ae233d25caef629237ab15`.
+
+The catalog-wide semantic review covers all 89 chapters and 110 lab guides.
+Safe corrections align teaching, glossary entries and commands with supplied
+implementations while preserving this course's declared profile. Source/static
+validation passes; see the [complete consistency review](../docs/course-format-validation.md#complete-teaching-consistency-review--2026-10-05)
+for corrections, test results, artifact identities and remaining generic-checker
+and mobile-diagram limitations. Browser and live GPU qualification were not rerun.
+Earlier entries below apply to their own artifact identities.
+
+## Catalog presentation audit — 2026-10-05
+
+Reviewed `gpu-fundamentals/index.html` SHA-256:
+`0fcab9d688020749cd3e8f530a99634fd7bcb419be395a40db81e92428d4445e`.
+
+The complete eight-course review confirms shared typography, declared profile
+formatting, navigation and current HTML. All eight native validators and 380
+focused tests pass; three PyTorch runtime checks are skipped. Thirty headless
+Chrome 154.0.8037.93 checks cover all ten pages at 1440, 390 and 320 pixels,
+including keyboard controls, local scrollers and doubled-text reflow. These
+artifacts are unchanged by the build. Mobile diagram density and generic
+checker diagnostics remain explicitly qualified in the
+[complete evidence and artifact record](../docs/course-format-validation.md#complete-catalog-presentation-audit--2026-10-05).
+No live installation, GPU run or external publication is established.
+
+## Shared preparation referral review — 2026-10-03
+
+Current preparation teaching points once per course entry or lab guide to the
+shared Lab Guide, which selects the script by course and lab number. Duplicate
+installer commands and competing manual setup procedures were removed while
+preserving lab-specific prerequisites, native commands and historical results.
+
+Inspected `gpu-fundamentals/index.html` SHA-256:
+`0fcab9d688020749cd3e8f530a99634fd7bcb419be395a40db81e92428d4445e`.
+
+See [catalog preparation validation](../docs/catalog-preparation-validation.md)
+for the eight-course/110-lab audit, 536 passing tests, native validators, artifact
+identities and browser evidence at desktop/390px/320px. The final browser run had
+one intermittent 320px guide navigation failure; three unchanged affected-case
+replays passed. The observation and generic-checker limitations remain recorded.
+Installed/runtime/live qualification was not rerun. Earlier entries apply to
+their original artifacts.
+
+## Tools-first navigation review — 2026-10-02
+
+Source/static and browser checks pass for this navigation revision. GPU
+Performance Tools precedes GPU Fundamentals in every course/guide menu.
+Inspected `gpu-fundamentals/index.html` SHA-256:
+`23de2cc98fce3d7cd71337da66501da939c7ba1aacddbd4bfec0737d84fc7ac6`.
+
+See [catalog navigation validation](../docs/catalog-navigation-validation.md)
+for 243 focused tests, all eight native validators, 30 isolated headless Chrome
+checks at desktop/390px/320px, exact evidence paths and cleanup. Existing lesson
+bodies, lab sources, figures and results are preserved. The generic checker
+retains its pre-existing profile/markup limitations. This is local navigation
+evidence; runtime qualification and deployment are not claimed. Earlier review
+entries describe their own artifact revisions.
+
 ## One-time setup and native commands — 2026-10-01
 
 Artifact: `index.html`, SHA-256 `6236a89ccdc0705016da1bbf1dc5eb9fecb2d49c61abaa45514a2aeddefee432`.
@@ -768,3 +840,22 @@ switcher test pass. Current HTML identity and scoped browser evidence are in
 [the Soperator integration validation](../docs/soperator-course-validation.md).
 Earlier GPU publication reviews describe their own artifact revisions; live
 hardware/runtime qualification remains unchanged.
+
+## Build and browser audit — 2026-10-02
+
+Local build/static and browser checks pass for this page. See the
+[complete eight-course build audit](../docs/course-build-validation.md) for
+484 focused tests, all eight native validators, preservation checks, browser
+assertions and the generic skill-checker limitations. This audit preserves
+the existing teaching profile and does not change runtime qualification.
+
+Inspected artifact: `gpu-fundamentals/index.html`, SHA-256
+`438d6646e2be39a81edb9a3254d685adb12a1a88cd91b34e483645720520fa21`.
+Owned isolated headless Chrome 154.0.8037.93 rendered the complete page at
+1440×1000, 390×1000 and 320×1000 with JavaScript disabled, keyboard navigation,
+local scrollers, doubled-text reflow and zero automatic network requests.
+Visual captures were reviewed. Evidence group `course-build-audit-l57_57x5`,
+`browser-complete/publication-gpu-fundamentals-publication-WIDTH/`,
+contains the captures; `browser-complete.json` includes identity and assertion
+results. Final traces were disabled. Owned browser resources were closed.
+No live lab execution or external publication was performed.

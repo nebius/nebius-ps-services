@@ -4,7 +4,7 @@ Independent compute can overlap an asynchronous all-reduce only until a dependen
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -21,15 +21,15 @@ Independent compute can overlap an asynchronous all-reduce only until a dependen
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_distributed_profiling/logs/%j.out" \
   --error="$PWD/results/14_distributed_profiling/logs/%j.err" \
-  slurm/fabric.sbatch \
-  labs/14_distributed_profiling.py --profile small --overlap off
+  slurm/14_distributed_profiling.sbatch --workload small --overlap off
 ```
 
 ## Check your results
+
+Each new job owns `results/14_distributed_profiling/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/14_distributed_profiling/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -58,6 +58,7 @@ Select the two unprofiled result artifacts. The publisher checks equivalent para
 `publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it.
 
 ```bash
+source tools/course_env.sh 14_distributed_profiling --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 14_distributed_profiling \
   --baseline "${BASELINE_RESULT:?baseline JSON}" --candidate "${CANDIDATE_RESULT:?candidate JSON}" \
   --expected-generation "${COMPARISON_GENERATION:?0 initially; otherwise reviewed generation}"
@@ -72,43 +73,37 @@ In Grafana, select the workspace and profile. Require **Correctness of selected 
 On the login node, submit the baseline and candidate below. Save both job numbers and printed result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_distributed_profiling/logs/%j.out" \
-  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/14_distributed_profiling.sbatch --workload small --overlap off
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_distributed_profiling/logs/%j.out" \
-  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap on
+  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/14_distributed_profiling.sbatch --workload small --overlap on
 ```
 
 Slurm writes job logs under `results/14_distributed_profiling/logs/<job>.out` and `.err`. A submitted job is not a completed result.
 
 In Systems, select communication, independent_compute and wait_for_collective ranges and inspect CUDA/NCCL lanes on every rank. Is reduced waiting real overlap or a slower GEMM sharing resources? For framework attribution, make a separate --torch-trace run: open each rank JSON in a local Chrome trace viewer and inspect training_like_step, aten::mm and its input shapes, c10d collectives and CUDA activity. The workload reuses tensors allocated before recording, so allocation events may be absent even with memory profiling enabled. An empty allocation view does not mean the workload uses no GPU memory. Profiling adds overhead; do not compare those timings with clean runs or capture PyTorch and Systems simultaneously. Independently try the same fixed-shape comparison on one node; do not mix eight- and sixteen-rank slots.
 
-Capture separately from timing. Check exported statistics for every rank, then open representative `.nsys-rep` reports from each worker in Systems, loading large reports in small groups. Rank filenames retain the Slurm job and global rank; correlate matching phases across reports. Use a local-kernel exercise for Compute: replaying distributed collectives can stall their peers.
+Capture separately from timing. Check exported statistics for every rank, then open representative `.nsys-rep` reports from each worker in Systems, loading large reports in small groups. Report filenames contain the Slurm job, step, task ID and process ID. A torchrun task launches several workers, so its Slurm task ID is not a worker's global rank. Use the rank-to-host record and each report's process identity to correlate matching phases across workers. Use a local-kernel exercise for Compute: replaying distributed collectives can stall their peers.
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/14_distributed_profiling/logs/capture-%J-%t.out" \
-  --error="results/14_distributed_profiling/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 8 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/14_distributed_profiling/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/14_distributed_profiling.py --profile small --overlap off
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/14_distributed_profiling/logs/%j.out" \
+  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/14_distributed_profiling.nsys.sbatch --workload small --overlap off
 ```
+
+The native Systems command is in `slurm/14_distributed_profiling.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Repeat the unprofiled baseline and candidate after inspecting the trace. Instrumented artifacts are rejected by the comparison publisher.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/14_distributed_profiling/logs/%j.out" \
-  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/fabric.sbatch labs/14_distributed_profiling.py --profile small --overlap off --torch-trace
+  --error="$PWD/results/14_distributed_profiling/logs/%j.err" slurm/14_distributed_profiling.sbatch --workload small --overlap off --torch-trace
 ```
 
-Each trace is under `results/14_distributed_profiling/profiles/torch-<run-id>/rank-<rank>.json`; preserve the rank-to-host record privately.
+Each trace is under `results/14_distributed_profiling/jobs/$JOB_ID/results/14_distributed_profiling/profiles/torch-<run-id>/rank-<rank>.json`; preserve the rank-to-host record privately.
 
 **Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Check exported statistics for every rank, then open representative rank .nsys-rep reports from each worker. Load large reports in small groups and close them between comparisons. Expand CUDA streams, NCCL activity and available NVTX ranges; align collective boundaries and compare arrival, waiting and compute intervals across hosts. Use clock correlation before claiming cross-node overlap. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

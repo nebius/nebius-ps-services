@@ -20,6 +20,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   show_usage
   exit 0
 fi
+
+source tools/course_env.sh tooling_preflight.sbatch
 if [[ $# -ne 0 ]]; then
   show_usage >&2
   exit 2
@@ -29,7 +31,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   exit 2
 fi
 
-course_python="${COURSE_PYTHON:-python3}"
+course_python="${COURSE_PYTHON}"
 command -v "${course_python}" >/dev/null 2>&1 || {
   printf 'ERROR: Python command not found: %s\n' "${course_python}" >&2
   exit 2

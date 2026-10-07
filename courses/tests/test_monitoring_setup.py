@@ -19,7 +19,7 @@ def digest(data):
 
 @pytest.fixture
 def owned_monitoring(tmp_path, monkeypatch, request):
-    m = load("course_setup")
+    m = load("course_bootstrap/support")
     custom = getattr(request, "param", False)
     project = tmp_path / "deployment space"
     generated = project / "generated"
@@ -513,7 +513,7 @@ def test_actual_native_scrape_rejects_misleading_states(
 
 
 def test_kubectl_always_uses_explicit_connection(monkeypatch):
-    m = load("course_setup")
+    m = load("course_bootstrap/support")
     calls = []
     monkeypatch.setattr(
         m.subprocess,
@@ -545,7 +545,7 @@ def test_removed_installer_flags_are_rejected(flag):
     result = subprocess.run(
         [
             sys.executable,
-            str(ROOT / "tools/course_setup.py"),
+            str(ROOT / "tools/regular-lab-setup.py"),
             "monitoring",
             "--config",
             "config.yaml",

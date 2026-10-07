@@ -32,7 +32,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    sequence = 256 if args.profile == "small" else 2_048
+    sequence = 256 if args.workload == "small" else 2_048
     query = torch.randn((1, 8, sequence, 64), device="cuda", dtype=torch.bfloat16)
     key = torch.randn_like(query)
     value = torch.randn_like(query)

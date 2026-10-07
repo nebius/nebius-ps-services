@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 import pytest
+from native_job_fixtures import prepare_job, local_commands
 from test_course_review_fixes import COURSES, ROOT
 
 
@@ -16,7 +17,7 @@ from test_course_review_fixes import COURSES, ROOT
 def test_readme_gates_live_submission_before_first_job(course):
     document = (ROOT / course / "README.md").read_text()
     before_submit = document[: document.index("sbatch ")]
-    assert "../README.md#how-to-set-up-the-lab" in before_submit
+    assert "../lab-guide.html#lab-preparation-scripts" in before_submit
     assert "umask 077" not in document
     assert "VERSIONS.md" in before_submit
     assert "qualified" in before_submit or "approved" in before_submit
@@ -31,11 +32,12 @@ def test_readme_closing_invitation_has_no_stray_comma(course):
     assert "for optional reading" in " ".join(document.split())
 
 
-def test_cuda_readme_limits_direct_build_to_allocated_qualified_environment():
+def test_cuda_readme_separates_compile_only_setup_from_allocated_tests():
     document = (ROOT / "custom-cuda-kernels/README.md").read_text()
-    before_build = document[: document.index("cmake -S")]
-    assert "allocated H100" in before_build
-    assert "qualified" in before_build
+    before_test = document[: document.index("sbatch ")]
+    assert "without a GPU" in before_test
+    assert "GPU allocation" in before_test
+    assert "not GPU qualified" in before_test
 
 
 @pytest.mark.parametrize("tool", ["memcheck", "racecheck", "initcheck", "synccheck"])
@@ -44,6 +46,8 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
     tool, cpus, tmp_path
 ):
     """Run the real launcher with only Slurm execution replaced by an argv spy."""
+    prepare_job(tmp_path, "custom-cuda-kernels", "03_tiled_transpose")
+    commands = local_commands(tmp_path)
     capture = tmp_path / "argv.json"
     srun = tmp_path / "srun"
     srun.write_text(
@@ -58,22 +62,24 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
     runner.chmod(0o700)
     image = "docker://example.invalid/cuda@sha256:" + "a" * 64
     environment = {
-        "PATH": str(tmp_path) + os.pathsep + os.defpath,
+        "PATH": str(tmp_path) + os.pathsep + commands["PATH"],
         "SLURM_JOB_ID": "17",
         "CUDA_IMAGE_DIGEST": image,
         "COURSE_CONTAINER_RUNNER": str(runner),
         "TEST_ARGV": str(capture),
+        "COURSE_BUILD_DIR": "/qualified",
     }
     if cpus is not None:
         environment["SLURM_CPUS_PER_TASK"] = cpus
     completed = subprocess.run(
         [
             "bash",
-            str(ROOT / "custom-cuda-kernels/slurm/sanitizer.sbatch"),
+            str(ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sanitizer.sbatch"),
             tool,
-            "/qualified/03_tiled_transpose",
-            "--profile", "small",
+            "--workload",
+            "small",
         ],
+        cwd=tmp_path,
         env=environment,
         capture_output=True,
         text=True,
@@ -88,8 +94,6 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
     expected = [
         "--ntasks=1",
         "--gpus-per-task=1",
-        str(runner),
-        image,
         "compute-sanitizer",
         "--tool",
         tool,
@@ -102,7 +106,7 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
             "--force-synchronization-limit",
             "2",
         ]
-    expected += ["/qualified/03_tiled_transpose", "--profile", "small"]
+    expected += ["/qualified/03_tiled_transpose", "--workload", "small"]
     assert json.loads(capture.read_text()) == expected
 
 
@@ -119,10 +123,10 @@ def test_triton_launcher_passes_canonical_output_and_run_id(
     The extracted commands cannot start Slurm or an engine. Artifacts stay in
     pytest's temporary directory; HTTP is replaced inside the child process.
     """
-    source = (ROOT / "llm-inference/slurm/trtllm_triton.sbatch").read_text()
+    source = (ROOT / "llm-inference/slurm/30_engine_profile.trtllm.sbatch").read_text()
     identity = source[
         source.index("if [[ -z ${COURSE_RUN_ID:-} ]]; then") : source.index(
-            'mkdir -p "${course_dir}/results/30_engine_profile/logs"'
+            'mkdir -p "${COURSE_JOB_DIR}/logs"'
         )
     ]
     invocation = source[
@@ -156,6 +160,8 @@ client_python() {
 }
 course_python=client_python
 course_dir=${TEST_COURSE_DIR}
+export COURSE_JOB_DIR="${course_dir}/results/owned/jobs/123"
+export COURSE_RESULTS_DIR="${COURSE_JOB_DIR}/results"
 http_port=20000
 model=tensorrt_llm
 profile=llmapi
@@ -190,7 +196,7 @@ max_token_field=sampling_param_max_tokens
     run_id = re.search(r"SERVER_RUN_ID=([0-9a-f]{12})", completed.stdout)[1]
     if supplied_run_id:
         assert run_id == supplied_run_id
-    output = tmp_path / "results" / f"30_engine_profile-run-{run_id}.json"
+    output = tmp_path / "results/owned/jobs/123/results" / f"30_engine_profile-run-{run_id}.json"
     if not isinstance(response_text, str) or not response_text:
         assert completed.returncode != 0
         assert "did not contain generated text" in completed.stderr
@@ -214,10 +220,10 @@ def test_chunked_launcher_shares_run_id_with_both_policy_clients(
     supplied_run_id, tmp_path
 ):
     """Execute the real identity handoff and clients with fixture HTTP only."""
-    source = (ROOT / "llm-inference/slurm/vllm_chunked_prefill_ab.sbatch").read_text()
+    source = (ROOT / "llm-inference/slurm/34_policy_equivalence_client.sbatch").read_text()
     identity = source[
         source.index("if [[ -z ${COURSE_RUN_ID:-} ]]; then") : source.index(
-            'mkdir -p "${course_dir}/results/34_policy_equivalence_client/logs"'
+            'mkdir -p "${COURSE_JOB_DIR}/logs"'
         )
     ]
     invocation = source.split("  if [[ ${phase} == probe ]]; then\n", 1)[1].split(
@@ -259,6 +265,8 @@ client_python() {
 }
 course_python=client_python
 course_dir=${TEST_COURSE_DIR}
+export COURSE_JOB_DIR="${course_dir}/results/owned/jobs/123"
+export COURSE_RESULTS_DIR="${COURSE_JOB_DIR}/results"
 port=20000
 model=fixture
 revision=1234567890123456789012345678901234567890
@@ -286,7 +294,7 @@ trial=1
     run_id = re.search(r"SERVER_RUN_ID=([0-9a-f]{12})", completed.stdout)[1]
     if supplied_run_id:
         assert run_id == supplied_run_id
-    base = tmp_path / "results" / f"chunked-prefill-ab-run-{run_id}"
+    base = tmp_path / "results/owned/jobs/123/results" / f"chunked-prefill-ab-run-{run_id}"
     for variant in ("disabled", "enabled"):
         output = base / f"{variant}-trial-1-digests.json"
         payload = json.loads(output.read_text())

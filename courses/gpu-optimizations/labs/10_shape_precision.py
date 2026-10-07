@@ -29,7 +29,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    aligned = 1_024 if args.profile == "small" else 4_096
+    aligned = 1_024 if args.workload == "small" else 4_096
     misaligned = aligned - 7
     rows = []
     all_finite = True

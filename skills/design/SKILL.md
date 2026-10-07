@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Design non-SDLC features, architectures, ADRs, proven contract-changing remediations, or standalone portable HTML documents, reports and presentations. Ground plans in existing code and project docs; implement only on explicit request. Route due diligence to research, agent design to ai-agent-design, stack choices to app-stack/ai-stack, unknown failures to troubleshoot, and checklist reviews to system-design-rules."
+description: "Design non-SDLC features, architectures, ADRs, proven contract-changing remediations, or standalone portable HTML artifacts. Ground plans in code and docs; implement only on explicit request. Use research for due diligence, ai-agent-design for AI behavior, app-stack/ai-stack for stack choices, and nebius for Nebius constraints. Route unknown failures to troubleshoot and checklist reviews to system-design-rules."
 ---
 
 # Design
@@ -179,6 +179,11 @@ When only model access, training, inference, interoperability, retrieval, or AI
 technology selection is undecided, use `ai-stack` directly and follow its
 required reads. Do not copy its workload or compatibility framework here.
 
+When Nebius services, infrastructure, deployment or integrations materially
+affect the design, use `nebius` and its matching category references, even when
+Nebius is the fixed provider. For any specialist handoff, read the routing and
+research-fallback rules in `references/design-workflow.md` before deciding.
+
 ## Workflow
 
 Always move through these phases in order. Keep each phase proportional to risk
@@ -233,47 +238,48 @@ Record only design-relevant findings: constraints, supported patterns,
 version-specific APIs, limits, migration considerations, security implications,
 and unknowns. Mark anything unverified instead of treating it as fact.
 
-### Phase 4: Delegate Agent Design And Stack Decisions
+### Phase 4: Use Specialist Skills
 
-Use `app-stack` when the design must select, review, simplify, or modernize the
-application stack, including choices for frontend or client, web server, API
-framework and runtime, backend service, data and database layer, asynchronous
-work, deployment, or observability. This applies to a whole greenfield stack
-and to one unresolved layer in an otherwise established system.
+Resolve each applicable named skill from the active catalog or its sibling
+skill folder. Load its full `SKILL.md` through the host's skill mechanism or
+file reader, follow its required references and apply its scoped advisory
+workflow. Mentioning a skill or reading its description is not using it.
+Reuse a skill already loaded in this task; skill use does not require a
+subagent or authorize delegation, implementation or live changes.
 
-Give `app-stack` the requirements, quality attributes, brownfield constraints,
-team and operational context, and relevant research evidence. Let it own the
-technology comparison, smallest justified stack, component status, rationale,
-and revisit triggers. Bring its decision back into `design` for cross-layer
-interfaces, data and control flow, failure handling, rollout, and `/plan`.
-Treat this as a scoped adviser handoff; do not transfer the complete design or
-re-enter `design` recursively.
+Pass requirements, quality attributes, current implementation, fixed decisions,
+operational constraints, research evidence and the bounded decision needed.
+Consume the returned decision and evidence; `design` owns cross-layer synthesis
+and the complete plan. Follow this order for applicable scopes:
 
-Skip `app-stack` when the applicable technologies are already approved and no
-stack choice is being reconsidered. Record that fixed-stack boundary instead
-of reopening the decision.
+1. Consult `nebius` for provider constraints before finalizing Nebius-dependent
+   choices, including for a fixed provider. Use its design-only advisory path;
+   no credentials, cloud inventory or provisioning preflight are required.
+2. Use `ai-agent-design` for unsettled AI behavior, topology, authority,
+   contracts, context, memory, recovery, evaluation or governance. Preserve its
+   four-class capability map and frozen subsystem contract. It obtains the
+   `ai-stack` component decision when model-backed capabilities remain.
+3. Use `ai-stack` directly when only AI component choices remain. Reuse any
+   decision returned by `ai-agent-design`; do not request it a second time.
+   Deterministic-only outcomes skip AI selection. Any classification made by
+   a direct stack-only invocation remains provisional under its own contract.
+4. Use `app-stack` for undecided or reconsidered application layers, including
+   frontend, API/runtime, services, data, asynchronous work, deployment and
+   observability. Pass completed AI decisions as fixed inputs so its nested
+   routing does not select them again. Retain component status and rationale.
 
-Identify each material AI subsystem and its product constraints. When its
-behavior, topology, policy, or contracts need design, delegate that scoped
-subsystem once to `ai-agent-design`. It owns the definitive capability map—
-deterministic code, direct model calls, deterministic AI workflows, and
-agents—plus the agent-specific topology, authority, context, state, recovery,
-evaluation, and governance decisions. Bring the complete logical subsystem
-back into `design` without re-entering either workflow.
+Skip settled application/AI decisions unless the request reopens them; do not
+skip relevant Nebius constraints solely because the provider is fixed. Reuse
+completed handoffs and never recurse into an active owning workflow. New
+blocking evidence returns a bounded conflict to the decision owner.
 
-`ai-agent-design` passes its frozen workload and policy contract to `ai-stack`
-for component and technology selection. `ai-stack` owns models, providers,
-SDKs, runtimes, durability technology, interoperability, retrieval, and AI
-operations components; it must not reopen the frozen behavior, topology,
-policy, or contract decision. When the request is only an undecided AI
-technology layer and no agent-subsystem design is needed, call `ai-stack`
-directly and treat any local behavior classification as provisional.
-
-When both product and AI layers are undecided, keep the adviser handoffs scoped:
-`app-stack` owns the surrounding application, `ai-agent-design` owns the AI
-subsystem behavior and policy contract, and `ai-stack` owns AI component and
-technology selection. `design` owns their integration. Skip any handoff whose
-decisions are already fixed.
+If an applicable specialist is unavailable, use `research` for the bounded
+missing evidence, then synthesize the fallback in `design`. Prioritize official
+vendor sources, then reputable established community sources for missing or
+insufficient coverage. Label provenance, assumptions and unverified claims.
+If `research` is also unavailable, apply that hierarchy directly. Report the
+fallback honestly; unresolved material facts limit plan readiness, and no
+fallback bypasses permissions, explicit-only invocation or workflow ownership.
 
 ### Phase 5: Design Solution
 
@@ -452,6 +458,10 @@ short answer is explicitly requested:
   policy, or contracts, or the fixed-agent-subsystem/skipped rationale.
 - `ai-stack` decision for undecided or reconsidered AI component choices, or
   the fixed-AI-stack/skipped rationale.
+- `nebius` provider guidance for relevant designs, including fixed-provider
+  constraints, evidence limits and later validation needs, or a skip rationale.
+- Actual specialist use, skipped scopes and unavailable-skill research
+  fallbacks; distinguish returned decisions from unverified assumptions.
 - Deterministic-code, direct-call, deterministic-workflow, or agent
   classification for every AI-enabled capability, including the reason an
   agent is necessary.
@@ -470,7 +480,8 @@ short answer is explicitly requested:
 
 - Read `references/design-workflow.md` for the detailed phase checklist,
   brownfield and greenfield paths, `research`, `app-stack`,
-  `ai-agent-design`, and `ai-stack` handoff guidance, `system-design-rules`
+  `ai-agent-design`, `ai-stack`, and `nebius` handoffs and research fallbacks,
+  `system-design-rules`
   decision review guidance, and `/plan` handoff template.
 - Read `references/readme-design.md` for the conditional README design scope
   in Required Reads: structure, TOC, examples, formatting, documentation

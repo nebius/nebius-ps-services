@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: "Build and inspect Nebius infrastructure with Python SDK patterns across compute, storage, networking, observability, IAM and API/SDK. Route Terraform, Helm, cxcli lifecycle, Grafana queries and agent-auth setup to their owners."
+description: "Design, build and inspect Nebius infrastructure across compute, storage, networking, observability, IAM and API/SDK. Advise design on provider constraints without credentials or cloud actions. Route Terraform, Helm, cxcli lifecycle, Grafana queries and agent-auth setup to their owners."
 ---
 
 # Nebius
@@ -60,7 +60,31 @@ Read only the matching category and conditional references before decisions:
 | Discover service coverage, API versions and maturity | `references/service-catalog.md` |
 | Adapt project patterns into reusable automation | `references/adoption-patterns.md` |
 
-## Workflow
+## Design-Only Consultation
+
+For a design-only request or a scoped handoff from `design`, use this advisory
+path instead of the operational workflow below. Consult relevant Nebius
+constraints even when the provider is already fixed; preserve settled
+application technologies and AI behavior/component decisions.
+
+1. Establish the outcome, workload, known provider/region constraints, fixed
+   decisions and bounded design question. Credentials and exact resource IDs
+   are not prerequisites for documentation-based planning.
+2. Read the matching category/conditional references and verify volatile
+   provider claims against current official sources. Keep service availability,
+   actual capacity, quota and compatibility distinct; unresolved project facts
+   become assumptions or later validation needs, not invented inventory.
+3. Return constraints, feasible service options, integration prerequisites,
+   lifecycle owners, sources, uncertainty and required later validation. Return
+   to the active design owner without re-entering `design` or selecting its
+   application/AI stack; `ai-stack` retains model and runtime selection.
+
+Do not establish credentials, run inspectors or execute provisioning preflight
+merely to complete this consultation. Separately authorized scoped discovery
+may supply evidence under the operational rules below; it never becomes an
+implicit requirement or authority for mutations, auth setup or diagnostics.
+
+## Operational Workflow
 
 1. Establish explicit project, region, credentials, resource identities,
    intended outcome, workflow owner and permitted effects. Preserve task-owned
@@ -133,4 +157,6 @@ output quality and live product validation as separate evidence lanes.
 Return the concrete result and evidence limits. For inspection, include scope,
 collected metadata, completeness and sanitized errors. For partial writes,
 retain safe operation/resource IDs and the required reconciliation step.
+For design-only consultation, return the bounded provider guidance above and
+distinguish documentation evidence from pending project or live validation.
 Do not claim deployment, installation or live readiness from source checks.

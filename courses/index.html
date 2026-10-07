@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Six free Nebius courses, an Advanced Labs collection and a shared Lab Guide: explore Slurm, GPUs, language models and custom kernels.">
+<meta name="description" content="Eight free Nebius courses, an Advanced Labs collection and a shared Lab Guide: explore Slurm, PyTorch, GPUs, language models and custom kernels.">
 <title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
 <style>:root {
   color-scheme: light;
@@ -73,8 +73,6 @@ h1 span { color: var(--teal); }
 .course-card:target { border-color: var(--teal); }
 .card-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
 .course-number { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 7px; background: #edf6f0; color: var(--teal); font: 13px ui-monospace, monospace; }
-.resource-gpu-fundamentals .course-number, .resource-llm-training .course-number { background: #eef5fc; color: var(--blue); }
-.resource-llm-inference .course-number { background: #fff7e7; color: #86500e; }
 .course-hours { color: var(--muted); font-size: 11px; }
 .card-eyebrow { color: var(--teal); font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .08em; line-height: 1.5; margin: 0 0 10px; }
 .course-card h3 { font-size: 23px; line-height: 1.2; letter-spacing: -.035em; margin: 0 0 16px; font-weight: 650; text-wrap: balance; }
@@ -166,16 +164,16 @@ h1 span { color: var(--teal); }
 <main id="main"><header class="hero">
 <div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
 <h1>GPU Performance<br><span>Engineering</span></h1>
-<p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then build your GPU mental model and explore language models and custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
+<p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then read GPU Performance Tools and PyTorch for GPU Performance Engineering before GPU Fundamentals and its labs. Continue with GPU Performance Optimization before choosing language models or custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
 <div class="hero-actions"><a class="button primary" href="soperator/index.html">Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" href="lab-guide.html">Set up and run the labs <span aria-hidden="true">→</span></a></div>
 <p class="platform-note">GPU performance · Linux · Slurm</p></div>
 <aside class="learning-map" id="learning-path" aria-labelledby="path-title">
-<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">8 resources</span></div>
+<div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">10 resources</span></div>
 <h2 id="path-title">A foundation.<br>Then your direction.</h2>
-<p class="path-group-label">Getting started · Learn the cluster, then prepare for practice</p><ol class="path-foundations path-group-foundations" start="1"><li value="1"><span class="path-step" aria-hidden="true">01</span><a href="#soperator">Soperator<small>Understand the cluster behind your jobs</small></a></li><li value="2"><span class="path-step" aria-hidden="true">02</span><a href="#lab-guide">Lab Guide<small>Prepare once, then run the labs</small></a></li></ol><p class="path-group-label">GPU foundations · Take these in order</p><ol class="path-foundations path-group-foundations" start="3"><li value="3"><span class="path-step" aria-hidden="true">03</span><a href="#gpu-fundamentals">GPU Fundamentals<small>Understand the machine</small></a></li><li value="4"><span class="path-step" aria-hidden="true">04</span><a href="#gpu-optimizations">GPU Performance Optimization<small>Turn measurements into decisions</small></a></li></ol><p class="path-group-label">Specializations · Choose your direction</p><ol class="path-foundations path-group-specializations" start="5"><li value="5"><span class="path-step" aria-hidden="true">05</span><a href="#llm-training">LLM Training<small>Understand how models learn</small></a></li><li value="6"><span class="path-step" aria-hidden="true">06</span><a href="#llm-inference">LLM Inference<small>Follow a request from prompt to tokens</small></a></li><li value="7"><span class="path-step" aria-hidden="true">07</span><a href="#custom-cuda-kernels">Custom CUDA Kernels for GPU Optimization<small>Make the hardware your programming model</small></a></li></ol><p class="path-group-label">Advanced communication labs · Two eight-H100 workers with InfiniBand</p><ol class="path-foundations path-group-advanced" start="8"><li value="8"><span class="path-step" aria-hidden="true">08</span><a href="#advanced-gpu-communication">Advanced Labs<small>Follow the bytes between GPUs</small></a></li></ol>
-<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. The three specializations are independent. Start any of them after the two GPU foundation courses. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
+<p class="path-group-label">Getting started · Learn the cluster, then prepare for practice</p><ol class="path-foundations path-group-foundations" start="1"><li value="1"><span class="path-step" aria-hidden="true">01</span><a href="#soperator">Soperator<small>Understand the cluster behind your jobs</small></a></li><li value="2"><span class="path-step" aria-hidden="true">02</span><a href="#lab-guide">Lab Guide<small>Prepare once, then run the labs</small></a></li></ol><p class="path-group-label">GPU foundations · Take these in order</p><ol class="path-foundations path-group-foundations" start="3"><li value="3"><span class="path-step" aria-hidden="true">03</span><a href="#gpu-performance-tools">GPU Performance Tools<small>Understand the evidence</small></a></li><li value="4"><span class="path-step" aria-hidden="true">04</span><a href="#pytorch-gpu-performance-engineering">PyTorch for GPU Performance Engineering<small>Read the tensor work</small></a></li><li value="5"><span class="path-step" aria-hidden="true">05</span><a href="#gpu-fundamentals">GPU Fundamentals<small>Understand the machine</small></a></li><li value="6"><span class="path-step" aria-hidden="true">06</span><a href="#gpu-optimizations">GPU Performance Optimization<small>Turn measurements into decisions</small></a></li></ol><p class="path-group-label">Specializations · Choose your direction</p><ol class="path-foundations path-group-specializations" start="7"><li value="7"><span class="path-step" aria-hidden="true">07</span><a href="#llm-training">LLM Training<small>Understand how models learn</small></a></li><li value="8"><span class="path-step" aria-hidden="true">08</span><a href="#llm-inference">LLM Inference<small>Follow a request from prompt to tokens</small></a></li><li value="9"><span class="path-step" aria-hidden="true">09</span><a href="#custom-cuda-kernels">Custom CUDA Kernels for GPU Optimization<small>Make the hardware your programming model</small></a></li></ol><p class="path-group-label">Advanced communication labs · Two eight-H100 workers with InfiniBand</p><ol class="path-foundations path-group-advanced" start="10"><li value="10"><span class="path-step" aria-hidden="true">10</span><a href="#advanced-gpu-communication">Advanced Labs<small>Follow the bytes between GPUs</small></a></li></ol>
+<p class="path-note">Soperator introduces the Slurm concepts used throughout the courses. Read GPU Performance Tools for command and profiler explanations, then PyTorch for GPU Performance Engineering for tensor operations and GPU execution. Continue directly to Fundamentals and the practical labs. The three specializations are independent. Start any of them after Fundamentals and Optimization. Then use the <a href="#advanced-gpu-communication">advanced communication labs</a> when you have a sixteen-GPU cluster.</p></aside>
 </header>
-<div class="catalog-facts" aria-label="Catalog overview"><p><strong>6</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">110 practical labs.<br>Free to read.</p></div>
+<div class="catalog-facts" aria-label="Catalog overview"><p><strong>8</strong> courses</p><p><strong>1</strong> Advanced Labs collection</p><p><strong>1</strong> Lab Guide</p><p class="fact-note">110 practical labs.<br>Free to read.</p></div>
 <section id="catalog" class="catalog-section" aria-labelledby="catalog-title"><div class="section-heading"><div><p class="eyebrow">The course collection</p><h2 id="catalog-title">Build understanding.<br>Put it to work.</h2></div><p>Begin with the foundations, then follow the questions that matter to your workload.</p></div>
 <div class="collection-label"><span>01 / Getting started</span><p>Learn the cluster, then prepare for practice</p></div><div class="course-grid foundations"><article class="course-card resource-soperator" id="soperator">
 <div class="card-top"><span class="course-number">01</span><span class="course-hours">2 guided hours</span></div>
@@ -193,16 +191,32 @@ h1 span { color: var(--teal); }
 <div class="course-tags" aria-label="Topics"><span>Shared setup</span><span>Lab execution</span><span>Results</span></div>
 <div class="card-bottom"><p class="prerequisite">Use before running labs; no setup needed to read the courses</p>
 <a class="course-link" href="lab-guide.html" aria-label="Read Lab Guide">Read guide <span aria-hidden="true">↗</span></a></div>
-</article></div><div class="collection-label"><span>02 / GPU foundations</span><p>Take these in order</p></div><div class="course-grid foundations"><article class="course-card resource-gpu-fundamentals" id="gpu-fundamentals">
-<div class="card-top"><span class="course-number">03</span><span class="course-hours">21 guided hours</span></div>
+</article></div><div class="collection-label"><span>02 / GPU foundations</span><p>Take these in order</p></div><div class="course-grid foundations"><article class="course-card resource-gpu-performance-tools" id="gpu-performance-tools">
+<div class="card-top"><span class="course-number">03</span><span class="course-hours">1 guided hours</span></div>
+<p class="card-eyebrow">Understand the evidence</p><h3>GPU Performance Tools</h3>
+<p class="course-description">A concise reference for native Slurm jobs, NVIDIA Nsight, PyTorch profiler and Grafana metrics.</p>
+<ul class="course-outcomes"><li>Read profiler commands and flags</li><li>Distinguish timelines, counters and operator summaries</li><li>Follow metrics from collection to dashboard queries</li></ul>
+<div class="course-tags" aria-label="Topics"><span>Nsight</span><span>PyTorch</span><span>Reference · No labs</span></div>
+<div class="card-bottom"><p class="prerequisite">Read before GPU Fundamentals and practical labs; no cluster required</p>
+<a class="course-link" href="gpu-performance-tools/index.html" aria-label="Read GPU Performance Tools">Read course <span aria-hidden="true">↗</span></a></div>
+</article><article class="course-card resource-pytorch-gpu-performance-engineering" id="pytorch-gpu-performance-engineering">
+<div class="card-top"><span class="course-number">04</span><span class="course-hours">3 guided hours</span></div>
+<p class="card-eyebrow">Read the tensor work</p><h3>PyTorch for GPU Performance Engineering</h3>
+<p class="course-description">A visual PyTorch foundation with small commented examples: shapes, operations, memory and GPU execution before the practical courses.</p>
+<ul class="course-outcomes"><li>Follow shapes, dtypes and devices</li><li>Distinguish views, copies and reductions</li><li>Recognize transfers and completion boundaries</li></ul>
+<div class="course-tags" aria-label="Topics"><span>PyTorch</span><span>Visual examples</span><span>Lessons only · No labs</span></div>
+<div class="card-bottom"><p class="prerequisite">Basic Python; read before GPU Fundamentals; no GPU required</p>
+<a class="course-link" href="pytorch-gpu-performance-engineering/index.html" aria-label="Read PyTorch for GPU Performance Engineering">Read course <span aria-hidden="true">↗</span></a></div>
+</article><article class="course-card resource-gpu-fundamentals" id="gpu-fundamentals">
+<div class="card-top"><span class="course-number">05</span><span class="course-hours">21 guided hours</span></div>
 <p class="card-eyebrow">Understand the machine</p><h3>GPU Fundamentals</h3>
 <p class="course-description">Build a working mental model of GPU execution before you begin optimizing. Connect what your code does to the hardware that runs it.</p>
 <ul class="course-outcomes"><li>Explain threads, warps and scheduling</li><li>Reason about memory and precision</li><li>Read topology and health evidence</li></ul>
 <div class="course-tags" aria-label="Topics"><span>Execution</span><span>Memory</span><span>Precision</span></div>
-<div class="card-bottom"><p class="prerequisite">No previous GPU course required</p>
+<div class="card-bottom"><p class="prerequisite">Read GPU Performance Tools and PyTorch for GPU Performance Engineering before the labs</p>
 <a class="course-link" href="gpu-fundamentals/index.html" aria-label="Read GPU Fundamentals">Read course <span aria-hidden="true">↗</span></a></div>
 </article><article class="course-card resource-gpu-optimizations" id="gpu-optimizations">
-<div class="card-top"><span class="course-number">04</span><span class="course-hours">44 guided hours</span></div>
+<div class="card-top"><span class="course-number">06</span><span class="course-hours">44 guided hours</span></div>
 <p class="card-eyebrow">Turn measurements into decisions</p><h3>GPU Performance Optimization</h3>
 <p class="course-description">Learn a repeatable approach to improving PyTorch workloads: establish a baseline, find the limiter, make one change and measure again.</p>
 <ul class="course-outcomes"><li>Asynchronous performance measurement</li><li>Use profiler evidence to find bottlenecks</li><li>Evaluate changes with equivalent work</li></ul>
@@ -210,7 +224,7 @@ h1 span { color: var(--teal); }
 <div class="card-bottom"><p class="prerequisite">Prerequisite: GPU Fundamentals</p>
 <a class="course-link" href="gpu-optimizations/index.html" aria-label="Read GPU Performance Optimization">Read course <span aria-hidden="true">↗</span></a></div>
 </article></div><div class="collection-label"><span>03 / Specializations</span><p>Choose your direction</p></div><div class="course-grid specializations"><article class="course-card resource-llm-training" id="llm-training">
-<div class="card-top"><span class="course-number">05</span><span class="course-hours">52 guided hours</span></div>
+<div class="card-top"><span class="course-number">07</span><span class="course-hours">52 guided hours</span></div>
 <p class="card-eyebrow">Understand how models learn</p><h3>LLM Training</h3>
 <p class="course-description">Connect the learning objective to the systems that make training possible. Explore correctness, memory, precision and distributed execution.</p>
 <ul class="course-outcomes"><li>Preserve the intended learning objective</li><li>Manage training memory and precision</li><li>Investigate communication and recovery</li></ul>
@@ -218,7 +232,7 @@ h1 span { color: var(--teal); }
 <div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
 <a class="course-link" href="llm-training/index.html" aria-label="Read LLM Training">Read course <span aria-hidden="true">↗</span></a></div>
 </article><article class="course-card resource-llm-inference" id="llm-inference">
-<div class="card-top"><span class="course-number">06</span><span class="course-hours">52 guided hours</span></div>
+<div class="card-top"><span class="course-number">08</span><span class="course-hours">52 guided hours</span></div>
 <p class="card-eyebrow">Follow a request from prompt to tokens</p><h3>LLM Inference</h3>
 <p class="course-description">Understand how language models generate responses, then explore the trade-offs between serving capacity, latency, throughput and quality.</p>
 <ul class="course-outcomes"><li>Explain prefill, decode and KV caches</li><li>Measure latency and throughput</li><li>Evaluate batching and serving behavior</li></ul>
@@ -226,7 +240,7 @@ h1 span { color: var(--teal); }
 <div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
 <a class="course-link" href="llm-inference/index.html" aria-label="Read LLM Inference">Read course <span aria-hidden="true">↗</span></a></div>
 </article><article class="course-card resource-custom-cuda-kernels" id="custom-cuda-kernels">
-<div class="card-top"><span class="course-number">07</span><span class="course-hours">36 guided hours</span></div>
+<div class="card-top"><span class="course-number">09</span><span class="course-hours">36 guided hours</span></div>
 <p class="card-eyebrow">Make the hardware your programming model</p><h3>Custom CUDA Kernels for GPU Optimization</h3>
 <p class="course-description">Learn when a custom kernel is warranted, then build, validate and profile CUDA C++ kernels against a clear correctness and performance baseline.</p>
 <ul class="course-outcomes"><li>Map computations to GPU execution</li><li>Build and validate CUDA kernels</li><li>Compare custom code with library baselines</li></ul>
@@ -234,17 +248,17 @@ h1 span { color: var(--teal); }
 <div class="card-bottom"><p class="prerequisite">Prerequisites: Fundamentals + Optimization</p>
 <a class="course-link" href="custom-cuda-kernels/index.html" aria-label="Read Custom CUDA Kernels for GPU Optimization">Read course <span aria-hidden="true">↗</span></a></div>
 </article></div><div class="collection-label"><span>04 / Advanced communication labs</span><p>Two eight-H100 workers with InfiniBand</p></div><div class="course-grid "><article class="course-card resource-advanced-gpu-communication" id="advanced-gpu-communication">
-<div class="card-top"><span class="course-number">08</span><span class="course-hours">64 guided hours</span></div>
+<div class="card-top"><span class="course-number">10</span><span class="course-hours">64 guided hours</span></div>
 <p class="card-eyebrow">Follow the bytes between GPUs</p><h3>Advanced Labs: Multi-GPUs Multi-Nodes communication optimization</h3>
 <p class="course-description">A laboratory course for sixteen H100 GPUs. Diagnose communication, tune training throughput and investigate distributed serving latency.</p>
 <ul class="course-outcomes"><li>Measure NVLink and InfiniBand paths</li><li>Overlap training communication</li><li>Tune Dynamo routing and KV transfers</li></ul>
 <div class="course-tags" aria-label="Topics"><span>16 H100 GPUs</span><span>InfiniBand</span><span>Labs only</span></div>
-<div class="card-bottom"><p class="prerequisite">Prerequisites: GPU profiling + the relevant training or inference course; 16 H100 GPUs</p>
+<div class="card-bottom"><p class="prerequisite">Fundamentals + Optimization + relevant training or inference foundations, or equivalent readiness; 16 H100 GPUs</p>
 <a class="course-link" href="advanced-gpu-communication/index.html" aria-label="Read Advanced Labs: Multi-GPUs Multi-Nodes communication optimization">Read course <span aria-hidden="true">↗</span></a></div>
 </article></div></section>
-<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">From concepts to evidence</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>The five GPU courses connect explanations to experiments. The Soperator introduction explains the cluster and commands through text examples. The advanced course develops communication skills through complete labs.</p></div>
+<section class="approach" aria-labelledby="approach-title"><div><p class="eyebrow">From concepts to evidence</p><h2 id="approach-title">Learn. Practice. Review.</h2><p>The five practical GPU courses connect explanations to experiments. The Soperator introduction explains the cluster and commands through text examples. GPU Performance Tools introduces profiling and metrics before those experiments, without requiring labs. PyTorch for GPU Performance Engineering builds tensor fluency through diagrams and commented examples. The advanced course develops communication skills through complete labs.</p></div>
 <ol><li><span>01</span><div><h3>Learn the mechanism</h3><p>Start with definitions, mental models and diagrams.</p></div></li><li><span>02</span><div><h3>Work through the experiment</h3><p>Read the prerequisites, explore the code and run the supplied lab.</p></div></li><li><span>03</span><div><h3>Explain the evidence</h3><p>Check correctness, interpret measurements and decide what to investigate next.</p></div></li></ol></section>
-<p class="environment-note">Read every course in your browser. The Soperator introduction requires no cluster. Run GPU-course labs in their documented Linux and Slurm environment with the specified hardware, dependencies and readiness checks.</p>
+<p class="environment-note">Read every course in your browser. Soperator, GPU Performance Tools and PyTorch for GPU Performance Engineering require no cluster to read. Run GPU-course labs in their documented Linux and Slurm environment with the specified hardware, dependencies and readiness checks.</p>
 <footer class="license-footer">
 <small>© 2026 Nebius B.V. Provided free of charge for learning and education.
 Licensed under <a href="#license">Apache License 2.0</a>.<br>

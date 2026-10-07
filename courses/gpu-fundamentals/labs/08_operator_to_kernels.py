@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+import os
 
 from common import (
     add_common_args,
@@ -29,8 +30,8 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 1_024 if args.profile == "small" else 4_096
-    batch = 64 if args.profile == "small" else 256
+    width = 1_024 if args.workload == "small" else 4_096
+    batch = 64 if args.workload == "small" else 256
     values = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
     bias = torch.randn((width,), device="cuda", dtype=torch.bfloat16)
@@ -43,6 +44,9 @@ def main() -> None:
     for _ in range(args.warmup):
         workload()
     torch.cuda.synchronize()
+    measured_workload = annotated_operation(workload, "course_measure")
+    if not args.external_only:
+        os.environ["COURSE_PROFILE_TOOL"] = "torch"
     with (nullcontext() if args.external_only else torch.profiler.profile(
         activities=[
             torch.profiler.ProfilerActivity.CPU,
@@ -52,7 +56,7 @@ def main() -> None:
     )) as profiler:
         loss = None
         for _ in range(args.iterations):
-            loss = workload()
+            loss = measured_workload()
             if profiler is not None:
                 profiler.step()
     assert loss is not None
@@ -90,4 +94,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    annotated_operation(main, "lab_workload")()
+    main()

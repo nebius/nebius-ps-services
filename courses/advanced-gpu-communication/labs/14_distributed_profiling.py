@@ -26,8 +26,8 @@ def main():
     validate_common_args(args)
     torch, rank, world, _local, env = initialize(args.seed)
     try:
-        size = 1024 if args.profile == "small" else 4096
-        elements = (4 if args.profile == "small" else 64) * 2**20 // 4
+        size = 1024 if args.workload == "small" else 4096
+        elements = (4 if args.workload == "small" else 64) * 2**20 // 4
         x = torch.randn(size, size, device="cuda")
         y = torch.randn_like(x)
         reference = x @ y

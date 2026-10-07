@@ -65,7 +65,7 @@ def main():
     nodes = allocated_nodes()
     binary = qualified_binary("perftest_read_lat")
     folder = private_folder(args, "27_rdma_latency")
-    size = 64 if args.profile == "small" else 4096
+    size = 64 if args.workload == "small" else 4096
     port = 35000 + int(os.environ["SLURM_JOB_ID"]) % 10000
     with Processes(folder) as processes:
         children = []

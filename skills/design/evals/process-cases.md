@@ -77,8 +77,10 @@ browser, offline or print checks before an artifact is implemented and tested.
 
 Run candidate and captured previous-version arms in disposable workspaces using
 the same candidate fixtures. Do not substitute HEAD for accepted working bytes.
-The runner installs only the target skill; fixed-stack local cases must report
-unavailable specialists or spec-owner handoffs rather than claim they ran.
+The runner installs only the target skill; unavailable specialist scopes use the
+research fallback, with direct ranked research when research is also missing.
+Spec-owner handoffs remain explicit and never gain a second document writer.
+Do not claim absent skills ran.
 
 Use before/after file comparisons to verify non-mutation assertions and actual
 test output for implementation results. The existing runner supplies bounded
@@ -130,3 +132,50 @@ Exercise these additional process cases in actual host sessions:
 Report `STATIC_PASS`, `RUNTIME_PASS`, `QUALITY_PASS`, `NOT_RUN`, `UNAVAILABLE`
 or `FAIL` per lane. Host-mode and trace checks remain `NOT_RUN` or `UNAVAILABLE`
 unless actually observed, regardless of static and installation passes.
+
+## Specialist Routing And Research Fallback
+
+Quality cases 15–20 cover mixed Nebius/AI/application designs, direct AI-stack
+selection, fixed-provider/fixed-stack advice, deterministic-only classification,
+missing-specialist fallback and application-only scope. These output assertions
+can assess honest unavailable-skill behavior in an isolated single-skill run;
+they do not prove actual multi-skill activation or order.
+
+For a fresh native Codex or Claude process check, expose the candidate design,
+nebius, ai-agent-design, ai-stack, app-stack and research skills in a disposable
+catalog. Use the same sibling versions, synthetic requests and public-document
+access in candidate and captured-baseline runs. Do not copy host credentials;
+if no authorized isolated authentication is available, report UNAVAILABLE.
+Keep actual host mode, authorization and before/after workspace state in the
+verification record. No live cloud target, inventory or auth setup is required.
+
+Review successful native skill/file-read traces plus the bounded handoff inputs,
+returned decisions and synthesized plan for these scenarios:
+
+1. Combined design (case 15): load applicable Nebius guidance before dependent
+   choices; ai-agent-design freezes behavior and obtains one ai-stack decision;
+   app-stack receives that result as fixed. No duplicate component selection or
+   re-entry into active design occurs. A mere skill-name mention is insufficient.
+2. AI components only (case 16): use ai-stack directly; preserve settled AI
+   behavior and application choices. Application-only work (case 20) uses
+   app-stack and skips unrelated AI and Nebius scopes.
+3. Fixed provider (case 17): still consult nebius, but skip fixed application
+   selection and irrelevant AI scopes. Verify no credential setup, inspectors,
+   preflight execution or cloud mutations occur. Also exercise nebius quality
+   cases 5–6 directly and as scoped handoffs.
+4. Deterministic-only outcome (case 18): no model/agent component selection,
+   even if the initial request uses the word agent or needs durable waits.
+5. Missing specialist (case 19): omit app-stack from the disposable catalog;
+   observe research loading and a bounded evidence handoff, with official
+   sources first and reputable community fallback only for missing coverage.
+   Repeat without research and expect explicit direct research under the same
+   hierarchy. Preserve completed decisions if a nested specialist is missing.
+   Missing tools or denied operations never authorize a bypass.
+6. Boundaries: help loads only the requested skill then stops; implementation-
+   only, provider-only and SDLC-owned requests retain their respective owners.
+
+Source definitions, static validators and final self-reports cannot prove these
+process claims. The current isolated runner copies one skill and exposes only
+summarized results; use separate fresh-session traces for this matrix or mark
+it NOT_RUN/UNAVAILABLE. Report source checks, actual activation, comparative
+quality and cloud evidence independently.

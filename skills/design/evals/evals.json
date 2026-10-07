@@ -235,6 +235,80 @@
         "Uses deliberate complete-print pagination and suitable orientation without forcing A3; includes details outside the selected view and keeps essential print content available without JavaScript.",
         "Includes all ten artifact acceptance areas with the stated projection viewport, narrow layout/enlarged text, reduced motion, renamed/relocated files, attempted requests and actual-browser reporting; makes no validation or implementation claims and leaves the workspace unchanged."
       ]
+    },
+    {
+      "id": 15,
+      "prompt": "Use $design to plan a fictional AI support product on Nebius. Incoming tickets need deterministic access checks, retrieval and a model response; ambiguous cases may need bounded dynamic investigation. Approval policy, AI components and application technologies are unsettled. Return the complete design and plan without implementation, credentials or live cloud discovery.",
+      "expected_output": "Scoped Nebius constraints, frozen AI behavior, one AI-component decision and surrounding application selection, with honest unavailable-skill fallback.",
+      "files": [],
+      "assertions": [
+        "Identifies the material nebius, ai-agent-design, ai-stack and app-stack scopes, or explicitly identifies unavailable specialists and applies the documented research fallback.",
+        "Uses provider constraints before finalizing dependent choices and separates documented support from unknown project capacity or availability.",
+        "Freezes AI behavior and policy before AI component selection and reuses any returned component decision as fixed input to app-stack rather than selecting it twice.",
+        "Keeps complete design ownership with design and distinguishes actual consultations from proposed or unavailable handoffs.",
+        "Does not implement, provision, configure authentication or demand credentials for documentation-only planning."
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Use $design to plan retrieval integration into a fictional existing product. The application stack and AI behavior, authority and data contracts are approved and fixed. Only retrieval and model-serving components remain undecided. Do not implement.",
+      "expected_output": "Direct ai-stack consultation for the unresolved layer without reopening fixed agent or application decisions.",
+      "files": [],
+      "assertions": [
+        "Routes unresolved AI components directly to ai-stack or clearly reports its absence and bounded research fallback.",
+        "Preserves approved behavior and application technologies; does not start agent-topology design or unrelated application-stack selection.",
+        "Integrates the returned or evidence-backed fallback component decision with interfaces and acceptance checks in one design.",
+        "Does not claim an unavailable skill was invoked."
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Use $design to plan a fictional reporting feature on Nebius. Python, PostgreSQL, all application components and deployment model are approved and fixed; there is no AI behavior. Nebius is also fixed. Check provider integration constraints from documentation only, with no credentials or project inventory.",
+      "expected_output": "Nebius advice remains applicable with a fixed provider while settled stack and AI scopes are skipped.",
+      "files": [],
+      "assertions": [
+        "Consults nebius or reports its absence and bounded research fallback despite the fixed provider.",
+        "Skips app-stack selection and both AI specialists with the appropriate fixed-stack or no-AI rationale.",
+        "Preserves fixed technologies and distinguishes provider evidence from project-specific capacity, quota and readiness.",
+        "Does not request credentials or run inventory, provisioning preflight or cloud actions merely for design."
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Use $design to plan an automation someone has called an AI agent. Every step and transition is known: validate a record, request human approval, wait up to a month, execute a deterministic transformation and verify the result. No step needs model reasoning or generation. The runtime is already approved. Do not implement.",
+      "expected_output": "Deterministic-only capability classification and no unnecessary AI technology selection.",
+      "files": [],
+      "assertions": [
+        "Classifies the specified capabilities as deterministic despite the initial agent label and durable wait.",
+        "Does not select models or agent runtimes; records that no AI component is required.",
+        "Uses ai-agent-design only if classification actually requires resolution, with an honest fallback if unavailable.",
+        "Preserves the approved runtime and designs deterministic approval, recovery and verification boundaries."
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Use $design to plan a fictional service with an unresolved application-stack choice. app-stack is unavailable in this environment. First use research for official vendor documentation; suppose a decision-relevant operational limitation has no official coverage but is discussed by an established maintainer community. Keep uncertain facts explicit and do not implement.",
+      "expected_output": "Research supplies ranked evidence for a design-owned fallback without fabricated specialist execution.",
+      "files": [],
+      "assertions": [
+        "Explicitly identifies app-stack as unavailable and requests bounded research rather than treating a description as specialist execution.",
+        "Uses research when available; if research is also unavailable, says so and applies the same hierarchy directly.",
+        "Prioritizes official vendor sources and consults reputable community sources for the stated coverage gap while labeling provenance and uncertainty.",
+        "Does not fabricate citations or treat community-only limitations as verified provider behavior; unresolved material facts limit readiness.",
+        "Keeps design synthesis with design and performs no implementation or external changes."
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use $design to plan a fictional non-AI scheduling application. The frontend, API and database technologies are undecided. It will run in a generic approved hosting environment; no Nebius services are involved. Provide the design and implementation plan without implementing.",
+      "expected_output": "Only the unresolved application stack is delegated, with unrelated AI and provider scopes skipped.",
+      "files": [],
+      "assertions": [
+        "Uses app-stack for surrounding application selection or explicitly identifies its absence and bounded research fallback.",
+        "Does not introduce AI behavior, model selection or Nebius provider requirements.",
+        "Keeps complete design synthesis with design and records skipped irrelevant specialist scopes.",
+        "Returns a plan without implementation or provisioning."
+      ]
     }
   ]
 }

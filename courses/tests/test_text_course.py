@@ -231,7 +231,7 @@ def test_text_next_steps_link_to_shared_setup(text_validator):
     document = cb_pages.render_course("soperator")
     assert "Lab 00" not in document
     assert (
-        'href="../lab-guide.html#how-to-set-up-the-lab">shared environment setup</a>'
+        'href="../lab-guide.html#lab-preparation-scripts">shared environment setup</a>'
         in document
     )
     text_validator.validate_document(document)

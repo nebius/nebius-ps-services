@@ -4,7 +4,7 @@ GRPO uses rewards from multiple completions of the same prompt to construct a re
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100. The calculation below shows how group rewards become normalized advantages; `--group-size` controls the number of completions in each group.
 
@@ -14,9 +14,9 @@ H100 accelerates policy inference and training differently. Variable decode leng
 
 The code generates reward groups and old, new and reference log probabilities. It normalizes each group's rewards, forms the clipped new-to-old surrogate and minimizes its negative plus `0.02 * (exp(d)-d-1)`, where `d = reference_log_probability - new_log_probability`. Backward differentiates this toy loss with respect to new log probabilities. There is no language model, rollout engine or optimizer update, and the sampled penalty is not a full-policy KL measurement.
 
-Given four rewards `[1, 1, 2, 4]`, the mean is 2 and centered advantages are `[-1,-1,0,2]`; normalize only with a declared epsilon and deviation rule. Change to `[3,3,3,3]`. Expected observation: zero variance produces zero or otherwise explicitly handled advantages, not NaNs; the report also shows rollout and reward time before claiming trainer optimization. For a separate clipping calculation with epsilon=0.2 and A=+1, ratio=1.5 gives min(1.5,1.2)=1.2: increasing the already-favored action beyond the upper clip adds no surrogate reward. With A=-1 and ratio=0.5, min(-0.5,-0.8)=-0.8: decreasing the disfavored action below the lower clip likewise stops improving this term. Opposite-direction changes can remain unclipped. Walk through these terms before interpreting gradients or the optional reference penalty.
+Given four rewards `[1, 1, 2, 4]`, the mean is 2 and centered advantages are `[-1,-1,0,2]`; normalize only with a declared epsilon and deviation rule. Change to `[3,3,3,3]`. Expected observation: zero variance produces zero or otherwise explicitly handled advantages, not NaNs. This is a hand calculation, not a report of rollout or reward time. For a separate clipping calculation with epsilon=0.2 and A=+1, ratio=1.5 gives min(1.5,1.2)=1.2: increasing the already-favored action beyond the upper clip adds no surrogate reward. With A=-1 and ratio=0.5, min(-0.5,-0.8)=-0.8: decreasing the disfavored action below the lower clip likewise stops improving this term. Opposite-direction changes can remain unclipped. Walk through these terms before interpreting gradients or the optional reference penalty.
 
-Verify finite gradients before interpreting objective timing. A synthetic reward pattern checks the update plumbing; it does not establish model quality.
+Verify finite gradients before interpreting the objective scalars. This script records no objective, rollout or reward timings. A synthetic reward pattern checks the loss and gradient plumbing; it does not establish model quality.
 
 ## Practice
 
@@ -25,15 +25,15 @@ Verify finite gradients before interpreting objective timing. A synthetic reward
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/06_grpo_objective/logs/%j.out" \
   --error="$PWD/results/06_grpo_objective/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/06_grpo_objective.py --profile small
+  slurm/06_grpo_objective.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/06_grpo_objective/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/06_grpo_objective/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -52,7 +52,7 @@ Reading JSON is inspection, not validation. Check `lab_id`, `experiment.slurm_jo
 
 Require zero-mean group advantages within the implemented tolerance and finite gradients. Inspect `loss`, `mean_approximate_kl`, and `max_group_advantage_mean_error`. These checks do not establish that rewards represent quality or that a learned policy improves.
 
-Record candidate groups, rewards, normalized advantages, ratios, clipping, KL term, gradients, and policy version.
+Use the code and hand calculation to trace rewards, normalized advantages, ratios, clipping and the penalty term. Retain the reported group size, loss, approximate divergence and correctness checks. Recording policy versions and rollout/reward phase timings requires a separate full-loop experiment with actual model policies; they are not outputs of this lab.
 
 Generation often dominates elapsed time, while the objective determines whether the update is meaningful. A synthetic reward can validate mechanics but cannot support a policy-quality claim.
 
@@ -65,9 +65,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Mean approximate kl | `mean_approximate_kl` | `none` |
 | Max group advantage mean error | `max_group_advantage_mean_error` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 06_grpo_objective --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 06_grpo_objective \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -83,15 +84,15 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the default group size, then change only that size to inspect the group statistics. This is an objective mechanics exercise, not a throughput benchmark of a GRPO system.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/06_grpo_objective/logs/%j.out" \
-  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/06_grpo_objective.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/06_grpo_objective/logs/%j.out" \
-  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/single_gpu.sbatch labs/06_grpo_objective.py --profile small --group-size 4
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/06_grpo_objective.sbatch --workload small --group-size 4
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Work out how a completion with above-group-average reward affects the surrogate when its probability ratio grows. Explain why clipping differs from simply clipping rewards, and why identical rewards within a group provide no relative preference.
 
@@ -100,35 +101,24 @@ Larger groups improve relative comparison but multiply rollout cost. Disaggregat
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/06_grpo_objective/logs/capture-%J-%t.out" \
-  --error="results/06_grpo_objective/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/06_grpo_objective/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/06_grpo_objective.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/06_grpo_objective/logs/%j.out" \
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/06_grpo_objective.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/06_grpo_objective.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 The Compute command selects the first reduction kernel inside `grpo_objective`, after random rewards and log-probabilities are constructed. This objective is reduction and elementwise work, so no matrix-kernel filter is applied. One kernel does not prove the complete loss or backward pass. Verify the selected kernel and its enclosing NVTX range against Systems before interpreting counters. Clean executions retain the original callable and do not enter these capture annotations.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/06_grpo_objective/logs/capture-%J-%t.out" \
-  --error="results/06_grpo_objective/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include grpo_objective/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/06_grpo_objective/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/06_grpo_objective.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/06_grpo_objective/logs/%j.out" \
+  --error="$PWD/results/06_grpo_objective/logs/%j.err" slurm/06_grpo_objective.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/06_grpo_objective.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

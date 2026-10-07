@@ -44,7 +44,7 @@ __global__ void scatter_grouped(const float* grouped_output, float* logical_outp
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 06_divergence_tail [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 06_divergence_tail [--workload small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 4096, 1U << 25);
     const auto properties = require_course_gpu();

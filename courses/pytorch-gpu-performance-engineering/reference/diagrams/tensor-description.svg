@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 450" role="img" aria-labelledby="pt-tensor-description-title pt-tensor-description-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-tensor-description-title">One tensor, three attributes and an element count</title>
+  <desc id="pt-tensor-description-desc">The same six-element matrix has two rows and three columns, stores 32-bit floating-point values and lives in CPU memory. Element count and element representation are separate facts.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>x = [[1, 2, 3], [4, 5, 6]]</tspan></text>
+    <rect x="16" y="48" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="78" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <text x="160" y="108" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2 rows, 3 columns</tspan></text>
+    <rect x="16" y="150" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="180" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32</tspan></text>
+    <text x="160" y="210" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>4 bytes per element</tspan></text>
+    <rect x="16" y="252" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="282" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="312" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Values live in CPU memory</tspan></text>
+    <text x="160" y="390" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Element count: 2 × 3 = 6</tspan></text>
+    <text x="160" y="428" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All three describe the same x</tspan></text>
+  </g>
+</svg>

@@ -37,7 +37,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    sequence = 512 if args.profile == "small" else 2_048
+    sequence = 512 if args.workload == "small" else 2_048
     batch, heads, head_dim = 2, 8, 64
     rows = []
     for label, query_length, causal in (

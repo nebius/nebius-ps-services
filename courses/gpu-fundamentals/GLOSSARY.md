@@ -16,20 +16,24 @@
 - **DMA** — direct memory access; transfer hardware moves data without CPU instructions copying each byte.
 - **Dot product** — The sum of products of matching entries in two sequences; matrix multiplication combines one row and one column this way.
 - **ECC** — error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
-- **ECN / CNP / PFC** — congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
+- **ECN / CNP / PFC** — Explicit congestion notification / congestion notification packet / priority flow control; respectively, congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
 - **Eligible warp** — a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
 - **Fabric** — the connected links and switches carrying traffic among endpoints.
 - **FMA** — fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
+- **FP16** — 16-bit floating point with a smaller exponent range than BF16; numerical range and rounding affect which workloads can use it safely.
+- **FP32** — 32-bit floating point, commonly used for parameters, accumulations and numerical references; storage dtype alone does not identify the arithmetic path.
+- **FP64** — 64-bit floating point, offering greater precision and range at a different storage and hardware-throughput cost.
+- **FP8** — Eight-bit floating-point formats whose range and precision depend on the selected format and scaling recipe.
 - **GEMM** — general matrix multiplication, often expressed as C = alpha × A × B + beta × C.
 - **Global memory** — CUDA device-wide address space for data accessible to threads across blocks, normally backed by HBM and serviced through caches.
-- **GPC** — graphics processing cluster, a replicated top-level on-chip processing group that contains TPCs; the enabled count varies by H100 product.
-- **GPC (graphics processing cluster)** — A hardware group containing TPCs; the Hopper architecture description also uses GPU processing cluster.
+- **GPC** — graphics processing cluster, also called GPU processing cluster in the Hopper architecture description; a top-level hardware group containing TPCs, with enabled counts varying by H100 product.
 - **GPU / device** — a parallel processor that executes supported kernels; it accelerates suitable workloads, not arbitrary CPU instructions automatically.
 - **GPU-resident tensor** — a tensor whose data is stored in GPU memory, independently of whether a kernel is currently using it.
 - **GPUDirect RDMA** — supported direct access between a network adapter and GPU memory, avoiding a host payload-staging buffer.
 - **Grid** — all thread blocks launched for one kernel invocation.
 - **HBM** — high-bandwidth memory, the device memory that stores tensors, temporary buffers and other device allocations.
 - **HCA** — host channel adapter, an RDMA endpoint adapter term; its device name is distinct from an IP-interface name.
+- **ILP** — instruction-level parallelism; independent instructions within one thread that can make progress without waiting on one another’s results.
 - **InfiniBand** — a switched network architecture supporting RDMA with compatible adapters, links and a subnet manager.
 - **Issued warp** — an eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
 - **JIT** — just-in-time compilation, such as translating compatible PTX when loading GPU code.
@@ -48,8 +52,7 @@
 - **NUMA** — non-uniform memory access; host-memory cost depends on CPU/socket locality.
 - **NVLink** — a high-bandwidth interconnect between supported GPU endpoints; not a generic server-network configuration switch.
 - **NVSwitch** — switching hardware connecting endpoints within a supported NVLink fabric; different from an InfiniBand switch.
-- **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
-- **NVTX (NVIDIA Tools Extension Library)** — NVIDIA's annotation API for adding named markers and ranges to application code. Nsight Systems shows these labels on a timeline; Nsight Compute can use ranges to select GPU work for analysis. NVTX annotations do not synchronize GPU work or measure GPU execution time by themselves.
+- **NVTX** — NVIDIA Tools Extension Library; annotation API for named markers and ranges. Nsight Systems displays these labels; Nsight Compute can use ranges to select GPU work. Annotations neither synchronize nor measure GPU execution by themselves.
 - **Occupancy** — active (resident) warps per SM relative to its maximum supported active warps. Theoretical occupancy is a resource limit; achieved occupancy is measured during execution.
 - **Pinned memory** — page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
 - **PTX** — Parallel Thread Execution, NVIDIA’s virtual instruction-set representation that a compatible driver can translate.
@@ -66,8 +69,7 @@
 - **Shared memory** — explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
 - **SIMT** — single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
 - **SM** — streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
-- **SMSP** — streaming multiprocessor subpartition, an SM subdivision with its own warp scheduler, dispatch resources, register-file implementation partition, and associated execution resources.
-- **SMSP (SM subpartition)** — One of four scheduling and execution subdivisions within an H100 SM.
+- **SMSP** — streaming multiprocessor subpartition; one of four H100 SM scheduling and execution subdivisions, with a warp scheduler, dispatch resources, register-file partition and associated execution resources.
 - **Subnet manager** — the operator-owned InfiniBand service responsible for discovering and configuring subnet paths.
 - **Synchronization** — A dependency or wait that ensures required work has completed before dependent work proceeds.
 - **Tail wave** — a final partially filled scheduling wave that leaves resources idle.
@@ -76,8 +78,7 @@
 - **TF32** — TensorFloat-32, a Tensor Core compute mode for selected FP32 matrix operations, not a tensor storage dtype.
 - **Thread-block cluster** — a group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.
 - **Tile** — A rectangular piece of a matrix processed as a unit of work; its elements need not map one-to-one to threads.
-- **TPC** — texture processing cluster; in Hopper, a TPC contains two SMs within a GPC.
-- **TPC (texture processing cluster)** — A hardware group containing two SMs on H100.
+- **TPC** — texture processing cluster; an H100 hardware group containing two SMs within a GPC.
 - **Triton program** — one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
 - **Warp** — 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.
 - **Xid** — an NVIDIA driver error classification that guides investigation; the code alone is not a diagnosis.

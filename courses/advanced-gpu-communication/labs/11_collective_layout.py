@@ -20,7 +20,7 @@ def main():
     validate_common_args(args)
     torch, rank, world, local, env = initialize(args.seed)
     try:
-        count = (1 if args.profile == "small" else 64) * 2**20 // 4
+        count = (1 if args.workload == "small" else 64) * 2**20 // 4
         # Every rank creates every group in the same order, including nonmembers.
         local_groups = [
             torch.distributed.new_group(list(range(start, start + 8)))

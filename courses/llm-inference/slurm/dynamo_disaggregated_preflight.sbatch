@@ -12,6 +12,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf 'Usage: DYNAMO_IMAGE_DIGEST=... sbatch [Slurm --name=value options] %s\n' "$0"
   exit 0
 fi
+
+source tools/course_env.sh dynamo_disaggregated_preflight.sbatch
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then printf 'ERROR: submit with sbatch.\n' >&2; exit 2; fi
 : "${DYNAMO_IMAGE_DIGEST:?set the exact qualified Dynamo image digest}"
 : "${COURSE_CONTAINER_RUNNER:?set the shared path to the reviewed container runner}"

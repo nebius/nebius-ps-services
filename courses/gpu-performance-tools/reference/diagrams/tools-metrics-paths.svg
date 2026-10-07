@@ -1,0 +1,70 @@
+<svg viewBox="0 0 600 840" role="img" aria-labelledby="tools-metrics-paths-title tools-metrics-paths-desc">
+<title id="tools-metrics-paths-title">Metrics collection and Grafana queries follow separate paths</title>
+<desc id="tools-metrics-paths-desc">In the collection path, the publisher validates selected result JSON and pushes benchmark gauges to Pushgateway. VMAgent scrapes both Pushgateway and GPU/node exporters, then writes their samples to VictoriaMetrics. Blue arrows follow the samples; VMAgent initiates both scrapes. In the query path, Grafana uses its Prometheus datasource to query the same VictoriaMetrics storage through its query API. Green arrows distinguish the query request from returned data, which Grafana displays in panels.</desc>
+<defs>
+<marker id="metrics-paths-blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#245880"/></marker>
+<marker id="metrics-paths-green-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 1 1 L 9 5 L 1 9 Z" fill="#206757"/></marker>
+</defs>
+<rect x="1" y="1" width="598" height="838" rx="16" fill="#ffffff" stroke="#c9d5dc" stroke-width="1.5"/>
+<g font-family="Arial, sans-serif">
+<text x="24" y="40" font-size="32" fill="#24343d" font-weight="700">From metrics to panels</text>
+<text x="24" y="75" font-size="20" fill="#52626b">Collection feeds storage; queries read it</text>
+<line x1="24" y1="95" x2="576" y2="95" stroke="#dce5e9"/>
+
+<text x="24" y="132" font-size="22" fill="#245880" font-weight="700">1  Collection · samples move to storage</text>
+<rect x="24" y="166" width="146" height="76" rx="8" fill="#f6f8fa" stroke="#a3bdd4" stroke-width="1.5"/>
+<text x="97" y="198" font-size="22" text-anchor="middle" fill="#24343d" font-weight="700">Result JSON</text>
+<text x="97" y="224" font-size="18" text-anchor="middle" fill="#52626b">Selected run</text>
+<rect x="227" y="166" width="146" height="76" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<text x="300" y="198" font-size="22" text-anchor="middle" fill="#245880" font-weight="700">Publisher</text>
+<text x="300" y="224" font-size="18" text-anchor="middle" fill="#52626b">Validates JSON</text>
+<rect x="430" y="166" width="146" height="76" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<text x="503" y="198" font-size="20" text-anchor="middle" fill="#245880" font-weight="700">Pushgateway</text>
+<text x="503" y="224" font-size="18" text-anchor="middle" fill="#52626b">Result gauges</text>
+<path d="M 176 210 H 218" fill="none" stroke="#245880" stroke-width="2" marker-end="url(#metrics-paths-blue-arrow)"/>
+<text x="198" y="193" font-size="17" text-anchor="middle" fill="#245880">read</text>
+<path d="M 379 210 H 421" fill="none" stroke="#245880" stroke-width="2" marker-end="url(#metrics-paths-blue-arrow)"/>
+<text x="400" y="193" font-size="17" text-anchor="middle" fill="#245880">push</text>
+
+<rect x="24" y="314" width="214" height="82" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<text x="131" y="347" font-size="22" text-anchor="middle" fill="#245880" font-weight="700">GPU / node</text>
+<text x="131" y="377" font-size="22" text-anchor="middle" fill="#245880" font-weight="700">exporters</text>
+<rect x="362" y="314" width="214" height="82" rx="8" fill="#eef5fc" stroke="#a3bdd4" stroke-width="1.5"/>
+<text x="469" y="347" font-size="24" text-anchor="middle" fill="#245880" font-weight="700">VMAgent</text>
+<text x="469" y="376" font-size="18" text-anchor="middle" fill="#52626b">Collects both sources</text>
+<path d="M 503 248 V 276 H 469 V 305" fill="none" stroke="#245880" stroke-width="2" marker-end="url(#metrics-paths-blue-arrow)"/>
+<text x="449" y="284" font-size="20" text-anchor="end" fill="#245880">scrape</text>
+<path d="M 244 361 H 353" fill="none" stroke="#245880" stroke-width="2" marker-end="url(#metrics-paths-blue-arrow)"/>
+<text x="299" y="345" font-size="20" text-anchor="middle" fill="#245880">scrape</text>
+
+<text x="24" y="446" font-size="20" fill="#52626b">Arrows follow samples.</text>
+<text x="24" y="474" font-size="20" fill="#52626b">VMAgent initiates</text>
+<text x="24" y="502" font-size="20" fill="#52626b">both scrapes.</text>
+<path d="M 469 402 V 445" fill="none" stroke="#245880" stroke-width="2" marker-end="url(#metrics-paths-blue-arrow)"/>
+<text x="489" y="430" font-size="20" fill="#245880">write</text>
+<rect x="362" y="454" width="214" height="70" rx="8" fill="#fff7e7" stroke="#c3a16c" stroke-width="1.5"/>
+<text x="469" y="483" font-size="22" text-anchor="middle" fill="#86500e" font-weight="700">VictoriaMetrics</text>
+<text x="469" y="509" font-size="18" text-anchor="middle" fill="#52626b">Stores metric samples</text>
+
+<line x1="24" y1="548" x2="576" y2="548" stroke="#dce5e9"/>
+<text x="24" y="582" font-size="22" fill="#206757" font-weight="700">2  Query · read stored samples</text>
+<rect x="24" y="607" width="242" height="171" rx="8" fill="#eef8f2" stroke="#9ac0ad" stroke-width="1.5"/>
+<text x="145" y="638" font-size="24" text-anchor="middle" fill="#206757" font-weight="700">Grafana</text>
+<rect x="38" y="651" width="214" height="48" rx="8" fill="#ffffff" stroke="#9ac0ad"/>
+<text x="145" y="681" font-size="18" text-anchor="middle" fill="#206757">Prometheus datasource</text>
+<path d="M 145 702 V 717" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#metrics-paths-green-arrow)"/>
+<rect x="38" y="725" width="214" height="39" rx="8" fill="#ffffff" stroke="#9ac0ad"/>
+<text x="145" y="752" font-size="22" text-anchor="middle" fill="#206757" font-weight="700">Panels</text>
+<rect x="362" y="634" width="214" height="115" rx="8" fill="#fff7e7" stroke="#c3a16c" stroke-width="1.5"/>
+<text x="469" y="664" font-size="22" text-anchor="middle" fill="#86500e" font-weight="700">VictoriaMetrics</text>
+<text x="469" y="693" font-size="22" text-anchor="middle" fill="#86500e" font-weight="700">Query API</text>
+<text x="469" y="728" font-size="18" text-anchor="middle" fill="#52626b">Same storage as above</text>
+<path d="M 272 661 H 353" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#metrics-paths-green-arrow)"/>
+<text x="313" y="648" font-size="18" text-anchor="middle" fill="#206757">query</text>
+<path d="M 356 694 H 275" fill="none" stroke="#206757" stroke-width="2" marker-end="url(#metrics-paths-green-arrow)"/>
+<text x="313" y="720" font-size="18" text-anchor="middle" fill="#206757">data</text>
+
+<rect x="20" y="794" width="560" height="34" rx="8" fill="#eef5f7"/>
+<text x="300" y="818" font-size="20" text-anchor="middle" fill="#24343d" font-weight="600">VMAgent collects · Grafana queries and displays</text>
+</g>
+</svg>

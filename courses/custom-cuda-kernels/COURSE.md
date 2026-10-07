@@ -5,6 +5,7 @@ its correctness, safety and end-to-end value. Build CUDA C++20 implementations,
 inspect their hardware behavior and compare them with mature library operations
 before deciding which implementation to keep.
 
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
 Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
 execution, memory and profiling skills, together with basic C++ knowledge. Neither
 LLM specialization is a prerequisite. The course progresses from a correct vector
@@ -13,8 +14,10 @@ decision.
 
 All executable labs use one full H100; even Hopper thread-block clusters operate
 within one GPU. Optional extensions retain their own prerequisites. Start with
-the shared Lab Guide's [environment setup](../README.md#how-to-set-up-the-lab),
+the shared Lab Guide's [environment setup](../lab-guide.html#lab-preparation-scripts),
 then follow the course's runtime preparation and lab order.
+
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 
 ## 1. Custom kernel decision making
 
@@ -386,7 +389,7 @@ Threads, warps, registers, shared memory, and block slots constrain occupancy. E
 
 **Objective**
 
-Create and repair three different sources of unused parallel capacity.
+Distinguish warp divergence, task imbalance and tail waves, then evaluate the supplied work-regrouping experiment.
 
 **How it works**
 
@@ -564,7 +567,7 @@ Suppose a kernel accounts for 40% of a 10-millisecond application step. Making t
 
 **Practice**
 
-Complete Lab 12’s three independent acceptance trials with counterbalanced order, numerical checks and both kernel and end-to-end timings.
+Complete Lab 12’s three independent kernel acceptance trials with counterbalanced order and numerical checks. Keep end-to-end acceptance pending until you implement and time the separate application integration described in the guide.
 
 - [Lab 12: Assemble a kernel acceptance report](reference/labs/12_capstone.md)
 

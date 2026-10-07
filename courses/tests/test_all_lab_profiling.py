@@ -6,10 +6,10 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from native_job_fixtures import worker_prefix
 from test_course_review_fixes import load_lab
 from test_observability_integration import ROOT, load
 
@@ -75,7 +75,7 @@ def test_evidence_validator_rejects_misleading_wiring(defect):
     elif defect == "wrong-unit":
         dashboard["panels"][1]["fieldConfig"]["defaults"]["unit"] = "bytes"
     elif defect == "missing-command":
-        guide = guide.replace("COURSE_PROFILE_TOOL=nsys", "COURSE_PROFILE_TOOL=none")
+        guide = guide.replace("01_cpu_gpu_crossover.nsys.sbatch", "01_cpu_gpu_crossover.sbatch")
     elif defect == "false-exception":
         recipe["systems"]["applicable"] = False
     elif defect == "missing-view":
@@ -83,14 +83,14 @@ def test_evidence_validator_rejects_misleading_wiring(defect):
     elif defect == "missing-setup":
         guide = guide.replace("[Lab Guide]", "[Missing Guide]")
     elif defect == "duplicate-setup":
-        link = "[Lab Guide](../../../README.md#how-to-set-up-the-lab)"
+        link = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
         guide = guide.replace(link, link + " " + link)
     elif defect == "dashboard-prerequisite":
         guide = guide.replace("## Before you start", "## Before you start\n\n[Dashboard](../grafana/assigned.json)")
     elif defect == "wrong-native-log":
-        guide = guide.replace("logs/capture-%J-%t.out", "logs/wrong.out")
+        guide = guide.replace("logs/%j.out", "logs/wrong.out")
     elif defect == "wrong-native-launcher":
-        guide = guide.replace("nsys profile", "nsys stats")
+        guide = guide.replace("01_cpu_gpu_crossover.nsys.sbatch", "unknown.nsys.sbatch")
     else:
         recipe["gpu_telemetry"] = False
     with pytest.raises(SystemExit):
@@ -112,7 +112,7 @@ def test_vendor_output_is_not_contaminated_by_profiler_and_preserves_exit(
             f"#!{sys.executable}\nimport os,subprocess,sys\n"
             "assert 'DEBUGINFOD_URLS' not in os.environ\n"
             "print('Profiler diagnostics are not vendor JSON',flush=True)\n"
-            "args=sys.argv[1:]\ncommand=args[args.index('--output')+2:]\n"
+            "args=sys.argv[1:]\ni=next(i for i,a in enumerate(args) if a.startswith('--output='));command=args[i+1:]\n"
             "raise SystemExit(subprocess.call(command))\n"
         )
         binary.chmod(0o700)
@@ -122,6 +122,7 @@ def test_vendor_output_is_not_contaminated_by_profiler_and_preserves_exit(
             [sys.executable, "-c", "print('{\"ok\": true}');raise SystemExit(7)"],
             output,
             ucx=True,
+            prefix=worker_prefix("29_nixl_transfer") if tool == "nsys" else None,
         )
         if tool == "nsys":
             assert "--trace=cuda,nvtx,osrt,ucx" in command
@@ -145,7 +146,7 @@ def test_vendor_replay_and_out_of_allocation_capture_are_rejected(
             helper.worker_command(["vendor"], tmp_path / "report")
         monkeypatch.setenv("COURSE_PROFILE_TOOL", "nsys")
         monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-        with pytest.raises(ValueError, match="allocation"):
+        with pytest.raises(ValueError, match="worker-prefix"):
             helper.worker_command(["vendor"], tmp_path / "report")
 
 
@@ -187,128 +188,7 @@ def test_goodput_capture_reaches_owned_server_and_is_not_published(
 
 
 def test_moved_nccl_launcher_uses_existing_lab():
-    launcher = (ROOT / "advanced-gpu-communication/slurm/nccl_tests.sbatch").read_text()
+    launcher = (ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch").read_text()
     assert "labs/18_nccl_tests_report.py" not in launcher
     assert "labs/10_nccl_tests_report.py" in launcher
     assert (ROOT / "advanced-gpu-communication/labs/10_nccl_tests_report.py").is_file()
-
-
-@pytest.mark.parametrize(
-    "lab,extra,expected",
-    [
-        ("24_checkpoint_resume", [], 0),
-        ("01_fabric_topology", [], 0),
-        ("10_hopper_cluster", [], 0),
-        ("32_learning_basics", ["--device", "cuda"], 0),
-        ("32_learning_basics", ["--device=cuda"], 0),
-        ("32_learning_basics", ["--device", "cpu"], 2),
-        ("27_paged_kv", [], 2),
-    ],
-)
-def test_profile_entrypoint_admits_gpu_work_and_rejects_cpu_exceptions(
-    monkeypatch, tmp_path, lab, extra, expected
-):
-    profiler = load("profile_lab")
-    recipe = next(r for _, r in RECIPES if r["lab"] == lab)
-    (tmp_path / "reference").mkdir()
-    (tmp_path / "reference/observability.json").write_text(
-        json.dumps({"labs": {lab: recipe}})
-    )
-    monkeypatch.setattr(profiler, "ROOT", tmp_path)
-    monkeypatch.setenv("SLURM_JOB_ID", "123")
-    monkeypatch.setenv("RANK", "1")
-    monkeypatch.setenv("DEBUGINFOD_URLS", "https://symbols.example.test")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "profile_lab",
-            "--lab",
-            lab,
-            "--tool",
-            "nsys",
-            "--",
-            "python",
-            "lab.py",
-            *extra,
-        ],
-    )
-    monkeypatch.setattr(profiler.shutil, "which", lambda x: x)
-    seen = []
-
-    def start(command, **kwargs):
-        seen.append((command, kwargs))
-        Path(command[command.index("--output") + 1]).with_suffix(
-            ".nsys-rep"
-        ).write_bytes(b"fixture report")
-        return SimpleNamespace(wait=lambda **kw: 0, poll=lambda: 0)
-
-    monkeypatch.setattr(profiler.subprocess, "Popen", start)
-    # Keep the fixture from changing the test process's umask.
-    monkeypatch.setattr(profiler.os, "umask", lambda _: None)
-    with pytest.raises(SystemExit) as ended:
-        profiler.main()
-    assert ended.value.code == expected
-    if expected == 0:
-        command, options = seen[0]
-        assert options["env"]["COURSE_CAPTURE"] == "1"
-        assert "DEBUGINFOD_URLS" not in options["env"]
-        assert profiler.os.environ["DEBUGINFOD_URLS"] == "https://symbols.example.test"
-        assert "--cuda-trace-scope=process-tree" in command
-        if recipe["systems"]["target"] == "rank":
-            assert "--trace=cuda,nvtx,osrt,nccl" in command
-        receipt = list((tmp_path / "results" / lab / "profiles").glob("*.json"))
-        assert len(receipt) == 1
-        assert json.loads(receipt[0].read_text())["acceptance_timing"] is False
-    else:
-        assert seen == []
-
-
-@pytest.mark.parametrize("tool", ["nsys", "ncu"])
-@pytest.mark.parametrize("report_state", ["missing", "empty", "nonempty"])
-@pytest.mark.parametrize("profiler_status", [0, 7])
-def test_success_requires_report_and_preserves_profiler_failure(
-    monkeypatch, tmp_path, capsys, tool, report_state, profiler_status
-):
-    profiler = load("profile_lab")
-    lab = "01_cpu_gpu_crossover"
-    recipe = next(r for _, r in RECIPES if r["lab"] == lab)
-    (tmp_path / "reference").mkdir()
-    (tmp_path / "reference/observability.json").write_text(
-        json.dumps({"labs": {lab: recipe}})
-    )
-    monkeypatch.setattr(profiler, "ROOT", tmp_path)
-    monkeypatch.setenv("SLURM_JOB_ID", "123")
-    monkeypatch.setenv("RANK", "0")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["profile_lab", "--lab", lab, "--tool", tool, "--", "python", "lab.py"],
-    )
-    monkeypatch.setattr(profiler.shutil, "which", lambda x: x)
-    monkeypatch.setattr(profiler.os, "umask", lambda _: None)
-
-    def start(command, **kwargs):
-        if report_state != "missing":
-            option = "--export" if tool == "ncu" else "--output"
-            extension = ".ncu-rep" if tool == "ncu" else ".nsys-rep"
-            Path(command[command.index(option) + 1]).with_suffix(extension).write_bytes(
-                b"fixture report" if report_state == "nonempty" else b""
-            )
-        return SimpleNamespace(
-            wait=lambda **kw: profiler_status, poll=lambda: profiler_status
-        )
-
-    monkeypatch.setattr(profiler.subprocess, "Popen", start)
-    with pytest.raises(SystemExit) as ended:
-        profiler.main()
-    expected = profiler_status or (0 if report_state == "nonempty" else 2)
-    assert ended.value.code == expected
-    receipts = list((tmp_path / "results" / lab / "profiles").glob("*.json"))
-    assert len(receipts) == 1
-    receipt = json.loads(receipts[0].read_text())
-    assert receipt["exit_code"] == expected
-    assert receipt["acceptance_timing"] is False
-    assert ("capture failed" in capsys.readouterr().err) == (
-        profiler_status == 0 and report_state != "nonempty"
-    )

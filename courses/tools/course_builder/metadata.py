@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NamedTuple
 import json
+import math
 import re
 from .markdown import slug
 from .config import (
@@ -32,7 +33,15 @@ def parse_course(path: Path) -> tuple[str, str, list[dict[str, str]]]:
     lessons: list[dict[str, str]] = []
     current: dict[str, str] | None = None
     active_field: str | None = None
+    fenced = False
     for line in lines:
+        if current is not None and active_field and line.strip().startswith("```"):
+            current[active_field] += "\n" + line
+            fenced = not fenced
+            continue
+        if fenced:
+            current[active_field] += "\n" + line
+            continue
         if line.startswith("## "):
             if current:
                 lessons.append(current)
@@ -44,9 +53,21 @@ def parse_course(path: Path) -> tuple[str, str, list[dict[str, str]]]:
         match = re.match(r"^\*\*([^*]+)\*\*\s*(.*)$", line)
         if match:
             active_field = match.group(1)
+            if active_field in current:
+                raise ValueError(
+                    f"{path.name}: duplicate lesson field {active_field!r} "
+                    f"in {current['title']!r}"
+                )
             current[active_field] = match.group(2)
+            fenced = match.group(2).strip().startswith("```")
         elif active_field:
             current[active_field] += "\n" + line
+        elif line.strip():
+            raise ValueError(
+                f"{path.name}: content outside a lesson field in {current['title']!r}"
+            )
+    if fenced:
+        raise ValueError(f"{path.name}: unterminated Markdown code block")
     if current:
         lessons.append(current)
     for lesson in lessons:
@@ -210,6 +231,10 @@ def course_metadata(course: Path) -> dict:
     metadata = json.loads(
         (course / "reference/course.json").read_text(encoding="utf-8")
     )
+    if metadata.get("profile") == "reference-only":
+        return reference_course_metadata(metadata)
+    if course.name == "pytorch-gpu-performance-engineering":
+        return lessons_course_metadata(course, metadata)
     if course.name == "soperator":
         return text_course_metadata(metadata)
     if course.name == "advanced-gpu-communication":
@@ -220,7 +245,6 @@ def course_metadata(course: Path) -> dict:
         "estimated_guided_hours",
         "labs",
         "extensions",
-        "performance_tools",
         "observability",
         "advanced_lessons",
         "external_labs",
@@ -398,25 +422,78 @@ def text_course_metadata(metadata: dict) -> dict:
     return metadata
 
 
-def parse_text_course(path: Path) -> tuple[str, str, list[dict[str, str]]]:
+def reference_course_metadata(metadata: dict) -> dict:
+    expected = {"slug", "title", "profile", "estimated_guided_hours", "lessons", "visual_manifest"}
+    if (set(metadata) != expected or metadata["slug"] != "gpu-performance-tools"
+        or metadata["title"] != "GPU Performance Tools" or metadata["profile"] != "reference-only"
+        or metadata["estimated_guided_hours"] != 1 or metadata["visual_manifest"] != "reference/visual-manifest.json"):
+        raise ValueError("invalid performance tools reference metadata")
+    lessons = metadata["lessons"]
+    if (not isinstance(lessons, list) or len(lessons) != 5 or any(
+        not isinstance(row, dict) or set(row) != {"id", "title"} or row["id"] != n
+        or not isinstance(row["title"], str) or not row["title"].strip()
+        for n, row in enumerate(lessons, 1))):
+        raise ValueError("reference course requires five ordered lessons")
+    return metadata
+
+
+def lessons_course_metadata(course: Path, metadata: dict) -> dict:
+    """A visual reading course declares lessons, never executable lab inventory."""
+    expected = {
+        "slug", "title", "profile", "estimated_guided_hours", "lessons",
+        "visual_manifest",
+    }
+    if (
+        set(metadata) != expected
+        or metadata["profile"] != "lessons-only"
+        or metadata["slug"] != course.name
+        or course.name not in COURSES
+        or not isinstance(metadata["title"], str)
+        or not metadata["title"].strip()
+        or type(metadata["estimated_guided_hours"]) not in (int, float)
+        or not math.isfinite(metadata["estimated_guided_hours"])
+        or metadata["estimated_guided_hours"] <= 0
+        or metadata["visual_manifest"] != "reference/visual-manifest.json"
+    ):
+        raise ValueError("invalid lessons-only course metadata")
+    lessons = metadata["lessons"]
+    if not isinstance(lessons, list) or not lessons or any(
+        not isinstance(row, dict)
+        or set(row) != {"id", "title"}
+        or type(row["id"]) is not int
+        or row["id"] != number
+        or not isinstance(row["title"], str)
+        or not row["title"].strip()
+        for number, row in enumerate(lessons, 1)
+    ):
+        raise ValueError("lessons-only course requires ordered lesson identities")
+    if len({row["title"] for row in lessons}) != len(lessons):
+        raise ValueError("lessons-only course requires unique lesson titles")
+    return metadata
+
+
+def parse_text_course(path: Path, profile: str = "text-only") -> tuple[str, str, list[dict[str, str]]]:
     """Parse the standard heading-based lesson format without lab assumptions."""
     text = path.read_text(encoding="utf-8")
     parts = re.split(r"^## (\d+)\. (.+)$", text, flags=re.MULTILINE)
-    if len(parts) != 19 or not parts[0].startswith("# "):
-        raise ValueError("text course must have a title and six numbered lessons")
+    if profile not in ("text-only", "reference-only", "lessons-only"):
+        raise ValueError("unknown reading course profile")
+    count = (len(parts) - 1) // 3 if profile == "lessons-only" else 5 if profile == "reference-only" else 6
+    if count < 1 or len(parts) != 1 + 3 * count or not parts[0].startswith("# "):
+        raise ValueError(f"reading course must have a title and {count} numbered lessons")
     title, preamble = parts[0][2:].split("\n", 1)
     lessons = []
-    for number in range(1, 7):
+    for number in range(1, count + 1):
         identity, heading, body = parts[3 * number - 2 : 3 * number + 1]
         fields = re.split(r"^### (.+)$", body, flags=re.MULTILINE)
         if (
             int(identity) != number
             or fields[0].strip()
-            or not valid_lesson_fields(fields[1::2])
+            or not (tuple(fields[1::2]) in (("Objective", "How it works", "Mental model"), ("Objective", "How it works", "Mental model", "References")) if profile in ("reference-only", "lessons-only") else valid_lesson_fields(fields[1::2]))
             or any(not value.strip() for value in fields[2::2])
         ):
             raise ValueError(
-                "text lessons require ordered, nonempty Objective, How it works, Practice, Mental model and optional References sections"
+                "reading lessons require ordered, nonempty sections for their profile"
             )
         lessons.append({"title": heading, **dict(zip(fields[1::2], fields[2::2]))})
     return title, preamble.strip(), lessons
@@ -432,7 +509,7 @@ def shared_guide_source() -> str:
         or tuple(re.findall(r"^## (.+)$", text, re.MULTILINE)) != SHARED_GUIDE_SECTIONS
     ):
         raise ValueError(
-            "shared guide requires the ordered setup, run and browsing sections"
+            "shared guide requires the ordered setup, preparation, run and browsing sections"
         )
     return text
 

@@ -62,6 +62,12 @@ def select(recipes, courses, labs, all_courses):
 
 def source_identity(root, courses):
     result = {}
+    # The shared runtime catalog/loader also governs copied course activation.
+    for p in sorted((root / "tools/course_bootstrap").rglob("*")):
+        if p.is_file() and "__pycache__" not in p.parts:
+            if p.is_symlink():
+                raise ValueError("Executable source must not use symlinks")
+            result[str(p.relative_to(root))] = digest(p)
     for course in sorted(set(courses)):
         base = root / course
         for section in ("labs", "tools", "slurm", "env", "reference"):
@@ -87,6 +93,39 @@ def source_identity(root, courses):
     return result
 
 
+def preparation(root, course, stages):
+    """Resolve actual jobs, including optional recipe variants, without effects."""
+    definitions = read(root / "tools/course_bootstrap/catalog.json")
+    bindings = read(root / course / "reference/runtime.json")
+    if bindings.get("course") != course or bindings.get("schema") != "course-runtime-bindings/v1":
+        raise ValueError("Invalid course runtime bindings")
+    result = {}
+    for stage in stages:
+        if stage["kind"] not in {"execute", "dependency", "profile"}:
+            continue
+        argv = stage["argv"]
+        jobs = [value for value in argv if value.endswith(".sbatch")]
+        if not argv or argv[0] != "sbatch" or len(jobs) != 1:
+            raise ValueError("Preparation requires one native launcher per executable stage")
+        launcher = Path(jobs[0]).name
+        if jobs[0] != "slurm/" + launcher:
+            raise ValueError("Preparation requires a course-owned native launcher")
+        runtime = bindings["launchers"][launcher]
+        spec = definitions["runtimes"][runtime]
+        group = spec["group"]
+        result[launcher] = {
+            "launcher": launcher,
+            "runtime": runtime,
+            "group": group,
+            "script": f"{group}-lab-setup.py",
+            "arguments": [] if group == "regular" else ["--launcher", launcher],
+            "optional": bool(spec.get("optional")),
+        }
+    if not result:
+        raise ValueError("Campaign unit has no executable preparation selections")
+    return [result[name] for name in sorted(result)]
+
+
 def expand(argv, profile, variables, *, unresolved=False):
     def replace(match):
         name = match[1] or match[2]
@@ -100,8 +139,8 @@ def expand(argv, profile, variables, *, unresolved=False):
         return value
 
     result = [VARIABLE.sub(replace, s) for s in argv]
-    if "--profile" in result:
-        result[result.index("--profile") + 1] = profile
+    if "--workload" in result:
+        result[result.index("--workload") + 1] = profile
     return result
 
 
@@ -144,7 +183,7 @@ def actions(recipe, profile, variables):
         stage["environment"] = {
             **variables,
             **environment,
-            "COURSE_WORKLOAD_PROFILE": profile,
+            "COURSE_WORKLOAD": profile,
         }
     ids = [s["id"] for s in stages]
     if len(ids) != len(set(ids)):
@@ -164,6 +203,7 @@ def freeze(root, selected, recipes, profiles, variables, overrides=None):
                 **config.get("course_variables", {}).get(recipe["course"], {}),
                 **config.get("lab_variables", {}).get(key, {}),
             }
+            stages = actions(recipe, profile, effective)
             units.append(
                 {
                     "key": key,
@@ -171,11 +211,13 @@ def freeze(root, selected, recipes, profiles, variables, overrides=None):
                     "lab": recipe["lab"],
                     "profile": profile,
                     "recipe": recipe,
-                    "stages": actions(recipe, profile, effective),
+                    "stages": stages,
+                    "preparation": preparation(root, recipe["course"], stages),
                 }
             )
     return {
         "schema": "run-labs-plan/v1",
+        "execution_contract": "native-jobs/v2",
         "source": source,
         "source_sha256": canonical(source),
         "recipes_sha256": digest(RECIPE_FILE),

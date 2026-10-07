@@ -43,7 +43,7 @@ def main() -> None:
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
     sizes = [1_024, 1_000_000]
-    if args.profile == "large":
+    if args.workload == "large":
         sizes.append(32_000_000)
     rows = []
     all_correct = True

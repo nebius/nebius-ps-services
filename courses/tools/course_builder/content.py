@@ -6,8 +6,7 @@ import html
 import posixpath
 import re
 from .markdown import block, inline, slug
-from .metadata import executable_sources, valid_lesson_fields
-from .visuals import tool_figure
+from .metadata import executable_sources
 from .downloads import dashboard_pointer, lab_results_pointer
 from .config import FIELD_CLASSES, LAB_SECTIONS, SHARED_GUIDE_SECTIONS
 
@@ -181,64 +180,13 @@ def lab_markup(
 <details class="lab-source" data-source="{html.escape(relative)}"><summary>Complete source: {html.escape(relative)}</summary><pre tabindex="0"><code data-source="{html.escape(relative)}">{html.escape(source.read_text(encoding="utf-8"))}</code></pre></details></article>"""
 
 
-def performance_tools_markup(
-    course: Path, metadata: dict, links: dict[str, str] | None = None
-) -> str:
-    if (
-        metadata.get("performance_tools") != "reference/performance-tools.md"
-        or metadata.get("observability") != "reference/observability.json"
-    ):
-        raise ValueError(
-            "performance lesson and observability inventory must use canonical paths"
-        )
-    text = (course / metadata["performance_tools"]).read_text()
-    chunks = re.split(r"^## (.+)\n", text, flags=re.MULTILINE)
-    if chunks[0].strip() != "# Using GPU performance tools" or not valid_lesson_fields(
-        chunks[1::2]
-    ):
-        raise ValueError(
-            "performance lesson requires ordered teaching fields and optional References"
-        )
-    diagram = '<figure class="performance-workflow" id="tools-measurement-loop"><svg viewBox="0 0 320 210" style="max-width: 380px; margin-inline: auto" role="img" aria-labelledby="tools-title tools-desc"><title id="tools-title">A measured optimization loop</title><desc id="tools-desc">Measure an unprofiled baseline; inspect with Systems, Compute and Grafana; change one variable; measure again and check correctness before keeping it.</desc><rect x="5" y="5" width="310" height="200" rx="10" fill="#edf3f7"/><g fill="#172b3a" font-size="15"><text x="20" y="35">Measure → inspect → predict</text><text x="20" y="70">↓ Change one variable</text><text x="20" y="105">↓ Measure again → check correctness</text><text x="20" y="140">↓ Explain the result</text></g><text x="20" y="170" fill="#172b3a" font-size="13">Profiler runs explain.</text><text x="20" y="190" fill="#172b3a" font-size="13">Unprofiled runs establish the outcome.</text></svg><figcaption>Use each observation to test a specific explanation.</figcaption></figure>'
-    seen: set[str] = set()
-
-    def figure(relative: str, title: str) -> str:
-        if relative in seen:
-            raise ValueError("duplicate tool figure")
-        seen.add(relative)
-        if relative == "#tools-measurement-loop":
-            if title != "A measured optimization loop":
-                raise ValueError("tool figure must match its declared title")
-            return diagram
-        return tool_figure(course, relative, title)
-
-    body = "".join(
-        f'<div class="tools-field tools-{slug(name)}"><h3>{html.escape(name)}</h3>'
-        + block(
-            content,
-            links,
-            prefix="tools-",
-            figure=figure if name == "How it works" else None,
-            heading_offset=1,
-        )
-        + "</div>"
-        for name, content in zip(chunks[1::2], chunks[2::2], strict=True)
-    )
-    if "#tools-measurement-loop" not in seen:
-        raise ValueError("missing authored measurement-loop figure placement")
-    return (
-        '<section id="using-gpu-performance-tools" class="performance-tools"><h2>Using GPU performance tools</h2>'
-        + body
-        + "</section>"
-    )
-
-
 def shared_guide_links() -> dict[str, str]:
-    return {
-        parent + "README.md#" + slug(section): "../lab-guide.html#" + slug(section)
+    return {**{parent + "gpu-performance-tools/index.html": "../gpu-performance-tools/index.html" for parent in ("../", "../../", "../../../")}, **{
+        parent + filename + "#" + slug(section): "../lab-guide.html#" + slug(section)
         for parent in ("../", "../../", "../../../")
         for section in SHARED_GUIDE_SECTIONS
-    }
+        for filename in ("README.md", "lab-guide.html")
+    }}
 
 
 def guide_id(relative: str) -> str:

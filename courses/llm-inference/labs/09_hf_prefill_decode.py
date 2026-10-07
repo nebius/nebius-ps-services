@@ -63,7 +63,7 @@ def main() -> None:
     require_hf_commit_revision(args.revision)
     new_tokens = resolve_int_override(
         args.new_tokens,
-        32 if args.profile == "small" else 128,
+        32 if args.workload == "small" else 128,
         option="--new-tokens",
     )
     torch = load_torch()
@@ -92,7 +92,7 @@ def main() -> None:
     )
     model_forward = annotated_operation(model, "model_forward")
     base_prompt = "Explain in two sentences why GPU benchmarks need warm-up iterations."
-    prompt = base_prompt if args.profile == "small" else " ".join([base_prompt] * 64)
+    prompt = base_prompt if args.workload == "small" else " ".join([base_prompt] * 64)
     tokenized = tokenizer(prompt, return_tensors="pt").to("cuda")
     prompt_tokens = int(tokenized.input_ids.shape[1])
     schedule = generation_schedule(prompt_tokens=prompt_tokens, new_tokens=new_tokens)

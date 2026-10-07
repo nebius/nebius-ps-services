@@ -12,7 +12,14 @@ import course_archives as archives
 from course_builder import build, markdown, visuals
 
 
-@pytest.mark.parametrize("name", [name for name in build.COURSES if name != "soperator"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        name
+        for name in build.COURSES
+        if json.loads((build.ROOT / name / "reference/course.json").read_text()).get("labs")
+    ],
+)
 def test_practical_downloads_offer_results_and_setup_without_kit(name):
     import re
 
@@ -168,6 +175,7 @@ def test_canonical_results_archive_is_not_retired_on_repeated_builds(course, mon
 def configure_build(monkeypatch, root, course):
     monkeypatch.setattr(build, "ROOT", root)
     monkeypatch.setattr(build, "publication_preflight", lambda outputs: {})
+    monkeypatch.setattr(build, "report_publication", lambda report, outputs: None)
     monkeypatch.setattr(build, "COURSES", ("example",))
     monkeypatch.setattr(build, "render_catalog", lambda: "catalog")
     monkeypatch.setattr(build, "render_shared_guide", lambda: "guide")

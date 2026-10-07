@@ -75,7 +75,7 @@ def main():
     if len(nodes) != 2 or len(set(nodes)) != 2:
         parser.error("Expected two distinct allocated nodes")
     port = 24000 + int(os.environ["SLURM_JOB_ID"]) % 20000
-    size = 65536 if args.profile == "small" else 4 * 2**20
+    size = 65536 if args.workload == "small" else 4 * 2**20
     folder = (
         args.output_dir / "07_rdma_bandwidth" / ("vendor-" + args.run_id)
     ).resolve()

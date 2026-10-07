@@ -37,7 +37,7 @@ def make_config(args, folder, kind):
         ValidationConfig,
     )
 
-    length = 2048 if args.profile == "small" else 16384
+    length = 2048 if args.workload == "small" else 16384
     steps = args.warmup + args.iterations
     overlap = kind == "overlap" and args.overlap == "on"
     optimizer, scheduler = distributed_fused_adam_with_cosine_annealing(
@@ -217,7 +217,7 @@ def run(kind):
                 torch.save(
                     {
                         "weights": weights,
-                        "profile": args.profile,
+                        "profile": args.workload,
                         "seed": args.seed,
                         "steps": args.warmup + args.iterations,
                         "kind": kind,
@@ -243,7 +243,7 @@ def run(kind):
     if any(
         reference[key] != value
         for key, value in {
-            "profile": args.profile,
+            "profile": args.workload,
             "seed": args.seed,
             "steps": args.warmup + args.iterations,
             "kind": kind,
@@ -275,7 +275,7 @@ def run(kind):
         raise ValueError(
             "Missing complete vendor iteration-time scalars; do not substitute console submission time"
         )
-    length = 2048 if args.profile == "small" else 16384
+    length = 2048 if args.workload == "small" else 16384
     print(
         write_result(
             args,

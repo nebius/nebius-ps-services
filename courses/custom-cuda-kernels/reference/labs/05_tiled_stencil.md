@@ -4,7 +4,7 @@ Stencil operations compute each output from nearby input values, so adjacent thr
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use the completed SM90 build on one H100. The small case has 1,003 elements, deliberately leaving a partial block. The boundary convention is zero outside the input domain.
 
@@ -16,7 +16,7 @@ Each thread loads its central value into shared memory. Boundary threads load th
 
 Given a 256-output block and radius one, naive code requests up to 768 input values, while a cooperative tile needs about 258 unique values before cache effects. Change `n` to 257 so the second block is partial. Expected observation: every launched thread still reaches the barrier, only valid outputs are stored, and sanitizer and correctness checks pass for the edge case.
 
-Run Lab 05 with `--profile small` (1,003 elements) and without arguments (2²⁴ elements). Inspect interior, block-boundary and global-edge outputs; the small fixture also exercises a partial block.
+Run Lab 05 with `--workload small` (1,003 elements) and without arguments (2²⁴ elements). Inspect interior, block-boundary and global-edge outputs; the small fixture also exercises a partial block.
 
 ## Practice
 
@@ -25,15 +25,15 @@ Run Lab 05 with `--profile small` (1,003 elements) and without arguments (2²⁴
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
   --error="$PWD/results/05_tiled_stencil/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil" --profile small
+  slurm/05_tiled_stencil.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/05_tiled_stencil/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/05_tiled_stencil/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -64,9 +64,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Shared bytes per block | `shared_bytes_per_block` | `bytes` |
 | Halo values per full block | `halo_values_per_full_block` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 05_tiled_stencil --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 05_tiled_stencil \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -82,18 +83,18 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Run the small fixture with memory and race checking. The full case changes the element count but preserves the stencil and boundary rule.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/single_gpu.sbatch "${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil" --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.sbatch --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/sanitizer.sbatch memcheck "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.sanitizer.sbatch memcheck --workload small
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/sanitizer.sbatch racecheck "${COURSE_BUILD_DIR}/05_tiled_stencil" --profile small
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.sanitizer.sbatch racecheck --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Trace one interior point, a block-boundary point, and the final valid input. Which values are reused by neighboring threads? Why must masked threads still respect the block barrier?
 
@@ -102,54 +103,34 @@ Larger tiles improve halo amortization but consume shared memory and can reduce 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/05_tiled_stencil/logs/capture-%J-%t.out" \
-  --error="results/05_tiled_stencil/logs/capture-%J-%t.err" \
-  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/05_tiled_stencil/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/05_tiled_stencil.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `course_measure`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. In Systems, identify a kernel that performs the operation this lab investigates. Set `COURSE_PROFILE_KERNEL` to a regular expression matching that kernel and repeat the Compute capture. Verify the selected kernel and NVTX range before interpreting its counters; initialization-only evidence does not explain the lab's measured work.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/05_tiled_stencil/logs/capture-%J-%t.out" \
-  --error="results/05_tiled_stencil/logs/capture-%J-%t.err" \
-  "${COURSE_CONTAINER_RUNNER:?select the qualified runner}" "${CUDA_IMAGE_DIGEST:?select the qualified image}" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include course_measure/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/05_tiled_stencil/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_BUILD_DIR:?set the completed build directory}/05_tiled_stencil" --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
+  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.ncu.sbatch --workload small
 ```
+
+The native Compute command is in `slurm/05_tiled_stencil.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 
-Guided comparison: Compare the global-memory stencil with shared-memory staging. Independently test threads=128 instead of 256, rebuild, and explain halo overhead versus occupancy at fixed elements.
+Guided comparison: Compare the supplied shared-memory stencil's 256-thread baseline with a source-edited and rebuilt 128-thread candidate at fixed elements. Explain halo overhead versus occupancy and verify both against the CPU reference. A timed direct-global stencil is an optional implementation extension, not a supplied comparison case.
 
-For the source experiment, rebuild with the same image and build directory, then repeat the original run and capture commands:
-
-```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
-  --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" --wait slurm/build_and_test.sbatch
-export COURSE_BUILD_DIR="${COMPLETED_BUILD_DIRECTORY:?completed build/run-JOB_ID directory}"
-```
+After changing the CUDA source, rerun this lab’s CUDA preparation from the Lab Guide to compile a new private build with the same pinned toolkit. Then repeat the original run and capture commands.
 
 The publisher compares the declared workload fields and source fingerprint; retain the original artifact and do not change input generation, timed scope, or correctness tolerances.
 
-**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
+**Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture. Open the worker .nsys-rep. Expand NVTX, CUDA API and CUDA GPU rows; locate course_measure and follow host submissions into the GPU streams. Inspect launch gaps, kernels and copies relevant to this lab, then test its named tuning control with another unprofiled run. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 
 ## If something goes wrong
 

@@ -31,7 +31,7 @@ def main() -> None:
     validate_common_args(args)
     payload_mib = resolve_int_override(
         args.payload_mib,
-        8 if args.profile == "small" else 256,
+        8 if args.workload == "small" else 256,
         option="--payload-mib",
     )
     torch = load_torch()

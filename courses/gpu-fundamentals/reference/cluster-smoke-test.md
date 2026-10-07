@@ -2,9 +2,9 @@
 
 **Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
 
-Run from the `gpu-fundamentals` course root after activating a cluster-approved environment that satisfies [VERSIONS.md](../VERSIONS.md). Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
+Run from the `gpu-fundamentals` course root with the prepared runtime described in [VERSIONS.md](../VERSIONS.md); launchers restore it automatically. Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
-Complete the one-time directory preparation in the shared Lab Guide before submitting. Keep runtime evidence in those private result directories.
+Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
 
 This runbook is a complete platform-qualification checklist, not the teaching
 order. Learners follow the [syllabus](../SYLLABUS.md): Lab 10 checks the local
@@ -25,28 +25,28 @@ Submit in this order:
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
-  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/single_gpu.sbatch labs/01_cpu_gpu_crossover.py --profile small
+  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/01_cpu_gpu_crossover.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/02_tensor_core_precision/logs/%j.out" \
-  --error="$PWD/results/02_tensor_core_precision/logs/%j.err" slurm/single_gpu.sbatch labs/02_tensor_core_precision.py --profile small
+  --error="$PWD/results/02_tensor_core_precision/logs/%j.err" slurm/02_tensor_core_precision.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
-  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/single_gpu.sbatch labs/03_transfer_and_pinning.py --profile small
+  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/03_transfer_and_pinning.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
-  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/single_gpu.sbatch labs/04_layout_and_coalescing.py --profile small
+  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
-  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/single_gpu.sbatch labs/05_roofline_microbench.py --profile small
+  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/05_roofline_microbench.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/07_async_streams/logs/%j.out" \
-  --error="$PWD/results/07_async_streams/logs/%j.err" slurm/single_gpu.sbatch labs/07_async_streams.py --profile small
+  --error="$PWD/results/07_async_streams/logs/%j.err" slurm/07_async_streams.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_operator_to_kernels/logs/%j.out" \
-  --error="$PWD/results/08_operator_to_kernels/logs/%j.err" slurm/single_gpu.sbatch labs/08_operator_to_kernels.py --profile small
+  --error="$PWD/results/08_operator_to_kernels/logs/%j.err" slurm/08_operator_to_kernels.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_triton_launch_geometry/logs/%j.out" \
-  --error="$PWD/results/09_triton_launch_geometry/logs/%j.err" slurm/single_gpu.sbatch labs/09_triton_launch_geometry.py --profile small
+  --error="$PWD/results/09_triton_launch_geometry/logs/%j.err" slurm/09_triton_launch_geometry.sbatch --workload small
 ```
 
 For each job, write the prediction first, require the lab's correctness result,
@@ -75,13 +75,13 @@ Repeat selected labs with their supported `small` or `large` profiles. Change on
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_compatibility_stack/logs/%j.out" \
-  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/single_gpu.sbatch labs/10_compatibility_stack.py --profile small
+  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/10_compatibility_stack.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/11_scheduler_tail/logs/%j.out" \
-  --error="$PWD/results/11_scheduler_tail/logs/%j.err" slurm/single_gpu.sbatch labs/11_scheduler_tail.py --profile small
+  --error="$PWD/results/11_scheduler_tail/logs/%j.err" slurm/11_scheduler_tail.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/12_read_only_health/logs/%j.out" \
-  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/single_gpu.sbatch labs/12_read_only_health.py --profile small
+  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/12_read_only_health.sbatch --workload small
 ```
 
 Record the wheel/runtime/driver/toolkit roles separately. The lane-work model

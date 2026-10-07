@@ -4,7 +4,7 @@ A nonblocking copy can free the CPU while the GPU still executes copies and kern
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one full H100 with the course's qualified PyTorch environment. No datasets, model downloads or storage access are required. The small profile uses 512-square FP32 matrices; large uses 2048-square matrices. The defaults use two slots and sixteen batches. Keep CPU and pinned-memory consumption within your allocation; eight slots is an explicit upper bound, not a recommended setting.
 
@@ -25,15 +25,15 @@ Run the bounded input-ring experiment. It reports a joined whole-loop duration r
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
   --error="$PWD/results/19_h2d_pipeline/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/19_h2d_pipeline.py --mode serial --slots 2
+  slurm/19_h2d_pipeline.sbatch --mode serial --slots 2
 ```
 
 ## Check your results
+
+Each new job owns `results/19_h2d_pipeline/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/19_h2d_pipeline/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -61,9 +61,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Whole loop / median (seconds) | `whole_loop.median_ms` | `s` |
 | Pinned pool bytes | `pinned_pool_bytes` | `bytes` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 19_h2d_pipeline --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 19_h2d_pipeline \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -79,61 +80,50 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 From this course directory, compare the same workload in fresh jobs. The JSON result appears in the results directory with a unique run identifier. Repeat each configuration at least three times in independent jobs for acceptance; the iteration samples within one process are not independent trials.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode serial --slots 2
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.sbatch --mode serial --slots 2
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode pipeline --slots 2
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.sbatch --mode pipeline --slots 2
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/single_gpu.sbatch labs/19_h2d_pipeline.py --mode pipeline --slots 1
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.sbatch --mode pipeline --slots 1
 ```
 
 After unprofiled timing, capture short diagnostic runs separately. The existing launcher produces private Nsight reports and summary text. Inspect the `h2d_loop` interval, excluding allocation and initialization before it.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
-  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/nsys_single_gpu.sbatch labs/19_h2d_pipeline.py --mode pipeline --slots 2 --warmup 1 --iterations 2
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.nsys.sbatch --mode pipeline --slots 2 --warmup 1 --iterations 2
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Follow `h2d_submit` and `consume_batch` to their corresponding device rows. The copy for a later batch may intersect a current batch's GEMM; the kernel consuming a batch must follow its own copy. One slot deliberately removes this runway. Increase only `--work` to change compute/transfer balance, then only `--slots` to examine buffering costs. More streams or a continuous kernel row does not establish full SM utilization.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/19_h2d_pipeline/logs/capture-%J-%t.out" \
-  --error="results/19_h2d_pipeline/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/19_h2d_pipeline/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/19_h2d_pipeline.py --mode serial --slots 2
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.nsys.sbatch --mode serial --slots 2
 ```
+
+The native Systems command is in `slurm/19_h2d_pipeline.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open the printed `.nsys-rep` in Systems. Expand NVTX and CUDA rows, select `lab_workload`, then inspect CUDA API calls, copies, kernel launches, and idle gaps within that interval. Follow a launch to GPU execution before attributing a CPU range to device work.
 
 For one kernel, use the same fixed workload in a separate Compute capture. Select `consume_batch` to skip weight initialization and capture the first batch GEMM. The launch-count limit applies after the range and kernel-name filters. With the default warmup, this GEMM belongs to the first warmup pipeline call. Verify its kernel name and range in the report; these counters describe one diagnostic GEMM, not a measured whole-loop sample or proof of copy/compute overlap. Use Systems to inspect the full pipeline.
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/19_h2d_pipeline/logs/capture-%J-%t.out" \
-  --error="results/19_h2d_pipeline/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=ncu \
-  ncu --target-processes all --nvtx --nvtx-include consume_batch/ \
-  --kernel-name-base demangled --rename-kernels off \
-  --kernel-name "regex:${COURSE_PROFILE_KERNEL:?select the measured kernel from Systems}" \
-  --launch-count 1 --set basic --section SpeedOfLight \
-  --section MemoryWorkloadAnalysis --section Occupancy --clock-control none \
-  --export "results/19_h2d_pipeline/profiles/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/19_h2d_pipeline.py --mode serial --slots 2
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/19_h2d_pipeline/logs/%j.out" \
+  --error="$PWD/results/19_h2d_pipeline/logs/%j.err" slurm/19_h2d_pipeline.ncu.sbatch --mode serial --slots 2
 ```
+
+The native Compute command is in `slurm/19_h2d_pipeline.ncu.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Open `.ncu-rep` → **Details → Speed Of Light**, **Memory Workload Analysis**, and **Occupancy**. Record kernel duration, memory throughput/traffic, and the limiting resource. Counters are diagnostic evidence; replay duration is not end-to-end application latency. Annotate a smaller phase with `annotated_operation(operation, "phase_name")` in Python, or `CaptureRange region("phase_name")` around a CUDA launch, then select `--nvtx-include phase_name/` in the native Compute command. Keep annotations opt-in and outside clean timing paths.
 

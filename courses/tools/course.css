@@ -69,6 +69,7 @@ dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
 summary { cursor: pointer; }
 details > summary { padding: .35rem 0; }
 code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--blue-wash); border-radius: 3px; padding: .1em .3em; overflow-wrap: anywhere; }
+strong code { font-weight: inherit; }
 pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; }
 pre code { padding: 0; background: none; overflow-wrap: normal; }
 .table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }

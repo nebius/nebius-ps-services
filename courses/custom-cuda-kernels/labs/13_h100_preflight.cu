@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv) {
   if (wants_help(argc, argv)) {
-    std::cout << "Usage: 13_h100_preflight [--profile small|large]\n";
+    std::cout << "Usage: 13_h100_preflight [--workload small|large]\n";
     return 0;
   }
   try {

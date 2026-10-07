@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from common import (
@@ -185,19 +184,17 @@ def launch_command(
     warmup: int,
     iterations: int,
     nodes: int = 2,
+    worker_prefix: list[str] | None = None,
 ) -> list[str]:
     if not re.fullmatch(r"(?:pmix(?:_v[0-9]+)?|pmi2)", mpi):
         raise ValueError("Select a site-qualified pmix, pmix_vN or pmi2 mode")
     native = [str(binary)]
-    if os.environ.get("COURSE_PROFILE_TOOL", "none") != "none":
-        native = [
-            sys.executable,
-            str(Path(__file__).resolve().parents[1] / "tools/profile_lab.py"),
-            "--lab",
-            "10_nccl_tests_report",
-            "--",
-            *native,
-        ]
+    if worker_prefix:
+        if "nsys" not in worker_prefix or "profile" not in worker_prefix:
+            raise ValueError("Supply the native Systems worker command")
+        native = [*worker_prefix, *native]
+    elif os.environ.get("COURSE_PROFILE_TOOL", "none") != "none":
+        raise ValueError("Supply the Systems job's explicit --worker-prefix")
     return [
         "srun",
         f"--mpi={mpi}",
@@ -267,6 +264,7 @@ def main() -> None:
     parser.add_argument("--nodes", type=int, choices=(1, 2), default=2)
     parser.add_argument("--min-bytes", type=int, default=8)
     parser.add_argument("--max-bytes", type=int, default=64 * 2**20)
+    parser.add_argument("--worker-prefix", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     validate_common_args(args)
     try:
@@ -313,7 +311,7 @@ def main() -> None:
                     )
             raw = args.output_dir / f"10_nccl_tests_report-run-{args.run_id}.log"
             command = launch_command(
-                binary, args.mpi, sizes, args.warmup, args.iterations, args.nodes
+                binary, args.mpi, sizes, args.warmup, args.iterations, args.nodes, args.worker_prefix
             )
             with open_private_exclusive(raw) as output:
                 rank_logs = []

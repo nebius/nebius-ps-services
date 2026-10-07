@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 COURSES = (
     "soperator",
+    "gpu-performance-tools",
+    "pytorch-gpu-performance-engineering",
     "gpu-fundamentals",
     "gpu-optimizations",
     "llm-training",
@@ -29,7 +31,7 @@ CATALOG_GROUPS = (
         "GPU foundations",
         "Take these in order",
         "foundations",
-        ("gpu-fundamentals", "gpu-optimizations"),
+        ("gpu-performance-tools", "pytorch-gpu-performance-engineering", "gpu-fundamentals", "gpu-optimizations"),
     ),
     (
         "Specializations",
@@ -69,6 +71,18 @@ LICENSE_PATH = ROOT.parent / "LICENSE"
 
 
 CATALOG_COPY = {
+    "pytorch-gpu-performance-engineering": (
+        "Read the tensor work",
+        "A visual PyTorch foundation with small commented examples: shapes, operations, memory and GPU execution before the practical courses.",
+        ("Follow shapes, dtypes and devices", "Distinguish views, copies and reductions", "Recognize transfers and completion boundaries"),
+        ("PyTorch", "Visual examples", "Lessons only · No labs"),
+    ),
+    "gpu-performance-tools": (
+        "Understand the evidence",
+        "A concise reference for native Slurm jobs, NVIDIA Nsight, PyTorch profiler and Grafana metrics.",
+        ("Read profiler commands and flags", "Distinguish timelines, counters and operator summaries", "Follow metrics from collection to dashboard queries"),
+        ("Nsight", "PyTorch", "Reference · No labs"),
+    ),
     "lab-guide": (
         "Prepare once, then run the labs",
         "Set up the shared lab environment, run course experiments, and inspect measurements and profiles in Grafana and NVIDIA Nsight.",
@@ -191,6 +205,7 @@ LAB_SECTIONS = (
 
 SHARED_GUIDE_SECTIONS = (
     "How to set up the lab",
+    "Lab Preparation Scripts",
     "How to run the labs",
     "Browsing Grafana and Nsight Profilers",
 )

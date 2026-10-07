@@ -15,7 +15,7 @@
     "to": "now"
   },
   "refresh": "30s",
-  "description": "Compare block sizes at fixed state count while keeping the amount of arithmetic fixed. Separately explain the state-count survey's changed arithmetic. Does the fastest case maximize theoretical resident warps, and what profiler evidence could explain a difference? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture.",
+  "description": "Compare block sizes at fixed state count while keeping the amount of arithmetic fixed. Separately explain the state-count survey's changed arithmetic. Does the fastest case maximize theoretical resident warps, and what profiler evidence could explain a difference? Use measured summaries for short runs. Job-window telemetry is correlation unless GPU exclusivity is established. A faster result must retain correctness and the same useful work. Nsight Systems: Capture the executable inside the Slurm GPU worker; submission and result publication remain outside capture.",
   "templating": {
     "list": [
       {

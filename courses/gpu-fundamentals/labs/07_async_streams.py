@@ -30,7 +30,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    width = 1_024 if args.profile == "small" else 4_096
+    width = 1_024 if args.workload == "small" else 4_096
     tensors = [
         torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
         for _ in range(4)

@@ -6,13 +6,133 @@ project folder.
 
 ## [Unreleased]
 
+- Preserve reading-course subsection heading levels when rendering diagrams,
+  so PyTorch lesson subsections use `h4` beneath lesson fields instead of `h6`.
+
+- Simplify PyTorch indexing with positive definitions, explicit grid/row/column
+  indices and short slicing/reshape examples. Label the selected diagram cell,
+  teach the linear layer's feature-axis rule in lesson 9, and keep advanced
+  reshape/layout details in lesson 6. Refresh glossary and generated teaching.
+
+- Clarify all PyTorch reading lessons with definition-first explanations, exact
+  API-name notation, concrete tensor-axis and random-sampling diagrams, and a
+  Performance connection in every lesson. Expand the estimated route to three
+  hours and eighteen lessons, including batching/vectorization and compilation.
+  Preserve the lessons-only profile and align sources, diagrams and publication.
+  Preserve bold API emphasis inside inline code in the shared course stylesheet.
+  Distinguish dataset tuple samples from the loader's default list batches.
+
+- Align all nine course packages and 110 lab guides with the current catalog.
+  Reconcile active prerequisite and topic-ownership specs, distinguish supplied
+  measurements from conceptual extensions, and complete taught glossary terms.
+  Keep the lessons-only PyTorch course out of shared runtime discovery and lab
+  directory preparation, with synchronized standalone helpers and regression tests.
+
+- Add PyTorch for GPU Performance Engineering as a visual, lessons-only foundation
+  immediately before GPU Fundamentals: sixteen concise lessons, sixteen original
+  diagrams and nineteen commented examples in an estimated 105-minute reading
+  route. Align the ten-resource catalog, course numbers, shared Lab Guide and
+  all course menus; preserve existing labs and their identities.
+
+- Review all eight course packages and 110 lab guides against their supplied
+  implementations. Correct log/report paths, launcher arguments, workload names,
+  optional-exercise and CUDA qualification claims; consolidate and expand taught
+  glossary terms while preserving the distinct reading and labs-only profiles.
+
+- Align synchronization documentation and fixtures with all eight packages,
+  source verification and Python preparation. Cover local course removal while
+  preserving destination-only course files and learner work.
+
+- Use the same mint background and teal text for every catalog card number badge.
+
+- Review all eight courses, the catalog and Lab Guide for consistent formatting
+  and fresh builds. Correct the supporting-guide test to use production link
+  mappings, refresh publication evidence, and distinguish passing responsive
+  layout checks from remaining dense-diagram readability limits.
+
+- Show decimal-MB sizes before each built or verified course HTML/ZIP path.
+  Print one aligned publication summary after successful verification, with
+  listed-output and other-file subtotals, total size, remaining capacity and
+  limits. Remove largest-file reporting; Python `--no-summary` suppresses only
+  the summary while retaining exact-byte budget enforcement.
+
+- Align run-labs with the five managed preparation scripts. Resolve actual
+  recipe launchers, including optional containers, and validate existing
+  runtime receipts before jobs. Keep campaign source copies and results isolated,
+  reuse original installations without rewriting receipts, and report exact
+  preparation commands for missing dependencies. Refresh the project-local skill
+  through its documented npx installation path.
+
+- Centralize dependency preparation across all eight courses and 110 labs in
+  the Lab Guide, with a complete course/lab-number lookup. Remove duplicated
+  setup commands and stale manual environment procedures while preserving
+  hardware qualification, native job commands and source-edit experiments.
+
+- Explain all five lab preparation scripts in a dedicated Lab Guide topic,
+  including automated dependencies, model reuse, prerequisites and selection.
+  Add nested sidebar links for guide steps and preparation groups, and align
+  readiness instructions with native CUDA and serving runtimes.
+
+- Split course preparation into five Python 3.12 commands: no-argument regular
+  setup and explicit CUDA, communication, serving and Transformer Engine groups.
+  Remove the old setup filename without an alias. Use native CUDA 13.3.0,
+  vLLM 0.28.0 and AIPerf 0.12.0; retain optional container exercises.
+  Select prerequisites before installation, share pinned model snapshots, scope
+  fingerprints to relevant dependencies, and preserve specialized installations
+  across regular reruns. Verify synchronized source before digest-gated retirement
+  of old entrypoints; native jobs keep private writable caches and process cleanup.
+  Preserve executable permissions when extracting native archives on shared
+  filesystems without restoring archive ownership; fail on extraction errors.
+  Keep vLLM's UUID-named RPC sockets on a short node-local path with private job
+  permissions, while retaining per-job writable caches.
+
+- Preserve course setup's APT simulation diagnostics in private phase logs,
+  report the failed phase and exit code, and keep package-plan checks in the
+  same isolated environment as installation. Explain repository version
+  mismatches without silently downgrading installed libraries.
+  Let Apptainer choose build privileges instead of forcing fakeroot for root.
+  Prepare a private mount namespace for privileged jail setup, preserving the
+  existing jail and other sessions while retaining Apptainer's isolation checks.
+  Bound image compression memory and parallelism for smaller login containers.
+  Place image-build scratch files in the private shared runtime cache to avoid
+  exhausting the login pod's local storage allowance.
+
+- Add automatic idempotent GPU-course setup: one no-argument command installs
+  applicable runtimes and preserves results; native jobs restore private runtime
+  records after reconnects. Bootstrap Python during normal sync/SSH, cache pinned
+  containers/models, and keep GPU qualification in the labs.
+  Isolate runtime activation from inherited Python overrides and managed paths
+  belonging to a previously selected checkout.
+
+- Replace the GPU Performance Tools metrics-path text sketch with a contextual
+  diagram matching the shared course style, distinguishing VMAgent collection
+  from Grafana queries and returned panel data.
+
+- Audit all eight course publications: reject silently overwritten lesson fields,
+  preserve fenced examples, strengthen passive-resource checks for reading
+  courses, and align build/navigation documentation with the current catalog.
+
+- Align native course execution: remove an unsupported distributed capture flag,
+  retain semantic workload metadata, mark internal PyTorch profiling as diagnostic,
+  stream historical report copies and clarify collection's exact-job scope.
+- Replace GPU course execution/profiling wrappers with explicit per-lab native
+  Slurm jobs and NVIDIA commands. Rename workload size to `--workload`, isolate
+  new outputs by job ID, preserve existing evidence and add verified copy-only
+  historical organization. Align run-labs recipes, recovery and exact-job collection.
+- Add the five-lesson GPU Performance Tools reference course before Fundamentals,
+  centralizing Slurm/Nsight flags, NVTX, PyTorch profiler and Grafana/VictoriaMetrics
+  explanations without adding practical labs. Align its prerequisite reading route
+  across the README, catalog, Lab Guide, course sidebars and practical syllabuses.
+
 - Display course publication sizes and limits in decimal MB, retaining exact-byte
   enforcement and showing precise overflow amounts. Highlight build/check
   failures, including exceeded file, site and archive limits, in red on terminals;
   preserve plain redirected and `NO_COLOR` output.
 
-- Keep course sync receipts aligned with the effective SSH port, including
-  alias configuration. Retry run-labs SSH transport failures only for queries,
+- Remove the unused `sync-labs.sh --receipt` option and duplicate connection
+  output from run-labs. Campaigns retain private connection settings and
+  independently verified synchronization evidence, without compatibility aliases.
+- Retry run-labs SSH transport failures only for queries,
   and recognize Slurm `BOOT_FAIL` and `DEADLINE` as terminal failures without
   cancelling terminal jobs or replaying failed units. Preserve failed evidence
   and release campaign claims after remaining work finishes.

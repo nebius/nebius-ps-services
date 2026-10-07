@@ -51,8 +51,8 @@ def compile_and_warm(
 def build_sync_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 2_000_000 if args.profile == "small" else 16_000_000
-    steps = 8 if args.profile == "small" else 40
+    elements = 2_000_000 if args.workload == "small" else 16_000_000
+    steps = 8 if args.workload == "small" else 40
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
 
     def synchronized() -> float:
@@ -72,8 +72,8 @@ def build_sync_case(
 def build_launch_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 262_144 if args.profile == "small" else 1_048_576
-    steps = 12 if args.profile == "small" else 30
+    elements = 262_144 if args.workload == "small" else 1_048_576
+    steps = 12 if args.workload == "small" else 30
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
 
     def pointwise_chain() -> Any:
@@ -100,7 +100,7 @@ def build_launch_case(
 def build_memory_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    elements = 8_000_000 if args.profile == "small" else 64_000_000
+    elements = 8_000_000 if args.workload == "small" else 64_000_000
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
     bias = torch.randn(elements, device="cuda", dtype=torch.float32)
 
@@ -132,7 +132,7 @@ def build_memory_case(
 def build_compute_case(
     torch: Any, args: argparse.Namespace
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
-    width = 1_024 if args.profile == "small" else 4_096
+    width = 1_024 if args.workload == "small" else 4_096
     input_scale = math.sqrt(width)
     left_fp32 = (
         torch.randn((width, width), device="cuda", dtype=torch.float32) / input_scale

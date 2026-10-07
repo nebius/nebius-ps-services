@@ -1,11 +1,18 @@
 """One shared guide replaces numbered setup without losing runtime prerequisites."""
 
-from course_builder import build as cb_build, config as cb_config, markdown as cb_markdown, metadata as cb_metadata, pages as cb_pages
+from course_builder import (
+    build as cb_build,
+    config as cb_config,
+    markdown as cb_markdown,
+    metadata as cb_metadata,
+    pages as cb_pages,
+)
 import json
 import os
 import re
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 import pytest
 from test_course_content_contract import COURSES, ROOT
@@ -14,67 +21,53 @@ from test_practice_integration import load_validator
 PRACTICAL = (*COURSES, "advanced-gpu-communication")
 
 
-def test_fabric_preparation_creates_its_prefix_without_publishing(tmp_path):
+def test_fabric_preparation_belongs_to_automatic_setup():
+    definitions = json.loads((ROOT / "tools/course_bootstrap/catalog.json").read_text())
+    fabric = definitions["components"]["fabric-perftest"]
+    assert fabric["recipe"] == "fabric"
+    assert "toolchain" in fabric["depends"]
+    assert "fabric/perftest/bin/ib_write_bw" in fabric["artifacts"]
     guide = (ROOT / "advanced-gpu-communication/reference/labs/01_fabric_topology.md").read_text()
-    block = next(block for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
-                 if "tools/install_fabric_tools.py" in block)
-    runtime = tmp_path / "courses/.runtime"
-    runtime.mkdir(parents=True)
-    (tmp_path / "courses/.profiling-tools").mkdir(mode=0o700)
-    interpreter = tmp_path / "python3.12"
-    interpreter.write_text(
-        f"#!{sys.executable}\n"
-        "import sys\nfrom pathlib import Path\n"
-        "assert sys.argv[1] == 'tools/install_fabric_tools.py'\n"
-        "prefix = Path(sys.argv[3])\n"
-        "assert prefix.is_dir(), 'installer requires an existing prefix'\n"
-        "assert prefix.stat().st_mode & 0o777 == 0o700\n"
-        "fabric = prefix / 'fabric'\nfabric.mkdir()\n"
-        "(fabric / 'environment.sh').write_text('export FABRIC_PREPARED=yes\\n')\n"
-    )
-    interpreter.chmod(0o700)
-    completed = subprocess.run(
-        ["bash", "-eu", "-c", block + '\ntest "$FABRIC_PREPARED" = yes'],
-        cwd=tmp_path,
-        env={"HOME": str(tmp_path), "PATH": str(tmp_path) + os.pathsep + os.defpath,
-             "COURSE": "advanced-gpu-communication"},
-        text=True, capture_output=True, timeout=10,
-    )
-    assert completed.returncode == 0, completed.stderr
-    assert 'COURSE_TOOLS=' in (runtime / 'advanced-gpu-communication.sh').read_text()
-    assert not (tmp_path / 'courses/.profiling-tools/venv').exists()
+    assert "tools/install_fabric_tools.py --prefix" not in guide
+    assert "source tools/course_env.sh 01_fabric_topology --lab" in guide
 
 
 def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
     guide = (ROOT / "README.md").read_text()
-    block = next(block for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
-                 if "tools/verify_monitoring.py" in block)
+    block = next(
+        block
+        for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
+        if "tools/verify_monitoring.py" in block
+    )
     checkout = tmp_path / "checkout with spaces/courses"
     course = checkout / "gpu-fundamentals"
-    (course / 'tools').mkdir(parents=True)
-    (course / 'tools/verify_monitoring.py').write_text('# fixture\n')
-    setup = tmp_path / 'monitoring setup'
+    (course / "tools").mkdir(parents=True)
+    (course / "tools/verify_monitoring.py").write_text("# fixture\n")
+    setup = tmp_path / "monitoring setup"
     setup.mkdir()
-    (setup / 'laptop-environment.sh').write_text(
+    (setup / "laptop-environment.sh").write_text(
         f'export COURSE_SETUP_DIR="{setup}"\n'
         'export KUBECONFIG="/fixture/kubeconfig"\n'
         'export CLUSTER_CONTEXT="fixture-context"\n'
     )
-    interpreter = tmp_path / '.gpu-course-tools/bin/python'
+    interpreter = tmp_path / ".gpu-course-tools/bin/python"
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text(
-        f'#!{sys.executable}\nimport sys\nfrom pathlib import Path\n'
+        f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
         "assert Path(sys.argv[1]).is_file(), 'verification must use the selected course'\n"
         'assert sys.argv[-1] == "fixture-context"\n'
-        'print(Path.cwd())\n'
+        "print(Path.cwd())\n"
     )
     interpreter.chmod(0o700)
-    block = block.replace('<absolute setup directory>', str(setup))
-    block = block.replace('<absolute checkout path>/courses', str(checkout))
+    block = block.replace("<absolute setup directory>", str(setup))
+    block = block.replace("<absolute checkout path>/courses", str(checkout))
     completed = subprocess.run(
-        ['bash', '-eu', '-c', f'source "{setup}/laptop-environment.sh"\n' + block],
-        cwd=tmp_path, env={'HOME': str(tmp_path), 'PATH': os.defpath},
-        text=True, capture_output=True, timeout=10,
+        ["bash", "-eu", "-c", f'source "{setup}/laptop-environment.sh"\n' + block],
+        cwd=tmp_path,
+        env={"HOME": str(tmp_path), "PATH": os.defpath},
+        text=True,
+        capture_output=True,
+        timeout=10,
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == str(course)
@@ -86,66 +79,71 @@ def test_monitoring_verification_restores_course_from_a_new_terminal(tmp_path):
         ("llm-training/README.md", "labs/32_learning_basics.py --device cpu"),
         (
             "llm-training/reference/labs/32_learning_basics.md",
-            "labs/32_learning_basics.py --device cpu",
+            "slurm/32_learning_basics.sbatch --device cpu",
         ),
         ("llm-inference/README.md", "labs/35_inference_basics.py --device cpu"),
         (
             "llm-inference/reference/labs/35_inference_basics.md",
-            "labs/35_inference_basics.py --device cpu",
+            "slurm/35_inference_basics.sbatch --device cpu",
         ),
         ("llm-training/reference/cluster-smoke-test.md", "-m pip check"),
         ("llm-inference/reference/cluster-smoke-test.md", "-m pip check"),
     ],
 )
 def test_documented_commands_use_the_restored_runtime(tmp_path, relative, arguments):
+    from native_job_fixtures import executable, local_commands, prepare_job
+
     source = (ROOT / relative).read_text()
+    env = {**os.environ, **local_commands(tmp_path)}
+    interpreter = tmp_path / "prepared python"
+    executable(
+        interpreter,
+        "import json,sys\nfrom pathlib import Path\n"
+        "Path('prepared-argv.json').write_text(json.dumps(sys.argv[1:]))\n",
+    )
+    env["COURSE_PYTHON"] = str(interpreter)
     if "/reference/labs/" in relative:
+        course = relative.split("/", 1)[0]
+        job = arguments.split()[0]
+        lab = job.split("/")[-1].removesuffix(".sbatch")
+        prepare_job(tmp_path, course, lab)
+        (tmp_path / "slurm").mkdir()
+        (tmp_path / job).write_text((ROOT / course / job).read_text())
         command = next(
-            block for block in re.findall(r"```bash\n(.*?)```", source, re.S)
+            block
+            for block in re.findall(r"```bash\n(.*?)```", source, re.S)
             if block.startswith("sbatch ")
         )
-        # Execute the documented submission through its real batch script, with
-        # only scheduler boundaries replaced; no Slurm service is contacted.
-        for name, body in {
-            "sbatch": (
-                "args = sys.argv[1:]\n"
-                "while args[0].startswith('--'):\n    args.pop(0)\n"
-                "assert args[0] == 'slurm/cpu.sbatch'\n"
-                "os.environ['SLURM_JOB_ID'] = '123'\n"
-                "os.execv('/bin/bash', ['bash', *args])\n"
-            ),
-            "srun": (
-                "assert sys.argv[1] == '--ntasks=1'\n"
-                "os.execv(sys.argv[2], sys.argv[2:])\n"
-            ),
-        }.items():
-            executable = tmp_path / name
-            executable.write_text(f"#!{sys.executable}\nimport os,sys\n" + body)
-            executable.chmod(0o700)
+        executable(
+            tmp_path / "bin/sbatch",
+            "import os,sys\n"
+            "args = sys.argv[1:]\n"
+            "while args[0].startswith('--'): args.pop(0)\n"
+            f"assert args[0] == {job!r}\n"
+            "os.execvpe('bash', ['bash', *args], os.environ)\n",
+        )
+        expected = [f"labs/{lab}.py", "--workload", "small", "--device", "cpu"]
     else:
         command = re.search(
             r'(?:python3?|"\$COURSE_PYTHON") ' + re.escape(arguments), source
         ).group()
-    interpreter = tmp_path / "prepared python"
-    interpreter.write_text(
-        f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n"
-    )
-    interpreter.chmod(0o700)
+        expected = arguments.split()
     for name in ("python", "python3"):
-        system = tmp_path / name
-        system.write_text("#!/bin/sh\nexit 37\n")
-        system.chmod(0o700)
+        executable(tmp_path / "bin" / name, "raise SystemExit(37)\n")
     result = subprocess.run(
         ["/bin/bash", "-c", command],
-        cwd=ROOT / relative.split("/", 1)[0],
-        env={"PATH": str(tmp_path), "COURSE_PYTHON": str(interpreter)},
+        cwd=tmp_path,
+        env=env,
         text=True,
         capture_output=True,
+        timeout=10,
     )
-    assert result.returncode == 0, (
-        "The documented command bypassed the prepared course interpreter"
-    )
-    assert json.loads(result.stdout) == arguments.split()
+    assert result.returncode == 0, result.stderr
+    assert json.loads((tmp_path / "prepared-argv.json").read_text()) == expected
+    if "/reference/labs/" in relative:
+        assert not any(
+            "gpu" in arg for arg in json.loads((tmp_path / "srun.json").read_text())
+        )
 
 
 @pytest.mark.parametrize("course", PRACTICAL)
@@ -173,17 +171,17 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
     assert (ROOT / "lab-guide.html").read_text() == cb_pages.render_shared_guide()
     owners = {
         "README.md": (
-            "requirements-mechanics.txt",
+            "regular-lab-setup.py",
             "--workload cuda",
             "--workload torch",
         ),
         "llm-inference/README.md": (
             "requirements-serving.txt",
-            "COURSE_SERVING_PYTHON",
+            "requirements-mechanics.txt",
         ),
         "custom-cuda-kernels/reference/labs/13_h100_preflight.md": (
             "CUTLASS_ROOT",
-            "CUDA_IMAGE_DIGEST",
+            "CUDA_HOME",
             "COURSE_BUILD_DIR",
         ),
         "advanced-gpu-communication/reference/labs/10_nccl_tests_report.md": (
@@ -191,7 +189,7 @@ def test_shared_guide_matches_source_and_required_runtime_routes():
         ),
         "advanced-gpu-communication/README.md": ("DYNAMO_UCX_PREFIX", "COURSE_ETCD"),
         "advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md": (
-            "MODEL_PATH",
+            "COURSE_MODEL_DIR",
         ),
     }
     for relative, values in owners.items():
@@ -222,7 +220,7 @@ def test_shared_guide_and_lab_referrals_render_as_links():
         "The seven courses share one reading format",
     ):
         assert removed not in document
-    assert '<h1>Lab Guide</h1>' in document
+    assert "<h1>Lab Guide</h1>" in document
     assert 'href="#license"' in document
     assert (
         'href="https://github.com/nebius/nebius-ps-services/blob/main/courses/skills/run-labs/SKILL.md"'
@@ -241,10 +239,49 @@ def test_shared_guide_and_lab_referrals_render_as_links():
     assert 'href="#browsing-grafana-and-nsight-profilers"' in document
     for course in PRACTICAL:
         page = (ROOT / course / "index.html").read_text()
-        assert (
-            'href="../lab-guide.html#how-to-set-up-the-lab">Lab Guide</a>'
-            in page
+        assert 'href="../lab-guide.html#lab-preparation-scripts">Lab Guide</a>' in page
+
+
+def test_shared_guide_toc_matches_topic_and_subsection_order():
+    source = cb_metadata.shared_guide_source()
+    document = cb_pages.render_shared_guide()
+    navigation = document.split('<nav aria-label="Lab guide contents">', 1)[1].split(
+        "</nav>", 1
+    )[0]
+    toc = ET.fromstring(
+        navigation.split("<summary>Table of contents</summary>", 1)[1].removesuffix(
+            "</details>"
         )
+    )
+    chunks = re.split(r"^## (.+)\n", source, flags=re.M)
+    topics = list(zip(chunks[1::2], chunks[2::2], strict=True))
+    assert [item.find("a").text for item in toc] == list(
+        cb_config.SHARED_GUIDE_SECTIONS
+    )
+    targets = cb_build.PageTargets(document.encode()).ids
+    for item, (heading, content) in zip(toc, topics, strict=True):
+        assert item.find("a").get("href") == "#" + cb_markdown.slug(heading)
+        children = item.findall("ul/li/a")
+        expected = re.findall(r"^### (.+)$", content, re.M)
+        assert [child.text for child in children] == expected
+        assert [child.get("href") for child in children] == [
+            "#" + cb_markdown.slug(title) for title in expected
+        ]
+        assert all(child.get("href")[1:] in targets for child in children)
+
+
+def test_shared_guide_toc_ignores_fenced_headings(monkeypatch):
+    source = cb_metadata.shared_guide_source().replace(
+        "### Regular labs\n",
+        "### Regular labs\n\n```bash\n### Example comment\n```\n",
+        1,
+    )
+    monkeypatch.setattr(cb_pages, "shared_guide_source", lambda: source)
+    document = cb_pages.render_shared_guide()
+    assert "### Example comment" in document
+    assert 'href="#example-comment"' not in document
+    assert 'id="example-comment"' not in document
+    assert 'href="#regular-labs"' in document
 
 
 def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeypatch):
@@ -265,18 +302,16 @@ def test_readme_browser_pointer_and_attribution_have_distinct_html_homes(monkeyp
     document = cb_pages.render_shared_guide()
     assert "Read this guide online" not in document
     assert document.count("© 2026 Nebius B.V.") == 1
-    assert 'Free educational material under' not in document
+    assert "Free educational material under" not in document
     assert document.count('<footer class="license-footer">') == 1
     assert '</section><footer class="license-footer">' in document
-    assert document.endswith('</footer></main></div></body></html>')
+    assert document.endswith("</footer></main></div></body></html>")
     assert "Third-party materials retain their respective licenses." in document
     assert "contains the same instructions." in document
 
     # Removing only those presentation fragments from the source must produce
     # identical HTML; every other paragraph and command remains rendered.
-    article = source.replace(pointer + "\n\n", "", 1).removesuffix(
-        "\n\n" + attribution
-    )
+    article = source.replace(pointer + "\n\n", "", 1).removesuffix("\n\n" + attribution)
     monkeypatch.setattr(cb_pages, "shared_guide_source", lambda: article)
     assert cb_pages.render_shared_guide() == document
 
@@ -295,60 +330,17 @@ def test_inline_still_rejects_unrecognized_local_destinations(target):
         cb_markdown.inline(f"[label]({target})")
 
 
-def test_documented_vendor_runtime_restores_in_a_clean_shell(tmp_path):
+def test_documented_setup_uses_one_automatic_runtime_contract():
     source = (ROOT / "README.md").read_text()
-    runtime = tmp_path / "courses/.runtime/advanced-gpu-communication.sh"
-    runtime.parent.mkdir(parents=True)
-    save_base = re.search(r"declare -p COURSE_PYTHON[^\n]+", source).group()
-    save_base += "\n" + re.search(r"declare -p COURSE_TOOLS[^\n]+", source).group()
-    vendor = (ROOT / "advanced-gpu-communication/README.md").read_text()
-    save_vendor = re.search(r"declare -p COURSE_ETCD[^\n]+", vendor).group()
-    model = (
-        ROOT / "advanced-gpu-communication/reference/labs/32_dynamo_disaggregation.md"
-    ).read_text()
-    save_vendor += "\n" + re.search(r"declare -p MODEL_PATH[^\n]+", model).group()
-    values = {
-        name: str(tmp_path / name)
-        for name in (
-            "COURSE_TOOLS",
-            "COURSE_PUBLISH_PYTHON",
-            "COURSE_PYTHON",
-            "COURSE_TORCHRUN",
-            "COURSE_CUDNN_LIB",
-            "COURSE_ETCD",
-            "MODEL_PATH",
-            "UCX_PREFIX",
-            "DYNAMO_UCX_PREFIX",
-        )
-    }
-    minimal = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
-    saved = subprocess.run(
-        ["/bin/bash", "-eu", "-c", save_base + "\n" + save_vendor],
-        env={**minimal, **values, "COURSE": "advanced-gpu-communication"},
-        capture_output=True,
-        text=True,
-    )
-    assert saved.returncode == 0, saved.stderr
-    restored = subprocess.run(
-        [
-            "/bin/bash",
-            "-eu",
-            "-c",
-            'source "$1"; source ./env/vendor-environment.sh; printf "%s\\n" "$UCX_PREFIX" "$COURSE_ETCD" "$COURSE_PYTHON"',
-            "restore",
-            str(runtime),
-        ],
-        cwd=ROOT / "advanced-gpu-communication",
-        env=minimal,
-        capture_output=True,
-        text=True,
-    )
-    assert restored.returncode == 0, restored.stderr
-    assert restored.stdout.splitlines() == [
-        values["UCX_PREFIX"],
-        values["COURSE_ETCD"],
-        str(tmp_path / "courses/.venvs/advanced-gpu-communication/bin/python"),
-    ]
+    assert 'python3.12 "$HOME/courses/tools/regular-lab-setup.py"' in source
+    assert "declare -p COURSE_PYTHON" not in source
+    assert "regular-lab-setup.py\" prepare" not in source
+    assert not (ROOT / "advanced-gpu-communication/env/vendor-environment.sh").exists()
+    assert not (ROOT / "advanced-gpu-communication/env/install-vendor-candidates.sh").exists()
+    definitions = json.loads((ROOT / "tools/course_bootstrap/catalog.json").read_text())
+    for row in definitions["runtimes"].values():
+        if "bridge" in row["components"]:
+            assert row["environment"]["COURSE_PYTHON"] == "{bridge}/venv/bin/python"
 
 
 @pytest.mark.parametrize("defect", ["empty", "extra-section", "order", "symlink"])
@@ -383,9 +375,7 @@ def test_course_validator_rejects_old_or_missing_setup_contract(defect):
     document = (ROOT / "gpu-fundamentals/index.html").read_text()
     metadata = {}
     if defect == "missing-link":
-        document = document.replace(
-            'href="../lab-guide.html"', 'href="missing.html"'
-        )
+        document = document.replace('href="../lab-guide.html"', 'href="missing.html"')
     elif defect == "legacy-metadata":
         metadata["setup_guide"] = "reference/setup.md"
     else:
@@ -423,7 +413,9 @@ def test_build_check_rejects_missing_or_stale_shared_page(
     monkeypatch.setattr(cb_build, "render_shared_guide", lambda: "current guide")
     monkeypatch.setattr(cb_build, "render_catalog", lambda: "current catalog")
     monkeypatch.setattr(cb_build, "render_course", lambda course: "current course")
-    monkeypatch.setattr(cb_build, "course_metadata", lambda course: {"profile": "text-only"})
+    monkeypatch.setattr(
+        cb_build, "course_metadata", lambda course: {"profile": "text-only"}
+    )
     monkeypatch.setattr(
         sys, "argv", ["build_course_html.py", "gpu-fundamentals", "--check"]
     )
@@ -438,16 +430,38 @@ def test_shared_guide_embeds_existing_monitoring_diagram():
 
     source = cb_metadata.shared_guide_source()
     document = cb_pages.render_shared_guide()
-    assert source.index("### Publish a measured comparison") < source.index("![Course measurements")
-    assert source.index("![Course measurements") < source.index("### Capture and qualify profiling")
-    match = re.search(r'<img alt="([^"]+)" data-source="docs/grafana.png" src="data:image/png;base64,([^"]+)">', document)
+    assert source.index("### Publish a measured comparison") < source.index(
+        "![Course measurements"
+    )
+    assert source.index("![Course measurements") < source.index(
+        "### Capture and qualify profiling"
+    )
+    match = re.search(
+        r'<img alt="([^"]+)" data-source="docs/grafana.png" src="data:image/png;base64,([^"]+)">',
+        document,
+    )
     assert match and "telemetry" in match[1]
-    assert base64.b64decode(match[2], validate=True) == (ROOT / "docs/grafana.png").read_bytes()
+    assert (
+        base64.b64decode(match[2], validate=True)
+        == (ROOT / "docs/grafana.png").read_bytes()
+    )
     assert "# Performance Engineering Courses\n" in source
-    assert 'nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway' in source
+    assert (
+        'nebius-cxcli grafana install --config "$CLUSTER_CONFIG" --target "$CLUSTER_TARGET" --pushgateway'
+        in source
+    )
 
 
-@pytest.mark.parametrize("relative", ["../private.png", "docs/../private.png", "/tmp/private.png", "https://example.invalid/image.png", "docs/missing.png"])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "../private.png",
+        "docs/../private.png",
+        "/tmp/private.png",
+        "https://example.invalid/image.png",
+        "docs/missing.png",
+    ],
+)
 def test_shared_guide_rejects_unsafe_or_missing_images(relative):
     with pytest.raises(ValueError):
         cb_markdown.block(f"![Diagram]({relative})", images=True)

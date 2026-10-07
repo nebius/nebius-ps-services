@@ -86,14 +86,18 @@ def test_incomplete_or_overbroad_mounts_fail(tmp_path, monkeypatch, defect):
 
 @pytest.mark.parametrize("course", ["llm-inference", "custom-cuda-kernels"])
 @pytest.mark.parametrize("discovery_ok", [True, False])
+@pytest.mark.parametrize("isolated", [True, False])
 def test_runner_mounts_managed_tools_and_preserves_arguments(
-    tmp_path, course, discovery_ok
+    tmp_path, course, discovery_ok, isolated
 ):
     root = tmp_path / "kit with spaces"
     (root / "slurm").mkdir(parents=True)
     (root / "tools").mkdir()
     runner = root / "slurm/runner.sh"
     shutil.copyfile(ROOT / course / "slurm/container_runner.example.sh", runner)
+    (root / "tools/course_runtime.py").write_text(
+        "from pathlib import Path\nprint(Path(__file__).parent.parent / 'cached image.sif')\n"
+    )
     (root / "tools/managed_profilers.py").write_text(
         "import sys\n"
         + (
@@ -112,13 +116,15 @@ def test_runner_mounts_managed_tools_and_preserves_arguments(
     tools = tmp_path / "course tools"
     tools.mkdir()
     output = tmp_path / "argv.json"
+    prepared = tmp_path / "prepared catalog" if isolated else root
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "COURSE_TOOLS": str(tools),
+        "COURSE_RUNTIME_ROOT": str(prepared),
         "ARGV_OUTPUT": str(output),
     }
-    image = "docker://fixture/image@sha256:" + "a" * 64
+    image = "sif://fixture@sha256:" + "a" * 64
     result = subprocess.run(
         ["bash", str(runner), image, "python3", "two words", "literal;$()"],
         env=env,
@@ -135,6 +141,10 @@ def test_runner_mounts_managed_tools_and_preserves_arguments(
     assert "/opt/tool resources:/opt/tool resources:ro" in args
     assert "/etc/profile.d/99-nsight.sh:/etc/profile.d/99-nsight.sh:ro" in args
     assert f"{tools}:{tools}:ro" in args
+    assert f"{prepared}/.runtime:{prepared}/.runtime:ro" in args
+    assert f"{prepared}:{prepared}" in args
+    assert f"{root}:{root}" in args
+    assert str(root / "cached image.sif") in args
     assert args[-3:] == ["python3", "two words", "literal;$()"]
     assert any("source /etc/profile.d/99-nsight.sh" in arg for arg in args)
 

@@ -4,7 +4,7 @@ Prompt text and padding may appear in a batch without being intended training ta
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 Use one H100 and the local tiny-model implementation. No tokenizer or external artifact is required. Review the one-position shift between input tokens and next-token labels.
 
@@ -23,15 +23,15 @@ This is a hand calculation and a proposed complete-update extension, not an oper
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_loss_masking/logs/%j.out" \
   --error="$PWD/results/13_loss_masking/logs/%j.err" \
-  slurm/single_gpu.sbatch \
-  labs/13_loss_masking.py --profile small
+  slurm/13_loss_masking.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/13_loss_masking/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/13_loss_masking/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -59,9 +59,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Masked loss | `masked_loss` | `none` |
 | Unmasked loss | `unmasked_loss` | `none` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 13_loss_masking --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 13_loss_masking \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -78,29 +79,24 @@ Run the supplied two-example fixture before editing masks. The exact token count
 
 ```bash
 "$COURSE_PYTHON" labs/13_loss_masking.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/13_loss_masking/logs/%j.out" \
-  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/single_gpu.sbatch labs/13_loss_masking.py --profile small
+  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/13_loss_masking.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Mark each target position by hand and explain why shifting happens before interpreting prompt boundaries. Which denominator should a global per-token loss use? Explain why different masked/unmasked losses need not have a predictable ordering.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=8 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/13_loss_masking/logs/capture-%J-%t.out" \
-  --error="results/13_loss_masking/logs/capture-%J-%t.err" \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/13_loss_masking/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/13_loss_masking.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/13_loss_masking/logs/%j.out" \
+  --error="$PWD/results/13_loss_masking/logs/%j.err" slurm/13_loss_masking.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/13_loss_masking.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture the executable inside the Slurm GPU worker/container; submission and result publication remain outside capture. Expand lab_workload, CUDA API and CUDA GPU rows. Locate forward, cross-entropy and backward launches; compare the trained/ignored token and finite-gradient evidence. The trace explains execution, not a masking speedup. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

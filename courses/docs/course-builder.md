@@ -1,7 +1,7 @@
 # Building and publishing the course website
 
 The site remains static HTML generated with Python's standard library. There is
-no JavaScript application, package installation or server-side runtime. All seven
+no JavaScript application, package installation or server-side runtime. All nine
 courses keep their existing content, layout and styling.
 
 ## Authoring architecture
@@ -38,7 +38,27 @@ Keep authoring CSS in the shared files and course-owned diagrams with their
 course. The generated pages embed CSS, teaching images, diagrams and complete
 source listings, so saving one HTML file preserves offline reading. Downloading
 ZIPs requires the companion files or the website. Soperator remains text-only
-and has no lab downloads.
+and has no lab downloads. GPU Performance Tools is a reference-only course with
+contextual diagrams and no exercises or result archives. PyTorch for GPU Performance
+Engineering uses a lessons-only profile with eighteen diagram-equipped lessons,
+commented examples and no Practice sections, labs, runtime files or archives.
+Its metadata declares the ordered lesson identities and 3 guided hours;
+the native reading validator checks that profile without weakening the other
+reading contracts. The build produces eleven HTML pages: nine courses, the
+catalog and the shared Lab Guide.
+
+The PyTorch course reserves bold monospace for exact API names and keeps
+application-assigned meanings in plain text. Headings and callout labels may
+remain bold. The shared stylesheet preserves inherited emphasis inside inline
+code; verify the rendered font weight as well as the generated HTML structure.
+Reading lessons preserve authored subsection levels with and without diagrams:
+course topics use `h2`, lesson fields use `h3`, and `####` subsections use `h4`.
+
+The reader-resource order is Soperator, Lab Guide, GPU Performance Tools,
+PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance
+Optimization, LLM Training, LLM Inference, Custom CUDA Kernels and Advanced Labs.
+The shared registry owns display numbers; existing lesson and lab numbers remain
+unchanged. Reading packages never enter the six-course runtime/preparation registry.
 
 ## Diagram placement
 
@@ -74,7 +94,7 @@ introductory dashboard reminder. Lab-specific dashboard pointers remain beside
 their owning lab.
 
 The sole download is the results ZIP. It contains all dashboards, including
-environment readiness, and both workload profiles:
+environment readiness, and both workload sizes:
 
 ```text
 COURSE-lab-results.zip
@@ -112,6 +132,13 @@ python3 -B tools/sync_course_tools.py --check
 For selected courses, use `python3 -B tools/build_course_html.py COURSE ...`.
 The catalog and shared guide are always included. `--check` writes nothing and
 checks both HTML and ZIP bytes against canonical inputs.
+Each successful `built` or `current` line shows an aligned decimal-MB size before
+the path, measured from encoded HTML or compressed ZIP bytes. Standalone Python
+build and check commands finish with a publication summary; `--no-summary`
+suppresses only that summary, leaving per-file sizes and budget checks active.
+The wrapper uses this option for its build phase so the summary appears exactly
+once, at the end of successful verification. Failed builds or checks print their
+diagnostic without a success summary.
 
 The README is the single source for `lab-guide.html`. Its **Read this guide
 online** link sits immediately under **How to set up the lab**, and its final
@@ -135,7 +162,11 @@ The supported Markdown subset includes headings, paragraphs, flat lists,
 tables, fenced code, inline code, bold and declared links. Nested lists and
 single emphasis fail instead of silently losing structure. Intentional
 plain-text links are explicitly scoped to their owning source in `markdown.py`;
-new unknown destinations fail. All authored SVGs share one passive policy.
+new unknown destinations fail. Duplicate lesson fields and prose outside a
+lesson field fail before output replacement; headings and field labels inside
+fenced examples remain literal code. All authored SVGs share one passive policy.
+Both reading-course validators also reject automatic external CSS/SVG resources,
+refreshes, forms and link tracking.
 
 ## GitHub Pages size and publication
 
@@ -152,10 +183,16 @@ The build and read-only check enforce 104,857,600 bytes per file and
 1,000,000,000 bytes for the full repository publication candidate before replacing
 outputs. Git must be available to inventory tracked and nonignored untracked files;
 planned output bytes replace existing sizes once. Missing inventory, symlinks and
-submodules fail instead of silently undercounting. The report prints total size,
-largest file and remaining capacity in decimal MB (1 MB = 1,000,000 bytes), with
-two decimal places and thousands separators. The displayed file and site limits
-are 104.86 MB and 1,000.00 MB; checks still compare exact byte counts. Overflow
+submodules fail instead of silently undercounting. The final report groups
+listed HTML/ZIP output sizes, other publication files and estimated site size,
+then shows the site limit, remaining capacity and per-file limit. It does not
+single out the largest file. All sizes use decimal MB (1 MB = 1,000,000 bytes),
+with two decimal places and thousands separators. The listed-output subtotal
+includes only the current run's planned outputs; other publication files include
+unselected outputs, original evidence, sources and assets counted by the same
+inventory. Subtotals use exact bytes before rounding, so displayed figures can
+differ by 0.01 MB when added. The displayed file and site limits are 104.86 MB
+and 1,000.00 MB; checks still compare exact byte counts. Overflow
 diagnostics show the excess with six decimals so even a one-byte overflow is
 visible. Build and check failures, including file, site and archive limits, are
 red on terminal stderr. Redirected streams, `TERM=dumb` and any defined

@@ -10,7 +10,8 @@ content even when the course labs themselves use synthetic data.
 
 1. Use synthetic or explicitly public inputs. Do not profile customer prompts,
    proprietary model inputs, credentials, or regulated data.
-2. Complete the one-time `course_setup.py prepare` step in the shared Lab Guide.
+2. Complete the preparation for your course and lab number in the
+   [Lab Guide](../../lab-guide.html#lab-preparation-scripts).
    Its private parent directories protect scheduler logs even when Slurm opens
    them before the job body starts.
 3. Keep `results/`, profiler reports, traces, and Slurm output in storage that
@@ -53,8 +54,9 @@ shared. Redact by producing a new file; do not overwrite the private original.
   Python labs or Slurm launchers.
 - The portable tree rejects Python bytecode and Ruff cache directories, and
   every launcher disables Python bytecode creation before Python starts.
-- `requirements.txt` is a direct compatibility constraint, not a lock; live
-  work requires an approved hash-locked file or immutable image digest.
+- `requirements.txt` is a direct compatibility constraint. The prepared runtime
+  records the installed package and component identities; retain those receipts
+  with qualification evidence. Optional containers also have immutable image identities.
 
 Live site policy remains authoritative. If a profiler or telemetry command is
 not approved, record a sanitized blocker and ask the cluster owner rather than

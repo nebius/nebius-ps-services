@@ -1,6 +1,10 @@
 """One source-complete course glossary across conceptual, text and lab profiles."""
 
-from course_builder import config as cb_config, content as cb_content, metadata as cb_metadata
+from course_builder import (
+    config as cb_config,
+    content as cb_content,
+    metadata as cb_metadata,
+)
 import re
 
 import pytest
@@ -16,12 +20,9 @@ def test_exactly_one_course_glossary_preserves_every_definition(course):
     assert not re.search(
         r"<h[1-6]>Glossary</h[1-6]>", document.replace("<h2>Glossary</h2>", "")
     )
+    assert "lesson-glossary" not in document and "tools-glossary" not in document
     assert (
-        "lesson-glossary" not in document and "tools-glossary" not in document
-    )
-    assert (
-        "lesson-next-steps" not in document
-        and "tools-where-to-go-next" not in document
+        "lesson-next-steps" not in document and "tools-where-to-go-next" not in document
     )
     assert document.count("<h2>Where to Go Next</h2>") == 1
     assert cb_content.course_glossary_markup(ROOT / course) in document
@@ -34,6 +35,8 @@ def test_exactly_one_course_glossary_preserves_every_definition(course):
     for lesson in lessons:
         headings = re.findall(r'<div class="[^"]+"><h3>(.*?)</h3>', lesson)
         expected = ["Objective", "How it works", "Practice", "Mental model"]
+        if cb_metadata.course_metadata(ROOT / course).get("profile") in ("reference-only", "lessons-only"):
+            expected.remove("Practice")
         assert headings in (expected, [*expected, "References"])
     for path in (
         ROOT / course / "COURSE.md",
@@ -96,7 +99,16 @@ def test_optional_references_follow_mental_model_and_local_appendices_fail(
         + source[boundary:]
     )
     lesson = parse(path)[2][0]
-    rendered = cb_content.lesson_markup(lesson, 1, {destination: "#practice" for value in lesson.values() for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)}, figures=authored_figure_placeholders(lesson))
+    rendered = cb_content.lesson_markup(
+        lesson,
+        1,
+        {
+            destination: "#practice"
+            for value in lesson.values()
+            for destination in re.findall(r"\[[^]]+\]\(([^)]+)\)", value)
+        },
+        figures=authored_figure_placeholders(lesson),
+    )
     assert cb_metadata.valid_lesson_fields(list(lesson)[1:])
     assert rendered.index('class="mental-model"') < rendered.index(
         'class="lesson-references"'
@@ -118,9 +130,7 @@ def test_optional_references_follow_mental_model_and_local_appendices_fail(
 def test_validator_rejects_missing_duplicate_local_or_changed_glossary(course):
     document = (ROOT / course / "index.html").read_text()
     source = (ROOT / course / "GLOSSARY.md").read_text()
-    section = re.search(
-        r'<section id="guide-glossary".*?</section>', document, re.S
-    )[0]
+    section = re.search(r'<section id="guide-glossary".*?</section>', document, re.S)[0]
     changed = re.sub(
         r"<dd>.*?</dd>",
         "<dd>Changed meaning.</dd>",

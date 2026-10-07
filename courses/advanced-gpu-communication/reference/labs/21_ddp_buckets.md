@@ -4,7 +4,7 @@ Gradient readiness only creates an opportunity for overlap; DDP must group gradi
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -12,7 +12,7 @@ DDP groups gradients into buckets and starts a collective as soon as each bucket
 
 ## Concepts and code path
 
-The fixture has four FP32 Linear/Tanh stages, 256-wide for small and 1024-wide for h100. Tanh is the smooth hyperbolic tangent, bounded between -1 and 1. Each rank trains on an equal disjoint half of the same generated global batch. MSE uses a mean, so averaged rank gradients match the full-batch objective. Candidate and reference use plain SGD: `parameter -= learning_rate * gradient`. The independent reference evolves on the complete batch.
+The fixture has four FP32 Linear/Tanh stages, 256-wide for small and 1024-wide for large. Tanh is the smooth hyperbolic tangent, bounded between -1 and 1. Each rank trains on an equal disjoint half of the same generated global batch. MSE uses a mean, so averaged rank gradients match the full-batch objective. Candidate and reference use plain SGD: `parameter -= learning_rate * gradient`. The independent reference evolves on the complete batch.
 
 DDP receives `--bucket-cap-mb` and exactly one registered hook. The hook wrapper logs public GradBucket indices and uncompressed bytes before delegating to the framework's averaging, FP16, BF16 or PowerSGD implementation. Those bytes describe original gradients, not network traffic. Buckets can rebuild during startup. PowerSGD uses error feedback and warm start; `--power-start` must be at least two, and warm-up must include a compressed step. The default start of two is a short mechanics setting, not a recommendation for real training.
 
@@ -31,15 +31,15 @@ Only rank zero writes the private JSON. Repeat candidate and baseline at least t
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
   --error="$PWD/results/21_ddp_buckets/logs/%j.err" \
-  slurm/training_two_rank.sbatch \
-  labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1
+  slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1
 ```
 
 ## Check your results
+
+Each new job owns `results/21_ddp_buckets/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/21_ddp_buckets/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -71,9 +71,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | Step / median (seconds) | `step.median_ms` | `s` |
 | Slowest rank step samples (seconds) / case | `slowest_rank_step_samples_ms.*` | `s` |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 21_ddp_buckets --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 21_ddp_buckets \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -89,47 +90,38 @@ In Grafana, select your workspace and profile. Require **Correctness of selected
 Use fresh jobs for each configuration, preserving seed, workload, warm-up and iterations. First vary only bucket cap; 0.1 MB is intentionally below a small layer's matrix size, so actual bucket sizes may exceed the hint. Keep the cap fixed before changing the hook.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
-  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 1
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
-  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 0.1
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook allreduce --bucket-cap-mb 0.1
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
-  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook fp16 --bucket-cap-mb 0.1
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook fp16 --bucket-cap-mb 0.1
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
-  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook bf16 --bucket-cap-mb 0.1
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook bf16 --bucket-cap-mb 0.1
+sbatch --chdir="$PWD" \
   --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
-  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/training_two_rank.sbatch labs/21_ddp_buckets.py --hook powersgd --bucket-cap-mb 0.1 --power-rank 1 --power-start 2 --warmup 4
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.sbatch --hook powersgd --bucket-cap-mb 0.1 --power-rank 1 --power-start 2 --warmup 4
 ```
 
-```bash
-```
+The separate Systems job retains reports in its private `results/21_ddp_buckets/jobs/JOB_ID/profiles/` directory with the `nsys-` prefix, one report per rank. This lab runs one rank per node. Correlate the measured-step ranges across both reports. An unavailable profiler leaves only this diagnostic gate pending.
 
-Reports are retained under a unique private `results/nsys-ddp-*` directory, one report per node. Correlate the measured-step ranges across both reports. An unavailable profiler leaves only this diagnostic gate pending.
-
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Do post-warm-up buckets differ from startup buckets? Does a smaller cap produce earlier communication or simply more collective overhead? Can conversion or low-rank factor work outweigh reduced transfer? PowerSGD may leave small tensors uncompressed; do not compute wire bandwidth from the raw bucket ledger. A faster configuration with growing numerical drift is a candidate for further evaluation, not an accepted optimization.
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/21_ddp_buckets/logs/capture-%J-%t.out" \
-  --error="results/21_ddp_buckets/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/21_ddp_buckets/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/21_ddp_buckets.py --hook allreduce --bucket-cap-mb 1
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/21_ddp_buckets/logs/%j.out" \
+  --error="$PWD/results/21_ddp_buckets/logs/%j.err" slurm/21_ddp_buckets.nsys.sbatch --hook allreduce --bucket-cap-mb 1
 ```
+
+The native Systems command is in `slurm/21_ddp_buckets.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 Check exported statistics for every rank, then open representative reports from each worker in Systems. Load large reports in small groups and close them between comparisons. Expand NVTX, CUDA, and NCCL kernel rows. Align step/collective boundaries and compare each rank’s arrival, waiting, and compute intervals. A rank-local trace alone cannot establish communication overlap across the job. Compute replay is inapplicable to the live collective; isolate a local kernel before inspecting counters.
 

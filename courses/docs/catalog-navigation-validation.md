@@ -1,5 +1,174 @@
 # Catalog navigation validation
 
+The latest [nine-course alignment](course-format-validation.md#nine-course-alignment--2026-10-05)
+records the current artifact hashes and final source/browser verification.
+Earlier sections below retain their own reviewed revisions.
+
+## PyTorch foundation before GPU Fundamentals — 2026-10-05
+
+The current catalog has nine course packages and ten reader resources:
+Soperator, Lab Guide, GPU Performance Tools, PyTorch for GPU Performance
+Engineering, GPU Fundamentals, GPU Performance Optimization, LLM Training,
+LLM Inference, Custom CUDA Kernels and Advanced Labs. Cards and the learning
+path are numbered 01–10; PyTorch is 04 and GPU Fundamentals is 05. README,
+the generated guide, all nine course menus, prerequisite and onward links
+share the route. Existing lab identities and practical runtime registries
+are unchanged.
+
+The new lessons-only course has 16 lessons, 16 original passive SVG diagrams,
+19 commented examples and a 1.75-hour reading estimate. It adds no labs,
+Practice sections, setup helpers or result archives. The existing reading
+profiles keep their fixed identities and constraints.
+
+**306 focused tests**, all nine native validators, the full build and
+HTML/archive freshness, scoped Ruff, configured Markdown lint and whitespace
+checks pass. Comparison with the task-start commit confirms all 3,191 protected
+lab, result, runtime, diagram and archive files retain their bytes, including
+all six result ZIPs. Independent read-only code/security review found
+no concrete defect. All 19 new Python examples parse; 12 CPU blocks and
+independent numeric assertions passed under existing PyTorch 2.13.0. Six CUDA
+examples and the optional compiler example remain unexecuted. The course
+references current PyTorch 2.14 documentation; local CPU execution does not
+qualify that version or a GPU environment.
+
+**33 isolated browser checks pass** across all eleven HTML pages at 1440×1000,
+390×1000 and 320×1000 using Playwright Test 1.57.0 and owned headless Chrome
+154.0.8037.98 with page JavaScript disabled. Assertions cover exact catalog and
+menu order/destinations, one current identity, keyboard navigation, fragment
+targets, local code scrolling, page containment and doubled-text reflow. Every
+new SVG label fits its viewbox and renders at least 13px high. All 16 figures
+were inspected on desktop and phone captures; catalog, course entry and
+reflow captures were also reviewed. Owned contexts and browser closed. A final catalog overview copy alignment
+was followed by three passing catalog browser cases, 91 passing catalog
+regressions and another publication freshness check.
+
+Initial browser runs exposed test assumptions about menu attributes and
+nested summary elements. Their logs remain separate; correcting the harness
+did not change the product or acceptance criteria. The generic skill checker
+retains standard-profile/shared-markup diagnostics; native profile-aware
+checks are the static acceptance gate. No deployment or live workload was
+performed.
+
+Local evidence group `pytorch-course-01a10ebe` contains
+`browser-results-verified.json`, `browser.spec.cjs`, `browser.config.cjs`,
+`browser-results-catalog-final.json`, `cpu-examples.json`, `preservation.json`,
+native and freshness logs, and generic
+checker reports. `browser-verified/` contains screenshots, browser metadata,
+SVG text geometry and exact HTML hashes. `browser-catalog-final/` records the
+final catalog artifact. The earlier dated sections below
+retain their historical counts and artifact identities.
+
+| Reviewed artifact | SHA-256 |
+| --- | --- |
+| `index.html` | `2d3605946c3975eb6faa555d272ededc98fb366fe0c27e9710a67bbfe4c5964e` |
+| `lab-guide.html` | `1f09fc34a8866dddab0b69ca5e8bac94c5719f05bc68f69d5ff4b2c3512e951f` |
+| `soperator/index.html` | `1b48d60f78544c8eb51d3f50022edea2dd7564013676e7bc5ca5035f5972b96f` |
+| `gpu-performance-tools/index.html` | `68a02c5f4476df6fd32daadd7524c198f4427a59bd46e674dcef5bac9f6b119f` |
+| `pytorch-gpu-performance-engineering/index.html` | `017677508b3a1ae275c612c179511134a11e452760c6959ed1679fcbb480897a` |
+| `gpu-fundamentals/index.html` | `68369df4fb125b061b99e28fa79ac8c94c55200927bd75f4d51f2a37ac64f568` |
+| `gpu-optimizations/index.html` | `7ab9ef5f6e764a47958254f49f1ae329e5be45e9a70df3250a8ce19f7fb55bda` |
+| `llm-training/index.html` | `e4952a2baeb473c6560e669fb3c29ceed04f7f53f09cb03e92a642e29c0cf1f6` |
+| `llm-inference/index.html` | `c3cc7b21e7cfbdc1c5a2bcb146e182731106b3050ee9d5b2e12ad31a03b251d6` |
+| `custom-cuda-kernels/index.html` | `363891cda36060822ca5b69380abd7de4387736b1510c94a0df1251eef1382b3` |
+| `advanced-gpu-communication/index.html` | `0cbea3c72584c5f107e7d8c0cc7cefc4a5df79007ab9f271d245ba09f72219ee` |
+
+The earlier [catalog badge consistency review](course-format-validation.md#consistent-catalog-badges--2026-10-05)
+records its catalog artifact and focused browser checks. The navigation
+audit below retains its original artifact hashes.
+
+## Catalog consistency — 2026-10-05
+
+The catalog contains eight course packages and nine reader resources, ordered
+Soperator, Lab Guide, GPU Performance Tools, GPU Fundamentals, GPU Performance
+Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced
+Labs. Cards and the learning path are numbered 01–09; Training, Inference,
+Custom CUDA and Advanced Labs are 06–09. Every course and guide menu follows
+the same order, with one current-page identity.
+
+Validation: **280 focused tests**, all eight native course validators, the full
+build wrapper, HTML/archive freshness, helper parity, scoped Ruff and configured
+Markdown lint, Bash syntax, ShellCheck and whitespace checks pass. Independent
+code and security review found no defects. All eight retained course bodies
+and 3,483 practical assets, including all six result ZIPs, match the task-start
+comparison.
+
+**30 isolated browser checks pass** across all ten HTML pages at 1440, 390 and
+320 pixels using installed headless Chrome. Checks cover exact card/menu order
+and numbering, current identity, keyboard menu operation, fragment targets,
+normal-width layout and doubled-text reflow. Desktop and mobile catalog and
+mobile guide screenshots were visually reviewed. Browser contexts and the
+owned browser closed after validation. This establishes local static and
+browser behavior; live workloads and external publication were not performed.
+The dated sections below retain their original evidence boundaries.
+
+| Reviewed artifact | SHA-256 |
+| --- | --- |
+| `index.html` | `984ac70ef368df6f4707c521f3b433fbdf508c40c92fafc402bad21caeb5371e` |
+| `lab-guide.html` | `c916d77157b9e5448a383ff37dec6cd2e6c55f502370d4bde405f4ae5985266b` |
+| `soperator/index.html` | `e6c86ee693875f1fbf82f7d125f7d9f9d7d680f3b1054c50f74eaafe2ad32647` |
+| `gpu-performance-tools/index.html` | `ada9be047b4ced5d1642aad60a213123448f6ace93321d7895967ed4d9c7fe6d` |
+| `gpu-fundamentals/index.html` | `0fcab9d688020749cd3e8f530a99634fd7bcb419be395a40db81e92428d4445e` |
+| `gpu-optimizations/index.html` | `d583d62b8c7ba844219aa24b24afcbb6c7b19dfcd1e46d7eb3cbee3b3762b79f` |
+| `llm-training/index.html` | `362b6e9bbb2b6b25d8e28480c88518376e7b56d9ea2da86b7c449a8ebe389941` |
+| `llm-inference/index.html` | `80e31fa0f7d9254b0a5bae442babe771b8cd8be3d89e2c4c53c4731a7e5c1dfa` |
+| `custom-cuda-kernels/index.html` | `c726e0f632fed59574b0471e28d43570c75ccc7296e8c3836f9db8a246e3f4c1` |
+| `advanced-gpu-communication/index.html` | `9d6054c89dde1011483cb2b76e65baa5bf1bd70e22fd7900a174a7087e652f10` |
+
+## Tools before practical courses — 2026-10-02
+
+The route at this revision was Soperator, Lab Guide, GPU Performance Tools, GPU
+Fundamentals, GPU Performance Optimization, LLM Training, LLM Inference,
+Custom CUDA Kernels, then Advanced Labs. The catalog cards, learning path,
+README, generated guide and all course sidebars share this order. The reference
+course no longer requires Fundamentals; practical overviews, READMEs and
+syllabuses direct learners to it before experiments. The three specializations
+retain their Fundamentals and Optimization prerequisites.
+
+Source/static checks pass: **243 focused tests**, all eight native course
+validators, generated HTML/archive freshness, canonical helper parity, scoped
+Ruff, configured Markdown lint and whitespace checks. A 3,988-file starting
+snapshot confirms all 3,190 protected lab-source, result, diagram and archive
+files retain their bytes, including all six results ZIPs. All existing lesson
+bodies are unchanged. The installed generic course checker produces exactly
+the same pre-existing profile/markup diagnostics before and after this revision
+for all eight courses; it is not a passing gate. The profile-aware native
+validators provide the static acceptance checks. Independent read-only review
+identified stale maintainer routing and duplicated design counts, which were
+corrected; no material
+code or security finding remains.
+
+**30 Playwright Test cases pass**, covering ten complete HTML pages at
+1440×1000, 390×1000 and 320×1000. Playwright 1.57.0 launched owned isolated
+headless Chrome 154.0.8037.93 with page JavaScript disabled. Assertions cover
+exact navigation order/current identity, working keyboard menus and links,
+section TOCs and fragments, appendix order, local scrollers, inline image/SVG
+containment, doubled-text reflow and zero automatic HTTP(S) requests. Reviewed
+captures of the desktop catalog, narrow course menu, course overviews and
+shared-guide introduction show readable wrapping without clipping or overlap.
+Browser processes and contexts closed after execution. Traces were retained
+only on failure; none were needed.
+
+Local evidence group `tools-course-order-79_gflfe` contains
+`publication.spec.cjs`, `playwright.config.cjs`, `browser-complete.json`,
+`artifact-hashes.json`, `preservation.json` and `generic-checker.json`.
+Screenshots are under `browser-complete/publication-PAGE-publication-WIDTH/`.
+The exact inspected artifacts are listed below; earlier sections record
+historical revisions. This navigation revision does not qualify installed
+Slurm/profiler environments, run live GPU workloads or deploy the website.
+
+| Page | SHA-256 |
+| --- | --- |
+| `index.html` | `b726abe8f79b23b3fee0a7709a59bc4fcc0ff30dbe16cff4587f0ef3a946c73a` |
+| `lab-guide.html` | `4b9ce1ed9ee2ca563ff4bffb50150d1a207bedea53aa5e5a9763b0f44c1ca6f8` |
+| `soperator/index.html` | `b1184c1f90073a3bdf64c2fe15fc3946d89198ae6d2758cf0e50012f1f6b4ffc` |
+| `gpu-performance-tools/index.html` | `b72be28fac03275b00219507736ff6e790239868b7caaf3bbcc028ff73e7bef9` |
+| `gpu-fundamentals/index.html` | `23de2cc98fce3d7cd71337da66501da939c7ba1aacddbd4bfec0737d84fc7ac6` |
+| `gpu-optimizations/index.html` | `89b6014a15a0cc9e1afeb92176261c31727eda5a19ef222c02d07bf64906a7c6` |
+| `llm-training/index.html` | `7f1504a91de65082c357e1ea6ca1a771e4e8ef12c22f24dba7df768e9f7a20fe` |
+| `llm-inference/index.html` | `f65b00ec1b51e080f7f753802341b43904ae7dac2fc2ac196511e77e1d8e9632` |
+| `custom-cuda-kernels/index.html` | `22c24ecabfd6d4de19f92fc7658f887c8a38900ffa32010bbeafe03ac0c82137` |
+| `advanced-gpu-communication/index.html` | `298b636b1f1baea779bebb63e2f56a605d8718df5d767dd6872f9cd336259c7f` |
+
 ## Introduction cleanup: 2026-09-28
 
 The README and generated Lab Guide now use **Explore the courses** as a

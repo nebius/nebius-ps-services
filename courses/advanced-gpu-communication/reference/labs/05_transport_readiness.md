@@ -4,7 +4,7 @@ An optimization comparison is interpretable only when the execution platform is 
 
 ## Before you start
 
-Complete the [Lab Guide](../../../README.md#how-to-set-up-the-lab) before starting.
+Use the [Lab Guide](../../../lab-guide.html#lab-preparation-scripts) once to prepare this course and lab number before submitting jobs.
 
 **Advanced fabric route:** use the separate Soperator cluster with two eight-H100 workers (16 GPUs), healthy intra-node NVLink/NVSwitch and active inter-node InfiniBand. The base two one-GPU TCP workers are useful for local labs but cannot establish this fabric’s performance.
 
@@ -21,15 +21,15 @@ The launcher starts distributed workers; common helpers identify ranks and devic
 Run from this course directory on the login node after the one-time Lab Guide setup. Save the job number; the completed job prints its result paths.
 
 ```bash
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 \
-  --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_transport_readiness/logs/%j.out" \
   --error="$PWD/results/05_transport_readiness/logs/%j.err" \
-  slurm/two_node.sbatch \
-  labs/05_transport_readiness.py --profile small
+  slurm/05_transport_readiness.sbatch --workload small
 ```
 
 ## Check your results
+
+Each new job owns `results/05_transport_readiness/jobs/JOB_ID/`: `results/` contains measurements, `profiles/` native captures, `logs/` process logs and `artifacts/` auxiliary output. Scheduler logs remain in `results/05_transport_readiness/logs/`. Use the ID returned by this submission.
 
 Inspect the baseline now. After running the variation in Investigate, return here to check and publish the equivalent baseline/candidate pair.
 
@@ -54,9 +54,10 @@ The dashboard reads these completed artifact fields. Each row retains its case a
 | --- | --- | --- |
 | Correctness of selected results | `correctness` | Boolean pass |
 
-`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same profile. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
+`publish_results.py` validates the selected pair, publishes its metrics and confirms the selection generation. Prepare publishing once using the Lab Guide before running it. Select two successful, equivalent, unprofiled runs in the same workload preset. For programs that measure several implementations in one run, compare those cases within each slot. Use this lab's declared baseline/candidate pairing: change only one permitted control, or keep all controls fixed for repeated qualification. On the login node, set the paths to the printed result files and review the current generation (use `0` for the first selection):
 
 ```bash
+source tools/course_env.sh 05_transport_readiness --lab
 "$COURSE_PUBLISH_PYTHON" tools/publish_results.py --lab 05_transport_readiness \
   --baseline "${BASELINE_RESULT:?printed baseline JSON path}" \
   --candidate "${CANDIDATE_RESULT:?printed candidate JSON path}" \
@@ -73,30 +74,24 @@ Inspect command options locally, then submit through the two-node launcher. The 
 
 ```bash
 "$COURSE_PYTHON" labs/05_transport_readiness.py --help
-sbatch --export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0 --chdir="$PWD" \
+sbatch --chdir="$PWD" \
   --output="$PWD/results/05_transport_readiness/logs/%j.out" \
-  --error="$PWD/results/05_transport_readiness/logs/%j.err" slurm/two_node.sbatch labs/05_transport_readiness.py --profile small
+  --error="$PWD/results/05_transport_readiness/logs/%j.err" slurm/05_transport_readiness.sbatch --workload small
 ```
 
-Keep a fixed profile for a comparison. If both profiles appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
+Keep the workload size fixed for a comparison. If both sizes appear, treat them as separate workload campaigns. Repeat the baseline command to check variation.
 
 Write the invariants that must remain fixed in a later comparison: device variant, rank count, global work, dtype, environment and timed operations. Which of these would invalidate a direct baseline/candidate ratio if changed?
 
 Capture a separate diagnostic run:
 
 ```bash
-srun --nodes=2 --ntasks=2 --ntasks-per-node=1 --gpus-per-task=8 --cpus-per-task=32 --time=00:15:00 --kill-on-bad-exit=1 \
-  --chdir="$PWD" --output="results/05_transport_readiness/logs/capture-%J-%t.out" \
-  --error="results/05_transport_readiness/logs/capture-%J-%t.err" \
-  bash slurm/capture_ranks.sh 1 \
-  env -u DEBUGINFOD_URLS COURSE_CAPTURE=1 COURSE_PROFILE_TOOL=nsys \
-  nsys profile --trace=cuda,nvtx,osrt,nccl \
-  --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
-  --discard-environment=true --force-overwrite=false \
-  --duration=300 --kill=none --wait=all \
-  --output "results/05_transport_readiness/profiles/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{RANK}-%p" \
-  "${COURSE_PYTHON:?source the course runtime}" labs/05_transport_readiness.py --profile small
+sbatch --chdir="$PWD" \
+  --output="$PWD/results/05_transport_readiness/logs/%j.out" \
+  --error="$PWD/results/05_transport_readiness/logs/%j.err" slurm/05_transport_readiness.nsys.sbatch --workload small
 ```
+
+The native Systems command is in `slurm/05_transport_readiness.nsys.sbatch`. The [GPU Performance Tools reference](../../../gpu-performance-tools/index.html) explains its flags.
 
 **Nsight Systems evidence:** Capture inside each participating GPU rank, retaining separate reports for cross-rank correlation. Open both rank reports. Inspect lab_workload and the CUDA/NCCL collective. Confirm placement separately from the trace; kernel duration alone does not identify the network transport. Reports are diagnostic; publish the separate unprofiled baseline and candidate. The capture must contain the exercise itself, not only initialization. If it does not, treat it as incomplete.
 

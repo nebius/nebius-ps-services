@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 580" role="img" aria-labelledby="pt-compilation-title pt-compilation-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-compilation-title">Compilation may avoid intermediate storage</title>
+  <desc id="pt-compilation-desc">Eager addition and ReLU produce intermediate tensors before reduction. An optimized region may avoid some intermediate storage. Fusion and kernel count depend on the implementation; the result is still required. Inputs and outputs are FP32 on CPU in the example.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="64" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Eager: named intermediates</tspan></text>
+    <rect x="16" y="82" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="112" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>add → shifted: [2, 3]</tspan></text>
+    <path d="M160 138 V160 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="16" y="170" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="200" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>ReLU → positive: [2, 3]</tspan></text>
+    <path d="M160 226 V248 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="16" y="258" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="288" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan> → result: [2]</tspan></text>
+    <text x="160" y="354" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Possible optimized region</tspan></text>
+    <rect x="16" y="374" width="288" height="112" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="404" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>add → ReLU → </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
+    <text x="160" y="434" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>May avoid intermediates</tspan></text>
+    <text x="160" y="464" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result still has </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2]</tspan></text>
+    <text x="160" y="526" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Grouping is backend-dependent</tspan></text>
+    <text x="160" y="562" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compile cost precedes reuse</tspan></text>
+  </g>
+</svg>

@@ -40,3 +40,9 @@ design-html-positive-02,true,"Plan a self-contained HTML quarterly report with a
 design-html-positive-03,true,"Design an offline single-file HTML presentation with a speaker narrative, accessible previous/next controls and a readable fallback."
 design-html-negative-01,false,Implement this already approved standalone HTML report design exactly; no new design decisions or planning are needed.
 design-html-negative-02,false,Fix two spelling mistakes and the border radius in this existing HTML page without changing its structure or behavior.
+design-specialist-positive-01,true,"Design an AI customer-support product on Nebius before coding; its approval policy, model stack and surrounding application technologies are undecided. Provide the complete integration plan."
+design-specialist-positive-02,true,"Design a new feature for our fixed application stack on Nebius, including cloud integration constraints. Do not provision anything or reopen the stack."
+design-specialist-positive-03,true,"Design the AI retrieval integration for this product. The behavior and approval contract are fixed, but the AI component technologies remain undecided."
+design-specialist-positive-04,true,Design this service even if a relevant specialist is unavailable; use research with official vendor documentation first and reputable community sources for missing coverage.
+design-specialist-negative-01,false,Use the approved Nebius resource plan to create the VM now; no architecture or technology decisions remain.
+design-specialist-negative-02,false,"Compare Nebius storage service constraints for this workload only; I need provider guidance, not a whole-product design or implementation plan."

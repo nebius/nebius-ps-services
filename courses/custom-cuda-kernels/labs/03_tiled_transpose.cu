@@ -31,7 +31,7 @@ __global__ void tiled_unpadded_transpose(const float* input, float* output, int 
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 03_tiled_transpose [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 03_tiled_transpose [--workload small|large]\n"; return 0; }
   try {
     const int rows = static_cast<int>(problem_size(argc, argv, 1003, 8192));
     require_course_gpu();

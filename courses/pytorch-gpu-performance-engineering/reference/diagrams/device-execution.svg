@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 588.0" role="img" aria-labelledby="pt-device-execution-title pt-device-execution-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-device-execution-title">Submission is separate from completion</title>
+  <desc id="pt-device-execution-desc">CPU Python submits tensor work. The CUDA implementation schedules GPU operations. A same-stream summation follows multiplication; extracting a Python number obtains the completed result for the CPU.</desc>
+  <defs>
+    <marker id="pt-device-execution-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>CPU: Python</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>y = x * 2; total = y.</tspan><tspan font-family="ui-monospace, monospace" font-weight="700">sum</tspan><tspan>()</tspan></text>
+    <path d="M160 98 V135" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="147" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="178" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>GPU: ordered work</tspan></text>
+    <text x="160" y="209" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>multiply → sum</tspan></text>
+    <path d="M160 235 V277" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="289" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="320" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>CUDA scalar</tspan></text>
+    <text x="160" y="351" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result remains on GPU</tspan></text>
+    <path d="M160 377 V415" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="427" width="288" height="82" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="458" font-size="22.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>CPU: total.</tspan><tspan font-family="ui-monospace, monospace" font-weight="700">item</tspan><tspan>()</tspan></text>
+    <text x="160" y="489" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Wait for result → number</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Input </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [3] · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU → CUDA</tspan></text>
+  </g>
+</svg>

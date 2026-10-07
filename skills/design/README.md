@@ -3,13 +3,23 @@
 `design` is an implicit, non-SDLC skill for software and standalone portable HTML
 design before implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
-`research` when available, routes undecided application-stack and layer
-technology choices through `app-stack`, routes undecided AI subsystem behavior,
-topology, policy, and contracts through `ai-agent-design`, consumes its scoped
-`ai-stack` component decision, and applies `system-design-rules` to
+`research` when available, consults `nebius` for relevant provider constraints,
+routes undecided AI subsystem behavior, topology, policy, and contracts through
+`ai-agent-design`, consumes its scoped `ai-stack` component decision, then uses
+`app-stack` for remaining application choices. It applies `system-design-rules` to
 non-trivial solution decisions, chooses components and boundaries, compares
 alternatives, designs vertical end-to-end slices for serial multi-layer
 applications, and produces a Codex `/plan` handoff.
+
+Specialist use means loading its instructions and applying its advisory
+workflow. Nebius guidance applies even when the provider is fixed, without
+credentials or cloud actions. Completed AI decisions become fixed inputs to
+`app-stack`, avoiding duplicate selection. If a specialist is unavailable,
+`research` supplies official-vendor evidence first, then reputable established
+community sources where official coverage is missing or insufficient; `design`
+synthesizes the fallback and labels uncertainty. Direct research uses the same
+hierarchy when `research` is unavailable. Report actual use, skipped scopes and
+fallbacks separately; preserve all execution and ownership boundaries.
 
 Before proposing a solution, it reads the selected project's design documents
 and then traces the affected implemented code and consumers. When documentation
@@ -51,6 +61,7 @@ $design Design this feature against the project's design documents and code.
 $design Design this feature and implement it.
 $design Plan this project's README structure and quick start from its code.
 $design Plan a standalone offline HTML report with findings, evidence and print layout.
+$design Plan an AI support service on Nebius, including provider constraints and undecided stack layers.
 $design --help
 $design -h
 ```
@@ -73,7 +84,7 @@ that scaffold and the scaffold workflow does not call back into design.
   output contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/design-workflow.md`: detailed phase checklist, `research`,
-  `app-stack`, `ai-agent-design`, and `ai-stack` handoff guidance,
+  `app-stack`, `ai-agent-design`, `ai-stack`, and `nebius` handoff/fallback guidance,
   `system-design-rules` decision-review guidance, depth guidance,
   vertical-slice strategy, and `/plan` handoff template.
 - `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
@@ -109,6 +120,9 @@ that scaffold and the scaffold workflow does not call back into design.
   component selection to `ai-stack`.
 - Use `ai-stack` directly for an undecided AI-specific technology layer when
   no agent-subsystem design or complete `/plan` handoff is needed.
+- Use `nebius` for material Nebius provider constraints, including fixed-provider
+  designs. Its design-only path returns service/integration guidance and later
+  validation needs; Terraform, Helm, cxcli and vpngw retain operational ownership.
 - For AI applications, keep known logic and transitions deterministic, use a
   direct model call when one request is sufficient, and introduce an agent only
   when the model must choose actions or observation-driven next steps. One
@@ -140,7 +154,7 @@ conditional reference reads and the help short circuit.
 
 Portable HTML cases cover all three layout profiles, the shared theme and
 portability contract, report snapshot/filter semantics and presentation fallback.
-The definitions contain 41 trigger cases (24 positive, 17 negative) and 14
+The definitions contain 47 trigger cases (28 positive, 19 negative) and 20
 quality cases. Offline `file://`, no-JavaScript, relocation, request, keyboard,
 responsive and print checks require an actual implemented artifact; these
 planning cases do not establish browser behavior.
@@ -148,7 +162,10 @@ planning cases do not establish browser behavior.
 Structure and fixture checks are static evidence. Fresh trigger and comparative
 quality runs require native authenticated runners; do not copy real host
 credentials into disposable evaluation homes. The isolated runner installs only
-this skill, so absent specialist and spec-owner handoffs must remain explicit.
+this skill, so absent specialists use the documented research fallback and
+spec-owner handoffs remain explicit. Multi-skill cases need fresh sessions with
+the relevant sibling skills and successful loading traces. Single-skill results
+do not prove ordering, result reuse or absence of recursive selection.
 Host Plan Mode and read-order behavior require an actual host session and trace
 review; a prompt claiming to be Plan Mode or a final summary is not proof.
 

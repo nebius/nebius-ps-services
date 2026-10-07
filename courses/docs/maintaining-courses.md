@@ -6,12 +6,23 @@ or the [local catalog](../index.html).
 
 ## Learner execution and tool ownership
 
-One `course_setup.py prepare --courses-root` operation reads each practical
-course's `reference/course.json` and prepares private result/log/profile paths
-before Slurm opens its logs. It also prepares shared runtime/tool directories.
-Use `--course-root` for a standalone package. Monitoring discovery is the separate
-`course_setup.py monitoring` action. `sync-labs.sh` delivers the catalog setup
-entrypoint as well as standalone course copies.
+One no-argument `python3.12 tools/regular-lab-setup.py` operation discovers the catalog
+from its installed path, prepares private results/logs before Slurm opens them,
+and reconciles every applicable runtime. `tools/course_bootstrap/catalog.json`
+owns immutable images, source revisions, model snapshots and dependency recipes.
+Each practical course's `reference/runtime.json` maps every lab and native launcher
+to exactly one runtime. Keep those bindings complete when adding a variant.
+
+Normal sync/SSH ensures Python 3.12; dry-run and sync-only never install packages.
+Setup uses private locked state, stable generation paths and atomic receipts under
+`.runtime`. Native jobs source `tools/course_env.sh` with their literal launcher
+name (Slurm changes `$0`), and reject stale definitions. Setup never submits GPU
+jobs or runs qualification. Unsupported configured hardware skips; missing or
+failed dependencies are errors. Preserve old generations and historical results.
+
+Standalone copies carry the same bootstrap modules and recipes. Run
+`python3 tools/sync_course_tools.py` after helper changes. Monitoring discovery
+remains the distinct `regular-lab-setup.py monitoring` workstation action.
 
 Each lab guide's Practice explains its actual Python/CUDA program and contains
 one baseline `sbatch`, explicitly clearing external capture. Put workload
@@ -34,8 +45,8 @@ Keep these supported tools and their consumers:
 
 | Tools | Responsibility |
 | --- | --- |
-| `submit_lab.py`, `inspect_results.py` | Maintainer campaign submissions, receipts and machine-readable inspection. Learners use native `sbatch`, `sacct` and `cat`. |
-| `profile_lab.py`, `server_capture.py`, `managed_profilers.py` | Maintainer capture automation and installed profiler qualification. Learner recipes show native profiling and controls. |
+| Native per-lab batch jobs, `inspect_results.py` | Learners and campaigns submit the same explicit jobs with `sbatch`; inspection reads exact-job results. |
+| Native diagnostic batch jobs, `managed_profilers.py` | Visible profiler commands and installed profiler qualification; workload coordinators retain distributed/server lifecycle control. |
 | `publish_results.py`, `course_evidence.py`, `cuda_result.py` | Validated result contracts, diagnostic labeling and selected-pair publication. |
 | `readiness.py`, `verify_monitoring.py`, `fabric_guard.py`, `install_fabric_tools.py` | Runtime/domain qualification and reproducible tool builds. |
 | Builders, validators and `sync_course_tools.py` | Source-owned publication and standalone-copy parity. |
@@ -66,17 +77,19 @@ its stable `slug` identifies the course even if a downloaded folder is renamed.
 Catalog introductions and learning outcomes live in the renderer, while
 `tools/catalog.css` owns the catalog's embedded styles. Edit these sources
 instead of generated HTML. A selected-course build also refreshes the shared guide and catalog;
-rebuild all seven pages when shared metadata, navigation, styles or licensing
+rebuild all eight course pages when shared metadata, navigation, styles or licensing
 changes. `--check` always checks the shared guide and catalog as well as the selected courses.
 
-The reader-facing order is Soperator, Lab Guide, GPU Fundamentals, GPU Performance
+The reader-facing order is Soperator, Lab Guide, GPU Performance Tools, GPU Fundamentals, GPU Performance
 Optimization, LLM Training, LLM Inference, Custom CUDA Kernels, then Advanced Labs.
 `course_builder.config.CATALOG_GROUPS` owns the presentation groups and derives
-the eight-entry sequence used by cards, the learning path, and every course/guide
-menu. `COURSES` remains the seven real course packages; never add the README-derived
+the nine-entry sequence used by cards, the learning path, and every course/guide
+menu. `COURSES` remains the eight real course packages; never add the README-derived
 guide to that build registry. Its generated title is Lab Guide, and it has no
 invented guided hours. Each menu has one current-page marker and a separate
-catalog backlink. Display order does not change course prerequisites.
+catalog backlink. Read GPU Performance Tools before starting lab-bearing courses;
+it needs neither GPU Fundamentals nor a running cluster for reading. Preserve the
+Fundamentals and Optimization prerequisites for the three specializations.
 
 Keep every Course overview to three short paragraphs in its canonical
 `COURSE.md`: purpose and outcomes, audience and prerequisites, then practical
@@ -122,7 +135,7 @@ synchronize remote files or publish the website.
 
 Run the offline validation commands below before committing generated HTML.
 Once Pages is enabled, reviewed changes to `main` publish those committed files.
-Confirm the deployment succeeded and the root, catalog, shared guide and seven course URLs
+Confirm the deployment succeeded and the root, catalog, shared guide and eight course URLs
 serve the intended revision before declaring a publication complete. See
 [GitHub's publishing-source documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 for the branch deployment settings.
@@ -132,7 +145,7 @@ To preview from a local checkout, serve the repository root with
 
 ## Educational approach
 
-All seven learner pages use `tools/course.css`: the course title is H1, major
+All nine learner pages use `tools/course.css`: the course title is H1, major
 sections are H2, lesson fields and guide titles are H3, and nested concepts
 are H4. Keep **Glossary** in its own top-level section with a definition list.
 Use numbered **Official references** and one complete bullet per **Where to Go
@@ -148,13 +161,14 @@ the course README. Do not add duplicate displayed mission or syllabus sections.
 Every lesson has a concise title naming its central subject. The five conceptual
 GPU courses use **Objective**, **How it works**, **Practice** and **Mental model**.
 Optional **References** come last. The text-only Soperator course uses **Practice** for reading checks with answers
-and intentionally has no diagrams, labs or runtime assets. The advanced
-communication course is labs-only and retains complete practical guides.
+and intentionally has no diagrams, labs or runtime assets. GPU Performance Tools
+is reference-only with contextual diagrams. The advanced communication course is labs-only and retains complete practical guides.
 All lesson fields render as semantic subheadings in the same visual style.
 The objective states the capability to learn. How it works starts with a
 plain-English definition, integrates useful prerequisite connections and
 purpose, and follows the causal steps through to their consequences. It contains
-at least one accessible diagram explaining the core concept in GPU courses. Unfamiliar terms
+at least one accessible diagram explaining the core concept in the five practical
+GPU courses. Unfamiliar terms
 such as Parallel Thread Execution (PTX) are expanded in context; common CPU/GPU
 names do not need repeated expansions. The closing mental model summarizes
 concepts already explained.
@@ -173,7 +187,7 @@ expansions. Write each entry as `- **Term** — Definition`; the builder renders
 semantic definition list. Lesson References, when included, follow Mental model
 and end the lesson.
 
-Each GPU course preserves its substantial introductory explanation of the subject,
+Each practical GPU course preserves its substantial introductory explanation of the subject,
 workflow and vocabulary, plus a small worked example, inside How it works.
 Training Lab 32 and Inference Lab 35 teach learning versus fixed-parameter
 prediction on CPU or an explicitly selected H100 without model downloads.
@@ -310,14 +324,17 @@ does not change campaign recipes or their validation contracts.
 The Soperator text-only validator checks its exact metadata, lesson and syllabus
 identities, complete generated prose, public references and navigation without
 requiring lab folders or runtime dependencies. Synchronization discovers a
-course through `reference/course.json` and `COURSE.md`, so the text-only package
-travels with the catalog and six practical GPU packages.
+course through `reference/course.json` and `COURSE.md`, so both reading packages
+(Soperator and GPU Performance Tools) travel with the catalog and six practical
+GPU packages. Removing a local course excludes it from future transfers;
+existing destination-only files are retained, including prior course copies.
 
 Navigation checks cover lesson order, lab identities and local destinations.
 Each course's `PUBLICATION-REVIEW.md` records the latest reviewed HTML identity,
 checks and evidence limits. The [course standardization review](course-standardization-validation.md)
-and [format review](course-format-validation.md) retain historical preservation,
-teaching-flow and layout evidence for their recorded artifacts.
+retains historical preservation and teaching-flow evidence. The
+[format review](course-format-validation.md) records the current complete-catalog
+presentation audit, exact artifacts and remaining visual/checker limitations.
 
 Conceptual Practice sections start with the action for that lesson, explicitly identifying previews and revisits, followed by every assigned guide exactly once in the intended reading order. The builder and standalone validators preserve that context and reject missing, duplicated or mismatched assignments. Keep the text-only reading course and labs-only advanced route in their declared profiles.
 The closing study section and its TOC link must both use the title from
@@ -417,7 +434,7 @@ Asset rendering does not replace the separate full-page browser review.
 
 **For course maintainers.**
 
-`tools/submit_lab.py`, `fabric_guard.py`, `install_fabric_tools.py`, `course_evidence.py`, `inspect_results.py`, `publish_results.py`, `profile_lab.py`, `server_capture.py`, `course_setup.py`, `verify_monitoring.py`, and `readiness.py` are the canonical shared helpers; course-local copies make each lab kit independent. The inspector prints completed measurements and their exact artifact paths for a submitted job. Throughput units identify the measured quantity: tokens/s, samples/s or requests/s in the inspector, lab guides and Grafana panels. `tools/build_observability.py` renders the 116 JSON dashboards (110 labs and six setup dashboards) from explicit measurement recipes. `tools/sync_course_tools.py` maintains support-file parity before rebuilding HTML.
+`tools/submit_lab.py`, `fabric_guard.py`, `install_fabric_tools.py`, `course_evidence.py`, `inspect_results.py`, `publish_results.py`, `profile_lab.py`, `server_capture.py`, `regular-lab-setup.py`, `verify_monitoring.py`, and `readiness.py` are the canonical shared helpers; course-local copies make each lab kit independent. The inspector prints completed measurements and their exact artifact paths for a submitted job. Throughput units identify the measured quantity: tokens/s, samples/s or requests/s in the inspector, lab guides and Grafana panels. `tools/build_observability.py` renders the 116 JSON dashboards (110 labs and six setup dashboards) from explicit measurement recipes. `tools/sync_course_tools.py` maintains support-file parity before rebuilding HTML.
 
 The shared README installs private Grafana and Pushgateway with
 `nebius-cxcli grafana install --config ./config.yaml --target CLUSTER_TARGET --pushgateway`,

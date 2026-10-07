@@ -40,7 +40,7 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    side = 4_096 if args.profile == "small" else 8_192
+    side = 4_096 if args.workload == "small" else 8_192
     contiguous = torch.randn((side, side), device="cuda")
     strided = contiguous.transpose(0, 1)
     packed = strided.contiguous()

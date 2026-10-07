@@ -38,14 +38,14 @@ foreach(lab IN LISTS REQUIRED_LABS)
       $<$<COMPILE_LANGUAGE:CUDA>:--resource-usage>
   )
   if(lab STREQUAL "12_capstone")
-    add_test(NAME ${lab}_smoke COMMAND ${lab} --profile small --variant-order baseline-first)
+    add_test(NAME ${lab}_smoke COMMAND ${lab} --workload small --variant-order baseline-first)
   else()
-    add_test(NAME ${lab}_smoke COMMAND ${lab} --profile small)
+    add_test(NAME ${lab}_smoke COMMAND ${lab} --workload small)
   endif()
 endforeach()
 
-add_test(NAME 08_async_pipeline_zero_work COMMAND 08_async_pipeline --profile small --work-iterations 0)
-add_test(NAME 08_async_pipeline_max_work COMMAND 08_async_pipeline --profile small --work-iterations 1024)
+add_test(NAME 08_async_pipeline_zero_work COMMAND 08_async_pipeline --workload small --work-iterations 0)
+add_test(NAME 08_async_pipeline_max_work COMMAND 08_async_pipeline --workload small --work-iterations 1024)
 add_test(NAME 08_async_pipeline_invalid_work COMMAND 08_async_pipeline --work-iterations -1)
 set_tests_properties(08_async_pipeline_invalid_work PROPERTIES WILL_FAIL TRUE)
 
@@ -70,5 +70,5 @@ if(COURSE_ENABLE_SM90A)
       $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
       $<$<COMPILE_LANGUAGE:CUDA>:--resource-usage>
   )
-  add_test(NAME 10_hopper_cluster_smoke COMMAND 10_hopper_cluster --profile small)
+  add_test(NAME 10_hopper_cluster_smoke COMMAND 10_hopper_cluster --workload small)
 endif()

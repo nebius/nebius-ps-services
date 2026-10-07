@@ -16,7 +16,7 @@ __global__ void fused_scale_bias_relu(const float* input, const float* bias, flo
 }
 
 int main(int argc, char** argv) {
-  if (wants_help(argc, argv)) { std::cout << "Usage: 02_fused_elementwise [--profile small|large]\n"; return 0; }
+  if (wants_help(argc, argv)) { std::cout << "Usage: 02_fused_elementwise [--workload small|large]\n"; return 0; }
   try {
     const std::size_t count = problem_size(argc, argv, 4099, 1U << 25);
     require_course_gpu();

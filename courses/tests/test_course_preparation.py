@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
-    "local_course_setup", ROOT / "tools/course_setup.py"
+    "local_setup_support", ROOT / "tools/course_bootstrap/support.py"
 )
 setup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(setup)
@@ -34,7 +34,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
     for metadata in ROOT.glob("*/reference/course.json"):
         name = metadata.parent.parent.name
         course(tmp_path, name, **json.loads(metadata.read_text()))
-        if json.loads(metadata.read_text()).get("profile") != "text-only":
+        if json.loads(metadata.read_text()).get("profile") not in ("text-only", "reference-only", "lessons-only"):
             expected[name] = len(json.loads(metadata.read_text())["labs"])
     assert sum(expected.values()) == 110
     assert setup.prepare(courses_root=tmp_path) == expected
@@ -45,11 +45,23 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
     for name in expected:
         metadata = json.loads((tmp_path / name / "reference/course.json").read_text())
         for row in metadata["labs"]:
-            for leaf in ("logs", "profiles"):
+            for leaf in ("logs", "jobs"):
                 path = tmp_path / name / "results" / Path(row["path"]).stem / leaf
                 assert path.stat().st_mode & 0o777 == 0o700
                 assert path.stat().st_uid == os.geteuid()
-    assert not (tmp_path / "soperator/results").exists()
+    for name in ("soperator", "gpu-performance-tools", "pytorch-gpu-performance-engineering"):
+        assert not (tmp_path / name / "results").exists()
+
+
+@pytest.mark.parametrize("profile", ["text-only", "reference-only", "lessons-only"])
+def test_preparation_skips_reading_profile_without_lab_inventory(tmp_path, profile):
+    course(tmp_path, "practical")
+    reading = course(tmp_path, "reading", profile=profile)
+    (reading / "reference/course.json").write_text(
+        json.dumps({"slug": "reading", "profile": profile})
+    )
+    assert setup.prepare(courses_root=tmp_path) == {"practical": 1}
+    assert not (reading / "results").exists()
 
 
 @pytest.mark.parametrize(
@@ -58,7 +70,7 @@ def test_catalog_prepares_every_declared_lab_and_preserves_results(tmp_path):
         "results",
         "results/01_example",
         "results/01_example/logs",
-        "results/01_example/profiles",
+        "results/01_example/jobs",
     ],
 )
 @pytest.mark.parametrize("defect", ["public", "file", "symlink", "dangling"])
@@ -114,8 +126,8 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
     path = course(tmp_path)
     for args in (
         ["--help"],
-        ["prepare", "--help"],
-        ["prepare", "--course-root", str(path)],
+        ["monitoring", "--help"],
+        ["organize-history", "--help"],
     ):
         result = subprocess.run(
             check=False,
@@ -123,14 +135,14 @@ def test_prepare_and_help_need_no_site_packages(tmp_path):
                 sys.executable,
                 "-I",
                 "-S",
-                str(ROOT / "tools/course_setup.py"),
+                str(ROOT / "tools/regular-lab-setup.py"),
                 *args,
             ],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0, result.stderr
-    assert (path / "results/01_example/logs").is_dir()
+    assert not (path / "results").exists()
 
 
 def test_metadata_symlink_is_rejected(tmp_path):
@@ -155,7 +167,7 @@ def test_malformed_metadata_fails_cleanly_before_any_write(tmp_path, document):
             sys.executable,
             "-I",
             "-S",
-            str(ROOT / "tools/course_setup.py"),
+            str(ROOT / "tools/regular-lab-setup.py"),
             "prepare",
             "--courses-root",
             str(tmp_path),
@@ -174,23 +186,8 @@ def test_fifo_metadata_cannot_hang_preparation(tmp_path):
     metadata = path / "reference/course.json"
     metadata.unlink()
     os.mkfifo(metadata)
-    result = subprocess.run(
-        check=False,
-        args=[
-            sys.executable,
-            "-I",
-            "-S",
-            str(ROOT / "tools/course_setup.py"),
-            "prepare",
-            "--course-root",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 2
-    assert "regular file" in result.stderr
+    with pytest.raises(ValueError, match="regular file"):
+        setup.prepare(course_root=path)
     assert not (path / "results").exists()
 
 

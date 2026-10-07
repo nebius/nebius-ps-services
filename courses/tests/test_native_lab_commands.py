@@ -47,11 +47,10 @@ def test_native_example_submits_with_private_logs_and_no_monitoring(tmp_path, su
     lab = '01_cpu_gpu_crossover'
     captured = json.loads((tmp_path / 'submission.json').read_text())
     assert captured['argv'] == [
-        '--export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0',
         f'--chdir={tmp_path}',
         f'--output={tmp_path}/results/{lab}/logs/%j.out',
         f'--error={tmp_path}/results/{lab}/logs/%j.err',
-        'slurm/single_gpu.sbatch', f'labs/{lab}.py', '--profile', 'small',
+        f'slurm/{lab}.sbatch', '--workload', 'small',
     ]
     assert not (tmp_path / "results").exists()  # Preparation is a separate setup operation.
 
@@ -68,16 +67,16 @@ def test_submission_failure_is_not_completion_or_old_result_selection(tmp_path, 
     assert old.read_text() == '{"old": true}'
 
 
-def test_mechanics_example_preserves_per_command_interpreter(tmp_path, submit_spy):
+def test_mechanics_example_needs_no_parent_runtime_selection(tmp_path, submit_spy):
     result = run_block(
         tmp_path, {**submit_spy, 'HOME': str(tmp_path)},
         submissions(ROOT / 'llm-inference/README.md')[0],
     )
     assert result.returncode == 0, result.stderr
     captured = json.loads((tmp_path / 'submission.json').read_text())
-    assert captured['python'] == str(tmp_path / 'courses/.venvs/llm-inference/bin/python')
-    assert captured['argv'][-4:] == [
-        'slurm/single_gpu.sbatch', 'labs/09_hf_prefill_decode.py', '--profile', 'small',
+    assert captured['python'] is None
+    assert captured['argv'][-3:] == [
+        'slurm/09_hf_prefill_decode.sbatch', '--workload', 'small',
     ]
 
 
@@ -99,12 +98,11 @@ def test_intro_variations_produce_inspectable_jobs(
         result = run_block(tmp_path, submit_spy, command)
         assert result.returncode == 0, result.stderr
         argv = json.loads((tmp_path / 'submission.json').read_text())['argv']
-        assert '--export=ALL,COURSE_PROFILE_TOOL=none,COURSE_CAPTURE=0' in argv
+        assert not any('COURSE_PROFILE_TOOL=' in arg for arg in argv)
         assert f'--output={tmp_path}/results/{lab}/logs/%j.out' in argv
         assert f'--error={tmp_path}/results/{lab}/logs/%j.err' in argv
-        launcher = 'cpu' if index < cpu_runs else 'single_gpu'
+        launcher = lab if index < cpu_runs else lab + '.cuda'
         assert f'slurm/{launcher}.sbatch' in argv
-        assert f'labs/{lab}.py' in argv
         device = argv[argv.index('--device') + 1]
         assert device == ('cpu' if index < cpu_runs else 'cuda')
 
@@ -114,7 +112,7 @@ def test_every_lab_has_one_shared_prerequisite_link_and_native_inspection():
     for path in GUIDES:
         source = path.read_text()
         before = source.split('## Before you start\n', 1)[1].split('\n## ', 1)[0]
-        assert before.count('[Lab Guide](../../../README.md#how-to-set-up-the-lab)') == 1, path
+        assert before.count('[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)') == 1, path
         assert 'assigned Grafana dashboard' not in before, path
         assert 'tools/submit_lab.py' not in source, path
         assert '"$COURSE_PUBLISH_PYTHON" tools/inspect_results.py' not in source, path

@@ -5,6 +5,7 @@ request scheduling, latency, throughput and output quality. Learn to explain
 serving-engine behavior and compare changes while keeping workload and decoding
 semantics explicit.
 
+Read [GPU Performance Tools](../gpu-performance-tools/index.html) before practical work.
 Complete GPU Fundamentals and GPU Performance Optimization first, or bring their
 execution, timing and profiling skills. No training-course prerequisite is
 required. Begin with generation mechanics, then develop local serving-engine
@@ -14,7 +15,9 @@ Local GPU practice uses one full H100; distributed serving and multi-worker
 placement belong to [Advanced Labs](../advanced-gpu-communication/index.html).
 Serving experiments require qualified runtimes and model artifacts before making
 performance claims. Use the shared Lab Guide's
-[environment setup](../README.md#how-to-set-up-the-lab) before practice.
+[environment setup](../lab-guide.html#lab-preparation-scripts) before practice.
+
+For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
 
 ## 1. Model inference and artifact preparation
 

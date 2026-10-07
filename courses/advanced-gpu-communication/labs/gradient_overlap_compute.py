@@ -37,14 +37,14 @@ def require_single_process() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("small", "large"), default="small")
+    parser.add_argument("--workload", choices=("small", "large"), default="small")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--bucket-mib", type=int, nargs="+", default=None)
     parser.add_argument("--warmup", type=int, default=3)
     args = parser.parse_args()
     if args.warmup < 0:
         parser.error("--warmup must be non-negative")
-    sizes = bucket_sizes(args.profile, args.bucket_mib)
+    sizes = bucket_sizes(args.workload, args.bucket_mib)
     require_single_process()
     torch = load_torch()
     require_course_gpu(torch)

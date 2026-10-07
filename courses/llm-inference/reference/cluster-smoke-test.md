@@ -8,12 +8,14 @@ exercise's relevant safety/setup gate before running it. Distributed and optiona
 checks qualify those paths; they are not prerequisites for earlier single-GPU
 lessons that do not use them.
 
-Run from the Inference course root. Use the separate mechanics, client, and
-pinned engine environments in [VERSIONS.md](../VERSIONS.md). Prepare the
-site-approved container runner and immutable image identities before engine
-jobs. Before submitting, set the submitting shell's file-creation mask:
+Run from this course root after preparing the course and lab number through the
+[Lab Guide](../../lab-guide.html#lab-preparation-scripts). Launchers restore the
+saved runtime automatically; [VERSIONS.md](../VERSIONS.md) describes its scope.
+Preparation creates private log directories before Slurm opens its output.
+For these read-only local dependency checks, select the ordinary lab runtime:
 
 ```bash
+source tools/course_env.sh 35_inference_basics --lab
 "$COURSE_PYTHON" -m pip check
 python3 tools/validate_course.py
 ```
@@ -27,7 +29,7 @@ follow [evidence-security.md](evidence-security.md) before sharing aggregates.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/16_model_artifact_audit/logs/%j.out" \
-  --error="$PWD/results/16_model_artifact_audit/logs/%j.err" slurm/single_gpu.sbatch labs/16_model_artifact_audit.py --profile small
+  --error="$PWD/results/16_model_artifact_audit/logs/%j.err" slurm/16_model_artifact_audit.sbatch --workload small
 ```
 
 Require a full non-MIG H100, compute capability 9.0, immutable model/tokenizer
@@ -42,25 +44,25 @@ to Gate 5 and must use the two-node launcher.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/35_inference_basics/logs/%j.out" \
-  --error="$PWD/results/35_inference_basics/logs/%j.err" slurm/single_gpu.sbatch labs/35_inference_basics.py --device cuda
+  --error="$PWD/results/35_inference_basics/logs/%j.err" slurm/35_inference_basics.cuda.sbatch --device cuda
 sbatch --chdir="$PWD" \
   --output="$PWD/results/08_kv_cache/logs/%j.out" \
-  --error="$PWD/results/08_kv_cache/logs/%j.err" slurm/single_gpu.sbatch labs/08_kv_cache.py --profile small
+  --error="$PWD/results/08_kv_cache/logs/%j.err" slurm/08_kv_cache.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/09_hf_prefill_decode/logs/%j.out" \
-  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/single_gpu.sbatch labs/09_hf_prefill_decode.py --profile small
+  --error="$PWD/results/09_hf_prefill_decode/logs/%j.err" slurm/09_hf_prefill_decode.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/17_sampling_semantics/logs/%j.out" \
-  --error="$PWD/results/17_sampling_semantics/logs/%j.err" slurm/single_gpu.sbatch labs/17_sampling_semantics.py --profile small
+  --error="$PWD/results/17_sampling_semantics/logs/%j.err" slurm/17_sampling_semantics.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/18_padding_bucketing/logs/%j.out" \
-  --error="$PWD/results/18_padding_bucketing/logs/%j.err" slurm/single_gpu.sbatch labs/18_padding_bucketing.py --profile small
+  --error="$PWD/results/18_padding_bucketing/logs/%j.err" slurm/18_padding_bucketing.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/23_speculative_decoding/logs/%j.out" \
-  --error="$PWD/results/23_speculative_decoding/logs/%j.err" slurm/single_gpu.sbatch labs/23_speculative_decoding.py --profile small
+  --error="$PWD/results/23_speculative_decoding/logs/%j.err" slurm/23_speculative_decoding.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/24_sdpa_attention/logs/%j.out" \
-  --error="$PWD/results/24_sdpa_attention/logs/%j.err" slurm/single_gpu.sbatch labs/24_sdpa_attention.py --profile small
+  --error="$PWD/results/24_sdpa_attention/logs/%j.err" slurm/24_sdpa_attention.sbatch --workload small
 ```
 
 Lab 35 can first be studied with `--device cpu` without downloads or an engine.
@@ -82,19 +84,19 @@ shape, dtype, and correctness tolerances fixed.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/25_workload_metrics/logs/%j.out" \
-  --error="$PWD/results/25_workload_metrics/logs/%j.err" slurm/single_gpu.sbatch labs/25_workload_metrics.py --profile small
+  --error="$PWD/results/25_workload_metrics/logs/%j.err" slurm/25_workload_metrics.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/26_kv_capacity/logs/%j.out" \
-  --error="$PWD/results/26_kv_capacity/logs/%j.err" slurm/single_gpu.sbatch labs/26_kv_capacity.py --profile small
+  --error="$PWD/results/26_kv_capacity/logs/%j.err" slurm/26_kv_capacity.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/27_paged_kv/logs/%j.out" \
-  --error="$PWD/results/27_paged_kv/logs/%j.err" slurm/single_gpu.sbatch labs/27_paged_kv.py --profile small
+  --error="$PWD/results/27_paged_kv/logs/%j.err" slurm/27_paged_kv.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/28_continuous_batching/logs/%j.out" \
-  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/single_gpu.sbatch labs/28_continuous_batching.py --profile small
+  --error="$PWD/results/28_continuous_batching/logs/%j.err" slurm/28_continuous_batching.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/29_quantization/logs/%j.out" \
-  --error="$PWD/results/29_quantization/logs/%j.err" slurm/single_gpu.sbatch labs/29_quantization.py --profile small
+  --error="$PWD/results/29_quantization/logs/%j.err" slurm/29_quantization.sbatch --workload small
 ```
 
 Define ISL/OSL, arrival pattern, concurrency, TTFT/ITL timestamp endpoints and AIPerf aggregation conventions, and output
@@ -125,16 +127,16 @@ KV persistence, GPUDirect Storage activation, TTFT or storage performance.
 ```bash
 sbatch --chdir="$PWD" \
   --output="$PWD/results/10_vllm_offline/logs/%j.out" \
-  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/vllm_offline.sbatch --profile small
+  --error="$PWD/results/10_vllm_offline/logs/%j.err" slurm/10_vllm_offline.sbatch --workload small
 sbatch --chdir="$PWD" \
   --output="$PWD/results/11_serving_client/logs/%j.out" \
-  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/vllm_benchmark.sbatch
+  --error="$PWD/results/11_serving_client/logs/%j.err" slurm/11_serving_client.sbatch
 sbatch --chdir="$PWD" \
   --output="$PWD/results/15_streaming_client/logs/%j.out" \
-  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/vllm_streaming_benchmark.sbatch
+  --error="$PWD/results/15_streaming_client/logs/%j.err" slurm/15_streaming_client.sbatch
 sbatch --chdir="$PWD" \
   --output="$PWD/results/20_prefix_cache_client/logs/%j.out" \
-  --error="$PWD/results/20_prefix_cache_client/logs/%j.err" slurm/vllm_prefix_cache.sbatch
+  --error="$PWD/results/20_prefix_cache_client/logs/%j.err" slurm/20_prefix_cache_client.sbatch
 ```
 
 Use the launchers' documented model and immutable revision inputs. Keep cold
@@ -166,13 +168,13 @@ Inspect each specialized launcher's help before providing its required engine
 repository or profile inputs:
 
 ```bash
-bash slurm/trtllm_triton.sbatch --help
-bash slurm/aiperf.sbatch --help
+bash slurm/30_engine_profile.trtllm.sbatch --help
+bash slurm/15_streaming_client.aiperf.sbatch --help
 bash slurm/dynamo_disaggregated_preflight.sbatch --help
-bash slurm/vllm_speculative_ab.sbatch --help
+bash slurm/33_speculative_engine_client.sbatch --help
 sbatch --chdir="$PWD" \
   --output="$PWD/results/32_inference_capstone/logs/%j.out" \
-  --error="$PWD/results/32_inference_capstone/logs/%j.err" slurm/capstone_three_trials.sbatch --profile small
+  --error="$PWD/results/32_inference_capstone/logs/%j.err" slurm/32_inference_capstone.trials.sbatch --workload small
 ```
 
 Lab 30 and its engine profiles document TensorRT-LLM/Triton, AIPerf, and

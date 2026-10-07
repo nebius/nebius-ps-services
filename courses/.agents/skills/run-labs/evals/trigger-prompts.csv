@@ -15,3 +15,5 @@ repeated-viewer-recovery,true,Resume the prepared lab campaign and recover its N
 unrelated-service-recovery,false,Restart the production Nsight service used by another team; this is an infrastructure incident with no course lab campaign.
 full-tool-recovery,true,Resume the prepared course campaign and fully recover its Grafana service and both Nsight viewers and profiler runtimes as needed; preserve configuration and storage.
 failed-profiler-recovery,true,Finish the selected lab evidence after a diagnosed nsys tool failure; recover the existing runtime and use a fresh campaign for only the failed lab and profile.
+prepared-native-campaign,true,Run CUDA Lab 01 using its already prepared native runtime and collect the usual evidence.
+preparation-only,false,Install the five lab preparation groups; do not run labs or collect evidence.

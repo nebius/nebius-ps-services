@@ -140,7 +140,7 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_num_threads(1)
         device = torch.device("cuda", local_rank)
-        width = 256 if args.profile == "small" else 1024
+        width = 256 if args.workload == "small" else 1024
         model = torch.nn.Sequential(
             *[
                 layer

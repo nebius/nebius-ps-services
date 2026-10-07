@@ -144,7 +144,7 @@ def test_rendered_lesson_toc_follows_reviewed_order(course):
     assert positions == sorted(positions)
     lesson_navigation = document.split("<h2>Lessons</h2>", 1)[1]
     introductory, numbered = lesson_navigation.split("<ol>", 1)
-    assert introductory.count('href="#using-gpu-performance-tools"') == 1
+    assert 'href="#using-gpu-performance-tools"' not in introductory
     toc = numbered.split("</ol>", 1)[0]
     links = re.findall(r'<li value="([0-9]+)"><a href="#[^"]+">([^<]+)</a></li>', toc)
     assert [(int(n), html.unescape(title)) for n, title in links] == [
@@ -168,15 +168,15 @@ def test_foundations_teaches_basic_timing_before_first_benchmark():
     concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
     assert "warm-up" in concepts and "cuda events" in concepts
     practice = lab_section("gpu-fundamentals", 1, "Practice")
-    assert "--profile small" in practice and "--profile large" not in practice
-    assert "--profile large" in lab_section("gpu-fundamentals", 1, "Investigate the behavior")
+    assert "--workload small" in practice and "--workload large" not in practice
+    assert "--workload large" in lab_section("gpu-fundamentals", 1, "Investigate the behavior")
     assert "README" not in practice and "Lesson" not in practice
     assert "repack timing" in lab_section("gpu-fundamentals", 4, "Investigate the behavior")
 
 
 def test_training_previews_do_not_require_advanced_execution():
     practice = lab_section("llm-training", 32, "Practice")
-    assert "slurm/cpu.sbatch" in practice and "--device cpu" in practice
+    assert "slurm/32_learning_basics.sbatch" in practice and "--device cpu" in practice
     assert "optional CUDA alternative" in lab_section("llm-training", 32, "Investigate the behavior")
     batching = lesson("llm-training", EXPECTED_ORDER["llm-training"][1])
     assert "logits" in batching["How it works"]
@@ -192,7 +192,7 @@ def test_inference_starts_with_basic_engine_then_advanced_work():
     assert "prepared qualified engines" in prerequisites
     assert "loopback server and client in one Slurm allocation" in prerequisites
     practice = lab_section("llm-inference", 30, "Practice")
-    for launcher in ("openai_engine", "trtllm_triton"):
+    for launcher in ("30_engine_profile", "30_engine_profile.trtllm"):
         assert f"slurm/{launcher}.sbatch" in lab_section("llm-inference", 30, "Investigate the behavior")
     assert practice.count("\nsbatch ") == 1
     concepts = lab_section("llm-inference", 30, "Concepts and code path")
@@ -202,8 +202,8 @@ def test_inference_starts_with_basic_engine_then_advanced_work():
     # Both metrics belong here; the explanation should distinguish them.
     assert all(term in metrics["How it works"] for term in ("ITL", "TPOT"))
     practice = lab_section("llm-inference", 15, "Practice")
-    assert "slurm/vllm_streaming_benchmark.sbatch" in practice
-    assert "slurm/aiperf.sbatch" in lab_section("llm-inference", 15, "Investigate the behavior")
+    assert "slurm/15_streaming_client.sbatch" in practice
+    assert "slurm/15_streaming_client.aiperf.sbatch" in lab_section("llm-inference", 15, "Investigate the behavior")
 
 
 def test_cuda_safety_practice_uses_completed_vector_lab():

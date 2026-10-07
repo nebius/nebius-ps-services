@@ -35,7 +35,7 @@ def main() -> None:
     try:
         seed_everything(torch, args.seed)
         hidden, layers, sequence, batch = (
-            (512, 4, 256, 8) if args.profile == "small" else (2_048, 12, 1_024, 4)
+            (512, 4, 256, 8) if args.workload == "small" else (2_048, 12, 1_024, 4)
         )
         vocab_size = 4_096
         model = build_tiny_lm(

@@ -22,12 +22,12 @@ fallback or establish CUDA/H100 behavior. It downloads no model or engine.
 | Python | 3.12 | Local serving environment exists; cluster parity pending |
 | PyTorch | 2.14.0 mechanics-manifest authority | Clean Linux/H100 install and qualification pending; no fallback approved |
 | Transformers | Pinned mechanics candidate set | Target installation and joint compatibility pending |
-| vLLM | 0.28 profile | Linux/H100 install and engine activation pending |
-| TensorRT-LLM and Triton | Exact support-matrix container digest | Not selected until target qualification |
-| AIPerf | Exact client version matched to server profile | Target qualification pending |
-| Dynamo | Advanced exact container profile | Deferred pending transport/topology qualification |
+| Native vLLM | 0.28.0 | Linux/H100 install and engine activation pending |
+| TensorRT-LLM and Triton | Explicit optional pinned container variant | Installation and target qualification are separate |
+| Native AIPerf | 0.12.0 | Target qualification pending |
+| Dynamo container preflight | Explicit optional pinned container variant | Deferred pending transport/topology qualification |
 
-Do not substitute an unqualified “latest” image. Once validated, record the
+For optional containers, do not substitute an unqualified “latest” image. Once validated, record the
 full immutable digest, model revision, driver, runtime, and launch arguments.
 
 ## KV-retention policy qualification
@@ -39,9 +39,13 @@ persistent KV recovery or a GPUDirect Storage path.
 
 ## Shared profiling qualification
 
-Nsight Systems **2026.4.1** and Nsight Compute **2026.2.1** are the cxcli-managed tool/viewer pair. The shared setup uses `soperator profiling install`, which owns package hashes, activation and matching viewers. Successful installation alone does not qualify the driver, both H100 workers, each AI/CUDA container, or hardware-counter access; retain pending status until the canaries and report inspections pass.
-
-The shared setup specifies Soperator **4.1.8**, its release-owned VictoriaMetrics stack **0.39.4**, and private Grafana. Pushgateway **1.11.3** is pinned to `sha256:74fa117cef2d7e383112d25139ff1c2d2e309c35389a9e0554a47136a1482e48`; publisher dependencies are pinned in `tools/profiling-requirements.txt`. No additional DCGM collector or metrics database is installed. Keep the existing AI runtime versions above; a profiler update does not authorize changing those environments.
+Use the [Lab Guide](../lab-guide.html#lab-preparation-scripts) for the preparation
+and cluster-managed profiling route. Keep the matching CLI/viewer identities
+recorded with each run. Installation does not qualify the driver, either worker,
+the selected native runtime or optional container, or hardware-counter access;
+those claims require the relevant canaries and report inspections. Keep the
+existing AI runtime identities above; changing a profiler does not authorize
+changing those environments or adding collectors and metrics databases.
 
 Prepared H200 runtime and applicable live profiler captures are recorded above. This campaign did not rerun the complete infrastructure installer or qualify the H100 target.
 
@@ -49,4 +53,4 @@ Prepared H200 runtime and applicable live profiler captures are recorded above. 
 
 The documented base target uses two one-H100 workers; all distributed GPU experiments now belong to the separate two-eight-H100 route. Eight-/sixteen-rank launchers require full devices with MIG disabled, NVLink peer paths and active InfiniBand. Physical topology checks do not replace Fabric Manager health, MPI/NCCL compatibility or GPUDirect registration qualification. No live 16-H100 qualification is claimed by these source changes.
 
-NVIDIA nvbandwidth source is pinned to `82fc4e8c6afa0babb8687793678f615b3b8d793e`; linux-rdma/perftest to `b513a77278c8061ca6c4dcd1a95d08801c6e7623`; MPI-enabled NCCL Tests 2.20.0 to `b4d5beebca8a76cf01335f724d154b9b9d394d96`. Shared environment setup records build hashes. Preserve existing course AI runtime pins and qualify the same runtime on both nodes before accepting a comparison.
+The advanced course owns these fabric experiments and their selected native tool dependencies. Use the Lab Guide for preparation, retain the component build receipts, and qualify the same runtime on both nodes before accepting a comparison.

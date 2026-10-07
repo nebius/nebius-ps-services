@@ -29,8 +29,8 @@ def main() -> None:
     torch = load_torch()
     environment = require_course_gpu(torch)
     seed_everything(torch, args.seed)
-    vector_elements = 16_000_000 if args.profile == "small" else 128_000_000
-    matrix_size = 2_048 if args.profile == "small" else 8_192
+    vector_elements = 16_000_000 if args.workload == "small" else 128_000_000
+    matrix_size = 2_048 if args.workload == "small" else 8_192
     x = torch.randn(vector_elements, device="cuda")
     y = torch.randn(vector_elements, device="cuda")
     a = torch.randn((matrix_size, matrix_size), device="cuda", dtype=torch.bfloat16)

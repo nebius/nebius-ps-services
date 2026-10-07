@@ -1,6 +1,6 @@
 # Nebius infrastructure skill
 
-One reusable skill for building and inspecting Nebius infrastructure. Start with
+One reusable skill for designing, building and inspecting Nebius infrastructure. Start with
 [SKILL.md](SKILL.md), then load the relevant category; the
 [service catalog](references/service-catalog.md) distinguishes practical assets,
 guidance and integration-only coverage, with official sources and review dates.
@@ -21,6 +21,18 @@ Soperator, Serverless AI and MLflow have
 cxcli and vpngw retain their lifecycle ownership. The assets have no dependency
 on those projects. The [adoption ledger](references/adoption-patterns.md)
 records the generic patterns and preserved safety contracts.
+
+## Design-only guidance
+
+Use `$nebius` directly for provider-specific design advice or as a scoped adviser
+inside `$design`. The design-only path reads matching references and returns
+provider constraints, service options, integration prerequisites, lifecycle
+owners, sources, assumptions and later validation needs. It applies even when
+Nebius is fixed. Documentation-based planning does not require credentials,
+resource IDs, inventory or provisioning preflight, and authorizes no cloud
+changes. Unknown capacity, quota, region availability and compatibility remain
+explicit validation needs. AI and application stack selection stay with their
+specialists; the active design owner integrates the result.
 
 ## Use the inspectors
 
@@ -127,3 +139,8 @@ checks; an isolated copy is portability evidence; fresh agent routing is
 validation is `STATIC_PASS`. Mark unavailable or unexecuted lanes explicitly.
 No source test establishes installed-skill discovery, live provisioning,
 authorization, service availability or workload performance.
+
+The 28 trigger definitions and six quality cases include design-only and
+fixed-provider consultations without credentials, inventory or mutations.
+Fresh multi-skill traces are needed to prove return to the active design owner;
+the isolated single-skill runner cannot establish that handoff.

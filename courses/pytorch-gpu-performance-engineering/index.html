@@ -1,0 +1,1138 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PyTorch for GPU Performance Engineering</title><link rel="icon" href="data:,"><style>:root {
+  color-scheme: light;
+  --ink: #24343d;
+  --muted: #52626b;
+  --paper: #f7f9f7;
+  --card: #ffffff;
+  --line: #dbe5e1;
+  --blue: #245880;
+  --teal: #206757;
+  --amber: #86500e;
+  --blue-wash: #eef5fc;
+  --mint-wash: #eef8f2;
+  --amber-wash: #fff7e7;
+  --reading-width: 88ch;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
+a { color: var(--blue); text-underline-offset: .18em; overflow-wrap: anywhere; }
+a:hover { color: var(--teal); }
+:focus-visible { outline: 3px solid var(--teal); outline-offset: 4px; }
+.skip-link { position: absolute; top: .5rem; left: 1rem; transform: translateY(-180%); padding: .5rem; background: white; z-index: 10; }
+.skip-link:focus { transform: none; }
+header { padding: 3rem max(5vw, 1.25rem) 2.5rem; text-align: center; background: linear-gradient(115deg, var(--mint-wash), var(--blue-wash)); border-bottom: 1px solid var(--line); }
+h1 { max-width: 1000px; margin: 0 auto; font-size: clamp(2.1rem, 4.2vw, 3.3rem); line-height: 1.18; letter-spacing: -.035em; text-wrap: balance; }
+.guided-hours { margin: 1rem 0 0; color: var(--muted); font-size: .95rem; }
+.course-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.5rem; max-width: 1800px; margin: auto; padding: 2rem 1.5rem 5rem; }
+aside, main { min-width: 0; }
+nav { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; font-size: .87rem; line-height: 1.5; padding: 1.15rem; background: var(--card); border: 1px solid var(--line); border-radius: 14px; scrollbar-gutter: stable; }
+nav h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .07em; margin: 1.6rem 0 .6rem; }
+nav ol, nav ul { padding-left: 1.2rem; }
+nav li { margin: .25rem 0; }
+nav li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+nav .section-links { list-style: none; padding: 0; }
+nav .section-links ul { list-style: disc; }
+nav summary { font-weight: 650; }
+nav a { display: inline-block; padding: .3rem .2rem; border-radius: 5px; text-decoration: none; }
+nav a:hover { text-decoration: underline; background: var(--mint-wash); }
+nav > details li > a { display: inline; }
+section, article, figure { scroll-margin-top: 1.5rem; }
+h2 { font-size: clamp(1.6rem, 2.6vw, 2.1rem); line-height: 1.25; letter-spacing: -.025em; margin: 0 0 1.1rem; }
+h3 { font-size: 1.25rem; line-height: 1.35; margin-top: 1.8rem; }
+h4 { font-size: 1.1rem; }
+h5 { font-size: 1rem; }
+h6 { font-size: .95rem; }
+h4, h5, h6 { line-height: 1.4; margin-top: 1.6rem; }
+p { margin: .7rem 0 1rem; }
+main > section { margin: 0 0 2rem; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 2rem clamp(1.3rem, 3vw, 2.5rem); box-shadow: 0 3px 14px #24343d04; }
+main p, .lesson > div, .lesson > details, .supporting-guide > ul, .supporting-guide > ol { max-width: var(--reading-width); }
+main > section:target, article:target, figure:target { border-color: var(--teal); }
+.performance-tools { overflow-wrap: anywhere; }
+.performance-workflow { margin: 1rem 0; }
+.lesson > div, .lesson > details { margin: 1.15rem 0; }
+.lesson > .how-it-works { max-width: none; }
+.how-it-works > ul, .how-it-works > ol { max-width: var(--reading-width); }
+.lesson > div > h3, .tools-field > h3 { margin: 0 0 .7rem; color: var(--ink); font-size: 1.25rem; }
+.tools-field { margin: 1.15rem 0; }
+.next-steps-list { padding-left: 1.5rem; }
+.next-steps-list > li { margin: 1.5rem 0; padding-left: .25rem; }
+.next-steps-list > li > h3 { margin: 0 0 .7rem; }
+#guide-glossary > dl { max-width: var(--reading-width); }
+#official-references > ol { list-style-type: decimal; padding-left: 1.5rem; }
+#official-references li { margin: .6rem 0; }
+dt { margin-top: .75rem; font-weight: 650; overflow-wrap: anywhere; }
+dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
+.lesson .lesson-outcome { border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
+.lesson .warning { border-color: var(--amber); background: var(--amber-wash); }
+.lesson .lesson-visuals { padding-top: .5rem; border-top: 1px solid var(--line); }
+summary { cursor: pointer; }
+details > summary { padding: .35rem 0; }
+code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--blue-wash); border-radius: 3px; padding: .1em .3em; overflow-wrap: anywhere; }
+strong code { font-weight: inherit; }
+pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; }
+pre code { padding: 0; background: none; overflow-wrap: normal; }
+.table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 14em; overflow-wrap: normal; }
+th { background: var(--blue-wash); font-weight: 650; }
+tbody tr:last-child td { border-bottom: 0; }
+.course-contract { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.course-contract > div { border-top: 3px solid var(--teal); padding: .4rem .4rem 0; }
+.course-contract h3 { margin-top: .5rem; }
+.lab, .supporting-guide { padding: 1.4rem 0; border-top: 1px solid var(--line); }
+.lab h3, .supporting-guide > h3 { margin-top: .5rem; }
+.lab-guide { display: block; }
+.lab-guide-section { margin: 1.5rem 0; }
+.lab-guide-section h4 { font-size: 1.1rem; color: var(--teal); margin-bottom: .5rem; }
+.practice-links, .lab-lessons { border-left: 3px solid var(--teal); padding-left: 1rem; }
+.lab-scope { display: inline-block; margin-top: 0; padding: .1rem .6rem; border-radius: 20px; color: var(--teal); background: var(--mint-wash); font-size: .85rem; }
+.lab-source { margin-top: 1.2rem; border: 1px solid var(--line); padding: .65rem 1rem; border-radius: 8px; }
+.lab-source > summary { color: var(--blue); overflow-wrap: anywhere; }
+.setup-guide, .route-heading, .lesson h2, .lab h3 { overflow-wrap: anywhere; }
+.optional-study { margin-top: 1.5rem; padding-top: .25rem; border-top: 1px solid var(--line); }
+figure { margin: 1.5rem 0 2rem; padding: .75rem; border: 1px solid var(--line); border-radius: 10px; background: white; min-width: 0; width: 100%; }
+.guide-image { max-width: 640px; margin-inline: auto; }
+.guide-image img { display: block; width: 100%; height: auto; }
+svg { display: block; width: 100%; max-width: 100%; height: auto; font: 18px Arial, Helvetica, sans-serif; color: var(--ink); fill: var(--ink); }
+svg .diagram-label { font-size: 15px; }
+svg .diagram-small { font-size: 13px; }
+.overview-diagram svg rect, .overview-diagram svg .diagram-shape { fill: var(--blue-wash); stroke: var(--blue); stroke-width: 2; }
+.overview-diagram svg .arrows { stroke: var(--teal); stroke-width: 3; }
+.overview-diagram svg .axes, .overview-diagram svg .timeline { stroke: var(--blue); stroke-width: 3; }
+.overview-diagram svg .roofline { fill: none; stroke: var(--amber); stroke-width: 5; }
+.overview-diagram svg .diagram-note { font-size: 15px; fill: var(--muted); }
+.overview-diagram svg .exposed { fill: var(--amber-wash); stroke: var(--amber); }
+figcaption { padding: .8rem .4rem .25rem; font-size: .92rem; color: var(--muted); }
+footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--muted); font-size: .9rem; }
+.catalog-navigation { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin-bottom: 1rem; }
+.catalog-home { font-weight: 650; }
+.course-switcher { margin-top: .5rem; }
+.course-switcher ul { list-style: none; padding: 0; }
+.course-switcher li { margin-top: .5rem; }
+.course-switcher [aria-current="page"] { display: block; padding: .4rem; border-left: 3px solid var(--teal); background: var(--mint-wash); font-weight: 650; }
+.current-label { display: block; font-size: .75rem; font-weight: 400; color: var(--muted); }
+.license-footer small { display: block; font-size: .875rem; line-height: 1.65; }
+.license-footer details { margin-top: .8rem; }
+.license-footer summary { font-size: .875rem; }
+.license-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .875rem/1.65 system-ui, sans-serif; }
+@media (max-width: 950px) {
+  .course-layout { grid-template-columns: 1fr; padding: 1rem 1rem 3rem; gap: 1.5rem; }
+  nav { position: static; max-height: none; }
+  nav > details > ol { columns: 2; column-gap: 2rem; }
+  nav li { break-inside: avoid; }
+}
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  header { padding: 2.3rem 1.2rem 2rem; }
+  .course-layout { padding: 1rem .65rem 3rem; }
+  main > section { padding: 1.2rem 1rem; }
+  nav > details > ol { columns: 1; }
+  .course-contract { grid-template-columns: 1fr; }
+  h2 { font-size: 1.6rem; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+@media print {
+  body { background: white; font-size: 11pt; }
+  .course-layout { display: block; padding: 0; }
+  aside, .skip-link { display: none; }
+  header { padding: 1rem; }
+  main > section { border: 0; padding: 0; box-shadow: none; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+</style></head>
+<body class="text-course"><a class="skip-link" href="#main">Skip to course</a>
+<header><h1>PyTorch for GPU Performance Engineering</h1><p class="guided-hours">Estimated guided hours: 3</p></header>
+<div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents"><div class="catalog-navigation">
+<a class="catalog-home" href="../index.html">← Course catalog</a>
+<details class="course-switcher"><summary>Courses and guide</summary>
+<ul><li><a href="../soperator/index.html">Soperator: A Nebius Slurm cluster running on Kubernetes</a></li><li><a href="../lab-guide.html">Lab Guide</a></li><li><a href="../gpu-performance-tools/index.html">GPU Performance Tools</a></li><li><span aria-current="page" data-course="pytorch-gpu-performance-engineering">PyTorch for GPU Performance Engineering<span class="current-label">Current course</span></span></li><li><a href="../gpu-fundamentals/index.html">GPU Fundamentals</a></li><li><a href="../gpu-optimizations/index.html">GPU Performance Optimization</a></li><li><a href="../llm-training/index.html">LLM Training</a></li><li><a href="../llm-inference/index.html">LLM Inference</a></li><li><a href="../custom-cuda-kernels/index.html">Custom CUDA Kernels for GPU Optimization</a></li><li><a href="../advanced-gpu-communication/index.html">Advanced Labs: Multi-GPUs Multi-Nodes communication optimization</a></li></ul></details></div><details open><summary>Table of contents</summary>
+<ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Lessons</h2><ol><li><a href="#lesson-1-a-tensor-is-data-with-a-description">A tensor is data with a description</a></li><li><a href="#lesson-2-dimensions-are-indexed-axes-with-sizes">Dimensions are indexed axes with sizes</a></li><li><a href="#lesson-3-broadcasting-reuses-values-across-axes">Broadcasting reuses values across axes</a></li><li><a href="#lesson-4-element-wise-work-and-matrix-multiplication-differ">Element-wise work and matrix multiplication differ</a></li><li><a href="#lesson-5-reductions-remove-information-and-axes">Reductions remove information and axes</a></li><li><a href="#lesson-6-views-change-interpretation-copies-move-values">Views change interpretation; copies move values</a></li><li><a href="#lesson-7-dtype-changes-storage-and-numerical-behavior">Dtype changes storage and numerical behavior</a></li><li><a href="#lesson-8-device-placement-selects-where-work-happens">Device placement selects where work happens</a></li><li><a href="#lesson-9-a-model-is-a-sequence-of-tensor-operations">A model is a sequence of tensor operations</a></li><li><a href="#lesson-10-training-saves-information-for-a-backward-pass">Training saves information for a backward pass</a></li><li><a href="#lesson-11-evaluation-mode-and-gradient-mode-are-separate">Evaluation mode and gradient mode are separate</a></li><li><a href="#lesson-12-transfers-are-part-of-the-input-pipeline">Transfers are part of the input pipeline</a></li><li><a href="#lesson-13-live-tensors-and-reserved-memory-are-different">Live tensors and reserved memory are different</a></li><li><a href="#lesson-14-batching-expresses-repeated-work-as-tensor-operations">Batching expresses repeated work as tensor operations</a></li><li><a href="#lesson-15-a-timer-must-include-completion">A timer must include completion</a></li><li><a href="#lesson-16-code-suggests-a-hypothesis-a-profile-supplies-evidence">Code suggests a hypothesis; a profile supplies evidence</a></li><li><a href="#lesson-17-compilation-can-reduce-launches-and-intermediate-storage">Compilation can reduce launches and intermediate storage</a></li><li><a href="#lesson-18-read-a-complete-step-like-a-performance-engineer">Read a complete step like a performance engineer</a></li></ol>
+<h2>Reference and further reading</h2><ul class="section-links"><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul></details></nav></aside>
+<main id="main"><section id="course-overview"><h2>Course overview</h2><p>Read PyTorch code and see the work it asks the GPU to do: calculate, move data, allocate memory or wait. This foundation prepares you for <a href="../gpu-fundamentals/index.html">GPU Fundamentals</a> and the performance labs that follow.</p><p><strong>Before you begin:</strong> basic Python variables, lists, functions and loops are enough. No machine-learning background, GPU or running cluster is needed for reading. Examples use small invented inputs; numeric outputs are worked results, not performance measurements. Blocks marked <strong>CUDA example</strong> require an NVIDIA GPU and a compatible PyTorch environment if you choose to run them later. Already comfortable with PyTorch? If you can explain why a transpose can share storage, why <strong><code>eval</code></strong> does not disable gradients and why <strong><code>item</code></strong> can wait for CUDA, use the final worked example as your entry point and revisit unfamiliar lessons.</p><p><strong>Reading route:</strong> lessons 1–7 explain tensors; 8–11 explain execution and models; 12–18 connect them to performance and optimization. Read each objective, opening definition, diagram and code comments, then the explanation and performance connection. The full route is about three guided hours; there are no labs, exercises or setup tasks.</p><p><strong>Reading the notation:</strong> bold monospace marks an actual PyTorch API name, such as <strong><code>shape</code></strong>, <strong><code>dtype</code></strong> or <strong><code>torch.randn</code></strong>. Ordinary monospace marks example variables and values, such as <code>x</code> and <code>[2, 3, 4]</code>. Plain words such as batch, position and feature describe concepts or meanings we assign to an example. Their meanings come from the application. Headings and callout labels may also be bold. Code blocks use normal Python formatting, with explanatory comments.</p></section>
+<section class="lesson" id="lesson-1-a-tensor-is-data-with-a-description"><h2>1. A tensor is data with a description</h2><div class="lesson-outcome"><h3>Objective</h3><p>Read a tensor&#x27;s <strong><code>shape</code></strong>, element count, <strong><code>dtype</code></strong> and <strong><code>device</code></strong>, and explain what each tells you.</p></div><div class="how-it-works"><h3>How it works</h3><p>PyTorch is a library for computing with tensors on CPUs and accelerators. Its <strong><code>torch.Tensor</code></strong> type represents values arranged along zero or more dimensions. A dimension, also called an axis, organizes entries in a tensor: a matrix has a row axis and a column axis. Each axis has a size, such as two rows or three columns. Lesson 2 explains how to choose entries along each axis.</p><p>A tensor combines stored values with metadata: information describing those values. Start with three attributes. <strong><code>shape</code></strong> gives the size of each axis; <strong><code>dtype</code></strong> gives the element representation; <strong><code>device</code></strong> identifies where the values live. The diagram describes one tensor from these three perspectives. Element count is a separate fact derived from its sizes. Each card describes one property of the same tensor.</p><figure class="detail-diagram" id="detail-tensor-description" data-after="How it works" data-diagram-source="reference/diagrams/tensor-description.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 450" role="img" aria-labelledby="pt-tensor-description-title pt-tensor-description-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-tensor-description-title">One tensor, three attributes and an element count</title>
+  <desc id="pt-tensor-description-desc">The same six-element matrix has two rows and three columns, stores 32-bit floating-point values and lives in CPU memory. Element count and element representation are separate facts.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>x = [[1, 2, 3], [4, 5, 6]]</tspan></text>
+    <rect x="16" y="48" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="78" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <text x="160" y="108" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2 rows, 3 columns</tspan></text>
+    <rect x="16" y="150" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="180" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32</tspan></text>
+    <text x="160" y="210" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>4 bytes per element</tspan></text>
+    <rect x="16" y="252" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="282" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="312" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Values live in CPU memory</tspan></text>
+    <text x="160" y="390" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Element count: 2 × 3 = 6</tspan></text>
+    <text x="160" y="428" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All three describe the same x</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>One tensor, three attributes and an element count</strong><p>The same six-element matrix has two rows and three columns, stores 32-bit floating-point values and lives in CPU memory. Element count and element representation are separate facts.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x = torch.tensor([[1., 2., 3.],
+                  [4., 5., 6.]], dtype=torch.float32, device=&quot;cpu&quot;)
+print(x.shape)    # torch.Size([2, 3]): two rows, three columns
+print(x.ndim)     # 2: the number of dimensions
+print(x.numel())  # 6: the number of elements, 2 * 3
+print(x.dtype)    # torch.float32: each element uses four bytes
+print(x.device)   # cpu: values are in CPU memory</code></pre><p>Here <strong><code>ndim</code></strong> counts axes, while <strong><code>numel</code></strong> counts values. The two axes have sizes 2 and 3, so six values are stored. FP32 means 32-bit floating point, represented by <strong><code>torch.float32</code></strong>; each element uses four bytes. The CPU is the central processing unit; a GPU, or graphics processing unit, is an accelerator. The example above creates values on the CPU. Estimating an operation&#x27;s cost combines these attributes with the computation it performs.</p><p>Unless an example states otherwise, it uses PyTorch&#x27;s ordinary defaults: newly created floating tensors are FP32 on the CPU. Integer sequences below use <strong><code>torch.int64</code></strong>. The examples retain these global <strong><code>dtype</code></strong> and <strong><code>device</code></strong> defaults.</p><p>Other common constructors make intent easy to spot:</p><pre tabindex="0"><code>zeros = torch.zeros(2, 3, dtype=torch.float32, device=&quot;cpu&quot;)
+ones = torch.ones_like(zeros)  # Same shape, dtype and device; fill with 1
+ids = torch.arange(4)         # Integer values: [0, 1, 2, 3]</code></pre><p><strong><code>torch.zeros</code></strong> fills the requested <strong><code>shape</code></strong> with zero. <strong><code>torch.ones_like</code></strong> uses an existing tensor as the attribute template. <strong><code>torch.arange</code></strong> generates a sequence from zero up to the value just before its stop: <code>0, 1, 2, 3</code> here. Each constructor defines the meaning of its arguments; these comments identify sizes, fill values and sequence boundaries.</p><h4 id="lesson-1-shape-and-random-values-answer-different-questions">Shape and random values answer different questions</h4><p>In <strong><code>torch.rand</code></strong> and <strong><code>torch.randn</code></strong>, the positional numbers specify axis sizes. Both calls below create two rows and three columns. Their difference is the distribution: the rule describing how likely different values are.</p><ul><li><strong><code>torch.rand</code></strong> uses a uniform distribution on <code>[0, 1)</code>: equal-width intervals within that range have equal probability. Zero is included; one is excluded.</li><li><strong><code>torch.randn</code></strong> uses a standard normal distribution: values cluster near zero with a standard deviation of one, a measure of spread. Negative values and values above one are possible; the distribution extends across the real-number line.</li></ul><p>The small sketches illustrate the sampling rules. Curve height shows relative probability density: a higher curve indicates more likely values nearby.</p><figure class="detail-diagram" id="detail-random-values" data-after="How it works" data-diagram-source="reference/diagrams/random-values.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 496" role="img" aria-labelledby="pt-random-values-title pt-random-values-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-random-values-title">Same shape, different sampling rules</title>
+  <desc id="pt-random-values-desc">Both tensors contain two rows of three FP32 values in CPU memory. Uniform sampling ranges from zero inclusive to one exclusive. Normal sampling clusters near zero and extends in both directions. Curves show probability density schematically.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3] · 6 samples</tspan></text>
+    <text x="160" y="58" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="105" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.rand</tspan></text>
+    <path d="M40 192 H280 M90 192 V135 H230 V192" stroke="#245880" stroke-width="2.5" fill="none" />
+    <text x="90" y="221" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0</tspan></text>
+    <text x="230" y="221" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <text x="160" y="256" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0 included; 1 excluded</tspan></text>
+    <text x="160" y="303" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.randn</tspan></text>
+    <path d="M30 391 H290 M30 388 C92 388 110 325 160 325 C210 325 228 388 290 388" stroke="#206757" stroke-width="2.5" fill="none" />
+    <text x="80" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>−1</tspan></text>
+    <text x="160" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0</tspan></text>
+    <text x="240" y="422" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <text x="160" y="457" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Normal: centered at 0</tspan></text>
+    <text x="160" y="487" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Tails extend beyond this sketch</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Same shape, different sampling rules</strong><p>Both tensors contain two rows of three FP32 values in CPU memory. Uniform sampling ranges from zero inclusive to one exclusive. Normal sampling clusters near zero and extends in both directions. Curves show probability density schematically.</p></figcaption></figure><pre tabindex="0"><code>uniform = torch.rand(2, 3, dtype=torch.float32, device=&quot;cpu&quot;)
+normal = torch.randn(2, 3, dtype=torch.float32, device=&quot;cpu&quot;)
+# Both: shape [2, 3], dtype torch.float32, device cpu.
+# rand: each value is at least 0 and less than 1.
+# randn: values may be negative or greater than 1.
+# The sizes 2 and 3 create two rows with three values each.</code></pre><p>The distribution has mean zero. The average of a small random sample varies from draw to draw. Later examples use fixed values so we can calculate their results directly.</p><p><strong>Performance connection:</strong> element count estimates the amount of data. <strong><code>dtype</code></strong> sets bytes per element, while <strong><code>device</code></strong> determines which execution path is available. Start with those facts before guessing why a workload is slow.</p></div><div class="mental-model"><h3>Mental model</h3><p>A tensor is values plus a description. Inspect the description before reading the computation.</p></div></section><section class="lesson" id="lesson-2-dimensions-are-indexed-axes-with-sizes"><h2>2. Dimensions are indexed axes with sizes</h2><div class="lesson-outcome"><h3>Objective</h3><p>Use grid, row and column indices to select values, and explain the shapes produced by slicing and reshaping.</p></div><div class="how-it-works"><h3>How it works</h3><p>An axis is a dimension used to organize values. Its size counts the entries along it. A <strong><code>shape</code></strong> lists these sizes in order. Here, <code>[2, 3, 4]</code> describes two grids, each with three rows and four columns: <code>2 * 3 * 4 = 24</code> values.</p><p>An index is an integer that chooses an entry along an axis. The plural of index is indices. Counting starts at zero, so index <code>0</code> chooses the first entry and index <code>1</code> chooses the second. A grid is a table of values; a grid index is the number used to choose one of those tables.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Axis number</th><th scope="col">What its index chooses</th><th scope="col">Size</th><th scope="col">Available indices</th></tr></thead><tbody><tr><td>0</td><td>A grid</td><td>2</td><td><code>0</code>, <code>1</code></td></tr><tr><td>1</td><td>A row in that grid</td><td>3</td><td><code>0</code>, <code>1</code>, <code>2</code></td></tr><tr><td>2</td><td>A column in that row</td><td>4</td><td><code>0</code>, <code>1</code>, <code>2</code>, <code>3</code></td></tr></tbody></table></div><p>Read <code>x[1, 2, 3]</code> from left to right: grid index <code>1</code>, row index <code>2</code>, column index <code>3</code>. These three indices select the second grid, its third row and its fourth column. The highlighted cell below contains the value <code>23</code>.</p><figure class="detail-diagram" id="detail-shape-axes" data-after="How it works" data-diagram-source="reference/diagrams/shape-axes.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 730" role="img" aria-labelledby="pt-shape-axes-title pt-shape-axes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-shape-axes-title">Choose a grid, a row and a column</title>
+  <desc id="pt-shape-axes-desc">An index chooses an entry, counting from zero. In x[1, 2, 3], 1 chooses the second grid, 2 its third row and 3 its fourth column. The highlighted cell contains 23. Each grid has three rows and four columns. The tensor contains 64-bit integers on the CPU.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" fill="#24343d" text-anchor="middle">x · <tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan>: [2, 3, 4]</text>
+    <text x="160" y="58" font-size="20" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan>: int64 · <tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan>: CPU</text>
+    <text x="160" y="100" font-size="20" fill="#24343d" text-anchor="middle">Grid index 0 · first grid</text>
+    <text x="160" y="126" font-size="20" fill="#24343d" text-anchor="middle">Column indices</text>
+    <text transform="translate(26 236) rotate(-90)" font-size="20" fill="#24343d" text-anchor="middle">Row indices</text>
+    <text x="88" y="154" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <text x="136" y="154" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <text x="184" y="154" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <text x="232" y="154" font-size="20" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="196" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="64" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="196" font-size="22" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="112" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="196" font-size="22" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="160" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="196" font-size="22" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="208" y="164" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="196" font-size="22" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="244" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="64" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="244" font-size="22" fill="#24343d" text-anchor="middle">4</text>
+    <rect x="112" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="244" font-size="22" fill="#24343d" text-anchor="middle">5</text>
+    <rect x="160" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="244" font-size="22" fill="#24343d" text-anchor="middle">6</text>
+    <rect x="208" y="212" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="244" font-size="22" fill="#24343d" text-anchor="middle">7</text>
+    <text x="43" y="292" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="64" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="292" font-size="22" fill="#24343d" text-anchor="middle">8</text>
+    <rect x="112" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="292" font-size="22" fill="#24343d" text-anchor="middle">9</text>
+    <rect x="160" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="292" font-size="22" fill="#24343d" text-anchor="middle">10</text>
+    <rect x="208" y="260" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="292" font-size="22" fill="#24343d" text-anchor="middle">11</text>
+    <text x="160" y="346" font-size="20" fill="#24343d" text-anchor="middle">Grid index 1 · second grid</text>
+    <text x="160" y="372" font-size="20" fill="#24343d" text-anchor="middle">Column indices</text>
+    <text transform="translate(26 482) rotate(-90)" font-size="20" fill="#24343d" text-anchor="middle">Row indices</text>
+    <text x="88" y="400" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <text x="136" y="400" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <text x="184" y="400" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <text x="232" y="400" font-size="20" fill="#24343d" text-anchor="middle">3</text>
+    <text x="43" y="442" font-size="20" fill="#24343d" text-anchor="middle">0</text>
+    <rect x="64" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="442" font-size="22" fill="#24343d" text-anchor="middle">12</text>
+    <rect x="112" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="442" font-size="22" fill="#24343d" text-anchor="middle">13</text>
+    <rect x="160" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="442" font-size="22" fill="#24343d" text-anchor="middle">14</text>
+    <rect x="208" y="410" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="442" font-size="22" fill="#24343d" text-anchor="middle">15</text>
+    <text x="43" y="490" font-size="20" fill="#24343d" text-anchor="middle">1</text>
+    <rect x="64" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="490" font-size="22" fill="#24343d" text-anchor="middle">16</text>
+    <rect x="112" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="490" font-size="22" fill="#24343d" text-anchor="middle">17</text>
+    <rect x="160" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="490" font-size="22" fill="#24343d" text-anchor="middle">18</text>
+    <rect x="208" y="458" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="232" y="490" font-size="22" fill="#24343d" text-anchor="middle">19</text>
+    <text x="43" y="538" font-size="20" fill="#24343d" text-anchor="middle">2</text>
+    <rect x="64" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="88" y="538" font-size="22" fill="#24343d" text-anchor="middle">20</text>
+    <rect x="112" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="136" y="538" font-size="22" fill="#24343d" text-anchor="middle">21</text>
+    <rect x="160" y="506" width="48" height="48" rx="4" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="184" y="538" font-size="22" fill="#24343d" text-anchor="middle">22</text>
+    <rect x="208" y="506" width="48" height="48" rx="4" fill="#fff0cf" stroke="#805818" stroke-width="3" />
+    <text x="232" y="538" font-size="22" fill="#24343d" text-anchor="middle">23</text>
+    <rect x="16" y="582" width="288" height="132" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="610" font-size="20" fill="#206757" text-anchor="middle">x[1, 2, 3] = 23</text>
+    <text x="160" y="640" font-size="20" fill="#24343d" text-anchor="middle">1: second grid</text>
+    <text x="160" y="668" font-size="20" fill="#24343d" text-anchor="middle">2: third row</text>
+    <text x="160" y="696" font-size="20" fill="#24343d" text-anchor="middle">3: fourth column</text>
+  </g>
+</svg>
+<figcaption><strong>Choose a grid, a row and a column</strong><p>An index chooses an entry, counting from zero. In x[1, 2, 3], 1 chooses the second grid, 2 its third row and 3 its fourth column. The highlighted cell contains 23. Each grid has three rows and four columns. The tensor contains 64-bit integers on the CPU.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x = torch.arange(24).reshape(2, 3, 4)  # Arrange 0 through 23 into two grids
+print(x.ndim)                        # 3 axes: grid, row, column
+print(x[1, 2, 3])                    # tensor(23)</code></pre><h4 id="lesson-2-selecting-a-grid-a-row-or-one-value">Selecting a grid, a row or one value</h4><p>Each index narrows the selection. These examples continue with the same <code>x</code>:</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Expression</th><th scope="col">Selected result</th><th scope="col">Result shape</th></tr></thead><tbody><tr><td><code>x[0]</code></td><td>First grid: three rows of four values</td><td><code>[3, 4]</code></td></tr><tr><td><code>x[0, 1]</code></td><td>Second row of the first grid: <code>[4, 5, 6, 7]</code></td><td><code>[4]</code></td></tr><tr><td><code>x[0, 1, 2]</code></td><td>Third value in that row: <code>6</code></td><td><code>[]</code></td></tr></tbody></table></div><p>A matrix has two axes, a vector has one, and a scalar tensor holds one value with zero axes. Their shapes above are <code>[3, 4]</code>, <code>[4]</code> and <code>[]</code>. A one-element vector has <strong><code>shape</code></strong> <code>[1]</code>: one axis containing one value.</p><h4 id="lesson-2-keeping-a-group-with-a-slice">Keeping a group with a slice</h4><p>A slice selects a range of entries and keeps their axis. <code>0:1</code> means start at index <code>0</code> and stop just before index <code>1</code>, so it selects the first grid.</p><pre tabindex="0"><code>print(x[0].shape)    # torch.Size([3, 4]): one grid
+print(x[0:1].shape)  # torch.Size([1, 3, 4]): a group containing one grid</code></pre><p>Both results contain the first grid&#x27;s twelve values. <code>[3, 4]</code> describes its rows and columns; <code>[1, 3, 4]</code> also keeps the grid axis, now with size one. The arrows show two separate selections from the original <code>x</code>.</p><figure class="detail-diagram" id="detail-index-versus-slice" data-after="How it works" data-diagram-source="reference/diagrams/index-versus-slice.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 460" role="img" aria-labelledby="pt-index-versus-slice-title pt-index-versus-slice-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-index-versus-slice-title">One grid and a group containing one grid</title>
+  <desc id="pt-index-versus-slice-desc">Two arrows start at x. The first leads to x[0], a grid with shape [3, 4]. The second leads to x[0:1], a group of one grid with shape [1, 3, 4]. Both selections contain the same twelve values from the first grid.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="20" text-anchor="middle">
+    <text x="166" y="28" fill="#24343d"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan>: int64 · <tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan>: CPU</text>
+    <rect x="28" y="48" width="276" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="166" y="80" fill="#245880">x · <tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan>: [2, 3, 4]</text>
+    <path d="M166 100 V140 m-6 -8 l6 8 l6 -8" stroke="#245880" stroke-width="2" fill="none" />
+    <path d="M166 118 H10 V322 H28 m-8 -6 l8 6 l-8 6" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="28" y="140" width="276" height="104" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="166" y="170" fill="#245880">x[0] · one grid</text>
+    <text x="166" y="200" fill="#24343d"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan>: [3, 4]</text>
+    <text x="166" y="228" fill="#24343d">3 rows, 4 columns</text>
+    <rect x="28" y="274" width="276" height="104" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="166" y="304" fill="#206757">x[0:1] · a group of one grid</text>
+    <text x="166" y="334" fill="#24343d"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan>: [1, 3, 4]</text>
+    <text x="166" y="362" fill="#24343d">1 grid, 3 rows, 4 columns</text>
+    <text x="160" y="426" fill="#24343d">Both select the first 12 values</text>
+  </g>
+</svg>
+<figcaption><strong>One grid and a group containing one grid</strong><p>Two arrows start at x. The first leads to x[0], a grid with shape [3, 4]. The second leads to x[0:1], a group of one grid with shape [1, 3, 4]. Both selections contain the same twelve values from the first grid.</p></figcaption></figure><p>A colon <code>:</code> on its own selects every entry on that axis. Read <code>x[:, :, 0]</code> as “every grid, every row, first column”:</p><pre tabindex="0"><code>print(x[:, :, 0])  # One value from each row in each grid
+# tensor([[ 0,  4,  8],
+#         [12, 16, 20]])</code></pre><h4 id="lesson-2-giving-the-same-values-a-new-shape">Giving the same values a new shape</h4><p><strong><code>reshape</code></strong> arranges the same values into new axis sizes while preserving their reading order. Here it places the first grid&#x27;s three rows followed by the second grid&#x27;s three rows into one six-row matrix:</p><pre tabindex="0"><code>flat = x.reshape(6, 4)  # Six rows, each with four values
+print(flat.shape)      # torch.Size([6, 4])</code></pre><p>Both shapes contain 24 values: <code>2 * 3 * 4 = 6 * 4</code>. Our application supplies the axis meanings. For sensor data, those original sizes could describe two sensors, three readings per sensor and four measurements per reading.</p><p><strong>Performance connection:</strong> multiplying the sizes gives the element count. Both shapes above contain 24 values; the new shape groups them into six rows for later operations.</p></div><div class="mental-model"><h3>Mental model</h3><p>Shape lists sizes. An index chooses an entry; a slice keeps a range; reshaping gives the same values a new arrangement.</p></div></section><section class="lesson" id="lesson-3-broadcasting-reuses-values-across-axes"><h2>3. Broadcasting reuses values across axes</h2><div class="lesson-outcome"><h3>Objective</h3><p>Predict a broadcast result and spot an accidental expansion.</p></div><div class="how-it-works"><h3>How it works</h3><p>Broadcasting lets an operation reuse values from a smaller tensor across a larger one. Compare sizes from the right: each pair must match, or one size must be 1. A missing leading dimension behaves like size 1. For the nonempty tensors here, the result takes the larger size on each axis.</p><p>Adding one bias per feature to a <code>[2, 3]</code> matrix reuses the same three bias values for both rows. A bias here is simply an offset added to a value; feature is our chosen meaning for a column. The repeated bias row in the diagram shows how the operation reuses the original three bias values for each input row.</p><figure class="detail-diagram" id="detail-broadcast" data-after="How it works" data-diagram-source="reference/diagrams/broadcast.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 430.0" role="img" aria-labelledby="pt-broadcast-title pt-broadcast-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-broadcast-title">One bias row serves two input rows</title>
+  <desc id="pt-broadcast-desc">Each row of x receives the same bias values 10, 20 and 30. Bias reuse does not require storing a repeated input, but addition produces a six-element output.</desc>
+  <defs>
+    <marker id="pt-broadcast-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <text x="160" y="28" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>x </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <rect x="88" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <rect x="136" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2</tspan></text>
+    <rect x="184" y="42" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="73.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>3</tspan></text>
+    <rect x="88" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>4</tspan></text>
+    <rect x="136" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>5</tspan></text>
+    <rect x="184" y="90" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="121.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>6</tspan></text>
+    <text x="160" y="165" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>+ bias [10, 20, 30]</tspan></text>
+    <path d="M160 180 V215" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-broadcast-arrow)" />
+    <text x="160" y="241" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>y </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3]</tspan></text>
+    <rect x="88" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>11</tspan></text>
+    <rect x="136" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>22</tspan></text>
+    <rect x="184" y="256" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="287.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>33</tspan></text>
+    <rect x="88" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>14</tspan></text>
+    <rect x="136" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>25</tspan></text>
+    <rect x="184" y="304" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="335.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>36</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>One bias row serves two input rows</strong><p>Each row of x receives the same bias values 10, 20 and 30. Bias reuse does not require storing a repeated input, but addition produces a six-element output.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+bias = torch.tensor([10., 20., 30.])  # [3] aligns with the last axis
+y = x + bias                        # [2, 3] + [3] -&gt; [2, 3]
+print(y)  # [[11, 22, 33], [14, 25, 36]]
+
+row_offset = torch.tensor([[100.], [200.]])  # [2, 1]
+z = x + row_offset  # [2, 3] + [2, 1] -&gt; [2, 3]
+print(z)            # [[101, 102, 103], [204, 205, 206]]</code></pre><p><strong>Watch for:</strong> <code>[3, 1] + [3]</code> produces <code>[3, 3]</code>, not <code>[3, 1]</code>. This can silently create much more output than intended. <code>[2, 3] + [2]</code> fails because the trailing sizes 3 and 2 disagree.</p><p><strong>Performance connection:</strong> broadcasting avoids explicitly repeating the input, but an ordinary addition still computes and stores its output. A tiny bias does not make a huge output cheap. <strong><code>expand</code></strong> creates a view that reuses storage; <strong><code>repeat</code></strong> copies repeated values. Avoid writing into expanded views because multiple logical entries can refer to the same stored value.</p></div><div class="mental-model"><h3>Mental model</h3><p>Align from the right. Broadcasting can save input storage while still creating a large result.</p></div></section><section class="lesson" id="lesson-4-element-wise-work-and-matrix-multiplication-differ"><h2>4. Element-wise work and matrix multiplication differ</h2><div class="lesson-outcome"><h3>Objective</h3><p>Distinguish <code>*</code> from <code>@</code> and predict the <strong><code>shape</code></strong> of a batched matrix multiplication.</p></div><div class="how-it-works"><h3>How it works</h3><p>An element-wise operation applies a rule independently to corresponding entries, after any broadcasting. Matrix multiplication combines a row with a column: multiply matching entries, then add the products. Let <code>M</code> be the first matrix&#x27;s row count, <code>K</code> its column count and the second matrix&#x27;s row count, and <code>N</code> the second matrix&#x27;s column count. For <code>[M, K] @ [K, N]</code>, the shared size <code>K</code> is combined away; the output is <code>[M, N]</code>.</p><p>In the diagram, the top calculation is one element-wise output; the bottom is one matrix-product output. The plus sign belongs only to the row-column sum.</p><figure class="detail-diagram" id="detail-multiply" data-after="How it works" data-diagram-source="reference/diagrams/multiply.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 402.0" role="img" aria-labelledby="pt-multiply-title pt-multiply-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-multiply-title">The same inputs can mean different arithmetic</title>
+  <desc id="pt-multiply-desc">For the first output, element-wise multiplication uses one pair: 1 times 5. Matrix multiplication combines a row [1, 2] and column [5, 7]: 1 times 5 plus 2 times 7 equals 19.</desc>
+  <defs>
+    <marker id="pt-multiply-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="14" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="45" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>a * b</tspan></text>
+    <text x="160" y="76" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Pair corresponding entries</tspan></text>
+    <text x="160" y="130" font-size="22" font-weight="400" fill="#245880" text-anchor="middle"><tspan>1 × 5 = 5</tspan></text>
+    <rect x="16" y="166" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="197" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>a @ b</tspan></text>
+    <text x="160" y="228" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Combine row and column</tspan></text>
+    <text x="160" y="286" font-size="22" font-weight="400" fill="#206757" text-anchor="middle"><tspan>1 × 5 + 2 × 7 = 19</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All inputs: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2, 2]</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>The same inputs can mean different arithmetic</strong><p>For the first output, element-wise multiplication uses one pair: 1 times 5. Matrix multiplication combines a row [1, 2] and column [5, 7]: 1 times 5 plus 2 times 7 equals 19.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+a = torch.tensor([[1., 2.], [3., 4.]])
+b = torch.tensor([[5., 6.], [7., 8.]])
+print(a * b)  # [[5, 12], [21, 32]]: multiply corresponding entries
+print(a @ b)  # [[19, 22], [43, 50]]: row-by-column products
+# First matrix-product entry: 1 * 5 + 2 * 7 = 19
+
+left = torch.ones(2, 3, 4)   # Two matrices, each [3, 4]
+right = torch.ones(2, 4, 5)  # Two matching matrices, each [4, 5]
+out = left @ right         # [2, 3, 5]; every entry is 4
+print(out.shape)</code></pre><p>For tensors with at least two dimensions, <code>@</code> uses the last two as matrix axes. Leading axes are batch axes and may broadcast. <code>[2, 3, 4] @ [4, 5]</code> therefore also yields <code>[2, 3, 5]</code>, reusing one right-hand matrix for both batches. Here batch means a group processed together. The matrix operator uses the leading axes to group independent matrix products. Our application gives those axes meanings such as sample or time step. A single vector also works: <code>[4] @ [4, 5]</code> produces <code>[5]</code>, treating the vector as one row for the multiplication and omitting that temporary row axis in the result.</p><p><strong>Performance connection:</strong> matrix multiplication performs many arithmetic operations per output and can reuse input data. Element-wise work often performs little arithmetic per value read and written. These are investigation clues, not proof of a compute or memory bottleneck; small matrix products can also spend much of their time on submission overhead.</p></div><div class="mental-model"><h3>Mental model</h3><p><code>*</code> pairs entries. <code>@</code> combines rows and columns. <strong><code>shape</code></strong> reveals the arithmetic requested.</p></div></section><section class="lesson" id="lesson-5-reductions-remove-information-and-axes"><h2>5. Reductions remove information and axes</h2><div class="lesson-outcome"><h3>Objective</h3><p>Predict a reduction&#x27;s values and <strong><code>shape</code></strong>, including <strong><code>keepdim</code></strong> set to <code>True</code>.</p></div><div class="how-it-works"><h3>How it works</h3><p>A reduction combines multiple values into fewer values: sum, mean and maximum are examples. The <strong><code>dim</code></strong> argument selects the axis to combine. Axis numbers start at zero; <code>-1</code> selects the last axis. <strong><code>keepdim</code></strong> set to <code>True</code> retains that axis with size 1, which often makes the next broadcast unambiguous.</p><p>Each row in the diagram becomes its mean. Arrows mean “combine these values.” Keeping the last axis gives one column, so subtraction can reuse each mean across its original row.</p><figure class="detail-diagram" id="detail-reduction" data-after="How it works" data-diagram-source="reference/diagrams/reduction.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 416.0" role="img" aria-labelledby="pt-reduction-title pt-reduction-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-reduction-title">Keep one mean per row</title>
+  <desc id="pt-reduction-desc">Averaging along the last axis turns each three-value row into one value. Keeping that axis with size one gives two rows and one column, ready to broadcast back across the original rows.</desc>
+  <defs>
+    <marker id="pt-reduction-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <text x="160" y="28" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>x: [2, 3]</tspan></text>
+    <rect x="88" y="44" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="75.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>1</tspan></text>
+    <rect x="136" y="44" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="75.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2</tspan></text>
+    <rect x="184" y="44" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="75.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>3</tspan></text>
+    <rect x="88" y="92" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="112.0" y="123.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>4</tspan></text>
+    <rect x="136" y="92" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="123.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>5</tspan></text>
+    <rect x="184" y="92" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="208.0" y="123.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>6</tspan></text>
+    <path d="M160 151 V197" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-reduction-arrow)" />
+    <text x="160" y="225" font-size="20.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan>(-1, </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">keepdim</tspan><tspan>=True)</tspan></text>
+    <rect x="136" y="242" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="273.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2</tspan></text>
+    <rect x="136" y="290" width="48" height="48" rx="5" fill="#eef5fc" stroke="#245880" stroke-width="1.5" />
+    <text x="160.0" y="321.0" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>5</tspan></text>
+    <text x="160" y="368" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>means: [2, 1]</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Keep one mean per row</strong><p>Averaging along the last axis turns each three-value row into one value. Keeping that axis with size one gives two rows and one column, ready to broadcast back across the original rows.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
+print(x.sum(dim=0))    # [5, 7, 9]: combine rows, keep each column
+print(x.mean(dim=1))   # [2, 5]: combine columns, one mean per row
+
+means = x.mean(dim=-1, keepdim=True)  # [[2], [5]], shape [2, 1]
+centered = x - means                 # Broadcast each row&#x27;s mean
+print(centered)                      # [[-1, 0, 1], [-1, 0, 1]]
+print(x.mean().shape)                # torch.Size([]): scalar tensor</code></pre><p>A scalar tensor holds one value and has a <strong><code>dtype</code></strong> and <strong><code>device</code></strong>. <strong><code>item</code></strong> returns its value as a Python number; lesson 8 explains the possible CUDA wait.</p><p>Softmax turns scores into positive weights whose sum is 1 along a chosen axis. It uses information across that axis, unlike a purely element-wise rule. For example, <strong><code>torch.softmax</code></strong> with <strong><code>dim</code></strong> set to <code>-1</code> preserves <code>[2, 3]</code> and normalizes each row separately. Libraries use numerically stable implementations; do not replace them with a casual <code>exp(x) / exp(x).sum()</code> for large scores.</p><p><strong>Performance connection:</strong> a scalar output can require reading a very large input. Output size alone does not describe the work of a reduction.</p></div><div class="mental-model"><h3>Mental model</h3><p>A reduction combines an axis. <strong><code>keepdim</code></strong> preserves its place so later broadcasting stays clear.</p></div></section><section class="lesson" id="lesson-6-views-change-interpretation-copies-move-values"><h2>6. Views change interpretation; copies move values</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain a transpose&#x27;s <strong><code>shape</code></strong> and strides, and identify operations that may copy data.</p></div><div class="how-it-works"><h3>How it works</h3><p>A view shares stored values with another tensor. A stride says how many stored elements to step over when an index increases by one on an axis. A row-major <code>[2, 3]</code> tensor has strides <code>(3, 1)</code>: step three elements to the next row, one to the next column. Strides count stored elements.</p><p>The two index maps below point to the same storage. Transposing swaps the axes and their strides while preserving the stored value order. The arrows connect both views to their shared storage.</p><figure class="detail-diagram" id="detail-views-strides" data-after="How it works" data-diagram-source="reference/diagrams/views-strides.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 482.0" role="img" aria-labelledby="pt-views-strides-title pt-views-strides-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-views-strides-title">Two index maps share the same storage</title>
+  <desc id="pt-views-strides-desc">x uses strides (3, 1); its transpose y uses (1, 3). Both maps refer to the same six stored elements. A contiguous copy of y would store 0, 3, 1, 4, 2, 5 separately.</desc>
+  <defs>
+    <marker id="pt-views-strides-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <rect x="16" y="12" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="43" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>x: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2, 3]</tspan></text>
+    <text x="160" y="74" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>strides (3, 1)</tspan></text>
+    <path d="M160 100 V144" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-views-strides-arrow)" />
+    <rect x="16" y="154" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="185" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Shared storage</tspan></text>
+    <text x="160" y="216" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>0   1   2   3   4   5</tspan></text>
+    <path d="M160 310 V247" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-views-strides-arrow)" />
+    <rect x="16" y="322" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="353" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>y: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [3, 2]</tspan></text>
+    <text x="160" y="384" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>strides (1, 3)</tspan></text>
+    <text x="143" y="282" font-size="20.0" font-weight="400" fill="#206757" text-anchor="end"><tspan>same values</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: int64 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Two index maps share the same storage</strong><p>x uses strides (3, 1); its transpose y uses (1, 3). Both maps refer to the same six stored elements. A contiguous copy of y would store 0, 3, 1, 4, 2, 5 separately.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x = torch.arange(6).reshape(2, 3)  # [[0, 1, 2], [3, 4, 5]]
+y = x.transpose(0, 1)             # [[0, 3], [1, 4], [2, 5]]
+print(x.stride())                 # (3, 1)
+print(y.shape, y.stride())        # [3, 2], (1, 3)
+print(y.is_contiguous())          # False for this transposed view
+z = y.contiguous()                # Copy into row-major order
+print(z.stride())                 # (2, 1)
+
+y[0, 1] = 99                     # Modify shared storage
+print(x[1, 0])                    # tensor(99)
+print(z[0, 1])                    # tensor(3): independent copy</code></pre><p>Contiguous, in the default layout used here, means elements follow the tensor&#x27;s logical row-major order without gaps: finish one row before starting the next. For the original <code>x</code>, index <code>[1, 2]</code> reaches stored element <code>1 * 3 + 2 * 1 = 5</code>. Strides explain why the same storage can support a different index map after a transpose. Other memory formats exist; “contiguous” is not a universal promise of fast execution.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Expression</th><th scope="col">Storage behavior to recognize</th></tr></thead><tbody><tr><td><strong><code>view</code></strong></td><td>Requires compatible <strong><code>shape</code></strong> and strides; fails if a view is impossible.</td></tr><tr><td><strong><code>reshape</code></strong></td><td>Returns a view when possible; otherwise copies.</td></tr><tr><td><strong><code>transpose</code></strong>, <strong><code>permute</code></strong></td><td>Reorder axes as views. <strong><code>permute</code></strong> specifies all axes.</td></tr><tr><td><strong><code>contiguous</code></strong></td><td>Returns the input if already contiguous in the requested format; otherwise copies.</td></tr><tr><td><strong><code>clone</code></strong></td><td>Makes a copy; keeps gradient connectivity when tracking is enabled.</td></tr><tr><td>Basic slice / integer-array indexing</td><td>Basic slicing returns a view; advanced indexing returns a copy.</td></tr></tbody></table></div><p>To let <strong><code>reshape</code></strong> calculate one size, pass <code>-1</code> for that size. The six-value <code>x</code> above gives <strong><code>shape</code></strong> <code>[3, 2]</code> with <code>x.reshape(3, -1)</code> because <code>6 / 3 = 2</code>. Here <code>-1</code> means “calculate this size”; in an axis argument such as <strong><code>dim</code></strong>, <code>-1</code> means “select the last axis.”</p><p>Choose <strong><code>reshape</code></strong> to regroup values in their logical reading order. Choose <strong><code>transpose</code></strong> or <strong><code>permute</code></strong> to change axis order, such as moving an image&#x27;s channel axis before its height and width axes. Label the meaning of each size to check that the new arrangement suits the next operation.</p><p><strong>Watch for:</strong> calling <strong><code>view</code></strong> with size <code>-1</code> on this transposed <code>y</code> fails, while <strong><code>reshape</code></strong> with the same size can copy. Adding <strong><code>contiguous</code></strong> everywhere may introduce unnecessary traffic. Inspect the next operation and measure before changing layout.</p><p><strong>Performance connection:</strong> a view can avoid moving values, but the next operation still has to read them through its strides. A copy costs reads, writes and new storage; a different layout may help later work. Judge the whole sequence, rather than assuming every view is faster or every noncontiguous tensor needs repair.</p></div><div class="mental-model"><h3>Mental model</h3><p><strong><code>shape</code></strong> gives axis sizes, and strides map indices to storage locations. Multiple tensor objects can share the same stored values.</p></div></section><section class="lesson" id="lesson-7-dtype-changes-storage-and-numerical-behavior"><h2>7. Dtype changes storage and numerical behavior</h2><div class="lesson-outcome"><h3>Objective</h3><p>Estimate tensor bytes and explain why a smaller <strong><code>dtype</code></strong> needs a correctness check.</p></div><div class="how-it-works"><h3>How it works</h3><p>A floating-point format represents approximate real numbers using a sign, an exponent for scale and significant bits for precision. FP32 is 32-bit floating point; FP16 is 16-bit floating point; BF16 is the 16-bit bfloat16 format. BF16 has a wider exponent range than FP16 but fewer significant bits. The same byte size does not imply the same numerical behavior.</p><p>Range describes how large or small nonzero magnitudes can be represented. Precision describes how finely nearby values can be distinguished. A format can cover a large range while rounding away small differences near a given value.</p><p>For an ordinary dense tensor, logical bytes equal element count times bytes per element. These bars compare the same six values in FP32 and BF16; their lengths represent bytes, not measured speed.</p><figure class="detail-diagram" id="detail-dtype-bytes" data-after="How it works" data-diagram-source="reference/diagrams/dtype-bytes.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 332.0" role="img" aria-labelledby="pt-dtype-bytes-title pt-dtype-bytes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-dtype-bytes-title">Same shape, different byte counts</title>
+  <desc id="pt-dtype-bytes-desc">Six FP32 elements occupy 24 logical bytes. Six BF16 elements occupy 12. The bars encode bytes at the same scale; they do not encode execution time or total process memory.</desc>
+  <defs>
+    <marker id="pt-dtype-bytes-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <text x="16" y="30" font-size="22.0" font-weight="400" fill="#24343d" text-anchor="start"><tspan>6 elements in each tensor</tspan></text>
+    <text x="16" y="80" font-size="22.0" font-weight="400" fill="#245880" text-anchor="start"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> FP32: 24 bytes</tspan></text>
+    <rect x="16" y="96" width="288" height="40" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="16" y="186" font-size="22.0" font-weight="400" fill="#206757" text-anchor="start"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> BF16: 12 bytes</tspan></text>
+    <rect x="16" y="202" width="144" height="40" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="278" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Fewer bytes ≠ same precision</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 3] · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Same shape, different byte counts</strong><p>Six FP32 elements occupy 24 logical bytes. Six BF16 elements occupy 12. The bars encode bytes at the same scale; they do not encode execution time or total process memory.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+x32 = torch.ones(2, 3, dtype=torch.float32)
+x16 = x32.to(dtype=torch.bfloat16)  # Convert values; create new storage
+print(x32.numel() * x32.element_size())  # 6 * 4 = 24 bytes
+print(x16.numel() * x16.element_size())  # 6 * 2 = 12 bytes
+
+value = torch.tensor([1.0001], dtype=torch.float32)
+rounded = value.to(torch.bfloat16).float()  # Convert back to FP32
+print(rounded)  # tensor([1.]): conversion cannot restore lost detail</code></pre><p>This calculation is not total process memory: views may share a larger backing allocation, and models need outputs, temporary storage and other state. Integer indices often use <strong><code>torch.int64</code></strong>; masks use <strong><code>torch.bool</code></strong>. Do not convert indices to floating point merely to reduce bytes.</p><p>Automatic mixed precision (AMP) chooses operation-specific dtypes in an <strong><code>torch.autocast</code></strong> region. It does not convert every operation or model parameter to one format. On supported GPUs, some matrix work can use Tensor Cores, hardware units for matrix arithmetic. <strong><code>dtype</code></strong> alone does not establish their use or a speedup.</p><p>The course later shows autocast in context. For FP16 training, gradient scaling helps prevent small gradients from vanishing during computation; BF16 usually does not need that scaling. Validate numerical behavior and the actual workload before accepting any precision change.</p><p><strong>Performance connection:</strong> smaller elements can reduce storage and data traffic, and suitable arithmetic may use faster hardware paths. These are different mechanisms. Compare equivalent work and acceptable numerical error; halving logical bytes does not promise twice the speed.</p></div><div class="mental-model"><h3>Mental model</h3><p>Smaller elements reduce logical bytes. They also change representable values, so correctness comes first.</p></div></section><section class="lesson" id="lesson-8-device-placement-selects-where-work-happens"><h2>8. Device placement selects where work happens</h2><div class="lesson-outcome"><h3>Objective</h3><p>Follow a tensor from CPU to GPU and identify when the CPU needs a completed result.</p></div><div class="how-it-works"><h3>How it works</h3><p>The CPU runs the Python program. The GPU runs parallel device work. CUDA is NVIDIA&#x27;s GPU computing platform. A CUDA tensor&#x27;s <strong><code>device</code></strong> selects GPU execution for supported operations; Python itself continues on the CPU.</p><p>The diagram separates host submission from device execution. Arrows show requests and data dependencies, not equal durations. A kernel is a function executed on the GPU; a PyTorch operation can use one or several kernels or library calls.</p><figure class="detail-diagram" id="detail-device-execution" data-after="How it works" data-diagram-source="reference/diagrams/device-execution.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 588.0" role="img" aria-labelledby="pt-device-execution-title pt-device-execution-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-device-execution-title">Submission is separate from completion</title>
+  <desc id="pt-device-execution-desc">CPU Python submits tensor work. The CUDA implementation schedules GPU operations. A same-stream summation follows multiplication; extracting a Python number obtains the completed result for the CPU.</desc>
+  <defs>
+    <marker id="pt-device-execution-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>CPU: Python</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>y = x * 2; total = y.</tspan><tspan font-family="ui-monospace, monospace" font-weight="700">sum</tspan><tspan>()</tspan></text>
+    <path d="M160 98 V135" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="147" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="178" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>GPU: ordered work</tspan></text>
+    <text x="160" y="209" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>multiply → sum</tspan></text>
+    <path d="M160 235 V277" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="289" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="320" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>CUDA scalar</tspan></text>
+    <text x="160" y="351" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result remains on GPU</tspan></text>
+    <path d="M160 377 V415" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-device-execution-arrow)" />
+    <rect x="16" y="427" width="288" height="82" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="458" font-size="22.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>CPU: total.</tspan><tspan font-family="ui-monospace, monospace" font-weight="700">item</tspan><tspan>()</tspan></text>
+    <text x="160" y="489" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Wait for result → number</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Input </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [3] · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU → CUDA</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Submission is separate from completion</strong><p>CPU Python submits tensor work. The CUDA implementation schedules GPU operations. A same-stream summation follows multiplication; extracting a Python number obtains the completed result for the CPU.</p></figcaption></figure><p><strong>CUDA example:</strong> input creation and scalar extraction are intentionally visible.</p><pre tabindex="0"><code>import torch
+
+cpu_x = torch.tensor([1., 2., 3.])  # Host values
+x = cpu_x.to(&quot;cuda&quot;)               # Copy to the current CUDA device
+y = x * 2                         # Submit device arithmetic
+total = y.sum()                    # CUDA scalar tensor; value is 12
+print(total.device)                # cuda:0 on the first visible GPU
+answer = total.item()              # Wait for needed work; get host value
+print(answer)                     # 12.0, a Python float</code></pre><p>CUDA work is usually asynchronous relative to the CPU: the Python call can return before device work finishes. A stream is an ordered queue of device operations. Work in the same stream follows submission order, so <strong><code>sum</code></strong> can use <code>y</code> without a manual wait between the two calls. This course uses the current default stream; multiple streams require explicit dependency management.</p><p>Most arithmetic expects compatible tensor devices. <strong><code>Tensor.to</code></strong> returns the requested tensor; assign that result to the variable you want to use. <strong><code>torch.ones</code></strong> with <strong><code>device</code></strong> set to <code>&quot;cuda&quot;</code> creates values on the device directly. <strong><code>cpu</code></strong>, printing CUDA values and <strong><code>item</code></strong> can make host code wait. <strong><code>shape</code></strong> and <strong><code>dtype</code></strong> are metadata that host code can read directly.</p><p><strong>Performance connection:</strong> thousands of tiny GPU operations can incur substantial CPU submission overhead. Repeated host-visible scalar reads can also prevent the CPU from submitting useful work ahead of the GPU.</p></div><div class="mental-model"><h3>Mental model</h3><p>Device selects execution. Submission can finish before computation; requesting a host value must obtain the result.</p></div></section><section class="lesson" id="lesson-9-a-model-is-a-sequence-of-tensor-operations"><h2>9. A model is a sequence of tensor operations</h2><div class="lesson-outcome"><h3>Objective</h3><p>Read a module&#x27;s forward computation and track a linear layer&#x27;s last dimension.</p></div><div class="how-it-works"><h3>How it works</h3><p>An <strong><code>nn.Module</code></strong> groups computation and model state. A parameter is a registered tensor, usually a learnable weight or bias. Registered buffers hold other state, such as running statistics. The <strong><code>forward</code></strong> method defines the computation; calling <code>model(x)</code> uses it through PyTorch&#x27;s module machinery.</p><p>A sample is one input example; a batch is a group of samples processed together. A feature is one numeric input or representation component. For the model below, we choose <strong><code>shape</code></strong> <code>[2, 3, 4]</code> to mean two samples, three positions in each sample and four features at each position.</p><p><strong><code>nn.Linear</code></strong> with input size 4 and output size 2 converts each group of four features into two output features. It reads features along the last axis, so the input&#x27;s last size must be 4. For our <code>[2, 3, 4]</code> input, the output has <strong><code>shape</code></strong> <code>[2, 3, 2]</code>: two samples and three positions remain, and each position now holds two features. The same learned transformation serves all six positions.</p><p>Each output feature is a weighted sum of the four inputs plus a bias. The calculation is <code>x @ weight.T + bias</code>, with weight <strong><code>shape</code></strong> <code>[2, 4]</code> and bias <strong><code>shape</code></strong> <code>[2]</code>. In the diagram, arrows carry tensors and boxes name operations.</p><figure class="detail-diagram" id="detail-module-shapes" data-after="How it works" data-diagram-source="reference/diagrams/module-shapes.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 470.0" role="img" aria-labelledby="pt-module-shapes-title pt-module-shapes-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-module-shapes-title">A linear layer transforms the last dimension</title>
+  <desc id="pt-module-shapes-desc">Six four-feature vectors enter a linear layer with four inputs and two outputs. Each becomes a two-feature vector, giving axis sizes [2, 3, 2]. ReLU preserves those sizes while replacing negative values with zero.</desc>
+  <defs>
+    <marker id="pt-module-shapes-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 44)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input: [2, 3, 4]</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>2 × 3 input vectors</tspan></text>
+    <path d="M160 99 V133" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-module-shapes-arrow)" />
+    <rect x="16" y="145" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="176" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">nn.Linear</tspan><tspan>(4, 2)</tspan></text>
+    <text x="160" y="207" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>weights [2, 4] + bias [2]</tspan></text>
+    <path d="M160 234 V268" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-module-shapes-arrow)" />
+    <rect x="16" y="280" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="311" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>ReLU: [2, 3, 2]</tspan></text>
+    <text x="160" y="342" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Same </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>; negatives → 0</tspan></text>
+    <text x="160" y="408" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Only the last size changes</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>A linear layer transforms the last dimension</strong><p>Six four-feature vectors enter a linear layer with four inputs and two outputs. Each becomes a two-feature vector, giving axis sizes [2, 3, 2]. ReLU preserves those sizes while replacing negative values with zero.</p></figcaption></figure><pre tabindex="0"><code>import torch
+from torch import nn
+
+class TinyModel(nn.Module):
+    def __init__(self):
+        super().__init__()       # Initialize module registration
+        self.proj = nn.Linear(4, 2)
+
+    def forward(self, x):
+        y = self.proj(x)         # [..., 4] -&gt; [..., 2]
+        return torch.relu(y)     # Replace negatives with zero; same shape
+
+model = TinyModel()
+x = torch.ones(2, 3, 4)          # Our axes: sample, position, feature
+y = model(x)
+print(y.shape)                  # [2, 3, 2]
+print(model.proj.weight.shape)   # [2, 4]
+print(model.proj.bias.shape)     # [2]</code></pre><p>ReLU, the rectified linear unit, computes <code>max(0, value)</code> element by element; <strong><code>torch.relu</code></strong> applies that rule to a tensor. <strong><code>nn.Sequential</code></strong> is another common module: it passes each child module&#x27;s output to the next. A module&#x27;s operations can execute through several GPU kernels; profiling reveals the actual execution.</p><p><strong><code>nn.Module.to</code></strong> with <strong><code>device</code></strong> <code>&quot;cuda&quot;</code> moves registered parameters and buffers, modifies the module in place and returns it. Move inputs and any unregistered tensor attributes explicitly with <strong><code>Tensor.to</code></strong> and retain the returned tensors. <strong><code>named_parameters</code></strong> reveals parameter names, shapes, dtypes and devices.</p><p><strong>Performance connection:</strong> increasing either the number of input vectors or their feature dimensions changes matrix work and output storage. Read these sizes before treating the model name as an explanation of its cost.</p></div><div class="mental-model"><h3>Mental model</h3><p>A module organizes tensor operations and state. Follow its forward path and the shapes crossing each operation.</p></div></section><section class="lesson" id="lesson-10-training-saves-information-for-a-backward-pass"><h2>10. Training saves information for a backward pass</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain the forward, loss, backward and update steps, including why gradients are cleared.</p></div><div class="how-it-works"><h3>How it works</h3><p>Training adjusts parameters to reduce a loss, a scalar that measures prediction error. A gradient describes how a small parameter change affects that loss. Autograd, automatic differentiation, records relevant operations and computes gradients during <strong><code>backward</code></strong>. Forward activations are intermediate values; some must be retained until backward uses them.</p><p>The diagram shows one update: compute a loss, derive a gradient, then change the weight. The backward arrow means differentiation, not another prediction.</p><figure class="detail-diagram" id="detail-autograd" data-after="How it works" data-diagram-source="reference/diagrams/autograd.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 504.0" role="img" aria-labelledby="pt-autograd-title pt-autograd-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-autograd-title">Forward values lead to gradients and an update</title>
+  <desc id="pt-autograd-desc">With w equal to 2, the prediction is 6 and squared loss is 4. Backward computes gradient 12. An SGD update with learning rate 0.1 changes w to 0.8.</desc>
+  <defs>
+    <marker id="pt-autograd-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>FORWARD</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>w = 2 → prediction = 6</tspan></text>
+    <path d="M160 99 V129" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-autograd-arrow)" />
+    <rect x="16" y="141" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="172" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>LOSS</tspan></text>
+    <text x="160" y="203" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>(6 − 4)² = 4</tspan></text>
+    <path d="M160 230 V260" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-autograd-arrow)" />
+    <rect x="16" y="272" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="303" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>BACKWARD</tspan></text>
+    <text x="160" y="334" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>gradient of loss: dw = 12</tspan></text>
+    <text x="160" y="404" font-size="21.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>UPDATE: 2 − 0.1 × 12 = 0.8</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All tensors: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> []</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Forward values lead to gradients and an update</strong><p>With w equal to 2, the prediction is 6 and squared loss is 4. Backward computes gradient 12. An SGD update with learning rate 0.1 changes w to 0.8.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+w = torch.tensor(2.0, requires_grad=True)  # A scalar we want to learn
+optimizer = torch.optim.SGD([w], lr=0.1)   # Stochastic gradient descent
+
+optimizer.zero_grad(set_to_none=True)     # Start without an old gradient
+prediction = w * 3.0                     # Forward: 2 * 3 = 6
+loss = (prediction - 4.0) ** 2            # Squared error: (6 - 4)^2 = 4
+loss.backward()                          # dw = 2 * (6 - 4) * 3 = 12
+print(w.grad)                            # tensor(12.)
+optimizer.step()                         # w becomes 2 - 0.1 * 12 = 0.8</code></pre><p><strong><code>lr</code></strong> is the learning rate, the update&#x27;s scale. Real loops repeat these steps for successive batches. <strong><code>backward</code></strong> accumulates into existing gradients, so clearing them defines a new update. Deliberate accumulation across several batches is a different training choice. <strong><code>backward</code></strong> computes gradients; <strong><code>step</code></strong> changes parameters.</p><p><strong><code>requires_grad</code></strong> requests gradient tracking for the tensor; its <strong><code>grad</code></strong> attribute holds an accumulated gradient after backward. <strong><code>zero_grad</code></strong> clears the optimizer&#x27;s previous gradients. With <strong><code>set_to_none</code></strong> set to <code>True</code>, missing gradients are represented by <code>None</code> instead of filled zero tensors. A missing gradient and a zero gradient can lead to different optimizer behavior; use the choice intentionally. Here the single weight receives a gradient each update.</p><p>Inputs need not require gradients just because parameters do. A layer can compute parameter gradients from ordinary input data. An in-place operation, commonly marked by a trailing underscore such as <strong><code>add_</code></strong>, changes an existing tensor. It may invalidate values autograd saved, so in-place edits are not a general memory optimization.</p><p><strong>Performance connection:</strong> training adds backward computation, saved activations, gradients and sometimes optimizer state. A forward-only memory estimate misses these costs. This one-parameter SGD example has no momentum state; optimizers such as Adam keep additional per-parameter tensors.</p></div><div class="mental-model"><h3>Mental model</h3><p>Forward produces the loss; backward computes gradients; the optimizer applies an update. Each stage has its own work and state.</p></div></section><section class="lesson" id="lesson-11-evaluation-mode-and-gradient-mode-are-separate"><h2>11. Evaluation mode and gradient mode are separate</h2><div class="lesson-outcome"><h3>Objective</h3><p>Use <strong><code>eval</code></strong> and a gradient context for their distinct purposes when reading inference code.</p></div><div class="how-it-works"><h3>How it works</h3><p>Inference uses a model to produce outputs without training it. <strong><code>eval</code></strong> changes the behavior of modules that distinguish training and evaluation. For example, <strong><code>nn.Dropout</code></strong> sets randomly selected activations to zero during training, rescaling the survivors to preserve the expected scale. During evaluation it passes values through. Autograd remains controlled separately.</p><p><strong><code>torch.no_grad</code></strong> disables gradient recording in its region. <strong><code>torch.inference_mode</code></strong> also removes some tracking overhead and suits computations whose results stay outside later gradient-tracked work. Set evaluation mode and choose a gradient context separately, as the diagram&#x27;s two switches show.</p><figure class="detail-diagram" id="detail-inference-controls" data-after="How it works" data-diagram-source="reference/diagrams/inference-controls.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 338" role="img" aria-labelledby="pt-inference-controls-title pt-inference-controls-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-inference-controls-title">Two independent controls for inference</title>
+  <desc id="pt-inference-controls-desc">Evaluation mode changes module behavior, such as disabling dropout. Inference mode controls gradient recording and tracking. Neither control automatically sets the other.</desc>
+  <defs>
+    <marker id="pt-inference-controls-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="16" y="14" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="45" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">eval</tspan><tspan>()</tspan></text>
+    <text x="160" y="76" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Select evaluation behavior</tspan></text>
+    <text x="160" y="125" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">Dropout</tspan><tspan> passes values through</tspan></text>
+    <rect x="16" y="173" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="204" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode</tspan><tspan>()</tspan></text>
+    <text x="160" y="235" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Disable gradient tracking</tspan></text>
+    <text x="160" y="287" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>No backward graph here</tspan></text>
+    <text x="160" y="326" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Use both for this inference path</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Two independent controls for inference</strong><p>Evaluation mode changes module behavior, such as disabling dropout. Inference mode controls gradient recording and tracking. Neither control automatically sets the other.</p></figcaption></figure><pre tabindex="0"><code>import torch
+from torch import nn
+
+model = nn.Sequential(nn.Linear(4, 2), nn.Dropout(p=0.5))
+x = torch.ones(3, 4)
+model.eval()                       # Dropout now passes values through
+tracked = model(x)                 # Parameters still require gradients
+print(tracked.requires_grad)       # True: gradient tracking remains enabled
+
+with torch.inference_mode():
+    output = model(x)              # No backward graph for inference
+print(output.shape)                # [3, 2]
+print(output.requires_grad)        # False</code></pre><p>Use <strong><code>torch.no_grad</code></strong> when you need the less restrictive mode, for example when fixed features will later feed a trainable layer. <strong><code>detach</code></strong> creates a tensor that shares the original storage and has its connection to gradient history removed.</p><p><strong>CUDA example:</strong> AMP can be combined with inference on a GPU that supports BF16. The parameters stay FP32 here; eligible operations choose a lower precision.</p><pre tabindex="0"><code># Continue with the model and x above; requires CUDA with BF16 support.
+model = model.to(&quot;cuda&quot;)
+x_gpu = x.to(&quot;cuda&quot;)
+with torch.inference_mode(), torch.autocast(&quot;cuda&quot;, dtype=torch.bfloat16):
+    output_gpu = model(x_gpu)  # Shape [3, 2]; check numerical quality later</code></pre><p><strong>Performance connection:</strong> evaluation behavior protects the meaning of the prediction, while disabling gradient recording can avoid backward bookkeeping and saved tensors. Mixed precision is a separate numerical/performance choice. Compare the same inference behavior and validate outputs before judging a speed or memory change.</p></div><div class="mental-model"><h3>Mental model</h3><p><strong><code>eval</code></strong> selects module behavior. Gradient contexts decide whether computation is recorded for differentiation.</p></div></section><section class="lesson" id="lesson-12-transfers-are-part-of-the-input-pipeline"><h2>12. Transfers are part of the input pipeline</h2><div class="lesson-outcome"><h3>Objective</h3><p>Distinguish data preparation, host-to-device copying and GPU computation without assuming they overlap.</p></div><div class="how-it-works"><h3>How it works</h3><p>An input pipeline prepares batches and delivers them to the model. A PyTorch <strong><code>DataLoader</code></strong> groups samples and can use worker processes for loading. Moving each batch from CPU memory to GPU memory is a host-to-device (H2D) transfer. The reverse is a device-to-host (D2H) transfer.</p><p>Pinned memory is host memory kept resident for device transfers. It can enable efficient asynchronous copies. <strong><code>non_blocking</code></strong> set to <code>True</code> asks the transfer to avoid a host-side wait where supported; it does not by itself arrange overlap between copying and GPU computation.</p><p>The diagram is a deliberately serial pipeline: arrows show the dependencies of one batch. Overlap across batches requires suitable hardware, streams and data dependencies; it must be observed, not inferred from the option name.</p><figure class="detail-diagram" id="detail-input-pipeline" data-after="How it works" data-diagram-source="reference/diagrams/input-pipeline.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 510.0" role="img" aria-labelledby="pt-input-pipeline-title pt-input-pipeline-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-input-pipeline-title">A batch crosses preparation, copy and compute</title>
+  <desc id="pt-input-pipeline-desc">A data loader prepares a CPU batch; a host-to-device copy moves it to GPU memory; a model consumes it. This one-batch sequence shows dependencies and does not claim overlap.</desc>
+  <defs>
+    <marker id="pt-input-pipeline-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 104)">
+    <rect x="16" y="12" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="43" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>CPU: prepare</tspan></text>
+    <text x="160" y="74" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">DataLoader</tspan><tspan> → pinned batch</tspan></text>
+    <path d="M160 101 V139" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-input-pipeline-arrow)" />
+    <rect x="16" y="151" width="288" height="82" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="182" font-size="22.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>H2D: copy</tspan></text>
+    <text x="160" y="213" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">non_blocking</tspan><tspan>=True</tspan></text>
+    <path d="M160 240 V278" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-input-pipeline-arrow)" />
+    <rect x="16" y="290" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="321" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>GPU: compute</tspan></text>
+    <text x="160" y="352" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Same stream waits for copy</tspan></text>
+    <text x="160" y="399" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Overlap is a separate question</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Batch </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [2, 4]</tspan></text><text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32</tspan></text><text x="160" y="84" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU → CUDA</tspan></text></g>
+</svg>
+<figcaption><strong>A batch crosses preparation, copy and compute</strong><p>A data loader prepares a CPU batch; a host-to-device copy moves it to GPU memory; a model consumes it. This one-batch sequence shows dependencies and does not claim overlap.</p></figcaption></figure><p><strong>CUDA example:</strong> a tiny in-memory dataset makes each stage visible.</p><p><strong><code>TensorDataset</code></strong> retrieves samples from the first axis of its tensors. Here the source has six rows, and <strong><code>batch_size</code></strong> set to 2 groups two rows per batch. Each dataset sample is a one-item tuple. The loader&#x27;s default collation, which combines samples into a batch, returns a one-item list containing a <code>[2, 4]</code> tensor. The loop unpacks that list into the example variable <code>cpu_batch</code>.</p><pre tabindex="0"><code>import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+dataset = TensorDataset(torch.arange(24, dtype=torch.float32).reshape(6, 4))
+loader = DataLoader(dataset, batch_size=2, pin_memory=True, num_workers=0)
+model = nn.Linear(4, 2).to(&quot;cuda&quot;).eval()
+
+with torch.inference_mode():
+    for (cpu_batch,) in loader:          # Two samples, four features
+        gpu_batch = cpu_batch.to(&quot;cuda&quot;, non_blocking=True)
+        output = model(gpu_batch)        # Same-stream compute waits for copy
+        # Keep results on the GPU while more GPU work needs them.</code></pre><p><strong><code>num_workers</code></strong> set to <code>0</code> loads in the main process, keeping this example simple. More workers can help expensive input work, but use CPU resources and do not guarantee better throughput. Calling <strong><code>pin_memory</code></strong> on every tensor in a hot loop can add its own cost; <strong><code>DataLoader</code></strong> can manage pinning outside the model computation.</p><p><strong>Watch for:</strong> do not modify a pinned source buffer while an asynchronous copy is still using it. For an asynchronous D2H copy, wait for completion before the CPU reads the destination. Avoid GPU → CPU → GPU round trips when all subsequent computation can remain on the GPU.</p><p><strong>Performance connection:</strong> a faster model cannot process a batch that is not ready. Look for time spent preparing inputs, transferring bytes and waiting for dependencies. More workers, pinned memory and nonblocking copies address different stages; none guarantees that those stages overlap or run faster.</p></div><div class="mental-model"><h3>Mental model</h3><p>Input readiness, transfer and computation are separate stages. Nonblocking submission does not prove useful overlap.</p></div></section><section class="lesson" id="lesson-13-live-tensors-and-reserved-memory-are-different"><h2>13. Live tensors and reserved memory are different</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain allocated versus reserved CUDA memory and why clearing the cache cannot free live tensors.</p></div><div class="how-it-works"><h3>How it works</h3><p>PyTorch&#x27;s caching allocator manages reusable GPU memory blocks. Allocated memory is memory currently occupied by tensors. Reserved memory includes memory the allocator manages, including cached blocks available for reuse. Reusing blocks can avoid repeatedly asking the device runtime for allocations.</p><p>The outer box below is the reserved pool; the inner regions divide it into live allocations and cached capacity. The box sizes are schematic, not measured. Other GPU memory, such as library allocations, can exist outside this pool.</p><figure class="detail-diagram" id="detail-allocator" data-after="How it works" data-diagram-source="reference/diagrams/allocator.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 418" role="img" aria-labelledby="pt-allocator-title pt-allocator-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-allocator-title">Live allocations occupy part of the reserved pool</title>
+  <desc id="pt-allocator-desc">The reserved allocator pool contains live tensor allocations plus unused cached blocks. Emptying the cache can release unused blocks but cannot release live tensors. Areas are schematic.</desc>
+  <defs>
+    <marker id="pt-allocator-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="8" y="12" width="304" height="302" rx="12" fill="#f7f9f7" stroke="#24343d" stroke-width="2" />
+    <text x="160" y="48" font-size="22" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Reserved pool</tspan></text>
+    <rect x="24" y="69" width="272" height="94" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="105" font-size="22" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Allocated</tspan></text>
+    <text x="160" y="137" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Live tensor storage</tspan></text>
+    <rect x="24" y="182" width="272" height="109" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="221" font-size="22" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>Cached capacity</tspan></text>
+    <text x="160" y="257" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Available for reuse</tspan></text>
+    <text x="160" y="359" font-size="21.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Other GPU allocations</tspan></text>
+    <text x="160" y="390" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>can exist outside this pool</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Live allocations occupy part of the reserved pool</strong><p>The reserved allocator pool contains live tensor allocations plus unused cached blocks. Emptying the cache can release unused blocks but cannot release live tensors. Areas are schematic.</p></figcaption></figure><p><strong>CUDA example:</strong> values depend on the allocator, device and other live tensors.</p><pre tabindex="0"><code>import torch
+
+x = torch.ones(1024, device=&quot;cuda&quot;, dtype=torch.float32)
+print(x.numel() * x.element_size())  # 4096 logical bytes for x
+print(torch.cuda.memory_allocated())  # Live tensor bytes in this process
+print(torch.cuda.memory_reserved())   # Allocator-managed bytes; may be larger
+
+del x                     # Remove this reference; other aliases could retain it
+torch.cuda.empty_cache()  # Release unused cached blocks, not live tensors</code></pre><p>The counters are process/device observations, not the complete machine&#x27;s usage. <code>nvidia-smi</code> can show additional device-context and library memory. Do not expect it to equal <strong><code>torch.cuda.memory_allocated</code></strong>.</p><p><strong>Common retention pattern:</strong> appending each training <code>loss</code> tensor to a Python list can keep its gradient history reachable. Keep only what later computation needs. Calling <strong><code>detach</code></strong> on <code>loss</code> removes that history but still retains GPU storage; calling <strong><code>item</code></strong> keeps a host scalar but may synchronize. The right choice depends on whether you need future GPU work, later logging or neither.</p><p>Out of memory (OOM) means an allocation could not be satisfied. Check live inputs, outputs, saved activations, gradients and optimizer state first. Calling <strong><code>torch.cuda.empty_cache</code></strong> every iteration does not release them and can defeat useful reuse.</p><p><strong>Performance connection:</strong> reduce unnecessary live references before trying to shrink the reserved pool. Retained outputs and saved state consume capacity; allocator reuse can avoid repeated allocation work. A lower reserved-memory counter by itself is not evidence of a faster or more memory-efficient step.</p></div><div class="mental-model"><h3>Mental model</h3><p>Allocated memory holds live tensors. Reserved memory also holds reusable capacity. A cache clear cannot remove a live reference.</p></div></section><section class="lesson" id="lesson-14-batching-expresses-repeated-work-as-tensor-operations"><h2>14. Batching expresses repeated work as tensor operations</h2><div class="lesson-outcome"><h3>Objective</h3><p>Replace independent per-row tensor work with an equivalent batched expression and explain the tradeoffs.</p></div><div class="how-it-works"><h3>How it works</h3><p>Batching groups several inputs so an operation can process them together. Vectorization expresses repeated work with operations on whole tensors instead of a Python loop over individual entries or rows. They are related choices: batching organizes the inputs, while vectorization changes how we express the computation. Both describe choices made in the application code.</p><p>Consider three independent input vectors, each with two features. Each vector is multiplied by the same weight matrix, receives the same bias and passes through ReLU. Since no vector depends on another vector&#x27;s result, we can put them in a matrix and apply the same computation to all rows.</p><p>The diagram compares the requested work. The repeated boxes mean repeated Python-level operations, not measured time or a guaranteed number of GPU kernels. Both paths produce the same output <strong><code>shape</code></strong> and values for this example.</p><figure class="detail-diagram" id="detail-batching" data-after="How it works" data-diagram-source="reference/diagrams/batching.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 458" role="img" aria-labelledby="pt-batching-title pt-batching-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-batching-title">Independent rows can share one batched expression</title>
+  <desc id="pt-batching-desc">Three independent two-feature rows undergo the same matrix product, bias addition and ReLU. A loop processes each row; a batched expression processes the matrix. Both outputs contain three rows of two FP32 values in CPU memory.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <rect x="16" y="48" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="78" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [3, 2]</tspan></text>
+    <text x="160" y="108" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>3 independent rows</tspan></text>
+    <path d="M160 136 V164 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="16" y="178" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="208" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Loop: process 1 row × 3</tspan></text>
+    <text x="160" y="238" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Matrix product → add → ReLU</tspan></text>
+    <rect x="16" y="282" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="312" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Batched: process 3 rows</tspan></text>
+    <text x="160" y="342" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Matrix product → add → ReLU</tspan></text>
+    <text x="160" y="406" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Both outputs: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [3, 2]</tspan></text>
+    <text x="160" y="444" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compare results before timing</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Independent rows can share one batched expression</strong><p>Three independent two-feature rows undergo the same matrix product, bias addition and ReLU. A loop processes each row; a batched expression processes the matrix. Both outputs contain three rows of two FP32 values in CPU memory.</p></figcaption></figure><p><strong><code>torch.stack</code></strong> joins equal-shaped tensors along a new axis. Below it collects three separate row results into a matrix so we can compare the two routes. <strong><code>torch.testing.assert_close</code></strong> checks numerical agreement within tolerances; it does not compare performance.</p><pre tabindex="0"><code>import torch
+
+x = torch.tensor([[-1., 2.], [3., -4.], [5., 6.]])  # [3, 2], FP32, CPU
+w = torch.tensor([[1., 0.], [0., 2.]])              # [2, 2], FP32, CPU
+bias = torch.tensor([1., -1.])                      # [2], FP32, CPU
+
+rows = []
+for row in x:                                     # Three Python iterations
+    rows.append(torch.relu(row @ w + bias))       # Independent [2] result
+by_row = torch.stack(rows)                        # Three [2] rows -&gt; [3, 2]
+
+batched = torch.relu(x @ w + bias)                # Work on all rows together
+torch.testing.assert_close(batched, by_row)       # Check equivalent work
+print(batched)                                   # [[0, 3], [4, 0], [6, 11]]</code></pre><p>The batched expression removes repeated Python dispatch and lets matrix multiplication operate on a larger input. It still requests matrix arithmetic, addition and ReLU; one expression does not promise one kernel. Floating-point algorithms may sum in different orders, so equivalent formulations need not be bit-for-bit identical for arbitrary inputs.</p><p><strong>Watch for:</strong> a loop that uses one iteration&#x27;s result in the next has a data dependency. Combining iterations indiscriminately can change the computation. Some model behavior also depends on a batch&#x27;s composition. The independent, fixed-parameter example above deliberately avoids those cases.</p><p>Throughput is useful work completed per unit time. Latency is the time to finish a particular request. A larger batch may improve throughput while using more memory or making a request wait for other inputs to arrive. Keep the application&#x27;s latency and capacity limits visible; the next lesson explains timing boundaries.</p><p><strong>Performance connection:</strong> replacing repeated tiny submissions with larger tensor operations can reduce CPU overhead and expose more parallel work. Check equivalence first, then measure useful work per unit time and request latency. This tiny CPU example demonstrates the transformation, not a GPU speedup.</p></div><div class="mental-model"><h3>Mental model</h3><p>Group independent inputs, express their work together, and compare equivalent results before comparing cost.</p></div></section><section class="lesson" id="lesson-15-a-timer-must-include-completion"><h2>15. A timer must include completion</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain which interval a CUDA event pair measures and what it excludes.</p></div><div class="how-it-works"><h3>How it works</h3><p>Timing a Python call can measure mostly submission because CUDA work is asynchronous. A CUDA event marks a position in a stream. Two timed events measure the device interval between those positions after both have completed. Warmup runs the same kind of work before measurement so one-time initialization does not dominate the sample.</p><p>The diagram shows queue order. The start and end markers enclose repeated matrix work. Their spacing is schematic; the host wait comes after the end marker is submitted and is not an additional event-timing interval.</p><figure class="detail-diagram" id="detail-timing" data-after="How it works" data-diagram-source="reference/diagrams/timing.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 448" role="img" aria-labelledby="pt-timing-title pt-timing-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-timing-title">Mark the device interval, then wait before reading it</title>
+  <desc id="pt-timing-desc">In one stream, the start event precedes twenty matrix multiplications and the end event follows them. The CPU waits for the end marker before querying elapsed milliseconds.</desc>
+  <defs>
+    <marker id="pt-timing-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="16" y="12" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="43" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Start event</tspan></text>
+    <text x="160" y="74" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">record</tspan><tspan>()</tspan></text>
+    <path d="M160 101 V136" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-timing-arrow)" />
+    <rect x="16" y="148" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="179" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>20 matrix products</tspan></text>
+    <text x="160" y="210" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Measured stream interval</tspan></text>
+    <path d="M160 237 V272" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-timing-arrow)" />
+    <rect x="16" y="284" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="315" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>End event</tspan></text>
+    <text x="160" y="346" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">record</tspan><tspan>()</tspan></text>
+    <text x="160" y="404" font-size="21.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan>CPU: end.</tspan><tspan font-family="ui-monospace, monospace" font-weight="700">synchronize</tspan><tspan>()</tspan></text>
+    <text x="160" y="435" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Then read elapsed milliseconds</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Mark the device interval, then wait before reading it</strong><p>In one stream, the start event precedes twenty matrix multiplications and the end event follows them. The CPU waits for the end marker before querying elapsed milliseconds.</p></figcaption></figure><p><strong>CUDA example:</strong> a timing pattern, with no claimed measurement or speedup.</p><pre tabindex="0"><code>import torch
+
+a = torch.randn(256, 256, device=&quot;cuda&quot;)
+b = torch.randn(256, 256, device=&quot;cuda&quot;)
+for _ in range(5):
+    result = a @ b                       # Warm the same operation
+torch.cuda.synchronize()                 # Finish earlier device work
+
+start = torch.cuda.Event(enable_timing=True)
+end = torch.cuda.Event(enable_timing=True)
+repeats = 20
+start.record()                          # Mark the current stream
+for _ in range(repeats):
+    result = a @ b
+end.record()
+end.synchronize()                       # Wait until this marker completes
+ms_per_call = start.elapsed_time(end) / repeats
+print(ms_per_call)                       # A measured average, in milliseconds</code></pre><p>This interval excludes input construction, transfers before the start marker and final printing. It can include gaps between operations while the CPU submits work; it is not necessarily the sum of kernel execution times. Other streams or processes can contend for the same GPU and affect the result.</p><p>For end-to-end latency, include all work the application actually needs. A host wall-clock timer with appropriate completion waits can include preparation, transfers and computation. Throughput measures useful work per unit time; state the batch size and whether batching waits are included.</p><p>Repeat measurements and compare equivalent shapes, dtypes, devices and gradient modes. Check result correctness. Five warmups here illustrate placement, not a universal sufficient count. Compilation requires its own warmup and can recur when input conditions change.</p><p><strong>Performance connection:</strong> an optimization can improve the device interval while leaving application latency unchanged if preparation or transfers dominate. Choose the boundary that matches the user&#x27;s experience, then compare repeated measurements with the same work and completion rule.</p></div><div class="mental-model"><h3>Mental model</h3><p>A timing number is meaningful only with a boundary and a completion rule. Events and wall time answer different questions.</p></div></section><section class="lesson" id="lesson-16-code-suggests-a-hypothesis-a-profile-supplies-evidence"><h2>16. Code suggests a hypothesis; a profile supplies evidence</h2><div class="lesson-outcome"><h3>Objective</h3><p>Connect a tensor expression to operator/kernel evidence without assuming one line equals one kernel.</p></div><div class="how-it-works"><h3>How it works</h3><p>An operator is a framework operation such as addition or matrix multiplication. Profiles often show names such as <code>aten::add</code>; ATen is PyTorch&#x27;s core tensor operator library. The dispatcher selects implementations using tensor properties and execution context. A CUDA implementation can call a GPU library or launch kernels; some view operations need only metadata changes.</p><p>The diagram follows these layers. Arrows mean implementation selection and work submission, not a guaranteed one-to-one mapping. The CPU-side operator interval and device activity are different observations.</p><figure class="detail-diagram" id="detail-operator-evidence" data-after="How it works" data-diagram-source="reference/diagrams/operator-evidence.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 534" role="img" aria-labelledby="pt-operator-evidence-title pt-operator-evidence-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-operator-evidence-title">Follow an expression through the execution layers</title>
+  <desc id="pt-operator-evidence-desc">Python requests tensor operators. The dispatcher selects implementations; CUDA libraries and kernel launches submit device work. The number of kernels is not fixed by the number of Python lines.</desc>
+  <defs>
+    <marker id="pt-operator-evidence-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Python expression</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>transform(x, bias)</tspan></text>
+    <path d="M160 99 V130" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="142" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="173" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Tensor operators</tspan></text>
+    <text x="160" y="204" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">add</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">relu</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
+    <path d="M160 231 V262" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="274" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="305" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Dispatcher / backend</tspan></text>
+    <text x="160" y="336" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Choose implementations</tspan></text>
+    <path d="M160 363 V394" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
+    <rect x="16" y="406" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="437" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>GPU execution</tspan></text>
+    <text x="160" y="468" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Libraries and kernels</tspan></text>
+    <text x="160" y="526" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Mapping is not one-to-one</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Follow an expression through the execution layers</strong><p>Python requests tensor operators. The dispatcher selects implementations; CUDA libraries and kernel launches submit device work. The number of kernels is not fixed by the number of Python lines.</p></figcaption></figure><pre tabindex="0"><code>import torch
+
+def transform(x, bias):
+    shifted = x + bias              # Broadcast + element-wise addition
+    positive = torch.relu(shifted)  # Element-wise activation
+    return positive.mean(dim=-1)   # Reduction of the feature axis
+
+x = torch.tensor([[-2., 0., 2.], [1., 2., 3.]])
+bias = torch.ones(3)
+print(transform(x, bias))           # tensor([1.3333, 3.0000])</code></pre><p>In ordinary eager execution, operations are dispatched as the Python program reaches them. The temporary <code>shifted</code> and <code>positive</code> values help us reason about the requested computation. A profile can reveal the actual allocation and execution behavior. The next lesson explains how compilation may change it.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Question raised by the code</th><th scope="col">Evidence to look for</th></tr></thead><tbody><tr><td>Are many small operations costly?</td><td>CPU submission gaps and kernel timeline; compare useful batch sizes.</td></tr><tr><td>Are intermediate values expensive?</td><td>Actual copies, allocations and memory traffic; investigate fusion.</td></tr><tr><td>Is a matrix product the main cost?</td><td>Operator time, shapes and selected kernel behavior.</td></tr><tr><td>Does <strong><code>item</code></strong> interrupt submission?</td><td>Host wait aligned with the required device work.</td></tr></tbody></table></div><p>Use a correct, unprofiled baseline first. PyTorch profiler connects operators to activity; Nsight Systems shows the wider CPU/GPU timeline; Nsight Compute inspects a selected kernel. Instrumentation can change timings. The <a href="../gpu-performance-tools/index.html">tools course</a> owns their detailed commands. Prefer an appropriate library operation before writing a custom kernel, and remeasure the unprofiled workload after any change.</p><p><strong>Performance connection:</strong> select an optimization from observed cost, not from the length of the source code. A wait, a copy and matrix arithmetic have different causes and remedies. Use profiling to explain the baseline, then validate a correct change with unprofiled measurements.</p></div><div class="mental-model"><h3>Mental model</h3><p>Tensor code describes requested work. Profiles reveal its implementation and timing; a plausible optimization still needs validation.</p></div></section><section class="lesson" id="lesson-17-compilation-can-reduce-launches-and-intermediate-storage"><h2>17. Compilation can reduce launches and intermediate storage</h2><div class="lesson-outcome"><h3>Objective</h3><p>Explain what compilation may change, why the first call differs, and how to check an optimized result.</p></div><div class="how-it-works"><h3>How it works</h3><p><strong><code>torch.compile</code></strong> returns an optimized callable that can capture regions of tensor computation and produce an implementation for them. A computation graph describes operations and their dependencies. A compiler backend turns captured work into executable code. Capture and compilation have costs of their own; they are not required to read or complete this course.</p><p>Fusion combines work that would otherwise require separate operations and intermediate storage. For the function in lesson 16, addition produces <code>shifted</code>, ReLU produces <code>positive</code>, and a mean reduces the last axis. An optimized implementation may avoid materializing some intermediate tensors and reduce launches. The exact grouping depends on the backend and inputs.</p><p>The diagram uses arrows for data dependencies. The lower box shows a possible combined region, not a promise that all three operations become one kernel. The final result still has to be produced.</p><figure class="detail-diagram" id="detail-compilation" data-after="How it works" data-diagram-source="reference/diagrams/compilation.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 580" role="img" aria-labelledby="pt-compilation-title pt-compilation-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-compilation-title">Compilation may avoid intermediate storage</title>
+  <desc id="pt-compilation-desc">Eager addition and ReLU produce intermediate tensors before reduction. An optimized region may avoid some intermediate storage. Fusion and kernel count depend on the implementation; the result is still required. Inputs and outputs are FP32 on CPU in the example.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
+    <text x="160" y="64" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Eager: named intermediates</tspan></text>
+    <rect x="16" y="82" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="112" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>add → shifted: [2, 3]</tspan></text>
+    <path d="M160 138 V160 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="16" y="170" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="200" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>ReLU → positive: [2, 3]</tspan></text>
+    <path d="M160 226 V248 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <rect x="16" y="258" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="288" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan> → result: [2]</tspan></text>
+    <text x="160" y="354" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Possible optimized region</tspan></text>
+    <rect x="16" y="374" width="288" height="112" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="404" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>add → ReLU → </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
+    <text x="160" y="434" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>May avoid intermediates</tspan></text>
+    <text x="160" y="464" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result still has </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2]</tspan></text>
+    <text x="160" y="526" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Grouping is backend-dependent</tspan></text>
+    <text x="160" y="562" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compile cost precedes reuse</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Compilation may avoid intermediate storage</strong><p>Eager addition and ReLU produce intermediate tensors before reduction. An optimized region may avoid some intermediate storage. Fusion and kernel count depend on the implementation; the result is still required. Inputs and outputs are FP32 on CPU in the example.</p></figcaption></figure><p><strong>Compiler example:</strong> continue with <code>transform</code>, <code>x</code> and <code>bias</code> from lesson 16 in an environment with a working compile backend. They remain FP32 CPU tensors; moving computation to CUDA is a separate choice.</p><pre tabindex="0"><code># Continue with the function and fixed inputs from lesson 16.
+compiled_transform = torch.compile(transform)    # Create optimized callable
+reference = transform(x, bias)                   # Ordinary eager result
+candidate = compiled_transform(x, bias)          # First call may compile
+torch.testing.assert_close(candidate, reference) # Check acceptable agreement
+# Time repeated steady-state calls separately from capture/compilation.</code></pre><p>The first call can include capture, compilation and execution; later compatible calls can reuse compiled work. Changes in input conditions, such as shapes, can require another compilation. A one-off request may never recover the initial cost. Warm up representative inputs and include startup cost when the application&#x27;s metric includes startup. Keep <strong><code>dtype</code></strong>, <strong><code>device</code></strong>, shapes and gradient mode equivalent when comparing the eager and compiled paths.</p><p>A graph break splits captured computation. Unsupported Python behavior or data-dependent branching can create such a boundary, reducing opportunities to optimize across it. Ordinary execution may handle the intervening code and capture may resume afterward. A graph break is different from producing an incorrect result, and not every Python statement causes one. For GPU tensors, extracting a host scalar can additionally require a completion wait, independently of compilation behavior.</p><p><strong>Watch for:</strong> compilation can change floating-point operation order. Use <strong><code>torch.testing.assert_close</code></strong> with tolerances suitable for the workload, and check the application&#x27;s numerical quality requirements. Passing one small example does not validate every input or establish a performance benefit.</p><p><strong>Performance connection:</strong> compilation is worth investigating when repeated dispatch, launches or intermediate memory traffic matter. Compare startup and steady-state costs separately, confirm the result, and inspect actual execution before claiming fusion or a speedup. Prefer an appropriate library operation before considering a custom kernel.</p></div><div class="mental-model"><h3>Mental model</h3><p>Compilation changes the implementation, not the intended result. Account for preparation cost, validate output, then measure repeated work.</p></div></section><section class="lesson" id="lesson-18-read-a-complete-step-like-a-performance-engineer"><h2>18. Read a complete step like a performance engineer</h2><div class="lesson-outcome"><h3>Objective</h3><p>Trace shapes, storage, computation and the host-visible result through a complete inference step.</p></div><div class="how-it-works"><h3>How it works</h3><p>Bring the earlier ideas together in a small linear model. Every dimension is deliberately small enough to reason about. There is no training update and no benchmark claim. The diagram follows the output <strong><code>shape</code></strong> and then the transition from a CUDA scalar to a Python number.</p><figure class="detail-diagram" id="detail-read-a-step" data-after="How it works" data-diagram-source="reference/diagrams/read-a-step.svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 614.0" role="img" aria-labelledby="pt-read-a-step-title pt-read-a-step-desc" style="max-width: 360px; margin-inline: auto">
+  <title id="pt-read-a-step-title">Trace shape and device through one inference step</title>
+  <desc id="pt-read-a-step-desc">The CUDA input has axis sizes [2, 3, 4]; the linear layer changes them to [2, 3, 8]. ReLU retains those sizes, averaging returns a CUDA scalar, and extraction obtains a completed Python number.</desc>
+  <defs>
+    <marker id="pt-read-a-step-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" />
+    </marker>
+  </defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" transform="translate(0 74)">
+    <rect x="16" y="10" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="160" y="41" font-size="22.0" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input: [2, 3, 4]</tspan></text>
+    <text x="160" y="72" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>CUDA · FP32</tspan></text>
+    <path d="M160 99 V124" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="136" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="167" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">Linear</tspan><tspan> output: [2, 3, 8]</tspan></text>
+    <text x="160" y="198" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>6 vectors · 8 features</tspan></text>
+    <path d="M160 225 V250" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="262" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="160" y="293" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>ReLU: [2, 3, 8]</tspan></text>
+    <text x="160" y="324" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan>() → scalar []</tspan></text>
+    <path d="M160 351 V376" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-read-a-step-arrow)" />
+    <rect x="16" y="388" width="288" height="82" rx="12" fill="#fff7e7" stroke="#86500e" stroke-width="2" />
+    <text x="160" y="419" font-size="22.0" font-weight="400" fill="#86500e" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">item</tspan><tspan>() → Python number</tspan></text>
+    <text x="160" y="450" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Obtain result on CPU</tspan></text>
+    <text x="160" y="515" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Shape → state → work → wait</tspan></text>
+  </g>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="160" y="24" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>All tensors: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan> FP32</tspan></text>
+    <text x="160" y="54" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CUDA until host extraction</tspan></text>
+  </g>
+</svg>
+<figcaption><strong>Trace shape and device through one inference step</strong><p>The CUDA input has axis sizes [2, 3, 4]; the linear layer changes them to [2, 3, 8]. ReLU retains those sizes, averaging returns a CUDA scalar, and extraction obtains a completed Python number.</p></figcaption></figure><p><strong>CUDA example:</strong> all operands for model computation are FP32 on the same GPU.</p><pre tabindex="0"><code>import torch
+from torch import nn
+
+model = nn.Linear(4, 8).to(&quot;cuda&quot;).eval()
+x = torch.ones(2, 3, 4, device=&quot;cuda&quot;)  # 24 FP32 elements = 96 bytes
+
+with torch.inference_mode():
+    y = model(x)             # [2, 3, 8]: six vectors, eight outputs each
+    z = torch.relu(y)        # Same shape; a separate eager output tensor
+    score = z.mean()        # []: reduce all 48 values to one CUDA scalar
+
+value = score.item()        # Obtain a completed Python number on the CPU
+print(value)               # Depends on the randomly initialized model</code></pre><p>The model has <code>8 * 4 = 32</code> weight values and eight bias values. That is 160 logical parameter bytes in FP32. Each of <code>y</code> and <code>z</code> has 48 elements, or 192 logical bytes. <code>score</code> has one four-byte value. These are tensor payload counts, not allocator reservations or a prediction of total GPU memory.</p><p>Read the program in four passes:</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable table"><table><thead><tr><th scope="col">Pass</th><th scope="col">What this example tells you</th></tr></thead><tbody><tr><td><strong><code>shape</code></strong></td><td><code>[2, 3, 4]</code> becomes <code>[2, 3, 8]</code>, stays that <strong><code>shape</code></strong>, then reduces to <code>[]</code>.</td></tr><tr><td>Data and state</td><td>Input and registered parameters are on CUDA; inference mode avoids a backward graph.</td></tr><tr><td>Work</td><td><strong><code>nn.Linear</code></strong> requests matrix-style arithmetic, ReLU is element-wise, mean combines values.</td></tr><tr><td>Completion</td><td><strong><code>item</code></strong> is the first explicit demand for a host-visible result.</td></tr></tbody></table></div><p><strong>What remains unknown:</strong> kernel selection, whether submission or device work dominates, and whether lower precision or compilation improves the application&#x27;s metric. Small shapes are excellent for learning but poor evidence about large workloads. GPU Fundamentals explains the hardware; GPU Performance Optimization teaches how to test these performance hypotheses.</p><p>This also revisits the common traps: a small output can require a large reduction; one model call is not one kernel; disabling gradient tracking is separate from evaluation mode; and a Python return does not necessarily mean GPU completion.</p><p><strong>Performance connection:</strong> the six input vectors already form a batch. Larger batches, fewer host reads, another <strong><code>dtype</code></strong> or compilation are possible changes, each with different correctness, memory and latency implications. Choose one based on evidence, keep the work comparable and check the application&#x27;s metric. Nothing in this small example establishes which change would help.</p></div><div class="mental-model"><h3>Mental model</h3><p>Read <strong><code>shape</code></strong>, state, work and completion in that order. Then choose the evidence needed to test a performance claim.</p></div></section><section id="next-steps"><h2>Where to Go Next</h2><div data-source="NEXT-STEPS.md"><ul class="next-steps-list"><li><h3>Connect code to hardware</h3><p>Continue to <a href="../gpu-fundamentals/index.html">GPU Fundamentals</a> to connect tensor work with GPU execution, memory and precision. You can now read the shapes, devices and operations in its PyTorch examples; its labs own hardware setup and execution requirements.</p></li><li><h3>Read performance evidence</h3><p>Keep <a href="../gpu-performance-tools/index.html">GPU Performance Tools</a> as a reference for Slurm commands, PyTorch profiler and NVIDIA Nsight. Revisit it when a later lab asks for operator, timeline or kernel evidence.</p></li><li><h3>Test an optimization</h3><p>After Fundamentals, take <a href="../gpu-optimizations/index.html">GPU Performance Optimization</a> to measure a correct baseline, test one change and judge equivalent work. The <a href="../lab-guide.html#lab-preparation-scripts">Lab Guide</a> provides preparation when you choose to run those labs.</p></li></ul></div></section><section id="guide-glossary" data-source="GLOSSARY.md"><h2>Glossary</h2><dl><dt>Activation</dt><dd>An intermediate value produced during a model forward pass; some activations must be saved for backward.</dd><dt>Allocated memory</dt><dd>CUDA memory currently occupied by live tensors in the observed process and device.</dd><dt>AMP</dt><dd>Automatic mixed precision; operation-specific <strong><code>dtype</code></strong> selection through <strong><code>torch.autocast</code></strong>, with gradient scaling where appropriate.</dd><dt>Asynchronous execution</dt><dd>Submission can return to the CPU before the requested device work completes.</dd><dt>ATen</dt><dd>PyTorch’s core tensor operator library; operator names often appear with an <code>aten::</code> prefix.</dd><dt>Autograd</dt><dd>Automatic differentiation: recording relevant computation and using it to calculate gradients.</dd><dt>Axis</dt><dd>One indexed dimension of a tensor. Its axis number, size and application meaning are separate; negative axis numbers count from the end.</dd><dt>Backward pass</dt><dd>The computation that derives gradients from a loss through the recorded operations.</dd><dt>Batch</dt><dd>A group of samples processed together.</dd><dt>BF16</dt><dd>The 16-bit bfloat16 floating-point format; it has fewer significant bits and a wider exponent range than FP16.</dd><dt>Bias</dt><dd>An offset added to a value. In a linear layer, it is a learned parameter; examples can also use fixed offsets.</dd><dt>Broadcasting</dt><dd>Logical reuse of values across compatible dimensions without explicitly repeating input storage.</dd><dt>Buffer</dt><dd>Registered module state other than a parameter, such as running statistics.</dd><dt>Caching allocator</dt><dd>A memory manager that retains unused blocks for reuse by later tensor allocations.</dd><dt>Compiler backend</dt><dd>The implementation that turns captured tensor computation into executable code.</dd><dt>Computation graph</dt><dd>A representation of operations and the dependencies between their inputs and outputs.</dd><dt>Contiguous</dt><dd>In the default layout taught here, elements follow the logical row-major order without gaps; other formats have their own contiguity rules.</dd><dt>CPU</dt><dd>Central processing unit; it runs the Python application and submits accelerator work.</dd><dt>CUDA</dt><dd>NVIDIA’s platform for GPU computing, including interfaces for device execution, memory and synchronization.</dd><dt>CUDA event</dt><dd>A marker recorded in a CUDA stream; timed event pairs measure a completed device interval.</dd><dt>D2H</dt><dd>Device-to-host transfer: copying values from GPU memory to CPU memory.</dd><dt>DataLoader</dt><dd>PyTorch’s <strong><code>DataLoader</code></strong> interface for grouping samples into batches, with options for worker processes and pinned host memory.</dd><dt>Device</dt><dd>The location of a tensor’s values, such as CPU or a particular CUDA GPU.</dd><dt>Dimension</dt><dd>An axis with a size. The application assigns its meaning, such as time or space; <strong><code>shape</code></strong> records its size.</dd><dt>Dispatcher</dt><dd>The PyTorch mechanism that selects an operator implementation from tensor properties and execution context.</dd><dt>Distribution</dt><dd>A rule describing how likely different sampled values or intervals are.</dd><dt>Dropout</dt><dd>A training operation that sets randomly selected activations to zero and rescales survivors; <strong><code>nn.Dropout</code></strong> passes values through during evaluation.</dd><dt>Dtype</dt><dd>The numeric representation of tensor elements, such as float32, int64 or bool.</dd><dt>Eager execution</dt><dd>Dispatching operations as Python reaches them.</dd><dt>Element-wise operation</dt><dd>A computation applied independently to corresponding tensor entries after broadcasting.</dd><dt>Evaluation mode</dt><dd>Module behavior selected by <strong><code>eval</code></strong>; distinct from disabling gradient recording.</dd><dt>Feature</dt><dd>One numeric input or representation component; its axis meaning comes from the application.</dd><dt>Floating point</dt><dd>Approximate numeric representation using a sign, exponent and significant bits.</dd><dt>Forward pass</dt><dd>Model computation that transforms inputs into outputs and, for training, a loss.</dd><dt>FP16</dt><dd>16-bit floating point, with a smaller exponent range than BF16.</dd><dt>FP32</dt><dd>32-bit floating point; each element occupies four bytes.</dd><dt>Fusion</dt><dd>Combining computation to reduce separate operations, launches or intermediate storage where the implementation permits it.</dd><dt>GPU</dt><dd>Graphics processing unit; an accelerator that executes parallel device work.</dd><dt>Gradient</dt><dd>A derivative describing how a small input or parameter change affects a result such as the loss.</dd><dt>Gradient scaling</dt><dd>Scaling a training loss and its gradients to reduce small-gradient underflow in formats such as FP16, then unscaling for the update.</dd><dt>Graph break</dt><dd>A boundary that splits computation captured by a compiler.</dd><dt>H2D</dt><dd>Host-to-device transfer: copying values from CPU memory to GPU memory.</dd><dt>In-place operation</dt><dd>An operation that changes an existing tensor, commonly indicated by a trailing underscore.</dd><dt>Index</dt><dd>An integer choosing an entry along an axis, with counting starting at zero. Its plural is indices. In <code>x[1, 2, 3]</code>, the three indices choose a grid, a row and a column in the course example.</dd><dt>Inference</dt><dd>Using a model to produce outputs without updating it through training.</dd><dt>Input pipeline</dt><dd>The stages that load, prepare, batch and deliver data for model computation.</dd><dt>Kernel</dt><dd>A function executed on the GPU; a framework operation need not map to exactly one kernel.</dd><dt>Latency</dt><dd>Elapsed time for a defined unit of work, such as one complete request.</dd><dt>Learning rate</dt><dd>The scale used by an optimizer when changing parameters.</dd><dt>Loss</dt><dd>A scalar measure of prediction error or another training objective.</dd><dt>Matrix</dt><dd>A tensor with two axes, commonly interpreted as rows and columns.</dd><dt>Matrix multiplication</dt><dd>Combining rows and columns through sums of products; written as <code>@</code> in the examples.</dd><dt>Metadata</dt><dd>Information describing tensor values and their interpretation, including <strong><code>shape</code></strong>, <strong><code>dtype</code></strong>, <strong><code>device</code></strong> and strides.</dd><dt>Module</dt><dd>A PyTorch <strong><code>nn.Module</code></strong> that organizes computation, parameters, buffers and child modules.</dd><dt>Normal distribution</dt><dd>A bell-shaped sampling distribution. The standard normal used by <strong><code>torch.randn</code></strong> has mean zero and standard deviation one; sampled values can be negative or greater than one.</dd><dt>OOM</dt><dd>Out of memory; a requested allocation could not be satisfied.</dd><dt>Operator</dt><dd>A framework computation such as addition, mean or matrix multiplication.</dd><dt>Optimizer</dt><dd>An algorithm that updates parameters using gradients and possibly additional state.</dd><dt>Parameter</dt><dd>A registered module tensor, normally a learnable weight or bias.</dd><dt>Pinned memory</dt><dd>Host memory kept resident so device transfers can access it efficiently.</dd><dt>Precision</dt><dd>The detail a numeric format can represent; distinct from its exponent range.</dd><dt>Profiler</dt><dd>A tool that records execution activity for diagnosis; recording can change execution cost.</dd><dt>PyTorch</dt><dd>A library for tensor computation, automatic differentiation and model building on CPUs and accelerators.</dd><dt>Range</dt><dd>The span of representable magnitudes of a numeric format; distinct from precision.</dd><dt>Reduction</dt><dd>Combining values along selected axes, as with sum, mean or maximum.</dd><dt>ReLU</dt><dd>Rectified linear unit; the element-wise rule <code>max(0, value)</code>.</dd><dt>Reserved memory</dt><dd>Memory managed by the CUDA allocator, including live tensor allocations and reusable cached blocks.</dd><dt>Scalar</dt><dd>A zero-dimensional tensor or single numeric value; a scalar tensor still has a <strong><code>dtype</code></strong> and <strong><code>device</code></strong>.</dd><dt>SGD</dt><dd>Stochastic gradient descent; an optimizer that updates parameters in the direction opposite the gradient.</dd><dt>Shape</dt><dd>The ordered sizes of a tensor’s dimensions.</dd><dt>Slice</dt><dd>A selection of a range along an axis that keeps that axis. <code>0:1</code> selects the first entry; <code>:</code> selects every entry.</dd><dt>Softmax</dt><dd>A transformation that makes scores into positive weights summing to one along a selected axis.</dd><dt>Standard deviation</dt><dd>A measure of spread around a distribution’s mean; the standard normal distribution has standard deviation one.</dd><dt>Storage</dt><dd>The underlying memory containing values; several views can share it.</dd><dt>Stream</dt><dd>An ordered queue of device operations; separate streams need appropriate dependencies.</dd><dt>Stride</dt><dd>The step in stored elements associated with increasing an index by one on an axis.</dd><dt>Synchronization</dt><dd>Waiting or establishing dependencies so required work completes before its result is used.</dd><dt>Tensor</dt><dd>Values arranged along zero or more dimensions, together with metadata that describes their interpretation.</dd><dt>Tensor Core</dt><dd>A GPU hardware unit for supported matrix arithmetic; <strong><code>dtype</code></strong> alone does not prove its use.</dd><dt>Throughput</dt><dd>Useful work completed per unit time within a stated measurement boundary.</dd><dt>Training</dt><dd>Updating model parameters to improve a defined objective.</dd><dt>Uniform distribution</dt><dd>A sampling rule assigning equal probability to equal-width intervals in its range. <strong><code>torch.rand</code></strong> uses zero inclusive to one exclusive.</dd><dt>Vector</dt><dd>A tensor with one axis, such as a four-element tensor with <strong><code>shape</code></strong> <code>[4]</code>.</dd><dt>Vectorization</dt><dd>Expressing repeated work through operations on whole tensors instead of a Python loop over individual entries or rows.</dd><dt>View</dt><dd>A tensor that interprets existing shared storage without copying its values.</dd><dt>Warmup</dt><dd>Executing representative work before measurement to reduce one-time initialization effects.</dd></dl></section><section id="official-references"><h2>Official references</h2><ol><li id="reference-1"><a href="https://docs.pytorch.org/tutorials/beginner/basics/tensorqs_tutorial.html">PyTorch tensor tutorial: construction, attributes and operations</a></li><li id="reference-2"><a href="https://docs.pytorch.org/docs/2.14/tensor_attributes.html">Tensor attributes: dtype, device and layout</a></li><li id="reference-3"><a href="https://docs.pytorch.org/docs/2.14/notes/broadcasting.html">Broadcasting semantics</a></li><li id="reference-4"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.matmul.html">Matrix multiplication and batch dimensions</a></li><li id="reference-5"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.mean.html">Mean reductions and keepdim</a></li><li id="reference-6"><a href="https://docs.pytorch.org/docs/2.14/tensor_view.html">Tensor views, indexing, reshape and contiguous</a></li><li id="reference-7"><a href="https://docs.pytorch.org/docs/2.14/notes/numerical_accuracy.html">Numerical accuracy and floating-point behavior</a></li><li id="reference-8"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.nn.Linear.html">Linear layers and parameter shapes</a></li><li id="reference-9"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.nn.Module.html">Modules: registered parameters, buffers and device conversion</a></li><li id="reference-10"><a href="https://docs.pytorch.org/docs/2.14/notes/autograd.html">Autograd mechanics and evaluation mode</a></li><li id="reference-11"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.optim.SGD.html">Stochastic gradient descent optimizer</a></li><li id="reference-12"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.autograd.grad_mode.inference_mode.html">Inference mode and its restrictions</a></li><li id="reference-13"><a href="https://docs.pytorch.org/docs/2.14/amp.html">Automatic mixed precision and autocast</a></li><li id="reference-14"><a href="https://docs.pytorch.org/docs/2.14/notes/cuda.html">CUDA semantics: asynchronous execution, streams and memory management</a></li><li id="reference-15"><a href="https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html">Pinned memory and nonblocking transfer guide</a></li><li id="reference-16"><a href="https://docs.pytorch.org/docs/2.14/data.html">DataLoader, batching and memory pinning</a></li><li id="reference-17"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.cuda.Event.html">CUDA events and elapsed time</a></li><li id="reference-18"><a href="https://docs.pytorch.org/docs/2.14/profiler.html">PyTorch profiler concepts and interfaces</a></li><li id="reference-19"><a href="https://docs.pytorch.org/docs/2.14/accelerator/operators.html">Operator registration and dispatcher</a></li><li id="reference-20"><a href="https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial.html">Introduction to torch.compile</a></li><li id="reference-21"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.rand.html">Uniform random tensors and shape arguments</a></li><li id="reference-22"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.randn.html">Standard normal random tensors and shape arguments</a></li><li id="reference-23"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.stack.html">Stacking tensors along a new dimension</a></li><li id="reference-24"><a href="https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html">Performance tuning: fusion, memory traffic and synchronization</a></li><li id="reference-25"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.nn.Dropout.html">Dropout training scaling and evaluation behavior</a></li><li id="reference-26"><a href="https://docs.pytorch.org/docs/2.14/generated/torch.optim.Optimizer.zero_grad.html">Clearing gradients and the meaning of None</a></li></ol></section><footer class="license-footer">
+<small>© 2026 Nebius B.V. Provided free of charge for learning and education.
+Licensed under <a href="#license">Apache License 2.0</a>.<br>
+Third-party materials retain their respective licenses.</small>
+<details id="license"><summary>License and notices</summary>
+<pre class="license-text" tabindex="0">                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      &quot;License&quot; shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      &quot;Licensor&quot; shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      &quot;Legal Entity&quot; shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      &quot;control&quot; means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      &quot;You&quot; (or &quot;Your&quot;) shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      &quot;Source&quot; form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      &quot;Object&quot; form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      &quot;Work&quot; shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      &quot;Derivative Works&quot; shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      &quot;Contribution&quot; shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, &quot;submitted&quot;
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as &quot;Not a Contribution.&quot;
+
+      &quot;Contributor&quot; shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a &quot;NOTICE&quot; text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an &quot;AS IS&quot; BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets &quot;[]&quot;
+      replaced with your own identifying information. (Don&#x27;t include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same &quot;printed page&quot; as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</pre></details>
+</footer></main></div></body></html>

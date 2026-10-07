@@ -77,6 +77,62 @@ def job_rows(name, job=None):
     return rows
 
 
+def native_submission(root, argv, name):
+    """Validate native argv and prepare only this lab's scheduler directories."""
+    if not argv or argv[0] != "sbatch":
+        raise ValueError("Execution plan requires native sbatch; create a new campaign")
+    index = next((i for i, value in enumerate(argv) if value.endswith(".sbatch")), None)
+    if index is None:
+        raise ValueError("Missing explicit native lab job")
+    relative = argv[index]
+    match = re.fullmatch(
+        r"slurm/([0-9]{2}_[a-z0-9_]+)(?:\.[a-z0-9_]+)*\.sbatch", relative
+    )
+    metadata = json.loads((root / "reference/course.json").read_text())
+    if not match or match[1] not in {
+        Path(row["path"]).stem for row in metadata["labs"]
+    }:
+        raise ValueError("Job must belong to an executable lab")
+    launcher = root / relative
+    if launcher.is_symlink() or not launcher.is_file() or (root / "slurm").is_symlink():
+        raise ValueError("Job must be a regular course-owned batch script")
+    for option in argv[1:index]:
+        if option != "--wait" and not re.fullmatch(
+            r"--(?:comment|partition|account|reservation|time|nodes|gpus-per-node|cpus-per-task)=[^\n\r]+",
+            option,
+        ):
+            raise ValueError(
+                "Unsupported scheduler override; identity and output paths are owned"
+            )
+    for relative_dir in (
+        "results",
+        f"results/{match[1]}",
+        f"results/{match[1]}/logs",
+        f"results/{match[1]}/jobs",
+    ):
+        path = root / relative_dir
+        if path.is_symlink():
+            raise ValueError("Result directories must not be symlinks")
+        path.mkdir(mode=0o700, exist_ok=True)
+        info = path.stat()
+        if (
+            not path.is_dir()
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o777 != 0o700
+        ):
+            raise ValueError("Result directories must be owned and private")
+    logs = root / "results" / match[1] / "logs"
+    return [
+        "sbatch",
+        "--parsable",
+        "--job-name=" + name,
+        f"--chdir={root}",
+        f"--output={logs}/%j.out",
+        f"--error={logs}/%j.err",
+        *argv[1:],
+    ]
+
+
 def main(req):
     root = Path(req["root"])
     if not root.is_absolute() or any(p.is_symlink() for p in (root, *root.parents)):
@@ -95,11 +151,29 @@ def main(req):
                 raise ValueError(
                     "Remote cleanup requires all owned jobs completed successfully"
                 )
-        results = root / "results"
-        if results.is_symlink():
-            raise ValueError("Remote results became a symlink")
-        if results.exists():
-            shutil.rmtree(results)
+        lab = req["lab"]
+        if not re.fullmatch(r"[0-9]{2}_[a-z0-9_]+", lab):
+            raise ValueError("Invalid cleanup lab identity")
+        targets = []
+        for job in req["jobs"]:
+            identity = job["job"]
+            if type(identity) is not int or identity < 1:
+                raise ValueError("Invalid cleanup job identity")
+            targets.extend(
+                [
+                    root / "results" / lab / "jobs" / str(identity),
+                    root / "results" / lab / "logs" / f"{identity}.out",
+                    root / "results" / lab / "logs" / f"{identity}.err",
+                ]
+            )
+        for target in targets:
+            if any(p.is_symlink() for p in (target, *target.parents)):
+                raise ValueError("Remote results became a symlink")
+        for target in targets:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
         return {"cleaned": True}
     name = req["name"]
     if not re.fullmatch(r"rl-[a-f0-9]{24}", name):
@@ -138,10 +212,7 @@ def main(req):
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
-            argv = req["argv"]
-            if argv[:2] != ["python3", "tools/submit_lab.py"]:
-                raise ValueError("Dispatch requires the course submit helper")
-            argv = argv[:4] + ["--parsable", "--job-name=" + name] + argv[4:]
+            argv = native_submission(root, req["argv"], name)
             env = os.environ.copy()
             env.update(req["environment"])
             proc = subprocess.run(

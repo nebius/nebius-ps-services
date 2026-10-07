@@ -2,7 +2,6 @@
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from concurrent.futures import Future
@@ -16,117 +15,20 @@ from test_course_review_fixes import load_lab
 
 @pytest.mark.parametrize("exit_code", [0, 9])
 def test_ddp_profiler_launch_preserves_rank_arguments_and_failure(tmp_path, exit_code):
-    bash = next(
-        (p for p in ("/opt/homebrew/bin/bash", "/usr/bin/bash") if Path(p).exists()),
-        shutil.which("bash"),
-    )
-    root = Path(__file__).resolve().parents[1]
-    for folder in ("labs", "tools", "reference", "bin"):
-        (tmp_path / folder).mkdir()
-    (tmp_path / "labs/21_ddp_buckets.py").write_text(
-        "raise SystemExit('fixture must not train')\n"
-    )
-    shutil.copyfile(root / "tools/profile_lab.py", tmp_path / "tools/profile_lab.py")
-    (tmp_path / "tools/fabric_guard.py").write_text(
-        "# Hardware guard replaced by fixture only\n"
-    )
-    (tmp_path / "reference/observability.json").write_text(
-        json.dumps(
-            {
-                "labs": {
-                    "21_ddp_buckets": {
-                        "kind": "distributed",
-                        "nvtx_range": "course_measure",
-                        "systems": {"applicable": True, "target": "rank"},
-                    }
-                }
-            }
-        )
-    )
-
-    def executable(name, body):
-        path = tmp_path / "bin" / name
-        path.write_text(f"#!{sys.executable}\n" + body)
-        path.chmod(0o700)
-
-    executable("scontrol", "print('node-a\\nnode-b')\n")
-    executable(
-        "srun",
-        """import os, subprocess, sys
-args = sys.argv[1:]
-assert '--kill-on-bad-exit=1' in args
-while args[0].startswith('--'): args.pop(0)
-raise SystemExit(subprocess.run(args, env=dict(os.environ,SLURM_NODEID='1')).returncode)
-""",
-    )
-    executable(
-        "torchrun",
-        """import json, os, pathlib, subprocess, sys
-args=sys.argv[1:]
-pathlib.Path(os.environ['RANK_ARGS']).write_text(json.dumps(args))
-command=args[args.index('--no-python')+1:]
-raise SystemExit(subprocess.run(command,env=dict(os.environ,RANK='1')).returncode)
-""",
-    )
-    executable(
-        "nsys",
-        """import json, os, pathlib, sys
-pathlib.Path(os.environ['CAPTURE_PATH']).write_text(json.dumps(sys.argv[1:]))
-if os.environ['FAKE_NSYS_EXIT'] == '0':
-    pathlib.Path(sys.argv[sys.argv.index('--output')+1]).with_suffix('.nsys-rep').write_bytes(b'fixture report')
-raise SystemExit(int(os.environ['FAKE_NSYS_EXIT']))
-""",
-    )
-    capture = tmp_path / "capture.json"
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if not k.startswith(("SLURM_", "MASTER_", "COURSE_"))
-    }
-    env.update(
-        PATH=str(tmp_path / "bin") + os.pathsep + env["PATH"],
-        SLURM_JOB_ID="123",
-        SLURM_JOB_NODELIST="node-[a-b]",
-        COURSE_PYTHON=sys.executable,
-        COURSE_PROFILE_TOOL="nsys",
-        CAPTURE_PATH=str(capture),
-        RANK_ARGS=str(tmp_path / "rank.json"),
-        FAKE_NSYS_EXIT=str(exit_code),
-    )
-    literal = "results/literal spaces;$(no-execution)"
-    run = subprocess.run(
-        [
-            bash,
-            str(root / "advanced-gpu-communication/slurm/training_two_rank.sbatch"),
-            "labs/21_ddp_buckets.py",
-            "--hook",
-            "allreduce",
-            "--output-dir",
-            literal,
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    from native_job_fixtures import ROOT, executable, local_commands, prepare_job
+    lab = "21_ddp_buckets"
+    prepare_job(tmp_path, "advanced-gpu-communication", lab)
+    env = {**os.environ, **local_commands(tmp_path)}
+    executable(tmp_path / "bin/scontrol", "print('node-a\\nnode-b')\n")
+    executable(tmp_path / "bin/torchrun", "import json,os,sys\nfrom pathlib import Path\nPath('rank.json').write_text(json.dumps(sys.argv[1:]))\nfor i in range(2): (Path(os.environ['COURSE_PROFILES_DIR'])/f'rank-{i}.nsys-rep').write_text('report')\nraise SystemExit(int(os.environ['FAKE_NSYS_EXIT']))\n")
+    env.update(SLURM_JOB_NODELIST="node-[a-b]", SLURM_NODEID="1", FAKE_NSYS_EXIT=str(exit_code))
+    literal = "literal spaces;$(no-execution)"
+    run = subprocess.run(["bash", str(ROOT / "advanced-gpu-communication/slurm/21_ddp_buckets.nsys.sbatch"), "--hook", "allreduce", "--note", literal], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert run.returncode == exit_code, run.stderr
-    rank_args = json.loads((tmp_path / "rank.json").read_text())
-    assert "--node-rank=1" in rank_args and "--master-addr=node-a" in rank_args
-    captured = json.loads(capture.read_text())
-    assert captured[-5:] == [
-        "labs/21_ddp_buckets.py",
-        "--hook",
-        "allreduce",
-        "--output-dir",
-        literal,
-    ]
-    report = Path(captured[captured.index("--output") + 1])
-    assert report.name.endswith("-rank-1")
-    assert report.parent == tmp_path / "results/21_ddp_buckets/profiles"
-    assert report.parent.stat().st_mode & 0o777 == 0o700
-    receipt = json.loads(report.with_suffix(".json").read_text())
-    assert receipt["exit_code"] == exit_code and receipt["acceptance_timing"] is False
+    argv = json.loads((tmp_path / "rank.json").read_text())
+    assert "--node-rank=1" in argv and "--master-addr=node-a" in argv
+    assert argv[-5:] == ["labs/21_ddp_buckets.py", "--hook", "allreduce", "--note", literal]
+    assert "nsys" in argv and "profile_lab.py" not in " ".join(argv)
 
 
 class ImmediateCPU:
@@ -196,7 +98,7 @@ def test_output_modes_complete_cpu_control_and_propagate_corruption(mode, monkey
     torch.set_num_threads(1)
     with load_lab("gpu-optimizations/labs/20_d2h_pipeline.py") as lab:
         args = SimpleNamespace(
-            profile="small", mode=mode, slots=2, workers=2, batches=3, sink_ms=0
+            workload="small", mode=mode, slots=2, workers=2, batches=3, sink_ms=0
         )
         elapsed, capacity = lab.run_pipeline(ImmediateCPU(torch), args)
         assert elapsed > 0 and capacity == 2 * 512 * 512 * 4
@@ -218,7 +120,7 @@ def test_input_modes_verify_every_batch_on_cpu_control(mode, slots, monkeypatch)
     proxy = ImmediateCPU(torch)
     with load_lab("gpu-optimizations/labs/19_h2d_pipeline.py") as lab:
         args = SimpleNamespace(
-            profile="small", mode=mode, slots=slots, batches=3, work=1
+            workload="small", mode=mode, slots=slots, batches=3, work=1
         )
         assert lab.run_pipeline(proxy, args)[0] > 0
         monkeypatch.setattr(proxy, "mm", lambda a, b, out: out.zero_(), raising=False)

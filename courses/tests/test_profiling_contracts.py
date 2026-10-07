@@ -228,8 +228,8 @@ def test_all_dashboards_bind_exact_datasource_and_fit_kubernetes_configmaps():
                 )
                 assert "invariants" in recipe
                 guide = (root / "reference/labs" / f"{recipe['lab']}.md").read_text()
-                assert "../../../README.md#how-to-set-up-the-lab" in guide
-                assert "[Lab Guide](../../../README.md#how-to-set-up-the-lab)" in guide
+                assert "../../../lab-guide.html#lab-preparation-scripts" in guide
+                assert "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)" in guide
                 assert "grafana import" not in guide
                 assert "grafana validate" not in guide
                 for obsolete in (
@@ -257,9 +257,9 @@ def test_setup_installs_profiling_before_monitoring_and_dashboard_import():
         "New → New folder",
         "export COURSE_GRAFANA_FOLDER_UID=",
         "nebius-cxcli grafana import ./reference/grafana --recursive",
-        'labs/10_compatibility_stack.py --profile small',
-        'tools/course_setup.py monitoring \\',
-        'tools/verify_monitoring.py \\',
+        "labs/10_compatibility_stack.py --workload small",
+        "tools/regular-lab-setup.py monitoring \\",
+        "tools/verify_monitoring.py \\",
         '"$COURSE_PYTHON" tools/readiness.py',
     )
     positions = [guide.index(command) for command in ordered]
@@ -282,82 +282,12 @@ def test_grafana_official_reference_uses_exact_host(host, accepted):
     assert (not parser.errors) is accepted
 
 
-@pytest.mark.parametrize("mode", [{}, {"server": True}, {"distributed": True}])
-def test_systems_capture_does_not_persist_process_environment(tmp_path, mode):
-    command = load("profile_lab").capture_command(
-        "nsys", ["python3", "lab.py"], tmp_path / "report", "lab_workload", ".*", **mode
-    )
-    assert "--discard-environment=true" in command
-
-
-@pytest.mark.parametrize("local_companion", [False, True])
-def test_compute_filter_matches_template_gemm_and_excludes_fill(
-    tmp_path, local_companion
-):
-    import re
-
-    command = load("profile_lab").capture_command(
-        "ncu",
-        ["python3", "lab.py"],
-        tmp_path / "report",
-        "produce_output",
-        ".*(gemm|nvjet).*",
-        local_companion=local_companion,
-    )
-    # CUTLASS can expose the generic function name Kernel2; GEMM is in its
-    # template argument. Use complete, unrenamed names for library selectors.
-    assert command[command.index("--kernel-name-base") + 1] == "demangled"
-    assert command[command.index("--rename-kernels") + 1] == "off"
-    pattern = command[command.index("--kernel-name") + 1].removeprefix("regex:")
-    assert not re.search(pattern, "Kernel2")
-    assert re.search(
-        pattern,
-        "void cutlass::Kernel2<cutlass_80_simt_sgemm_256x128_8x4_nn_align1>(T1::Params)",
-    )
-    assert not re.search(
-        pattern, "void at::native::vectorized_elementwise_kernel<FillFunctor<float>>()"
-    )
-    assert command[command.index("--nvtx-include") + 1] == "produce_output/"
-    assert command[command.index("--launch-count") + 1] == "1"
-
-
-def test_serving_capture_profiles_server_after_readiness(tmp_path):
-    command = load("profile_lab").capture_command(
-        "nsys",
-        ["vllm", "serve", "model"],
-        tmp_path / "report",
-        "lab_workload",
-        ".*",
-        server=True,
-    )
-    assert (
-        "--capture-range=cudaProfilerApi" in command
-        and "--trace-fork-before-exec=true" in command
-    )
-    for name in (
-        "vllm_benchmark",
-        "vllm_streaming_benchmark",
-        "vllm_prefix_cache",
-        "vllm_speculative_ab",
-        "vllm_chunked_prefill_ab",
-        "aiperf",
-    ):
-        text = (ROOT / "llm-inference/slurm" / f"{name}.sbatch").read_text()
-        assert (
-            "--server -- vllm serve" in text
-            or '--server -- "${serve_command[@]}"' in text
-            or "--server" in text
-        )
-        assert (
-            "tools/server_capture.py start" in text
-            and "tools/server_capture.py stop" in text
-        )
-
-
 @pytest.mark.parametrize("phase", ["probe", "profile"])
 @pytest.mark.parametrize("variant", ["disabled", "enabled"])
 def test_chunked_prefill_capture_brackets_each_request_campaign(phase, variant):
-    launcher = (ROOT / "llm-inference/slurm/vllm_chunked_prefill_ab.sbatch").read_text()
+    launcher = (
+        ROOT / "llm-inference/slurm/34_policy_equivalence_client.nsys.sbatch"
+    ).read_text()
     trial = launcher.split("run_trial() {\n", 1)[1].split("\n}\n", 1)[0]
     # Execute the actual post-readiness campaign with only local Bash fixtures.
     campaign = trial.split("  if [[ ${ready} -ne 1 ]]", 1)[1]
@@ -366,13 +296,13 @@ def test_chunked_prefill_capture_brackets_each_request_campaign(phase, variant):
         r"""
 set -euo pipefail
 course_python=python_fixture
-COURSE_CONTAINER_RUNNER=runner_fixture
-AIPERF_IMAGE_DIGEST=fixture
+COURSE_AIPERF=runner_fixture
 base_dir=fixture
 model=fixture
 revision=fixture
 port=8000
 trial=1
+control_profile() { printf 'capture %s\n' "$1"; }
 phase=$1
 variant=$2
 python_fixture() {
@@ -385,7 +315,7 @@ python_fixture() {
   fi
 }
 runner_fixture() {
-  [[ $2 == aiperf && $3 == profile ]]
+  [[ $1 == profile ]]
   printf 'aiperf\n'
 }
 mkdir() { :; }
@@ -420,7 +350,7 @@ def test_job_inspection_uses_throughput_units_without_grafana_format_ids(
     inspector = load("inspect_results")
     monkeypatch.setattr(inspector, "ROOT", tmp_path)
     (tmp_path / "reference").mkdir()
-    (tmp_path / "results").mkdir()
+    (tmp_path / "results/01_example/jobs/3/results").mkdir(parents=True)
     recipe = {
         "kind": "single_gpu",
         "metrics": [{"name": "throughput", "path": "throughput", "unit": unit}],
@@ -430,7 +360,7 @@ def test_job_inspection_uses_throughput_units_without_grafana_format_ids(
     )
     artifact = result()
     artifact["measurements"] = {"throughput": 1250000}
-    (tmp_path / "results/completed.json").write_text(json.dumps(artifact))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(artifact))
     report = inspector.inspect("01_example", 3)[0]
     assert f"throughput [value]: 1.25e+06 {label}" in report
     assert "count:" not in report and "reqps" not in report
@@ -443,7 +373,7 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     inspector = load("inspect_results")
     monkeypatch.setattr(inspector, "ROOT", tmp_path)
     (tmp_path / "reference").mkdir()
-    (tmp_path / "results").mkdir()
+    (tmp_path / "results/01_example/jobs/3/results").mkdir(parents=True)
     from test_observability_integration import RECIPE
 
     recipe = {
@@ -454,7 +384,7 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     (tmp_path / "reference/observability.json").write_text(
         json.dumps({"labs": {"01_example": recipe}})
     )
-    (tmp_path / "results/completed.json").write_text(json.dumps(result()))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(result()))
     assert inspector.inspect("01_example", 4) == []
     reports = inspector.inspect("01_example", 3)
     assert (
@@ -462,7 +392,7 @@ def test_job_inspection_exposes_actual_numbers_and_no_queued_job_success(
     )
     bad = result()
     bad["experiment"]["instrumented"] = True
-    (tmp_path / "results/completed.json").write_text(json.dumps(bad))
+    (tmp_path / "results/01_example/jobs/3/results/completed.json").write_text(json.dumps(bad))
     with pytest.raises(ValueError, match="unprofiled"):
         inspector.inspect("01_example", 3)
 
@@ -486,16 +416,41 @@ def test_numerical_equivalence_rejects_changed_or_invalid_losses(candidate_loss)
 
 
 def test_introductory_diagram_has_a_registered_home_without_renumbering_lessons():
-    validator = load("validate_course_template")
-    document = (ROOT / "gpu-fundamentals/index.html").read_text()
-    parser = validator.Parser()
-    parser.feed(document)
-    assert not parser.errors
-    assert parser.figures["tools-measurement-loop"] == ("tools", "how-it-works")
-    assert parser.lesson_number == document.count('class="lesson"')
-    malformed = document.replace(
-        'class="tools-field tools-how-it-works"', 'class="tools-field"'
-    )
-    parser = validator.Parser()
-    parser.feed(malformed)
-    assert "tools diagram must be inside How it works" in parser.errors
+    document = (ROOT / "gpu-performance-tools/index.html").read_text()
+    assert document.count('id="detail-tools-measurement-loop"') == 1
+    assert document.count('class="lesson"') == 5
+    fundamentals = (ROOT / "gpu-fundamentals/index.html").read_text()
+    assert fundamentals.count('class="lesson"') == 12
+    assert 'id="using-gpu-performance-tools"' not in fundamentals
+
+
+@pytest.mark.parametrize("relative", ["gpu-optimizations/labs/07_profile_workload.py", "llm-training/labs/30_training_profiler.py"])
+@pytest.mark.parametrize("external,tool,expected", [(False, "none", True), (True, "none", False), (True, "nsys", True)])
+def test_internal_profiler_results_record_actual_instrumentation(tmp_path, monkeypatch, relative, external, tool, expected):
+    from unittest.mock import MagicMock
+    from test_course_review_fixes import load_lab
+
+    monkeypatch.setenv("COURSE_CAPTURE", "1" if tool == "nsys" else "0")
+    monkeypatch.setenv("COURSE_PROFILE_TOOL", tool)
+    monkeypatch.delenv("COURSE_JOB_DIR", raising=False)
+    torch = MagicMock()
+    torch.profiler.profile.return_value.__enter__.return_value.key_averages.return_value.table.return_value = "operator summary"
+    with load_lab(relative) as lab:
+        argv = ["lab", "--workload", "small", "--output-dir", str(tmp_path)]
+        if external:
+            argv.append("--external-only")
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setattr(lab, "load_torch", lambda: torch)
+        monkeypatch.setattr(lab, "require_course_gpu", lambda _: {"gpu_family": "NVIDIA H100"})
+        monkeypatch.setattr(lab, "seed_everything", lambda *args: None)
+        monkeypatch.setattr(lab, "annotated_operation", lambda fn, name: fn)
+        if "training_profiler" in relative:
+            monkeypatch.setattr(lab, "build_tiny_lm", lambda *a, **kw: MagicMock())
+            monkeypatch.setattr(lab, "make_language_batch", lambda *a, **kw: (MagicMock(), MagicMock()))
+        lab.main()
+    document = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert document["experiment"]["instrumented"] is expected
+    if not external:
+        torch.profiler.profile.assert_called_once()
+    else:
+        torch.profiler.profile.assert_not_called()

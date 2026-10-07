@@ -5,6 +5,29 @@ instruction. Continue until status is complete or a real blocker is identified.
 Do not return to the user merely because the next stage requires agent tools.
 The state controller is intentionally separate from native GUI reasoning.
 
+Every execution stage submits the same explicit per-lab `.sbatch` file shown to
+students. Normal jobs run the lab directly; `.nsys.sbatch` and `.ncu.sbatch` place
+the native NVIDIA command at the GPU process. The selected job owns its profiler
+flags and filters. `--workload small|large` selects problem size; it does not enable
+profiling. The skill accepts `--workload both` to schedule both sizes.
+
+Fresh plans use `execution_contract: native-jobs/v2`. Status and cancellation can
+inspect earlier campaigns, but execution refuses an older plan: retain its evidence
+and create a new campaign. This version requires managed-runtime selections and
+verified prepared-root bindings. Do not translate old plans or replay saved argv.
+
+Submission prepares private scheduler directories before calling `sbatch` with
+an explicit working directory and log paths. Each fresh job exclusively creates
+`results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`. Requeue is disabled;
+retries require a new job ID. Collection admits only those producing job IDs and
+their exact scheduler logs, verifies checksums, and preserves all required originals.
+After successful publication, cleanup removes only those verified job directories
+and logs. It never deletes a whole results tree or historical evidence.
+
+Existing result JSON fields and metric labels named `profile` remain unchanged;
+they describe workload size in the stored evidence. The old CLI `--profile` and
+`COURSE_WORKLOAD_PROFILE` environment variable are unsupported.
+
 Optimization Lab 15's Compute recipe selects `uniform_tail_probe` in
 `tail_measure`: the first measured grid, excluding input initialization,
 warmup, compilation and validation launches. Keep the other grids and concurrent
@@ -42,9 +65,9 @@ Unknown keys, zero, units, placeholders and malformed values fail before jobs.
 Use this mapping instead of shell prefixes or global resource changes.
 
 Inference Lab 16 queries live Hub metadata even when model files are cached.
-Bind `HF_HUB_OFFLINE=0` and `TRANSFORMERS_OFFLINE=0` only for that lab in the
-prepared environment; do not change unrelated offline labs or download model
-weights as part of running the audit.
+Its managed runtime enables metadata access for that lab; verify the activated
+environment instead of supplying inherited offline overrides. Do not change
+unrelated offline labs or download model weights as part of running the audit.
 
 Interrupted claim acquisition leaves the campaign initializing. Resume recovers
 all selected claims under the control lock before any sync or job action. A
@@ -62,8 +85,11 @@ python3 <skill>/scripts/stage.py CAMPAIGN collect
 ```
 
 `sync` runs the inspected repository `sync-labs.sh --sync-only`, verifies every
-frozen source hash remotely, and creates isolated per-lab/profile workspaces.
-Record the observed preflight after sync. `advance` submits or polls exactly the
+frozen source hash remotely, and creates isolated per-lab/profile workspaces
+with the actual course slug as the leaf. It binds the existing prepared catalog
+and runs read-only native activation checks for all selected launchers, recording
+runtime fingerprints. A failure gives the owning preparation command and cannot
+complete preflight. Record independent hardware/monitoring observations after sync. `advance` submits or polls exactly the
 next execution/profile/reference stage. The helper persists intent first and
 uses a remote lock and durable job receipt. A lost response reconciles the same
 name, owner and job. If accounting has no unique row, stop rather than resubmit.
@@ -162,8 +188,9 @@ is declared.
 Record `run-labs-verification/v1` with frozen `source_sha256` and `jobs` mapping
 exact job numbers to `{ "passed": true, "checks": [...] }`. Checks must name
 actual independent observations; attach detailed private proof files. Then
-`collect` copies all raw `results/` files from the owned workspace with remote
-SHA256 and size inventory, excluding caches and unrelated course paths.
+`collect` copies only the dispatched jobs' `results/LAB/jobs/JOB_ID/` trees and
+their `results/LAB/logs/JOB_ID.out` and `.err` scheduler logs, with remote SHA256
+and size inventory. Historical files and other jobs remain in the workspace.
 Do not proceed if local and remote bytes differ.
 
 The browser stage is described separately. Export is another `advance`: it
@@ -218,7 +245,7 @@ After a proven tool/environment failure is repaired:
 
    ```text
    python3 <skill>/scripts/run_labs.py run --lab COURSE:LAB \
-     --profile small|large --environment PRIVATE_JSON
+     --workload small|large --environment PRIVATE_JSON
    ```
 
    Replace `small|large` with that one failed profile, not both. Reuse the accepted
