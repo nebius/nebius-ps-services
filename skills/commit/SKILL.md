@@ -247,7 +247,8 @@ A calling skill may use this shared transaction when the root user's authorized
 task includes the commit. Interpret the parent task semantically; do not demand
 another standalone `$commit` phrase. Skill invocation alone is not authority.
 Use the existing delegated Worktree or Task Implementer route for their commits.
-For an unmanaged `create-pr` task, read
+For an unmanaged `create-pr` task (including authorized complete publish-*,
+review-pr repair and merge-pr review delegation), read
 `../create-pr/references/commit-continuation.md`: its private grant permits
 successive reviewed commits and corrected no-commit retries until that PR task
 finishes. The parent PR skill owns repairs, checks and pushes. Ordinary direct

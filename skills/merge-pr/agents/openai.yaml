@@ -1,6 +1,6 @@
 interface:
   display_name: "Merge PR"
   short_description: "Safely merge ready GitHub pull requests"
-  default_prompt: "Use $merge-pr to verify and merge a ready GitHub pull request without bypassing branch protection."
+  default_prompt: "Use $merge-pr to obtain local review-pr evidence and safely repaired exact-head/base readiness, dispatch the protected GitHub Actions broker on default, and verify actual merge/destination/result CI. No PAT, direct merge or bypass fallback; exclude Agentic SDLC."
 policy:
   allow_implicit_invocation: false

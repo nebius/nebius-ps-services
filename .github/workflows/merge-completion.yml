@@ -1,0 +1,146 @@
+name: Merge completion
+on:
+  workflow_run:
+    workflows: ["Protected merge", "Merge automation CI", "vpngw-ci", "nebius-cxcli-ci", "nebius-cxcli-nsight", "github-report-ci", "Skills project specs CI"]
+    types: [completed]
+  schedule:
+    - cron: '12,27,42,57 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+jobs:
+  candidates:
+    name: completion-candidates
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: |
+          set -euo pipefail
+          targets=$(python3 skills/merge-pr/scripts/merge_completion.py targets)
+          printf 'targets=%s\n' "$targets" >> "$GITHUB_OUTPUT"
+  dispatch:
+    name: dispatch-result-ci
+    needs: candidates
+    if: needs.candidates.outputs.targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.targets) }}
+    concurrency:
+      group: result-ci-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+      PR_NUMBER: ${{ matrix.target.pr }}
+      PR_HEAD: ${{ matrix.target.head }}
+      BROKER_RUN: ${{ matrix.target.run_id }}
+      BROKER_ATTEMPT: ${{ matrix.target.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Freeze dispatch attempts before effects
+        id: journal
+        run: |
+          python3 skills/merge-pr/scripts/merge_completion.py prepare-dispatch --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --run-id "$BROKER_RUN" --run-attempt "$BROKER_ATTEMPT" \
+            --output "$RUNNER_TEMP/dispatch.json"
+      - name: Preserve uncertain dispatch recovery
+        id: dispatch-journal
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: merge-dispatch-${{ matrix.target.pr }}-${{ steps.journal.outputs.result_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dispatch.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Reconcile and dispatch exact-result CI
+        env:
+          DISPATCH_ARTIFACT_ID: ${{ steps.dispatch-journal.outputs.artifact-id }}
+        run: |
+          python3 skills/merge-pr/scripts/merge_completion.py dispatch --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --run-id "$BROKER_RUN" --run-attempt "$BROKER_ATTEMPT" \
+            --dispatch-record "$RUNNER_TEMP/dispatch.json"
+  pages:
+    name: verify-pages-${{ matrix.target.pr }}
+    needs: [candidates, dispatch]
+    if: always() && needs.candidates.result == 'success' && needs.candidates.outputs.targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.targets) }}
+    concurrency:
+      group: merge-pages-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      pages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+      PR_NUMBER: ${{ matrix.target.pr }}
+      PR_HEAD: ${{ matrix.target.head }}
+      BROKER_RUN: ${{ matrix.target.run_id }}
+      BROKER_ATTEMPT: ${{ matrix.target.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare Pages request without publication effects
+        id: pages-journal
+        run: |
+          status=0
+          python3 skills/merge-pr/scripts/merge_completion.py prepare-pages --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --run-id "$BROKER_RUN" --run-attempt "$BROKER_ATTEMPT" \
+            --output "$RUNNER_TEMP/pages.json" || status=$?
+          if [ "$status" != 0 ] && [ "$status" != 2 ]; then exit "$status"; fi
+      - name: Preserve Pages request recovery
+        id: pages-intent
+        if: steps.pages-journal.outputs.ready == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: merge-pages-${{ matrix.target.pr }}-${{ steps.pages-journal.outputs.result_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pages.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Verify CI and reconcile Pages publication
+        if: steps.pages-journal.outputs.ready == 'true'
+        env:
+          PAGES_ARTIFACT_ID: ${{ steps.pages-intent.outputs.artifact-id }}
+        id: completion
+        run: |
+          status=0
+          python3 skills/merge-pr/scripts/merge_completion.py pages --request --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --run-id "$BROKER_RUN" --run-attempt "$BROKER_ATTEMPT" \
+            --pages-record "$RUNNER_TEMP/pages.json" --output "$RUNNER_TEMP/completion.json" || status=$?
+          if [ "$status" != 0 ] && [ "$status" != 2 ]; then exit "$status"; fi
+      - name: Preserve terminal completion evidence
+        if: steps.completion.outputs.complete == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: merge-complete-${{ matrix.target.pr }}-${{ matrix.target.head }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/completion.json
+          retention-days: 30
+          if-no-files-found: error

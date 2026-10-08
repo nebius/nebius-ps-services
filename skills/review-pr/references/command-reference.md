@@ -1,36 +1,13 @@
-# Review PR Command Reference
+# Review PR commands
 
-Read this file when `review-pr` needs exact Git or GitHub CLI commands for PR
-metadata, checkout, local base sync, conflict detection, or branch updates.
+Read-only inspection uses `gh pr view <pr-url> --json number,url,title,author,headRefName,headRefOid,baseRefName,baseRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`
+and `gh pr diff <pr-url>`. Paginate API files/reviews/threads; a truncated diff or
+missing checks never establishes review completion.
 
-## PR Inspection
+Use create-pr's private preparation handoff for checkout, canonical commits,
+base synchronization and explicit feature-branch pushes. Do not invoke raw Git
+commit/merge/rebase, update-branch or force-push commands from this skill.
 
-- PR metadata:
-  - `gh pr view <pr-or-url> --json number,url,title,author,headRefName,headRepository,headRepositoryOwner,baseRefName,isCrossRepository,isDraft,maintainerCanModify,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`
-- Changed files:
-  - `gh pr diff <pr-or-url> --name-only`
-  - `gh pr view <pr-or-url> --json files`
-- Checkout:
-  - `gh pr checkout <pr-or-url>`
-
-## Base Sync And Conflicts
-
-- Local base sync:
-  - `git fetch origin <base>`
-  - `git merge-tree --write-tree origin/<base> HEAD`
-  - `git merge --no-edit origin/<base>`
-  - rebase only when safe: `git rebase origin/<base>`
-  - non-destructive alternative when appropriate:
-    `gh pr update-branch <pr-or-url>`
-- Conflict checks:
-  - `git diff --name-only --diff-filter=U`
-  - `rg -n '^(<{7}|={7}|>{7})'`
-
-## Push
-
-- Push:
-  - same-repository branch: `git push origin HEAD:<head-branch>`
-  - fork branch when GitHub created a writable remote:
-    `git push <head-remote> HEAD:<head-branch>`
-  - after an intentional safe rebase:
-    `git push --force-with-lease <head-remote> HEAD:<head-branch>`
+Follow [the Actions protocol](../../merge-pr/references/actions-protocol.md) for a passed
+ordinary local review's exact-head COMMENT attestation. It is excluded from
+report-only, fork/non-default admission and active Agentic SDLC review mode.

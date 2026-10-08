@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use only when explicitly asked to create/prepare a GitHub PR from unmanaged work or a named branch: validate, commit, merge base, push, open/reuse, and report readiness. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees; use commit-push when no PR is wanted."
+description: "Use only when explicitly asked to complete a GitHub PR from unmanaged work: validate, commit, push, locally review/fix, and delegate protected merge; --prepare-only stops before merge. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees; use commit-push when no PR is wanted."
 disable-model-invocation: true
 ---
 
@@ -34,7 +34,8 @@ never permission to bypass a guard or claim unobserved behavior.
 Use this skill to turn local repository work or named branches into GitHub pull
 requests with a safe default-branch workflow. It can prepare a single PR or one
 PR per branch, resolve straightforward merge conflicts against the default
-branch, and report the order the user should merge the PRs manually.
+branch, run local review-pr until safe repairs pass, and route every ordinary
+merge through merge-pr. `--prepare-only` stops at the reviewed PR.
 
 ## When To Use
 
@@ -62,7 +63,7 @@ branch, and report the order the user should merge the PRs manually.
 - Planning an ordered multi-branch merge path when several branches may overlap.
 - Honoring an explicit user-provided PR title or body instead of inventing one.
 - Returning PR numbers, URLs, readiness state, and merge order so the user can
-  review or merge manually.
+  inspect completion evidence or continue an explicitly preparation-only task.
 - In an Agentic SDLC run, publishing or reusing the PR only after
   `sdlc-uat-tests` passes for the clean exact SHA promoted by `sdlc-commit`.
 
@@ -72,6 +73,11 @@ Use commit-push for publication without a PR and review-pr for PR review.
 Managed children must finish their owning integration workflow first.
 
 ## Inputs
+
+Public usage: `$create-pr [<branch> ...] [--prepare-only]`. `-h, --help`
+shows help only. Ordinary default completion includes local review and protected
+merge. `--prepare-only` reviews/fixes but does not merge. Active Agentic SDLC
+retains publication-only behavior regardless of the ordinary default.
 
 - A Git repository with an `origin` remote.
 - GitHub CLI (`gh`) authenticated for the target repository.
@@ -145,8 +151,10 @@ expire the authorization when publication completes or stops.
 
 ## Commit Authority
 
-Explicit complete `publish-release` requests delegate necessary PR/commit work
-to this owner; see the release-caller contract in `references/commit-continuation.md`.
+Explicit complete `publish-release`, `publish-helm` and `publish-image` requests
+delegate necessary PR/commit work to this owner. Authorized review-pr repairs
+and merge-pr review delegation use the same preparation handoff; see
+`references/commit-continuation.md`.
 
 An explicit PR task authorizes the necessary validated staging, commits and
 pushes throughout its branch-owned repair loop. Do not request a new user turn
@@ -160,7 +168,10 @@ and `commit-push` permit one actual commit plus safe no-commit retries. Active S
 ## Required Reads
 
 Read current repository instructions, the affected checks, and
-`references/commit-continuation.md` before any PR commit.
+`references/commit-continuation.md` before any PR commit. Read
+[ordinary completion](references/ordinary-completion.md) before local review,
+repair delegation, or merge. Private preparation handoffs never recurse into
+review-pr or merge-pr.
 
 ## Writes
 
@@ -181,67 +192,17 @@ blocks continuation; never reset claims, fabricate receipts or bypass hooks.
 
 ## Completion Criteria
 
-The current pushed head has terminal passing available checks, the PR body
-reflects that head, and the continuation grant is closed. Otherwise report the
-specific blocker and keep the PR draft; ordinary review approval stays separate.
+Ordinary default completion requires review-pr's passing current-head/base
+attestation, merge-pr's confirmed merge, remote destination proof and separately
+reported result CI. A queued PR is pending. `--prepare-only` ends after the
+reviewed pushed head and terminal checks. Close the continuation grant only at
+that selected boundary; an internal preparation handoff keeps it open. Active
+Agentic SDLC ends at its exact promoted PR head and does not use this loop.
 
-## Local Check Order
+## Branch Preparation
 
-For any dirty local work this skill will commit:
-
-- Work from the repository root.
-- Inspect `git status --short` and the dirty diff before staging.
-- Run pre-test hygiene before tests: scan for conflict markers, run
-  `git diff --check`, and run the relevant existing formatter or lint command
-  for touched files when that command is available and safe. Apply only safe,
-  mechanical fixes. Do not run broad formatters over generated, vendored, or
-  exact upstream-imported files.
-- Run the focused local tests after formatting, whitespace, and lint fixes.
-  Wait for each test command to finish before staging or committing. If a test
-  is still running, pending, or waiting on external state, do not commit yet
-  unless generic non-SDLC mode applies, the user explicitly asked for an early
-  draft PR, and the blocker is recorded.
-- If validation fails and the failure is plausibly caused by branch work,
-  repair it, rerun the failed check, and keep the loop bounded to safe,
-  branch-owned fixes.
-- Stage only after the working tree passes the selected checks:
-  `git add -A`, then `git diff --cached --check`, then inspect
-  `git diff --cached --stat` and any needed focused staged diff before
-  committing.
-- If staged validation finds only simple mechanical whitespace issues, repair
-  the smallest safe whitespace-only issue, rerun `git add -A` and
-  `git diff --cached --check`, and rerun affected local checks when the repair
-  touches executable or source files. Stop on conflict markers, unresolved
-  conflicts, broad formatter churn, generated-artifact uncertainty, semantic
-  failures, or any staged-validation problem that is not plainly mechanical.
-
-## Base Merge Policy
-
-Refresh refs with `git fetch origin`, then run private `sync` on the clean,
-selected target after any dirty work has been validated and committed. The
-helper owns the normal-hook merge from the frozen base; do not perform raw
-merges. Review/check the actual result and acknowledge its exact tree before
-publication. Never merge the PR branch into the default branch, rebase or
-force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
-`git push origin HEAD:<branch>` for an existing one.
-
-## Branch Selection
-
-- If the user provides one or more branch names, process exactly those
-  branches. Preserve the user-provided order unless current Git evidence shows
-  a safer dependency order.
-- If the user provides no branch name and the current branch is non-default,
-  treat the current branch as the only target branch. Do not create a new
-  branch, do not switch to another branch before committing current work, and
-  make that branch conflict-free against the default branch after the local
-  work is committed.
-- If the user provides no branch name and the current branch is the default
-  branch, use the local-work PR flow: create a feature branch only when there
-  is work to submit.
-- For multiple target branches, create or reuse one PR per branch. Do not
-  combine unrelated branches into a single PR.
-- Use the repository default branch as the PR base unless the user explicitly
-  provides another base.
+Read [branch preparation](references/branch-preparation.md) for local check
+order, branch selection and base synchronization before the process below.
 
 ## Process
 
@@ -272,7 +233,8 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
      reuse it as the only target branch. Do not create another branch.
    - If this current feature branch has a dirty worktree and the user invoked
      this skill to create or update the PR for current work, follow
-     `Local Check Order`: run and repair safe pre-test hygiene, wait for local
+     `Local Check Order` in `references/branch-preparation.md`: run and repair
+     safe pre-test hygiene, wait for local
      tests to finish, stage the complete repository diff from the repository
      root with `git add -A`, run `git diff --cached --check`, inspect the
      staged diff, and commit it on the current branch with a concise message
@@ -301,7 +263,8 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
    - If the worktree is dirty on the default branch, create the feature branch
      first so the in-progress work moves off the default branch safely.
    - If the worktree is still dirty after branch selection and the user clearly
-     wants to submit the current local work, follow `Local Check Order`: run
+     wants to submit the current local work, follow `Local Check Order` in
+     `references/branch-preparation.md`: run
      and repair safe formatting, whitespace, lint, build, and test issues
      first, wait for local tests to finish, then stage the complete repository
      diff from the repository root with `git add -A`, including modified,
@@ -320,7 +283,8 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
    - First test each target branch against `origin/<base>` without changing it,
      for example with
      `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`.
-   - Update every target branch non-destructively with the `Base Merge Policy`:
+   - Update every target branch non-destructively with the `Base Merge Policy`
+     in `references/branch-preparation.md`:
      refresh refs, invoke private `sync`, review its actual result, run affected
      checks and acknowledge its exact tree before pushing. The helper owns the
      normal-hook merge and recorded no-op/fast-forward/two-parent proof.
@@ -399,7 +363,12 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
    the missing write explicitly.
    Remove or expire `permissions/pr-authorization.json` after publishing and
    PR creation/reuse completes.
-12. Return the result.
+12. For ordinary work, execute `references/ordinary-completion.md`: local
+    review-pr, safe fixes through the preparation handoff, fresh validation and
+    review, then merge-pr unless preparation-only. For multiple PRs, complete
+    in dependency order and synchronize/review each next PR against the new base.
+    Active Agentic SDLC skips this step.
+13. Return the result.
    Report:
 
     - head branch name for each PR
@@ -407,15 +376,15 @@ force-push. Use `git push -u origin HEAD:<branch>` for a new remote branch and
     - PR number and URL for each PR
     - whether conflicts were found and how they were resolved
     - validation performed
-    - recommended manual merge order
+    - actual completion order or pending dependencies
     - any blockers that remain
 
 ## Command Reference
 
-Close the private root task with `finish completed` after publication and
-checks are verified, including zero-commit tasks. Use `finish cancelled` when
-abandoning it; preserve unresolved effects. Neither closure nor passing checks
-bypasses required human approval.
+Close the private root task with `finish completed` only at the selected
+completion boundary, including zero-commit tasks. Keep it open across delegated
+review repairs and internal preparation handoffs. Use `finish cancelled` when
+abandoning it; preserve uncertain effects. Never bypass GitHub protection.
 
 Read `references/command-reference.md` when exact Git or GitHub CLI commands
 are needed for branch detection, validation, base merges, ordered merge
@@ -443,8 +412,8 @@ URLs, customer data, raw logs, or one-off local state.
   reuse the PR for that same branch.
 - Reuse an existing open PR for the same branch instead of creating duplicates.
 - Do not push directly to the default branch.
-- Do not merge the PRs into the default branch unless the user explicitly asks.
-  This skill prepares PRs so the user can merge them manually.
+- Do not issue merge commands directly. Ordinary default completion delegates
+  to merge-pr; `--prepare-only`, report-only and Agentic SDLC do not merge.
 - Do not open a PR from uncommitted changes alone. Commit first or stop.
 - For local-work PRs, always stage from the repository root with `git add -A`
   so monorepo-wide related changes stay together. Do not path-limit staging; if
@@ -462,7 +431,7 @@ URLs, customer data, raw logs, or one-off local state.
 - Do not use plain ambiguous `git push`. Use explicit refspecs such as
   `git push origin HEAD:<branch>` or `git push -u origin HEAD:<branch>`.
 - Do not treat a conflict-free current-base PR as enough when the user asked
-  for multiple branches. Also check the proposed manual merge order.
+  for multiple branches. Also check the proposed dependency order.
 - Do not resolve semantic conflicts by guessing. Prefer a small merge commit
   that preserves both branch and base behavior, or stop and report the blocker.
 - Do not normalize or reformat generated, vendored, or exact upstream-imported
@@ -493,8 +462,8 @@ When using this skill:
    requested.
 4. Push each branch if needed.
 5. Create or reuse the GitHub PR for each branch.
-6. Return the PR numbers, URLs, merge order, validation performed, and any
-   conflict-resolution commits.
+6. Return PR numbers/URLs, review/head/base evidence, merge result or explicit
+   preparation-only outcome, result CI, and any conflict-resolution commits.
 7. Call out any blockers, such as detached `HEAD`, missing `gh` auth, unknown
    branch names, unresolved conflicts, failing checks, or no diff against the
    base branch.

@@ -1,5 +1,7 @@
 name: nebius-cxcli-ci
 
+run-name: ${{ inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+
 on:
   pull_request:
     paths:
@@ -21,16 +23,69 @@ on:
       - ".github/workflows/nebius-cxcli-ci.yml"
       - ".github/workflows/nebius-cxcli-release.yml"
   workflow_dispatch:
+    inputs:
+      result_sha:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      merge_pr:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_attempt:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      correlation_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: nebius-cxcli-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: nebius-cxcli-ci-${{ github.workflow }}-${{ inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.result_sha == '' }}
 
 jobs:
+  merge-inputs:
+    name: Validate CI checkout identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      post_merge: ${{ steps.identity.outputs.post_merge }}
+      checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
+    steps:
+      - if: inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
+        run: |
+          if [ "$POST_MERGE_INPUTS" = true ]; then
+            python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow nebius-cxcli-ci.yml
+          else
+            printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
   python-compatibility:
+    needs: [merge-inputs]
     name: Python ${{ matrix.python-version }} offline suite
     runs-on: ubuntu-latest
     strategy:
@@ -44,7 +99,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
           fetch-depth: 0
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -85,6 +148,7 @@ jobs:
           make ci-python
 
   verify:
+    needs: [merge-inputs]
     name: Quality, coverage, and wheel
     runs-on: ubuntu-latest
     env:
@@ -96,7 +160,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
           fetch-depth: 0
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -185,8 +257,8 @@ jobs:
           echo "Verified bundled component_sources.yaml is packaged in ${wheel}"
 
   wheel-compatibility:
+    needs: [merge-inputs, verify]
     name: Python ${{ matrix.python-version }} exact wheel contract
-    needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -199,7 +271,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
           fetch-depth: 0
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -222,3 +302,34 @@ jobs:
         run: |
           set -euo pipefail
           make verify-wheel-cli-dist
+
+  result-evidence:
+    name: Post-merge result evidence
+    needs: [merge-inputs, python-compatibility, verify, wheel-compatibility]
+    if: always() && needs.merge-inputs.outputs.post_merge == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify job settlement and record result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+          CI_EXPECTED_JOBS: '["python-compatibility", "verify", "wheel-compatibility"]'
+        run: python3 skills/merge-pr/scripts/merge_completion.py ci-evidence --workflow nebius-cxcli-ci.yml --output "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: result-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          retention-days: 30
+          if-no-files-found: error

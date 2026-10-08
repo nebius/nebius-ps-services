@@ -1,5 +1,7 @@
 name: Skills project specs CI
 
+run-name: ${{ inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+
 on:
   pull_request:
     paths:
@@ -69,16 +71,69 @@ on:
       - "skills/README.md"
       - "skills/CHANGELOG.md"
   workflow_dispatch:
+    inputs:
+      result_sha:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      merge_pr:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_attempt:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      correlation_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: skills-project-specs-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: skills-project-specs-${{ github.workflow }}-${{ inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.result_sha == '' }}
 
 jobs:
+  merge-inputs:
+    name: Validate CI checkout identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      post_merge: ${{ steps.identity.outputs.post_merge }}
+      checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
+    steps:
+      - if: inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
+        run: |
+          if [ "$POST_MERGE_INPUTS" = true ]; then
+            python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow skills-project-specs-ci.yml
+          else
+            printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
   python-testing-contracts:
+    needs: [merge-inputs]
     name: Python testing skills (${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -92,7 +147,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
           persist-credentials: false
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
@@ -113,6 +175,7 @@ jobs:
           "$RUNNER_TEMP/python-testing-venv/bin/python" -B optimize-pytest/scripts/test_measurement_examples.py
 
   runtime-security:
+    needs: [merge-inputs]
     name: Skills runtime security (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
@@ -127,6 +190,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -141,6 +213,7 @@ jobs:
           python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py VerifierContractTests.test_payload_parity_requires_two_successful_regular_file_digests
 
   verify:
+    needs: [merge-inputs]
     name: Skills project specs
     runs-on: ubuntu-latest
     defaults:
@@ -150,6 +223,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -270,6 +352,7 @@ jobs:
           python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py
 
   npx-installation:
+    needs: [merge-inputs]
     name: Skills CLI discovery and copied installation
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -279,6 +362,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          persist-credentials: false
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -294,3 +386,34 @@ jobs:
         run: python -B align-skill/scripts/check-npx-compatibility.py align-skill
       - name: Verify full catalog discovery and installation
         run: python -B align-skill/scripts/check-npx-compatibility.py .
+
+  result-evidence:
+    name: Post-merge result evidence
+    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, npx-installation]
+    if: always() && needs.merge-inputs.outputs.post_merge == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify job settlement and record result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+          CI_EXPECTED_JOBS: '["python-testing-contracts", "runtime-security", "verify", "npx-installation"]'
+        run: python3 skills/merge-pr/scripts/merge_completion.py ci-evidence --workflow skills-project-specs-ci.yml --output "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: result-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          retention-days: 30
+          if-no-files-found: error

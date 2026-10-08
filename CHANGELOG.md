@@ -6,6 +6,16 @@ project folder.
 
 ## [Unreleased]
 
+- Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
+  direct merge and recoverable explicit result-CI/Pages publication. Add
+  disabled/canary/enabled rollout; stop for unsupported queues or workflow-file
+  permissions. Remove custom-App setup without changing Agentic SDLC.
+
+- Add a shared protected GitHub Actions merge broker for ordinary skill workflows
+  and deterministic Dependabot admission, with local agent review, exact-head
+  guards, explicit CI policy and no personal-token fallback. Preserve Dependabot
+  schedules/ecosystems and the separate Agentic SDLC workflow.
+
 - Fix release-session repository discovery to use GitHub's canonical endpoint
   without a trailing slash, preventing a false access failure during release intake.
 

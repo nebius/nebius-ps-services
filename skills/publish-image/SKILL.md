@@ -77,37 +77,24 @@ the user before continuing.
 
 ## Workflow
 
-1. Inspect the current project folder and Git repository.
-   For an image release, verify that the container contract and required local
-   validation evidence exist. Do not silently redesign or waive the image,
-   runtime, platform, or supply-chain requirements.
-2. Parse the requested mode and tag. Normalize tags to
-   `<tag-prefix>-vMAJOR.MINOR.PATCH`.
-3. For `setup`, create or update reusable changelog and release-helper assets
-   from `assets/`, using user-provided registry names, secret names, and project
-   inputs. Delegate creation or updates of `.github/workflows/*.yml` to
-   `$github-workflows`, passing it the approved `container` contract and release
-   inputs. Validate the generated shell and workflow files, then stop with a
-   setup report.
-4. For `prep`, require the current checkout to be the clean, synced default
-   branch. If the user is on any other branch, or the tree is dirty, stop and
-   ask them to merge their branch to the default branch, switch to it,
-   fast-forward, and rerun. Then run the skill-owned helper script:
-   `scripts/publish-image-doer.sh --mode prep ...`
-   The helper creates `release/<tag>` from the default branch, updates
-   `CHANGELOG.md`, commits release prep, and pushes that release branch.
-5. For `complete`, run `prep`, then invoke `create-pr` for `release/<tag>`.
-   After PR checks pass, invoke `merge-pr` with the selected merge method.
-6. After merge, switch to the default branch, fetch, and fast-forward only.
-   Verify the release changelog section from prep is present.
-7. Run `publish` only from the clean, synced default branch:
-   `scripts/publish-image-doer.sh --mode publish ...`
-   The helper creates and pushes only the annotated tag.
-8. If waiting is enabled, find the tag-triggered workflow with `gh run list`,
-   wait with `gh run watch --exit-status`, and inspect the terminal run.
-9. Verify published image tags with
-   `docker buildx imagetools inspect <image>:<version>` and record the digest.
-10. Return the final publish report.
+Read [ordinary publication](references/ordinary-publication.md) before effects.
+
+1. Resolve required explicit version, project, destination, tag prefix and live
+   default. Setup-only installs requested assets and returns without publication.
+2. For complete/prep, use create-pr intake before branch movement. Reuse the
+   current feature; from default create a feature carrying the local work.
+3. The helper's prep mode changes content only. Validate all repository changes,
+   commit and push through create-pr's canonical whole-repository transaction.
+4. Run local review-pr, repair safe findings through the private preparation
+   handoff, revalidate and re-review. Stop for unsafe findings or human objections.
+   Public prep stops at the reviewed PR. Complete routes merge only to merge-pr.
+5. Observe actual protected merge, prove its exact result is in remote default
+   history, and require passing applicable result CI. A queue is still pending.
+6. In a clean isolated clone at that exact result, verify release metadata. Use
+   helper tag mode to create an annotated tag, record its object, then push mode
+   with that exact object. Never tag latest main or alter the source worktree.
+7. Observe the exact tag/result publication workflow and verify the published
+   artifact and digest. Report all evidence or the precise blocker.
 
 ## Setup Assets
 
@@ -126,25 +113,18 @@ doer path.
 
 ## Guardrails
 
-- Do not hardcode registry URLs, repository names, project IDs, endpoints, or
-  secrets in skill sources or generated examples.
-- Store only secret and variable names in workflow templates.
-- Do not print, request, or persist secret values.
-- Do not publish from mutable branch state; publish from a release tag.
-- Own tag creation, registry pushes, signing actions, workflow waits, and
-  published digest evidence. Do not take ownership of Dockerfile/runtime design
-  from `container` or workflow YAML from `github-workflows`.
-- Treat the default branch as the release source of truth. `prep` and
-  `publish` must start from a clean, synced default branch.
-- If the user is on a feature branch or has local changes, fail fast before
-  editing files and ask them to create and merge a PR to the default branch,
-  switch to the default branch, fast-forward, and rerun.
-- Do not use cherry-pick or commit-copy workflows to move release content
-  between branches unless the user explicitly asks for that reconstruction.
-- Do not force-push, use admin merge, bypass branch protection, or ignore
-  required checks/reviews.
-- Stop when GitHub approvals, environment approvals, registry credentials, or
-  branch protection require human action.
+- Agentic SDLC is excluded; preserve its owners and exact promoted SHA.
+- Complete authorization covers the necessary ordinary PR/review/merge/tag flow;
+  do not request repeated commit, merge or routine Actions approval.
+- Missing inputs, credentials, unsafe findings, human objections and additional
+  protection requirements are blockers. Never bypass protections or use a PAT
+  merge fallback. Agent review stays local; Actions runs deterministic jobs only.
+- Prep never stages, commits, switches branches or pushes. create-pr owns those
+  effects with normal hooks and repository-root `git add -A`.
+- Publishing tags never edits release content. The reviewed changelog and chart
+  metadata (when applicable) must already be present in the verified result.
+- Never force-push, replace a tag, tag an unrelated default tip, or claim queued
+  work is merged. Preserve unrelated user work and exact resume evidence.
 
 ## Learning Loop
 

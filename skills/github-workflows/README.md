@@ -59,3 +59,12 @@ Validate syntax and workflow contracts
 - `assets/`: reusable workflow templates.
 - `references/`: workflow pattern guidance.
 - `agents/openai.yaml`: UI metadata.
+
+## Protected ordinary merge
+
+Use the [protected merge templates](assets/protected-merge/README.md) with the
+merge-pr helper for local-review skill completion and deterministic Dependabot
+admission. The built-in token never bypasses protection. Explicit result CI and optional
+Pages builds compensate for suppressed token-generated push events. AI agents remain
+local; privileged Actions runs trusted-default deterministic code only. Agentic
+SDLC remains separate.

@@ -1,0 +1,25 @@
+{
+  "schema": "merge-policy/v1",
+  "dependabot_workflow": "dependabot-auto-merge.yml",
+  "excluded_checks": [
+    "dependency-admission",
+    "merge-candidates",
+    "protected-merge",
+    "required-ci-status",
+    "completion-candidates",
+    "dispatch-result-ci",
+    "verify-pages",
+    "merge-admission"
+  ],
+  "ci_workflows": [
+    {
+      "file": "ci.yml",
+      "paths": [
+        "**"
+      ]
+    }
+  ],
+  "merge_workflow": "skills-merge-pr.yml",
+  "completion_workflow": "merge-completion.yml",
+  "pages_enabled": false
+}

@@ -7,12 +7,11 @@ primary job is to execute a release and return a completion report.
 ## What It Does
 
 - Collects chart, explicit tag, branch, and publish/verify destination inputs.
-- Runs chart release prep only from a clean synced default branch, creating and
-  pushing a `release/<tag>` branch that includes the `Chart.yaml` version bump
-  the tag workflow will package.
+- Prepares release content on the current feature branch, creating one through
+  create-pr when starting on default. Preparation never commits or pushes.
 - Validates dependencies, strict lint, and template smoke rendering.
 - Uses `create-pr` and `merge-pr` for the release-prep PR path.
-- Tags only from a clean synced default branch.
+- Tags the exact verified merge result from a clean isolated clone.
 - Waits for the tag-triggered chart workflow when requested.
 - Verifies the published OCI chart with `helm pull`.
 
@@ -23,7 +22,7 @@ Helm chart
   |
   +--> setup assets when missing or requested
   +--> skill-owned publish-helm-doer.sh
-  +--> create-pr -> merge-pr
+  +--> create-pr -> local review-pr / safe repairs -> merge-pr Actions broker
   `--> tag-triggered chart workflow
         |
         v
@@ -34,10 +33,11 @@ Published OCI chart
 
 1. Resolve release inputs and normalize the release tag.
 2. Run setup mode only when requested or required assets are missing.
-3. Prep from the clean synced default branch; the helper creates and pushes
-   `release/<tag>`.
+3. Prepare content on the selected feature, then use create-pr for whole-repo
+   commits and local review-pr for safe fixes before protected Actions merge.
 4. Create and merge the release-prep PR in complete mode.
-5. Publish the tag from the default branch.
+5. Tag the exact verified merge result in a clean isolated clone, then push
+   its recorded annotated object to the frozen origin.
 6. Wait for the workflow and verify the OCI chart pull.
 7. Return the final report.
 
@@ -45,10 +45,10 @@ Published OCI chart
 
 - Doer mode does not depend on a project-local `publish-helm.sh`, but the
   setup template is a maintained runnable helper and should keep the same
-  `--mode prep|publish|verify` contract as the skill-owned doer.
-- The default branch is the release source of truth. If work is still on a
-  feature branch, merge that branch to the default branch before prep or
-  publish.
+  `--mode prep|tag|push|verify` contract as the skill-owned doer.
+- Prepare content on the existing feature branch. create-pr owns canonical
+  commits and local review-pr repairs; merge-pr owns protected Actions merge.
+  Publish only the exact verified merge result, even if default advances.
 - Release version/tag is required for release execution. The skill should ask
   for it when missing instead of inferring it from chart files, Git history, or
   changelog text.
@@ -70,6 +70,9 @@ Published OCI chart
 ## Files
 
 - `SKILL.md`: Runtime workflow, inputs, guardrails, and output contract.
-- `scripts/publish-helm-doer.sh`: Local prep/publish/verify primitives.
+- `scripts/publish-helm-doer.sh`: Content-only prep and exact-result tag/push/verify primitives.
 - `assets/`: Optional setup templates for changelog and helper.
 - `agents/openai.yaml`: UI metadata.
+
+See [ordinary publication](references/ordinary-publication.md) for preparation,
+exact-result tagging, protected merge, resume and verification boundaries.

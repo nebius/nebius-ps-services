@@ -24,11 +24,13 @@ needed. GitHub Actions builds and uploads artifacts from the tagged commit.
 
 ## Approval and resume
 
-When GitHub requires approval, the skill shows the PR or workflow link and waits
-up to 10 minutes, checking every 15 seconds. An eligible reviewer must approve on
-GitHub. The same invocation then refreshes readiness and continues automatically.
-Partial environment approvals do not restart the timer. Repository protections
-remain effective.
+Local review-pr runs before Actions approval: safe fixes use create-pr, followed by
+fresh validation and review. merge-pr dispatches the protected broker, which
+supplies routine Actions approval. Unsafe findings and human objections stop.
+
+Additional required human or release-environment approvals retain a ten-minute
+wait with links and 15-second polling. Partial approvals do not restart that
+clock; repository protection remains authoritative.
 
 After timeout or interruption:
 
@@ -42,7 +44,7 @@ keeps completed work, and starts a fresh waiting attempt. It works across agent
 sessions without replaying old commit grants. Timeouts leave the PR/workflow
 intact; no local background publisher is left running.
 
-Checks, merge queue and release execution have separate one-hour wait limits.
+Checks, merge settlement and release execution have separate one-hour wait limits.
 Failures, conflicting identities and missing assets produce precise blockers.
 A queued PR, pushed tag or draft release is not a completed publication.
 
@@ -55,7 +57,7 @@ trailing slash; nested release and workflow reads retain their resource paths.
 publish-release
   -> prepare release content
   -> create-pr: review, validate, commit all work, synchronize, push, PR
-  -> wait for checks / eligible approval
+  -> local review-pr: safe repairs, revalidation, exact-head/base attestation
   -> merge-pr: protected merge, resulting commit and CI verification
   -> isolated clone: annotated tag, runtime check, record exact object, push
   -> tag workflow: build and publish assets
@@ -70,8 +72,8 @@ it supplies no commit, merge or approval authority.
 ## Configuration and partial operations
 
 Use `--project-dir`, `--tag-prefix`, package/import/build metadata and the existing
-workflow to identify the target. The default merge method is squash unless the
-repository requires a merge queue. Branches are retained by default.
+workflow to identify the target. The default merge method is squash. A required
+merge queue stops for a maintainer. Branches are retained by default.
 
 `--mode setup` prepares reusable assets; `--mode prep` ends at the pushed PR;
 `--mode publish` continues an existing merged release. `--no-wait` returns a

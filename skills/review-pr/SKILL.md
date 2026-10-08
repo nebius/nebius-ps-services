@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: inspect changes, checks, reviews, and conflicts; fix safe writable findings and report readiness. In Agentic SDLC, report only."
+description: "Use only when explicitly asked to review a GitHub PR by number, URL, or branch: run a local exact-head review, fix safe writable findings through create-pr, revalidate, and attest readiness; never merge. In Agentic SDLC, report only."
 disable-model-invocation: true
 ---
 
@@ -117,108 +117,40 @@ surfaces.
 
 ## Workflow
 
-1. Identify the PR, head branch, and base branch.
-   Use a supplied PR number or URL when available. Otherwise resolve the PR
-   from the current branch. Review against the PR base branch by default,
-   usually `main`. If the user explicitly asks for `main` but the PR targets a
-   different base, call out the mismatch before changing the target branch.
-   Collect:
-   - PR number and URL
-   - title and author
-   - head branch
-   - head repository and owner
-   - base branch
-   - whether the PR is from a fork or same-repository branch
-   - whether maintainers can modify the branch
-   - draft state
-   - merge status
-   - check status
-   - review decision and unresolved reviewer concerns when visible
-   - whether the PR maps to an active Agentic SDLC run; if so, use the
-     restricted review mode above
-2. Inspect the review surface.
-   Read the changed files, diff, existing review comments, and failing checks.
-   Compare the branch locally against `origin/<base>`, not only against the PR
-   summary UI.
-   If this PR belongs to an Agentic SDLC run, also inspect the relevant
-   `docs/requirements.md`, `docs/design.md`, and local evidence summaries
-   before calling the PR ready.
-3. Select sibling skills for the changed surface.
-   Based on the files touched and the kind of breakage in the PR, explicitly
-   apply the smallest relevant set of sibling skills from this repo. Keep
-   `review-pr` as the owner of readiness, branch updates, and final merge
-   judgment.
-4. Establish branch ownership, permissions, and update strategy.
-   Decide whether the branch can be updated and whether history is safe to
-   rewrite.
-   - If the PR is from another contributor or a fork, assume the branch is
-     externally owned unless the user says otherwise and GitHub shows the
-     branch is editable by maintainers.
-   - If the branch is not writable from the current credentials, perform the
-     review locally and report findings, conflict details, and suggested
-     changes. Do not claim conflicts were resolved upstream.
-   - If the branch is writable but externally owned or shared, prefer
-     non-destructive merge updates from `origin/<base>` or GitHub's update
-     branch flow.
-   - If the branch is clearly user-owned or automation-owned in the current
-     repository workflow, rebasing can be acceptable when it applies cleanly.
-   - If the branch may be shared, externally owned, or under active parallel
-     collaboration, stop before rewriting history unless the user explicitly
-     asks for it and branch ownership is clear.
-5. Review with code-review priorities first.
-   Focus on:
-   - incorrect behavior
-   - regressions
-   - missing tests
-   - stale docs or help text
-   - broken workflows or release paths
-6. Fix safe issues on the branch.
-   When the required fix is clear and the branch is writable, implement it
-   instead of stopping at a report. Keep tests, docs, and automation aligned
-   with the code changes. If the branch is not writable, report the exact fix
-   or patch shape without creating a misleading local-only resolution.
-   In active Agentic SDLC review mode, do not apply the fix here; classify and
-   route it through the coordinator.
-7. Run focused validation.
-   Choose validation based on the files changed:
-   - Python: `ruff`, focused `pytest`
-   - shell: `bash -n`, `shellcheck`
-   - workflows: `actionlint`
-   - Helm charts: `helm lint`, `helm template`
-   - docs-only: focused markdown validation when available
-8. Resolve branch drift or conflicts when safe.
-   If the PR branch is behind, conflicted, or GitHub reports it cannot merge
-   cleanly:
-   - fetch the base branch
-   - check out the PR branch with `gh pr checkout <pr>` or the existing local
-     branch
-   - test the merge locally before committing conflict-resolution work
-   - prefer non-destructive update paths first when branch ownership is unclear,
-     including `gh pr update-branch <pr>` when GitHub allows it
-   - merge `origin/<base>` into the PR branch when a same-branch merge commit is
-     the safest writable update path
-   - use local rebase only when the branch history is safe to rewrite
-   - resolve only straightforward conflicts automatically
-   - rerun focused validation after conflict resolution
-   - push branch updates back, using `--force-with-lease` only when a rebase
-     made it necessary
-   - if the branch cannot be pushed, keep the local conflict analysis and report
-     the unresolved files plus the safest next action
-   In active Agentic SDLC review mode, this entire step is inspection-only:
-   report drift or conflicts and route any required branch change through the
-   coordinator.
-9. Report readiness.
-   Return findings first, then summarize:
-   - what was fixed
-   - which sibling skills were applied and why
-   - what validation ran
-   - whether the PR is ready to merge
-   - any remaining blockers
-   For Agentic SDLC PRs, include whether requirements, design, validation,
-   tests, evaluation, and UAT evidence all support merge readiness.
-   When Agentic SDLC local state is available, record the readiness summary and
-   remaining blockers in run evidence; if local state cannot be updated, report
-   that explicitly.
+1. Freeze the exact host/repository/PR, head/base branches and SHAs, author,
+   ownership, draft state and live default. Resolve the actual PR, not an
+   unrelated current branch. Active Agentic SDLC uses its read-only mode above.
+2. For ordinary work, read create-pr's
+   the ordinary completion reference from the installed create-pr skill and
+   the commit continuation reference from that same skill.
+   Honor report-only restrictions and externally owned/fork branch limits.
+3. Inspect the complete base-to-head diff, specs, review comments, unresolved
+   threads, checks and conflicts. Select relevant sibling skills. Review locally;
+   never install or run an AI agent on GitHub Actions.
+4. Before editing, use the canonical owner to establish intake and select the
+   correct PR checkout. Prove its HEAD matches the remote PR head and preserve
+   unrelated work. Then classify findings and implement safe, supported repairs
+   when authorized and writable. Stop for semantic ambiguity, unsafe changes, unresolved human
+   objections or unavailable validation. Do not guess a product decision.
+5. Delegate all branch switching, commits, base synchronization and pushes to
+   create-pr's private preparation handoff, using the active grant and original
+   root receipt. Standalone authorized review repair opens that canonical owner
+   transaction before Git effects. It cannot call review-pr or merge-pr again.
+   Never use raw commits, rebase, force push or GitHub update-branch here.
+6. Run relevant checks, then re-review the complete final diff and fresh remote
+   head/base after each repair. No earlier review survives a changed head or base.
+   A newly discovered unsafe finding stops the loop and returns a blocker.
+7. For an ordinary completion caller, require no unresolved findings, passing
+   validation/CI and no outstanding human requested changes or threads. Follow
+   the Actions protocol reference from the installed merge-pr skill to post a
+   structured COMMENT review on the exact head. Record its review ID, head/base
+   and validation evidence. This attestation does not approve the author's own PR.
+   Standalone review also returns this evidence when writable and eligible;
+   report-only/fork/non-default reviews return findings without merge admission.
+8. Return findings/fixes, validation, final identity and attestation or blocker.
+   Do not merge. The calling create-pr/publication/merge-pr owner continues only
+   within its existing completion authorization. Standalone review closes its
+   repair transaction after publication and verification.
 
 ## Command Reference
 
@@ -256,16 +188,12 @@ URLs, customer data, raw logs, or one-off local state.
   local context. Stop and explain when conflicts are semantic or risky.
 - Never rewrite the default branch.
 - Do not push to another contributor's branch or fork unless GitHub permits it,
-  the user asked for branch updates, and the update is non-destructive or the
-  user explicitly approved the rewrite.
+  the user asked for branch updates, and the update is non-destructive.
 - Do not create a replacement PR from someone else's branch unless the user
   explicitly asks for that follow-up path.
-- Do not rewrite shared or externally owned branch history unless the user
-  explicitly wants that and the ownership is clear.
-- When a rebase is required on a branch you control, use `--force-with-lease`
-  rather than a blind force push.
-- Do not approve or merge the PR unless the user explicitly asks for that
-  separate step.
+- Do not rebase or force-push in the ordinary review repair path.
+- Do not issue approval or merge effects. The Actions broker approves only after
+  local attestation; merge-pr owns all ordinary merge effects.
 - Do not let a sibling skill override `review-pr`'s ownership of readiness,
   branch safety, or final review judgment.
 - Keep the PR branch aligned across code, tests, docs, and workflows before

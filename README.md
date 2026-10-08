@@ -65,7 +65,8 @@ The repository uses Dependabot for dependency update pull requests.
   requests may be auto-approved and auto-merged.
 - GitHub Actions updates, including majors, may be auto-merged only when the
   pull request is Dependabot-authored, scoped to workflow automation files, and
-  processed with the dedicated `dependabot-automerge` environment credential.
+  verified by secretless admission metadata and the shared Actions
+  broker, with passing applicable CI and no unresolved review objections.
 - Python dependency updates from the `uv` and `pip` ecosystems may also be
   auto-approved and auto-merged when every changed file stays within Python
   dependency manifests or lockfiles such as `pyproject.toml`, `uv.lock`,
@@ -73,6 +74,10 @@ The repository uses Dependabot for dependency update pull requests.
   `Pipfile`, and `Pipfile.lock`.
 - Dependabot pull requests that touch source code or other non-dependency files
   remain ineligible for repo-level auto-merge.
+
+Shared GitHub Actions merge setup and bootstrap verification are documented in
+[protected merge setup](.github/merge-automation.md). Ordinary skill review runs
+locally; Dependabot uses deterministic admission with the same Actions identity.
 
 ## Reusable Skill CI
 

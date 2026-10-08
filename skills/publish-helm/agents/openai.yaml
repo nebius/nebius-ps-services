@@ -1,6 +1,6 @@
 interface:
   display_name: "Publish Helm"
   short_description: "Publish Helm charts end to end"
-  default_prompt: "Use $publish-helm --mode complete --tag X.Y.Z --oci-repository oci://registry.example.com/org/charts to prep, PR, merge, tag, wait for CI, and verify an OCI Helm chart release."
+  default_prompt: "Use $publish-helm --mode complete --tag X.Y.Z --oci-repository oci://registry.example.com/org/charts to prepare content on a feature branch, use create-pr for canonical whole-repo commits and local review-pr repairs, merge through the Actions broker, tag the exact verified result, wait for CI, and verify an OCI Helm chart release."
 policy:
   allow_implicit_invocation: false

@@ -1,0 +1,205 @@
+name: Protected merge
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      head:
+        description: Exact locally reviewed head SHA
+        required: true
+        type: string
+      review_id:
+        description: Trusted operator COMMENT review ID
+        required: true
+        type: string
+      method:
+        description: Merge method (merge queues require a maintainer)
+        default: squash
+        type: choice
+        options: [squash, merge, rebase]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: ["dependabot-auto-merge", "CI"]
+    types: [in_progress, completed]
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+  statuses: read
+
+jobs:
+  candidates:
+    name: merge-candidates
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      ci_targets: ${{ steps.plan.outputs.ci_targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
+          MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
+        run: |
+          set -euo pipefail
+          ci_targets=$(python3 .github/scripts/merge_gate.py ci-targets)
+          printf 'ci_targets=%s\n' "$ci_targets" >> "$GITHUB_OUTPUT"
+          targets=$(python3 .github/scripts/merge_gate.py candidates)
+          printf 'targets=%s\n' "$targets" >> "$GITHUB_OUTPUT"
+
+  ci-status:
+    name: required-ci-status
+    needs: candidates
+    if: needs.candidates.outputs.ci_targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.ci_targets) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: write
+    concurrency:
+      group: required-ci-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.target.pr }}
+          PR_HEAD: ${{ matrix.target.head }}
+        run: python3 .github/scripts/merge_gate.py publish-ci --pr "$PR_NUMBER" --head "$PR_HEAD"
+
+  admission:
+    name: merge-admission
+    needs: candidates
+    if: needs.candidates.outputs.targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.targets) }}
+    concurrency:
+      group: merge-admission-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    env:
+      MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+      MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
+      MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
+      PR_NUMBER: ${{ matrix.target.pr }}
+      PR_HEAD: ${{ matrix.target.head }}
+      REVIEW_ID: ${{ matrix.target.review_id }}
+      MERGE_METHOD: ${{ matrix.target.method }}
+    steps:
+      # Never check out a PR, download executable PR artifacts, install dependencies,
+      # restore caches, or run an AI agent in this privileged workflow.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify admission before effects
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          status=0
+          python3 .github/scripts/merge_gate.py check --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --review-id "$REVIEW_ID" > "$RUNNER_TEMP/gate.json" || status=$?
+          cat "$RUNNER_TEMP/gate.json"
+          if [ "$status" = 2 ]; then
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$status" != 0 ]; then exit "$status"; fi
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'gate.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('ready=true\nworkflows=' + str(result['workflows']).lower() + '\n')
+          PYTHON
+      - name: Freeze admission receipt before effects
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/merge_gate.py intent --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --review-id "$REVIEW_ID" --method "$MERGE_METHOD" > "$RUNNER_TEMP/intent.json"
+      - name: Preserve admission for interrupted-run recovery
+        id: intent
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: merge-intent-${{ matrix.target.pr }}-${{ matrix.target.head }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/intent.json
+          retention-days: 30
+          if-no-files-found: error
+  merge:
+    name: protected-merge
+    needs: [candidates, ci-status, admission]
+    if: always() && needs.candidates.result == 'success' && needs.candidates.outputs.targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.targets) }}
+    concurrency:
+      group: protected-merge-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      checks: read
+      statuses: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+      MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
+      MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
+      PR_NUMBER: ${{ matrix.target.pr }}
+      PR_HEAD: ${{ matrix.target.head }}
+      REVIEW_ID: ${{ matrix.target.review_id }}
+      MERGE_METHOD: ${{ matrix.target.method }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Revalidate uploaded admission and request protected merge
+        run: |
+          status=0
+          python3 .github/scripts/merge_gate.py execute --pr "$PR_NUMBER" \
+            --head "$PR_HEAD" --review-id "$REVIEW_ID" --method "$MERGE_METHOD" || status=$?
+          if [ "$status" != 0 ] && [ "$status" != 2 ]; then exit "$status"; fi
