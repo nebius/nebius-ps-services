@@ -2,10 +2,15 @@
 """Offline regressions for asynchronous effects and exact-result evidence."""
 
 import copy
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
+import io
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import merge_completion as completion
 import merge_gate as gate
@@ -191,6 +196,49 @@ class CompletionTests(unittest.TestCase):
         )
         return journal
 
+    def verify_cli(self, *extra):
+        with tempfile.TemporaryDirectory() as folder:
+            policy = Path(folder) / "policy.json"
+            policy.write_text(json.dumps(POLICY))
+            args = [
+                "merge_completion.py",
+                "verify",
+                "--repo",
+                REPO,
+                "--policy",
+                str(policy),
+                "--pr",
+                "1",
+                "--head",
+                HEAD,
+                "--run-id",
+                "100",
+                "--run-attempt",
+                "1",
+                *extra,
+            ]
+            with (
+                patch("sys.argv", args),
+                patch.object(completion, "GitHub", return_value=self.api),
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                status = completion.main()
+            return status, json.loads(output.getvalue())
+
+    def test_read_only_verifier_rejects_effect_flag(self):
+        self.api.runs = [self.api.ci]
+        status, result = self.verify_cli("--request")
+        self.assertEqual(status, 1)
+        self.assertEqual(result["outcome"], "blocked")
+        self.assertFalse(self.api.effects)
+
+    def test_pending_pages_is_not_successful_verification_exit(self):
+        self.api.runs = [self.api.ci]
+        status, result = self.verify_cli()
+        self.assertEqual(status, 2)
+        self.assertEqual(result["outcome"], "pending")
+        self.assertFalse(self.api.effects)
+
     def test_dispatch_pins_result_and_captures_run_id(self):
         result = completion.verify_or_dispatch(
             self.api, self.api.intent, POLICY, True, self.journal()
@@ -283,6 +331,190 @@ class CompletionTests(unittest.TestCase):
         os.environ["GITHUB_ACTOR_ID"] = "123"
         with self.assertRaises(gate.Blocked):
             completion.ci_inputs(self.api, POLICY, self.inputs(), "ci.yml")
+
+    def checkout_process(self, *outputs):
+        return patch.object(
+            completion.subprocess,
+            "run",
+            side_effect=[Mock(returncode=0, stdout=value) for value in outputs],
+        )
+
+    def test_checkout_revalidates_before_fetch_and_does_not_persist_auth(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"GH_TOKEN": "fixture-token", "GITHUB_WORKSPACE": os.getcwd()},
+            ),
+            self.checkout_process(BASE + "\n", "", "", "", RESULT + "\n") as run,
+        ):
+            value = completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
+        self.assertEqual(value["checkout_sha"], RESULT)
+        calls = run.call_args_list
+        fetch = next(call for call in calls if "fetch" in call.args[0])
+        self.assertEqual(fetch.args[0][-2:], [f"https://github.com/{REPO}.git", RESULT])
+        self.assertIn("GIT_CONFIG_VALUE_0", fetch.kwargs["env"])
+        for call in calls:
+            self.assertNotIn("fixture-token", " ".join(call.args[0]))
+            self.assertNotIn("GH_TOKEN", call.kwargs["env"])
+            if call is not fetch:
+                self.assertNotIn("GIT_CONFIG_VALUE_0", call.kwargs["env"])
+        self.assertFalse(self.api.effects)
+
+    def test_checkout_rejects_untrusted_result_before_git(self):
+        for case in (
+            "ordinary",
+            "partial",
+            "actor",
+            "result",
+            "unmerged",
+            "history",
+            "receipt",
+        ):
+            with (
+                self.subTest(case=case),
+                patch.object(completion.subprocess, "run") as run,
+            ):
+                self.api = API()
+                event = self.inputs()
+                os.environ["GITHUB_ACTOR_ID"] = str(gate.ACTIONS_BOT_ID)
+                if case == "ordinary":
+                    event = {}
+                elif case == "partial":
+                    del event["inputs"]["broker_run_id"]
+                elif case == "actor":
+                    os.environ["GITHUB_ACTOR_ID"] = "123"
+                elif case == "result":
+                    event["inputs"]["result_sha"] = HEAD
+                elif case == "unmerged":
+                    self.api.pr.update(merged=False, state="open")
+                elif case == "history":
+                    self.api.comparisons[f"compare/{RESULT}...{TIP}"] = "diverged"
+                else:
+                    self.api.intent["source_sha"] = HEAD
+                with self.assertRaises((gate.Blocked, gate.Pending)):
+                    completion.ci_checkout(self.api, POLICY, event, "ci.yml")
+                run.assert_not_called()
+
+    def test_checkout_rejects_wrong_source_or_dirty_workspace_before_fetch(self):
+        for outputs in [(HEAD + "\n",), (BASE + "\n", " M changed\n")]:
+            with (
+                self.subTest(outputs=outputs),
+                patch.dict(
+                    os.environ,
+                    {"GH_TOKEN": "fixture-token", "GITHUB_WORKSPACE": os.getcwd()},
+                ),
+                self.checkout_process(*outputs) as run,
+                self.assertRaises(gate.Blocked),
+            ):
+                completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
+            self.assertFalse(
+                any("fetch" in call.args[0] for call in run.call_args_list)
+            )
+
+    def test_checkout_failure_is_sanitized_and_does_not_continue(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"GH_TOKEN": "fixture-token", "GITHUB_WORKSPACE": os.getcwd()},
+            ),
+            patch.object(
+                completion.subprocess,
+                "run",
+                side_effect=[
+                    Mock(returncode=0, stdout=BASE + "\n"),
+                    Mock(returncode=0, stdout=""),
+                    Mock(returncode=1, stdout="", stderr="sensitive transport details"),
+                ],
+            ) as run,
+            self.assertRaisesRegex(
+                gate.Blocked, "^Validated result checkout failed during fetch$"
+            ),
+        ):
+            completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
+        self.assertEqual(run.call_count, 3)
+
+    def test_checkout_real_git_selects_merged_ancestor_and_preserves_history(self):
+        real_run = completion.subprocess.run
+        original = Path.cwd()
+        with tempfile.TemporaryDirectory() as folder:
+            upstream = Path(folder) / "upstream"
+            workspace = Path(folder) / "workspace"
+            fixture_env = {
+                **os.environ,
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_NOSYSTEM": "1",
+            }
+
+            def fixture_git(*args, cwd=upstream):
+                return real_run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=fixture@example.invalid",
+                        *args,
+                    ],
+                    cwd=cwd,
+                    env=fixture_env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            upstream.mkdir()
+            fixture_git("init", "--initial-branch=main")
+            (upstream / "value").write_text("merged result\n")
+            fixture_git("add", "value")
+            fixture_git("commit", "-m", "result")
+            result = fixture_git("rev-parse", "HEAD")
+            fixture_git("tag", "v1.0.0")
+            (upstream / "value").write_text("newer default\n")
+            fixture_git("commit", "-am", "later default")
+            source = fixture_git("rev-parse", "HEAD")
+            fixture_git("clone", "--quiet", str(upstream), str(workspace))
+            initial_config = (workspace / ".git/config").read_bytes()
+            self.api.pr["merge_commit_sha"] = result
+            event = self.inputs()
+            event["inputs"].update(
+                result_sha=result,
+                correlation_id=completion.correlation(REPO, 1, result, "ci.yml"),
+            )
+
+            def local_transport(argv, **kwargs):
+                if "fetch" in argv:
+                    self.assertEqual(argv[-2], f"https://github.com/{REPO}.git")
+                    argv = [*argv[:-2], str(upstream), argv[-1]]
+                return real_run(argv, **kwargs)
+
+            try:
+                os.chdir(workspace)
+                with (
+                    patch.dict(
+                        os.environ,
+                        {
+                            "GITHUB_WORKSPACE": str(workspace),
+                            "GITHUB_SHA": source,
+                            "GH_TOKEN": "fixture-token",
+                        },
+                    ),
+                    patch.object(
+                        completion.subprocess, "run", side_effect=local_transport
+                    ),
+                ):
+                    completion.ci_checkout(self.api, POLICY, event, "ci.yml")
+                self.assertEqual(
+                    fixture_git("rev-parse", "HEAD", cwd=workspace), result
+                )
+                self.assertEqual((workspace / "value").read_text(), "merged result\n")
+                self.assertEqual(
+                    fixture_git("describe", "--tags", cwd=workspace), "v1.0.0"
+                )
+                self.assertEqual(
+                    (workspace / ".git/config").read_bytes(), initial_config
+                )
+            finally:
+                os.chdir(original)
 
     def test_required_job_failure_cannot_emit_success_receipt(self):
         with self.assertRaisesRegex(gate.Blocked, "did not succeed"):

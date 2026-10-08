@@ -87,8 +87,15 @@ intent even if the original broker failed after merge.
 
 The dispatcher uploads its attempted-work journal before explicitly dispatching
 applicable CI. Each dispatch binds repository, PR, result SHA, original intent,
-workflow and stable correlation. CI validates all inputs together, checks out
-that exact result, asserts checkout identity and records successful required
+workflow and stable correlation. Each CI job first checks out `github.sha` with
+credentials persistence disabled. Before setup, cache restoration or project
+execution, the trusted `ci-checkout` helper independently validates all five
+inputs, the broker receipt, merged PR identity and default-branch containment.
+It fetches only the authoritative merge result using process-local authentication,
+then verifies HEAD. These jobs need Contents, Pull requests and Actions read
+permissions. A job output or raw dispatch input is never checkout authority;
+read-only tokens alone do not prevent poisoning the default-branch cache.
+CI asserts checkout identity and records successful required
 push-equivalent jobs in a result artifact. The workflow revision may be a newer
 default commit; its run `head_sha` alone does not identify the tested revision.
 Only the trusted latest run/attempt with matching artifact can pass. A previous

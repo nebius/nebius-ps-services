@@ -97,11 +97,23 @@ jobs:
         host:
           - {arch: amd64, runner: ubuntu-24.04}
           - {arch: arm64, runner: ubuntu-24.04-arm}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -133,11 +145,23 @@ jobs:
     needs: [merge-inputs]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .

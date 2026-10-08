@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Revalidate merge receipts at each CI checkout boundary with read-only job
+  permissions and process-local fetch credentials. Reject write requests through
+  completion verification and return pending status consistently.
+
 - Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
   direct merge and recoverable explicit result-CI/Pages publication. Add
   disabled/canary/enabled rollout; stop for unsupported queues or workflow-file

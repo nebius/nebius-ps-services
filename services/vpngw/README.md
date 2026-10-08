@@ -3554,7 +3554,10 @@ python -m mypy
 ### Release model
 
 - `publish-release.sh` is the local release helper for this service.
-- `vpngw-ci.yml` is for PR validation and manual CI only; it does not run from `nebius-vpngw-v*` tags.
+- `vpngw-ci.yml` validates PRs, main pushes and authenticated post-merge results.
+  These lanes build once after unit tests. An ordinary manual dispatch runs the
+  separate integration, coverage and packaging lane; it does not also run the
+  ordinary build job. Release tags use the separate release workflow.
 - `vpngw-release.yml` is the dedicated release workflow for this service and is triggered only by `nebius-vpngw-v*` tags.
 - The local `publish-release.sh --publish X.Y.Z` flow creates the service tag locally and verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag.
 - The release workflow checks out the tagged commit from `services/vpngw`, runs lint and tests, builds the wheel, verifies the wheel version matches the tag, and publishes the GitHub Release asset.

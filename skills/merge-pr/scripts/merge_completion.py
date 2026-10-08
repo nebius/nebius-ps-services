@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -543,6 +544,85 @@ def ci_inputs(api, policy, event, workflow):
     return {"post_merge": "true", "checkout_sha": result}
 
 
+def ci_checkout(api, policy, event, workflow):
+    """Switch a clean CI checkout only after authoritative merge validation."""
+    identity = ci_inputs(api, policy, event, workflow)
+    require(
+        identity["post_merge"] == "true", "Result checkout requires post-merge inputs"
+    )
+    require(
+        Path.cwd().resolve() == Path(os.environ["GITHUB_WORKSPACE"]).resolve(),
+        "Result checkout must run at the workspace root",
+    )
+    result = identity["checkout_sha"]
+    # Do not pass the token to Git except as a process-only HTTP header for fetch.
+    git_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"GH_TOKEN", "GITHUB_TOKEN"} and not key.startswith("GIT_CONFIG_")
+    }
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
+
+    def git(*args, env=None):
+        try:
+            completed = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "credential.helper=",
+                    *args,
+                ],
+                env=git_env if env is None else env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise Blocked(
+                f"Validated result checkout failed during {args[0]}"
+            ) from None
+        require(
+            completed.returncode == 0,
+            f"Validated result checkout failed during {args[0]}",
+        )
+        return completed.stdout.strip()
+
+    require(
+        git("rev-parse", "HEAD") == os.environ["GITHUB_SHA"],
+        "Checkout helper must start from the trusted workflow revision",
+    )
+    require(
+        not git("status", "--porcelain", "--untracked-files=all"),
+        "CI workspace is dirty",
+    )
+    token = os.environ.get("GH_TOKEN", "")
+    require(bool(token), "Result checkout requires the read-only Actions token")
+    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    fetch_env = {
+        **git_env,
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {auth}",
+    }
+    # The source is the authoritative merged result, never a raw dispatch ref.
+    # Preserve full-history checkouts used by SCM versioning; do not add --depth.
+    git(
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        f"https://github.com/{api.repo}.git",
+        result,
+        env=fetch_env,
+    )
+    git("checkout", "--quiet", "--detach", result)
+    require(git("rev-parse", "HEAD") == result, "Result checkout identity mismatch")
+    return identity
+
+
 def emit_ci_evidence(api, policy, event, workflow, needs, expected):
     identity = ci_inputs(api, policy, event, workflow)
     require(identity["post_merge"] == "true", "No result evidence for ordinary CI")
@@ -584,6 +664,7 @@ def main():
             "verify",
             "pages",
             "ci-inputs",
+            "ci-checkout",
             "ci-evidence",
         ],
     )
@@ -600,6 +681,10 @@ def main():
     parser.add_argument("--request", action="store_true")
     args = parser.parse_args()
     try:
+        require(
+            not args.request or args.action == "pages",
+            "Only the trusted Actions Pages effect accepts --request; verify is read-only",
+        )
         api = GitHub(args.repo or "")
         policy = json.loads(Path(args.policy).read_text())
         event = (
@@ -631,6 +716,8 @@ def main():
                 json.loads(os.environ["CI_NEEDS"]),
                 json.loads(os.environ["CI_EXPECTED_JOBS"]),
             )
+        elif args.action == "ci-checkout":
+            result = ci_checkout(api, policy, event, args.workflow)
         else:
             intent = read_intent(
                 api, args.run_id, args.run_attempt, args.pr, args.head, policy
@@ -699,6 +786,8 @@ def main():
         if args.output:
             Path(args.output).write_text(json.dumps(result, sort_keys=True))
         print(json.dumps(result, separators=(",", ":")))
+        if args.action in {"verify", "pages"} and result["outcome"] == "pending":
+            return 2
         return 0
     except (
         Blocked,

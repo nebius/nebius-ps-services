@@ -120,7 +120,7 @@ surfaces.
 1. Freeze the exact host/repository/PR, head/base branches and SHAs, author,
    ownership, draft state and live default. Resolve the actual PR, not an
    unrelated current branch. Active Agentic SDLC uses its read-only mode above.
-2. For ordinary work, read create-pr's
+2. For ordinary work, read
    the ordinary completion reference from the installed create-pr skill and
    the commit continuation reference from that same skill.
    Honor report-only restrictions and externally owned/fork branch limits.

@@ -144,11 +144,23 @@ jobs:
     defaults:
       run:
         working-directory: skills
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -187,12 +199,24 @@ jobs:
     defaults:
       run:
         working-directory: skills
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -220,12 +244,24 @@ jobs:
       run:
         working-directory: skills
 
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -359,12 +395,24 @@ jobs:
     defaults:
       run:
         working-directory: skills
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .

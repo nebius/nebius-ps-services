@@ -8,8 +8,14 @@ Keep this pair aligned with the templates. No agent runtime runs on Actions.
 Use `ci.yml.template` as the complete input/checkout/evidence example. Replace
 `__CI_COMMAND__` with the repository's actual push-equivalent checks. For each
 existing CI workflow, preserve ordinary PR/push/manual behavior, add the five
-atomic post-merge inputs and trusted identity job, check out its validated SHA,
-assert HEAD in every required job and emit the result artifact only after all
+atomic post-merge inputs and trusted identity job. Every execution job first
+checks out `github.sha` without credential persistence, then runs `ci-checkout`
+from that trusted revision before setup, cache restoration or project commands.
+Give these jobs Contents, Pull requests and Actions read permissions. The helper
+revalidates the receipt and authoritative merged result immediately before
+checkout, with process-local fetch authentication. Never pass a dispatch input
+or job output directly to checkout. Assert HEAD in every required job and emit
+the result artifact only after all
 push-equivalent jobs succeed. Manual-only deployment/integration tasks must not
 run on post-merge dispatch. Include the result SHA in concurrency groups; do not
 cancel result verification when a newer main or manual run starts.

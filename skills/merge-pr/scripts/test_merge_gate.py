@@ -585,6 +585,18 @@ class MergeTests(unittest.TestCase):
                     "cancel-in-progress: ${{ inputs.result_sha == '' }}", value
                 )
                 self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"', value)
+                self.assertNotIn(
+                    "ref: ${{ needs.merge-inputs.outputs.checkout_sha }}", value
+                )
+                checkout_steps = value.count("name: Verify exact checkout identity")
+                self.assertEqual(
+                    value.count("ci-checkout --workflow " + workflow["file"]),
+                    checkout_steps,
+                )
+                self.assertEqual(
+                    value.count("      actions: read"),
+                    checkout_steps + 2,  # identity and terminal evidence jobs
+                )
                 self.assertIn("CI_EXPECTED_JOBS:", value)
                 self.assertIn("ci-evidence --workflow " + workflow["file"], value)
                 for field in (

@@ -71,8 +71,11 @@ a stale branch waits for Dependabot or an authorized maintainer update.
 Token-generated pushes do not start ordinary CI or legacy Pages builds. The
 completion workflow dispatches the applicable push-equivalent CI explicitly,
 with a frozen result SHA, stable correlation and pre-effect dispatch journal.
-Each CI run validates its complete input identity, asserts every required job's
-checkout and uploads exact-result evidence. Manual-only integration/deployment
+Each CI job loads its validator from `github.sha`, then independently validates
+the complete input identity, broker receipt and merged result before selecting
+that commit. Checkout happens before setup or cache restoration, with read-only
+job permissions and process-local fetch credentials. Every required job asserts
+HEAD; the run uploads exact-result evidence. Manual-only integration/deployment
 jobs are excluded. A newer workflow revision is distinct from the tested SHA.
 
 After CI passes, a separate Pages-write job preserves legacy main/root hosting

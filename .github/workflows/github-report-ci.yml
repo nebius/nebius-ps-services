@@ -85,13 +85,25 @@ jobs:
     needs: [merge-inputs]
     name: github-report-lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -119,13 +131,25 @@ jobs:
     needs: [merge-inputs, lint]
     name: github-report-unit-tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -154,13 +178,25 @@ jobs:
     name: github-report-build
     if: (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') || needs.merge-inputs.outputs.post_merge == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -189,13 +225,25 @@ jobs:
     name: github-report-integration-tests
     if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -224,13 +272,25 @@ jobs:
     name: github-report-coverage
     if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -259,13 +319,25 @@ jobs:
     name: github-report-packaging
     if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.merge-inputs.outputs.checkout_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow github-report-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .

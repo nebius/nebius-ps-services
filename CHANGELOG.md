@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Revalidate merge receipts inside each CI job before selecting the merged
+  commit. Load the validator from the trusted workflow revision and keep Git
+  fetch credentials process-local. Preserve ordinary PR and manual CI lanes.
+
 - Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
   direct merge and recoverable explicit result-CI/Pages publication. Add
   disabled/canary/enabled rollout; stop for unsupported queues or workflow-file
