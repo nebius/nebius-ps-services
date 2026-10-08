@@ -82,7 +82,10 @@ design does not provide custom-App isolation. Keep each job least-privileged.
 ## Result CI, Pages and recovery
 
 An accepted request is pending. Confirm actual merge and the authoritative
-result SHA, then remote default-branch containment. Token-generated pushes do
+result SHA through identity-bound GraphQL `mergeCommit.oid`, then remote
+default-branch containment. REST `2026-03-10` omits the old result field;
+missing GraphQL identity or result evidence blocks completion without effects.
+Token-generated pushes do
 not trigger ordinary CI or legacy Pages builds. A trusted completion workflow,
 triggered by workflow completion and a schedule, resumes from the uploaded
 operator-dispatched positive-review intent even if the broker failed after merge.

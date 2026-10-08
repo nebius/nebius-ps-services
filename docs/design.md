@@ -86,7 +86,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-002: Shared protected merge automation
 
 #### Requirements Covered
@@ -95,7 +95,7 @@ No independent verification evidence was recorded before schema migration.
 
 #### Context Evidence
 
-The deployed broker has separate ordinary-review and Dependabot metadata admission plus rollout controls. The accepted redesign replaces both paths with universal local review while preserving the existing completion and publication safeguards.
+The earlier broker had separate ordinary-review and Dependabot metadata admission plus rollout controls. The accepted redesign replaces both paths with universal local review while preserving the existing completion and publication safeguards.
 
 #### Design Details
 
@@ -105,7 +105,7 @@ Only an explicit trusted numeric operator workflow_dispatch can initiate a merge
 
 PR, CI and scheduled events maintain the CI-only Required CI aggregate for ordinary and fork PRs and return no merge candidates. Upload an immutable admission receipt before approval. Keep per-job least privilege, protected asynchronous merge with bypass_rules false, exact-head approval, repeated CI/objection checks and maintainer handoff for queues or workflow-file permission denial. The shared Actions identity is a trust boundary.
 
-Completion schedules recover only already-authorized operator-dispatched positive-review intents. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
+Completion schedules recover only already-authorized operator-dispatched positive-review intents. Resolve the authoritative result through GraphQL mergeCommit.oid after independently binding merged state, PR number, reviewed head and base repository/ref; the pinned REST version has no result field. Missing or inconsistent result evidence stops before completion effects. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
 
 #### Selected Option
 
@@ -154,9 +154,13 @@ Implemented universal positive COMMENT review admission and explicit trusted ope
 
 Historical foundation evidence: 179 focused tests and initial skill/workflow checks passed; the maintainer bootstrap PR passed 41 checks with 13 expected skips, and cxcli passed 8,278 tests. The bootstrap merged on 2026-10-08 and legacy Pages built that result. A later alignment passed 77 merge/completion/publication/template tests and 21 service checks with source/installed parity. These results do not verify this redesign or token-driven completion. Current source, installed, CI and live evidence must be recorded separately after implementation; delivery remains unverified until acceptance is observed.
 
-Current redesign evidence: 122 focused merge, completion, publication, release and template tests pass, including reviewed Python/Actions/Docker changes and safe source repairs, automatic-event non-initiation, malformed/stale review rejection and completion checkout provenance. Workflow actionlint, Python lint/format, publication shell checks, changed Markdown and paired spec validation pass. Independent code/security review found no blocking source issue. Eight skills pass portable/Codex/Claude structure checks and actual npx copy/repeat/isolation tests; all eight source/installed payloads and executable modes match. Native trigger and comparative quality probes are authentication-unavailable, not passing runtime evidence.
+Current redesign evidence: 127 focused merge, completion, publication, release and template tests pass, including reviewed Python/Actions/Docker changes and safe source repairs, automatic-event non-initiation, malformed/stale review rejection and completion checkout provenance. Workflow actionlint, Python lint/format, publication shell checks, changed Markdown and paired spec validation pass. Independent code/security review found no blocking source issue. Eight skills pass portable/Codex/Claude structure checks and actual npx copy/repeat/isolation tests; all eight source/installed payloads and executable modes match. Native trigger and comparative quality probes are authentication-unavailable, not passing runtime evidence.
 
-Live preflight confirmed the authorized numeric account and administration access, the built-in publisher App identity, read-only default workflow token and enabled Actions approvals. Old merge workflows were quiescent and the merge/effect receipt inventory was empty. Existing protection was captured and the narrow target configuration reviewed. Deployment, settings application/readback and live ordinary/real Dependabot acceptance remain pending; no eligible dependency PR was open at preflight. Source tests and bot fixtures do not establish live protected merge, exact-result CI or Pages completion.
+Live deployment evidence: maintainer bootstrap PR #216 landed on 2026-10-08. Its exact result passed skills CI, merge-contract CI, CodeQL and legacy main/root Pages publication. Authorized settings were applied and read back: the numeric operator list, strict Required CI bound to App ID 15368 and removal of the empty push restriction. Independent protection fields, read-only default token, Actions approvals and repository merge methods were retained. GitHub clears the dependent block_creations flag when restrictions are absent, even if explicitly requested true. No credentials or Environment were created. Old writers were quiescent and the earlier effect inventory was empty.
+
+The first ordinary acceptance PR #217 recorded a trusted COMMENT review and immutable intent, then received exact-head Actions approval and a protected squash merge. Its completion stopped before CI/Pages effects because REST 2026-03-10 removed merge_commit_sha. The source repair uses one identity-bound GraphQL mergeCommit.oid lookup for merged observation, recovery, completion receipts and CI checkout; no old API or field fallback exists. Updated REST fixtures reproduce the failure, and result-identity/error regressions cover the repair. Read-only live source validation resolves the authoritative result and containment. The retained intent is the known-good checkpoint for deployed recovery; record its live outcome on the acceptance PR without treating source validation as deployed proof.
+
+Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
 
 <!-- /FEATURE: FEAT-002 -->
 <!-- maintain-project-specs:design:end -->

@@ -25,7 +25,6 @@
     "merged": true,
     "merged_at": "2026-01-01T12:00:00Z",
     "state": "closed",
-    "merge_commit_sha": "2222222222222222222222222222222222222222",
     "head": {
       "sha": "1111111111111111111111111111111111111111"
     },
@@ -120,5 +119,19 @@
     "mergedAt": "2026-01-01T12:00:00Z",
     "mergeQueueEntry": null,
     "isInMergeQueue": false
+  },
+  "graphql_pr": {
+    "number": 42,
+    "merged": true,
+    "mergedAt": "2026-01-01T12:00:00Z",
+    "headRefOid": "1111111111111111111111111111111111111111",
+    "baseRefName": "release/stable",
+    "baseRepository": {
+      "nameWithOwner": "example/widget"
+    },
+    "mergeCommit": {
+      "oid": "2222222222222222222222222222222222222222"
+    },
+    "potentialMergeCommit": null
   }
 }

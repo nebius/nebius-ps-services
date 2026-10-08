@@ -130,6 +130,54 @@ class GitHub:
     def repo_info(self):
         return gh(["api", "--hostname", "github.com", self.prefix])
 
+    def merged_commit(self, number, head, base):
+        # REST 2026-03-10 removed merge_commit_sha. Query the actual merged
+        # result, never a test merge, a newer branch tip or a legacy API version.
+        owner, name = self.repo.split("/")
+        value = gh(
+            ["api", "--hostname", "github.com", "graphql", "--input", "-"],
+            {
+                "query": """query($owner:String!,$name:String!,$number:Int!){
+                  repository(owner:$owner,name:$name){pullRequest(number:$number){
+                    number merged mergedAt headRefOid baseRefName
+                    baseRepository{nameWithOwner} mergeCommit{oid}}}}""",
+                "variables": {"owner": owner, "name": name, "number": number},
+            },
+        )
+        data = value.get("data") if isinstance(value, dict) else None
+        repository = data.get("repository") if isinstance(data, dict) else None
+        pr = repository.get("pullRequest") if isinstance(repository, dict) else None
+        require(
+            isinstance(value, dict)
+            and not value.get("errors")
+            and isinstance(pr, dict),
+            "Unable to verify authoritative merged result",
+        )
+        target = pr.get("baseRepository")
+        require(
+            type(pr.get("number")) is int
+            and pr["number"] == number
+            and pr.get("headRefOid") == head
+            and pr.get("baseRefName") == base
+            and isinstance(target, dict)
+            and target.get("nameWithOwner") == self.repo,
+            "Merged PR identity drift",
+        )
+        require(
+            pr.get("merged") is True
+            and isinstance(pr.get("mergedAt"), str)
+            and bool(pr["mergedAt"]),
+            "PR merge is not confirmed",
+        )
+        commit = pr.get("mergeCommit")
+        require(
+            isinstance(commit, dict)
+            and isinstance(commit.get("oid"), str)
+            and bool(SHA.fullmatch(commit["oid"])),
+            "Missing authoritative merged commit",
+        )
+        return commit["oid"]
+
     def threads(self, number):
         owner, name = self.repo.split("/")
         cursor = None
@@ -441,7 +489,7 @@ def execute(api, number, head, review_id, method, policy, intent=None):
         )
         return {
             "outcome": "merged",
-            "result_sha": current["merge_commit_sha"],
+            "result_sha": api.merged_commit(number, head, default),
             "mutated": False,
         }
     expected = admitted_intent(api, number, head, review_id, method, policy)

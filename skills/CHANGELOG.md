@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Read protected merge results through GraphQL instead of the result field
+  removed in REST API `2026-03-10`. Bind result evidence to the exact merged PR,
+  head and target before completion, checkout or publication effects.
+
 - Unify ordinary and Dependabot PRs, including Docker, behind local review,
   safe repairs, fresh head/base review and CI, then explicit operator-dispatched
   protected merge. Remove the dependency metadata producer and rollout toggles;

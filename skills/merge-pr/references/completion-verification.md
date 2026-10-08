@@ -17,7 +17,8 @@ Do not dump complete PR bodies, patches, logs, or credentials into reports.
 
 | Evidence | API and fields |
 | --- | --- |
-| PR and result | `GET /repos/{owner}/{repo}/pulls/{number}`: `merged`, `merged_at`, `state`, `merge_commit_sha`, `head.sha`, `base.repo`, `base.ref` |
+| PR state | `GET /repos/{owner}/{repo}/pulls/{number}`: `merged`, `merged_at`, `state`, `head.sha`, `base.repo`, `base.ref` |
+| Merged result | GraphQL `repository.pullRequest`: `number`, `merged`, `mergedAt`, `headRefOid`, `baseRefName`, `baseRepository.nameWithOwner`, `mergeCommit.oid` |
 | Remote target tip | `GET /repos/{owner}/{repo}/git/ref/heads/{branch}`: `object.sha` |
 | Destination ancestry | `GET /repos/{owner}/{repo}/compare/{result_sha}...{target_tip_sha}`: `status`, `merge_base_commit.sha` |
 | Checks | `GET /repos/{owner}/{repo}/commits/{result_sha}/check-runs?filter=latest&per_page=100`: IDs, app, name, `head_sha`, status, conclusion, suite, links |
@@ -78,16 +79,21 @@ assume that this broker caused an externally observed merge.
 1. Require authoritative `merged: true` and a merge timestamp. If sources
    disagree, refresh within the settlement bound and report unresolved evidence.
    A successful CLI exit, closed PR, or non-null SHA alone is insufficient.
-2. Read `merge_commit_sha` only from the merged PR response:
+2. Query GraphQL `mergeCommit.oid` on the exact repository and PR. Require
+   confirmed `merged` and `mergedAt`, and matching PR number, reviewed head,
+   base repository and base branch. The shared `GitHub.merged_commit` helper
+   owns this read for broker observation, recovery, checkout and completion.
+   REST API `2026-03-10` removed `merge_commit_sha`; do not downgrade the API
+   or add a legacy-field fallback.
 
-   | Method | Result represented by `merge_commit_sha` |
+   | Method | Result represented by `mergeCommit.oid` |
    | --- | --- |
    | Merge | The actual merge commit |
    | Squash | The squashed commit on the base branch |
    | Rebase | The commit the base branch was updated to |
 
-   Before merging, this field may be a test merge commit. Never substitute the
-   original PR head, a queue entry's synthetic commit, or the newest branch tip.
+   Never substitute `potentialMergeCommit`, the original PR head, a queue
+   entry's synthetic commit, or the newest branch tip.
    If missing after settlement, report `merged; destination unverified; CI
    unverified` with the missing identity. Do not issue another merge command.
 3. Reconfirm the observed base repository/ref matches the frozen target. A
@@ -231,7 +237,8 @@ requeue, CI writes, credentials changes, or protection bypass.
 
 ## Official Sources
 
-- [PR result semantics](https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request)
+- [Authoritative merged result](https://docs.github.com/en/graphql/reference/pulls#pullrequest)
+- [REST API version changes](https://docs.github.com/en/rest/about-the-rest-api/breaking-changes)
 - [Remote reference](https://docs.github.com/en/rest/git/refs#get-a-reference)
 - [Commit comparison](https://docs.github.com/en/rest/commits/commits#compare-two-commits)
 - [Queue entry](https://docs.github.com/en/graphql/reference/pulls#mergequeueentry)

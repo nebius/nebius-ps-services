@@ -85,6 +85,11 @@ Bot identity, labels, metadata and green CI never substitute for local review.
 
 ## Completion and recovery
 
+The shared helper reads the authoritative result from GraphQL `mergeCommit.oid`
+and verifies the merged PR number, head and target identity. REST API
+`2026-03-10` removed the old result field. Missing result evidence stops before
+CI or Pages effects; recovery keeps the original immutable intent.
+
 Token-generated pushes do not start ordinary CI or legacy Pages builds. The
 completion workflow dispatches the applicable push-equivalent CI explicitly,
 with a frozen result SHA, stable correlation and pre-effect dispatch journal.

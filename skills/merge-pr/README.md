@@ -66,7 +66,9 @@ Read-only blocker    Remote destination ancestry
   conditions to bypass.
 - This skill does not write Agentic SDLC state; `sdlc-merge-pr` owns that path.
 - The guarded PR head and resulting merge SHA can differ, especially for squash
-  and rebase. Verification uses the resulting SHA supplied by GitHub.
+  and rebase. Verification uses GitHub's GraphQL `mergeCommit.oid`, bound to the
+  merged PR identity. REST `2026-03-10` has no result SHA field; missing result
+  evidence stops completion without dispatching CI or Pages.
 - CI polling uses a 3600-second deadline per invocation and a 30-second interval;
   delayed checks and observed reruns do not reset it. Result settlement is
   bounded to 60 seconds. Local verification is read-only; a separate trusted

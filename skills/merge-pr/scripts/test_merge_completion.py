@@ -61,7 +61,6 @@ class API:
             "merged": True,
             "state": "closed",
             "number": 1,
-            "merge_commit_sha": RESULT,
             "head": {"sha": HEAD, "repo": {"full_name": REPO}},
             "base": {"ref": "main", "repo": {"full_name": REPO}},
         }
@@ -80,6 +79,12 @@ class API:
         self.jobs = [{"name": "verify-pages-1", "conclusion": "success"}]
         self.expired = False
         self.fail_dispatch = False
+        self.result = RESULT
+
+    def merged_commit(self, number, head, base):
+        assert (number, head, base) == (1, HEAD, "main")
+        assert self.pr["merged"]
+        return self.result
 
     @staticmethod
     def run(number, filename, actor):
@@ -187,6 +192,28 @@ class CompletionTests(unittest.TestCase):
                 "correlation_id": self.api.corr,
             }
         }
+
+    def test_missing_authoritative_result_blocks_completion_effects(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100)
+        ]
+        with patch.object(
+            self.api,
+            "merged_commit",
+            side_effect=gate.Blocked("Missing authoritative merged commit"),
+        ):
+            for operation in (
+                lambda: completion.prepare_dispatch(self.api, self.api.intent, POLICY),
+                lambda: completion.verify_or_dispatch(
+                    self.api, self.api.intent, POLICY, True
+                ),
+                lambda: completion.verify_pages(self.api, self.api.intent, True),
+                lambda: completion.targets(self.api, POLICY, {}),
+                lambda: completion.ci_inputs(self.api, POLICY, self.inputs(), "ci.yml"),
+            ):
+                with self.subTest(operation=operation), self.assertRaises(gate.Blocked):
+                    operation()
+        self.assertFalse(self.api.effects)
 
     def journal(self):
         journal = completion.prepare_dispatch(self.api, self.api.intent, POLICY)
@@ -529,7 +556,7 @@ class CompletionTests(unittest.TestCase):
             source = fixture_git("rev-parse", "HEAD")
             fixture_git("clone", "--quiet", str(upstream), str(workspace))
             initial_config = (workspace / ".git/config").read_bytes()
-            self.api.pr["merge_commit_sha"] = result
+            self.api.result = result
             event = self.inputs()
             event["inputs"].update(
                 result_sha=result,

@@ -20,6 +20,11 @@ push-equivalent jobs succeed. Manual-only deployment/integration tasks must not
 run on post-merge dispatch. Include the result SHA in concurrency groups; do not
 cancel result verification when a newer main or manual run starts.
 
+The shared helper resolves the actual result using identity-bound GraphQL
+`mergeCommit.oid`. REST API `2026-03-10` removed the result field; do not add
+an older API fallback or replace the result with the current default tip.
+Missing result evidence stops recovery before dispatch or publication effects.
+
 Customize both workflow-run trigger lists and the complete CI/path policy
 inventory together. Retain at least one unfiltered PR CI workflow. The native
 `Required CI` aggregate runs independently of merge dispatch and review
