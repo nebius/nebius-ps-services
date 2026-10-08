@@ -99,6 +99,9 @@ that commit. Checkout happens before setup or cache restoration, with read-only
 job permissions and process-local fetch credentials. Every required job asserts
 HEAD; the run uploads exact-result evidence. Manual-only integration/deployment
 jobs are excluded. A newer workflow revision is distinct from the tested SHA.
+For example, recovery may run the current validator while testing an earlier
+merged result. Verify the result artifact and checkout identity instead of
+requiring the Actions run's `head_sha` to equal that result.
 
 After CI passes, a separate Pages-write job preserves legacy main/root hosting
 and explicitly requests a build. It verifies a built commit containing the

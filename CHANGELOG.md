@@ -6,6 +6,9 @@ project folder.
 
 ## [Unreleased]
 
+- Clarify the distinction between a completion run's trusted workflow revision
+  and its tested merge result in the CI workflow and deployment documentation.
+
 - Resolve merged results through identity-bound GraphQL evidence after GitHub
   removed the REST result field. Preserve fail-closed recovery, exact-result
   checkout and duplicate suppression for already-authorized merges.
