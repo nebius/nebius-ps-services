@@ -72,7 +72,10 @@ Push branch
 Open or reuse GitHub PR
   |
   v
-Report PR number, URL, and blockers
+Local review-pr -> safe repairs/review -> protected merge-pr Actions broker
+  |
+  v
+Report actual merge and result CI (or explicit prepare-only outcome)
 ```
 
 ## Workflow
@@ -95,7 +98,10 @@ Report PR number, URL, and blockers
 9. Keep repairing available branch-caused check failures when safe, or mark a
    real blocker. If GitHub checks are still pending, report the PR as pending
    instead of ready.
-10. Return PR details, validation state, and remaining blockers.
+10. For ordinary work, run local review-pr and safe canonical repairs until the
+    final head/base passes. Unless `--prepare-only`, delegate to merge-pr and
+    observe actual merge and result CI. Agentic SDLC remains publication-only.
+11. Return PR/review identity, selected completion outcome and any blocker.
 
 ## Core Concepts
 
@@ -136,4 +142,14 @@ refs and dependencies. Recorded sync handles no-op, fast-forward and normal
 merges; multi-branch order checks use one declared scratch ref with exact cleanup.
 Safe no-commit retries preserve the original task authorization and require a
 fresh candidate review. Explicit finish covers completed, cancelled and
-zero-commit tasks. Human GitHub review remains separate from passing checks.
+zero-commit tasks at the selected public completion boundary. Private handoffs
+retain the grant. Local review and protected Actions approval are separate from CI.
+
+## Ordinary completion
+
+Default invocation completes local review-pr, safe repair/revalidation and
+protected Actions merge through merge-pr. Use `--prepare-only` to stop at the reviewed
+PR. Reuse the current feature branch; from default create a feature before the
+canonical whole-repository commit. All agents stay local. Unsafe findings and
+human objections stop. Agentic SDLC remains exact-head publication-only.
+See [the completion contract](references/ordinary-completion.md).

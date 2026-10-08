@@ -37,7 +37,41 @@ unsettled state every five seconds within this window. Do not reset it after a
 successful read. If merged state becomes known, start the per-invocation
 3600-second CI deadline then; result settlement consumes that budget too.
 Budget sleeps and API calls against the absolute deadline. No persistent
-cross-invocation timer or background watcher is introduced.
+cross-invocation local timer is introduced. The deployed completion workflow
+separately reconciles retained intent receipts while the laptop is offline.
+
+## Actions Broker Result Evidence
+
+For a merge carrying a `merge-intent/v1` receipt, use the installed completion
+helper with the trusted deployment policy and original broker run/attempt:
+
+```text
+python3 <merge-pr>/scripts/merge_completion.py verify --repo owner/repository \
+  --policy <trusted-merge-policy.json> --pr 123 --head <reviewed-head> \
+  --run-id <broker-run> --run-attempt <broker-attempt>
+```
+
+This command is read-only. It checks authoritative merge/destination identity,
+trusted intent provenance, applicable explicit result-CI runs and their latest
+attempt artifacts, and configured Pages publication. Resolve numeric operator
+allowlist configuration from the trusted repository before using it. Exit 2 is
+pending; exit 1 is blocked/unverified. Neither permits repeating a merge.
+
+GITHUB_TOKEN merges suppress ordinary push-triggered CI and legacy Pages builds.
+The completion workflow owns explicit dispatch and Pages build requests. Its
+CI runs use a trusted default workflow revision, which can differ from the
+tested result SHA. Require the exact-result artifact, correlation, source
+identity and successful push-equivalent jobs; do not filter these runs out
+because their event is `workflow_dispatch` or their `head_sha` is newer. The
+helper validates the tested checkout independently. A failed latest attempt
+cannot be hidden by an earlier success. A successful Pages build must contain
+the result and still use the configured default/root source.
+
+Expired/missing intent, uncertain effect journals, permission errors and failed
+CI/Pages are explicit reconciliation blockers. The local skill does not rerun
+those effects. For a merge by another actor without a broker receipt, use the
+ordinary result-SHA/provider evidence rules below. Never invent a receipt or
+assume that this broker caused an externally observed merge.
 
 ## Merged Result and Destination
 
@@ -76,6 +110,9 @@ the configured queue method when available, otherwise `queue-configured`.
 
 ## Queue Membership
 
+This section observes queues created by other authorized actors. The built-in
+Actions merge path cannot enqueue; a required queue is a maintainer blocker.
+
 Query the exact PR using GraphQL variables for owner, repository, and number:
 
 ```graphql
@@ -111,7 +148,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
 
 ## Applicable Result-Commit CI
 
-Start with the resulting revision's workflow definitions and available CI
+For non-broker CI, start with the resulting revision's workflow definitions and available CI
 provider/repository configuration. Identify automatic CI applicable to the
 target-branch update, including branch/path filters and configured downstream
 workflows. Read configuration as data. Do not execute workflow code or trigger
@@ -121,7 +158,8 @@ Query checks, statuses, and Actions runs on the exact resulting SHA. For Actions
 require matching `head_sha`, target `head_branch`, and an applicable event/workflow
 identity. Correlate check runs with their app, suite, workflow/run, and attempt;
 check names alone can collide. Exclude unrelated PR, synthetic `merge_group`,
-tag, scheduled, and manual-only runs. Do not reuse green PR checks or checks on
+tag, scheduled, and manual-only runs. The explicitly correlated broker result
+runs above are a separate supported evidence path. Do not reuse green PR checks or checks on
 a newer target tip. If provider/event provenance cannot be established, keep
 that portion unverified instead of guessing from a name or timestamp.
 

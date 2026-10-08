@@ -1,5 +1,7 @@
 name: nebius-cxcli-nsight
 
+run-name: ${{ inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+
 on:
   pull_request:
     paths:
@@ -17,13 +19,34 @@ on:
       - "services/nebius-cxcli/tests/test_nsight*.py"
       - ".github/workflows/nebius-cxcli-nsight.yml"
   workflow_dispatch:
+    inputs:
+      result_sha:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      merge_pr:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      broker_run_attempt:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
+      correlation_id:
+        description: Post-merge identity (all fields required together)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: nebius-cxcli-nsight-${{ github.ref }}
-  cancel-in-progress: true
+  group: nebius-cxcli-nsight-${{ inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.result_sha == '' }}
 
 defaults:
   run:
@@ -31,7 +54,39 @@ defaults:
     working-directory: services/nebius-cxcli
 
 jobs:
+  merge-inputs:
+    name: Validate CI checkout identity
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      post_merge: ${{ steps.identity.outputs.post_merge }}
+      checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
+    steps:
+      - if: inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
+        run: |
+          if [ "$POST_MERGE_INPUTS" = true ]; then
+            python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow nebius-cxcli-nsight.yml
+          else
+            printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
   native-packages:
+    needs: [merge-inputs]
     name: Nsight Ubuntu ${{ matrix.ubuntu }} native ${{ matrix.host.arch }}
     runs-on: ${{ matrix.host.runner }}
     timeout-minutes: 40
@@ -42,8 +97,29 @@ jobs:
         host:
           - {arch: amd64, runner: ubuntu-24.04}
           - {arch: arm64, runner: ubuntu-24.04-arm}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -66,10 +142,32 @@ jobs:
           if-no-files-found: error
 
   official-chart:
+    needs: [merge-inputs]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -83,3 +181,34 @@ jobs:
           command -v kubectl
           uv sync --locked
           uv run --locked --no-sync python scripts/verify_nsight_chart.py
+
+  result-evidence:
+    name: Post-merge result evidence
+    needs: [merge-inputs, native-packages, official-chart]
+    if: always() && needs.merge-inputs.outputs.post_merge == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify job settlement and record result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+          CI_EXPECTED_JOBS: '["native-packages", "official-chart"]'
+        run: python3 skills/merge-pr/scripts/merge_completion.py ci-evidence --workflow nebius-cxcli-nsight.yml --output "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: result-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/result.json
+          retention-days: 30
+          if-no-files-found: error

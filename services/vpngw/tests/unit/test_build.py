@@ -121,12 +121,18 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
 
     lint_runs = [step.get("run") for step in workflow["jobs"]["lint"]["steps"] if step.get("run")]
     assert lint_runs.count("python -m mypy") == 1
-    assert workflow["jobs"]["unit-tests"]["needs"] == "lint"
+    assert set(workflow["jobs"]["unit-tests"]["needs"]) == {"merge-inputs", "lint"}
 
     build_job = workflow["jobs"]["build"]
     packaging_job = workflow["jobs"]["packaging"]
-    assert build_job["if"] == "github.event_name != 'workflow_dispatch'"
-    assert packaging_job["if"] == "github.event_name == 'workflow_dispatch'"
+    assert build_job["if"] == (
+        "(github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true'"
+    )
+    manual_only = (
+        "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
+    )
+    for name in ("packaging", "integration-tests", "coverage"):
+        assert workflow["jobs"][name]["if"] == manual_only
     for job in (build_job, packaging_job):
         build_runs = [
             step["run"]

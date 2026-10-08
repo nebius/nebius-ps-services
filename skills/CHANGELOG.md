@@ -4,6 +4,25 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Revalidate merge receipts at each CI checkout boundary with read-only job
+  permissions and process-local fetch credentials. Reject write requests through
+  completion verification and return pending status consistently.
+
+- Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
+  direct merge and recoverable explicit result-CI/Pages publication. Add
+  disabled/canary/enabled rollout; stop for unsupported queues or workflow-file
+  permissions. Remove custom-App setup without changing Agentic SDLC.
+
+### Protected ordinary merge
+
+- Route ordinary create-pr and complete release/chart/image publication through
+  local review-pr, safe canonical repair commits and a shared GitHub Actions merge
+  owner. Add explicit create-pr preparation-only mode; exclude Agentic SDLC.
+- Add authenticated exact-head/base review evidence, deterministic protected
+  broker and Dependabot admission templates, with no PAT or bypass fallback.
+- Make Helm/image preparation content-only and tag/push primitives bind the exact
+  verified merge result and annotated tag object; align generated templates.
+
 ### Publish release continuation
 
 - Made `publish-release` default to complete publication with waiting, including

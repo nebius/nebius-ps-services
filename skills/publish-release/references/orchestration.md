@@ -36,11 +36,14 @@ python3 <skill>/scripts/release_session.py open --project-dir <project> \
    dirty work. Direct shell prep requires an already-selected non-default branch.
 2. Complete create-pr's review, hygiene/tests, canonical complete-tree commit,
    owner-controlled base synchronization, push and PR creation/reuse. This
-   delegated release task covers its necessary validated repairs. Close the PR
-   continuation grant when that owner is complete; human review is separate.
+   delegated release task covers its necessary validated repairs. Use create-pr's
+   private preparation handoff; keep the grant open across local review-pr
+   safe repairs. Revalidate and re-review until the final head passes.
 3. Bind the final pushed head: `release_session.py bind-pr --project-dir <project>
    --tag <tag> --pr <number>`. This verifies local branch, remote PR head, same
-   repository and base. Never freeze an earlier head before create-pr repairs.
+   repository and base. Never freeze an earlier head before local review-pr and create-pr repairs.
+   Head drift after binding blocks until explicitly reconciled; do not silently
+   rewrite an immutable release checkpoint.
 
 Do not append a raw changelog commit after a separate commit-push task. The shell
 helper intentionally no longer offers commit/push preparation or `--no-push`.
@@ -48,17 +51,15 @@ Normal partial prep mode also uses these owners and stops at the prepared PR.
 
 ## Approval and merge
 
-Use `release_session.py wait --project-dir <project> --tag <tag> --phase pr`.
-The helper emits approval links and minute progress while polling every 15 seconds.
-Run it with a yielding tool session so progress remains visible. Alternatively
-call `observe` repeatedly, respecting returned `poll_seconds`; an observation
-persists the same deadlines. Never use `resume` inside a polling loop.
+Invoke merge-pr with the exact local review attestation before waiting for PR
+approval. The built-in Actions identity supplies routine approval through the protected broker; there
+is no human-approval wait ahead of dispatch. Missing setup, unsafe findings and
+unresolved human objections stop. The local agent remains the review/fix owner.
 
-A ready PR observation is a handoff to merge-pr, not a replacement for its required
-checks/review/mergeability queries. Use the guarded merge and preserve queue rules.
-For confirmed queue admission, observe `--phase merge` until the PR actually merges;
-do not re-enqueue. A removed queue entry or declined merge must be reported through
-merge-pr rather than blindly waiting or attempting another merge.
+Use the completion reference to observe actual merge and the explicit result
+CI/Pages evidence. Required merge queues and token-denied workflow-file merges
+stop for a maintainer; never enqueue or change credentials as a fallback. `release_session.py observe --phase pr` remains
+a read-only readiness view, not the ordinary flow's pre-dispatch approval gate.
 
 Observe the merge with `--phase merge` to freeze its resulting SHA. Have merge-pr
 verify that result's destination and applicable CI. Squash/rebase results can differ

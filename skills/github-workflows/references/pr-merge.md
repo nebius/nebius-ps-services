@@ -33,10 +33,12 @@ Use merge automation narrowly.
 - Prefer auto-merging GitHub Actions ecosystem PRs only when every changed file is under `.github/workflows/` or automation-only action metadata.
 - GitHub Actions major bumps can be auto-merged when the file scope is limited to workflow automation and the repository accepts bot approvals for branch protection.
 - Keep write permissions limited to workflows that approve, label, comment, or merge.
-- If the repository uses queued or squash merges by default, the automation should request that exact merge mode.
+- Route approval/merge through the protected merge templates and merge-pr owner.
+- The built-in token cannot enqueue queues; report a maintainer blocker.
+- Explicitly dispatch exact-result CI and configured Pages builds after token merges; push events are suppressed.
 
 ## Repo examples
 
 - `.github/workflows/nebius-cxcli-ci.yml`: compact PR + main merge CI with build verification.
 - `.github/workflows/vpngw-ci.yml`: split lint/unit/manual integration pipeline.
-- `.github/workflows/dependabot-auto-merge.yml`: safe bot-scoped approval and auto-merge.
+- `.github/workflows/dependabot-auto-merge.yml`: secretless bot metadata admission for the shared broker.

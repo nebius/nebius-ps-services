@@ -106,10 +106,10 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated repairs across frozen targets with recorded synchronization and explicit task closure; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
-| `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify queue membership or resulting-commit ancestry and post-merge CI. |
+| `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify result ancestry, explicit result CI and configured Pages publication. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
-| `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, push/merge its PR, wait for approvals, tag and verify assets. |
+| `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -1336,7 +1336,8 @@ test checks finish, validate the staged diff, merge `origin/<base>` into the PR
 branch before PR creation without rewriting history, reuse the current
 non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
-report readiness plus manual merge order.
+run local review-pr and safe repairs, then delegate protected Actions merge to
+merge-pr by default. `--prepare-only` stops at the reviewed PR.
 When a matching active Agentic SDLC run exists, that generic preparation path
 is disabled: `create-pr` requires passing UAT and publishes only the clean exact
 promoted SHA. A conflict, failed check, remote-head mismatch, or required
@@ -1384,16 +1385,17 @@ refs, rebases, or cherry-picks.
 `merge-pr` verifies and merges a GitHub pull request outside the Agentic SDLC
 workflow. It checks PR metadata, checks, review state, mergeability, base
 branch, and the exact head SHA, waits for pending checks when useful, then
-merges with `gh pr merge --match-head-commit` using `squash` by default, or the
-no-strategy merge-queue path when the base branch requires one. It does not use
-admin bypass, force-push, delete branches by default, or merge when branch
-protection, required reviews, environment approvals, conflicts, or failing
-checks still block the PR.
+requires local review-pr attestation for that exact head/base, and dispatches the
+trusted default-branch Actions broker. The built-in token approves and requests
+an exact-head protected async merge; required queues stop for a maintainer. No PAT,
+direct CLI merge or bypass fallback is used. Unsafe findings, human objections,
+missing permissions and failing CI remain blockers.
 
 Completion records the method-specific resulting commit, proves ancestry in the
 remote target, and observes applicable exact-commit CI for up to one hour. A
-verified queue entry returns queued with branch cleanup deferred. Merge success,
-destination proof, and CI outcome remain separate; see the
+separate completion workflow dispatches exact-result CI and configured Pages
+builds with durable receipts. Merge success, destination proof, CI and Pages
+outcomes remain separate; see the
 [skill README](merge-pr/README.md) for result and evaluation details.
 
 ### `update-branch`
@@ -2052,3 +2054,14 @@ fresh-model trigger runs, and baseline quality comparisons are distinct checks.
 The [align-skill evaluation guide](align-skill/references/evaluation-guide.md)
 documents the native runner and reports unavailable credentials or traces as
 `UNAVAILABLE`, never a runtime pass.
+
+## Ordinary PR and publication completion
+
+`create-pr` defaults to local review, safe fixes and protected GitHub Actions merge;
+`--prepare-only` stops at the reviewed PR. `merge-pr` is the only ordinary merge
+owner used by create-pr and all three publish skills. Review agents run locally;
+Actions performs deterministic checks and protected Actions effects. Unsafe findings
+and unresolved human objections stop. Agentic SDLC is excluded.
+See [Actions protocol](merge-pr/references/actions-protocol.md) and
+[repository setup](../.github/merge-automation.md). Helm/image prep is content-only;
+canonical whole-repository commits are followed by tagging the exact merge result.

@@ -7495,8 +7495,10 @@ and bounded wait deadlines. It never commits, merges, approves or creates grants
 
 Bare invocation means complete and wait. --resume selects one project checkpoint;
 a tag disambiguates multiple releases. Explicit partial modes remain scoped.
-Human approval waits use 600 seconds, 15-second polling and minute progress;
-checks, queues and release workflow waits use separate 3600-second budgets.
+Local review-pr and safe repairs precede Actions approval through merge-pr. Only
+additional human/environment approval waits use 600 seconds, 15-second polling
+and minute progress;
+checks, merge settlement and release workflow waits use separate 3600-second budgets.
 A deliberate resume opens a fresh waiting attempt, with all identities rechecked.
 
 Pin the verified method-specific merge result; prove remote-default ancestry.
@@ -7516,8 +7518,8 @@ interprets repository inputs and prepares release notes. No new AI subsystem.
 #### Alternatives Considered
 
 Manual handoffs retain friction. Feature-head tagging breaks the selected default
-branch policy. A new GitHub App/background service adds authority and operational
-scope unnecessarily. Latest-default tagging risks including unrelated later work.
+branch policy. A background agent service is unnecessary; the ordinary shared Actions broker
+introduced by FEAT-042 now supplies protected approval and merge. Latest-default tagging risks including unrelated later work.
 
 #### Implementation Boundaries
 
@@ -7585,5 +7587,71 @@ publication remain unverified and require separate target evidence.
 
 <!-- /FEATURE: FEAT-041 -->
 
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-042: Reviewed ordinary PR and publication completion
+
+#### Requirements Covered
+
+- REQ-043: Reviewed ordinary PR and publication completion.
+
+#### Context Evidence
+
+Existing create-pr ends before merge; review-pr permits independent branch mutation; Helm/image helpers commit selected paths and require clean default entry. Existing Dependabot automation uses a personal-token fallback.
+
+#### Design Details
+
+Ordinary skills and deterministic Dependabot automation use the repository GITHUB_TOKEN for protected approval and merge. Local agent review and safe repair remain mandatory for ordinary skills. Agentic SDLC is excluded. Custom Apps and PAT fallback are not supported.
+
+Keep the canonical whole-repository transaction and exact-head/base review evidence. Use a trusted-default metadata-only Required CI aggregate for all PRs, including human/fork review paths. Ordinary broker admission additionally requires a local review attestation; Dependabot uses verified secretless metadata. Separate per-job status, approval/merge, dispatch and Pages permissions. Upload an immutable admission receipt before effects. Use guarded asynchronous direct merge with no bypass; queues and rejected workflow-file merges stop for a maintainer. Shared github-actions identity is not exclusive to this broker.
+
+Completion reacts to broker/CI completion and schedule, validates receipt provenance and authoritative merge state, dispatches applicable CI on trusted default with a frozen result SHA, and verifies exact checkout evidence. Each execution job first loads the validator from github.sha, then independently revalidates the receipt and authoritative merged result before checkout and before setup or cache restoration. Jobs use Contents, Pull requests and Actions read permissions; fetch credentials exist only in the Git process environment. Job outputs and raw dispatch refs are not checkout authority. Correlate and reconcile ambiguous submissions. Retain legacy Pages publication and request a build explicitly; a successful build must contain the result. Publishers keep local exact-result tag ownership. Activation defaults disabled, with restricted canaries before full enablement. Preserve existing secrets and dependency update scope. Include the user's existing CODEOWNERS edit in the bootstrap PR.
+
+#### Selected Option
+
+Python, Bash, gh and deterministic GitHub Actions using GITHUB_TOKEN. Agentic review/repair remains local; no hosted model runtime or new cloud services.
+
+#### Alternatives Considered
+
+Custom App installation is unavailable. PAT fallback is rejected. Keeping the existing actor restriction requires a maintainer for every merge; the selected policy permits PR-gated Actions merges with explicit unsupported-case handoff.
+
+#### Implementation Boundaries
+
+Selected ordinary skills, direct commit-owner contracts, reusable workflow assets, root merge/Dependabot workflows, documentation and tests. Preserve SDLC and optional existing project helper copies.
+
+#### Test-First Success Criteria
+
+- TDD-001: Unsafe, stale or forged admission never approves or merges.
+- TDD-002: Authorized safe repairs re-review the new head before merge.
+- TDD-003: Publication tags the verified result even when default advances.
+
+#### Validation Plan
+
+Run focused deterministic regressions, lint/syntax, host skill structure, specification validation and changed-scope align.
+
+#### Test Plan
+
+Cover both admission lanes, missing checks, API errors, requested changes, provenance, concurrency, merge queue and exact-result publication.
+
+#### Evaluation Plan
+
+Update trigger and quality cases; report unavailable native evaluation rather than inferring runtime from metadata.
+
+#### Rollout And Rollback
+
+Bootstrap under current protection with one maintainer review. Keep effects disabled, establish Required CI, apply the reviewed PR-gated policy, then run ordinary, Dependabot and workflow-file canaries. Enable only after declared outcomes pass. Disable new effects and restore captured protection on rollback; continue verifying completed merges and never undo public releases automatically.
+
+#### Done Definition
+
+Code, instructions, templates and tests agree; independent review passes. Report local implementation separately from Actions policy setup, bootstrap approval and live merge proof.
+
+#### Implementation Evidence
+
+Implemented per-job Actions authority, CI-only aggregate, uploaded intent before effects, exact-result CI inputs/checkout receipts, deterministic completion and Pages journals, and disabled/canary/enabled controls. Ordinary skill owners, templates, documentation and publication primitives agree. Agentic SDLC and Dependabot scheduling remain unchanged. Bootstrap and live activation are pending.
+
+#### Verification Evidence
+
+Passed 179 focused tests: 65 merge/recovery, 10 disposable publication, 60 canonical transaction, 5 commit contract and 39 release tests. Also passed workflow actionlint, Python lint/format, shell syntax/ShellCheck, portable/Codex/Claude structure and stateful profiles, and eight-skill npx copy/repeat/isolation checks. Code/security review findings for fork association, rerun invalidation, result concurrency and recovery provenance were fixed with regression coverage. CI repair validation also passed all six vpngw build-contract tests, negative checkout-admission cases and a real disposable Git checkout that preserves tags and leaves Git configuration unchanged. Fresh PR CI and CodeQL verification remain pending. Native trigger/quality runners remain authentication-unavailable; no runtime or live merge claim. Maintainer bootstrap, protection activation and controlled live canaries remain pending.
+
+<!-- /FEATURE: FEAT-042 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -1,6 +1,6 @@
 ---
 name: publish-release
-description: "Use only when explicitly asked to publish a GitHub Release: commit current work, push and merge its PR, wait for approvals, tag, verify assets, and resume interruptions. Also supports setup-only guidance."
+description: "Use only when explicitly asked to publish a GitHub Release: commit current work, push and merge its PR, locally review/fix, use protected Actions merge, tag, verify assets, and resume interruptions. Also supports setup-only guidance."
 disable-model-invocation: true
 ---
 
@@ -55,8 +55,8 @@ implicit trigger. Use the image or Helm publication owners for those artifacts.
 - `--project-dir <path>`: selected project, default current directory.
 - `--main-branch <branch>`: expected default branch; verify against live origin.
 - `--tag-prefix <prefix>`: derive only from unambiguous project/workflow metadata.
-- `--merge-method squash|merge|rebase`: default squash; required queues select
-  their configured method through `merge-pr`.
+- `--merge-method squash|merge|rebase`: default squash; a required merge queue
+  stops for a maintainer because the built-in token cannot enqueue.
 - `--wait|--no-wait`: default wait. No-wait checkpoints pending work and reports
   pending, never published without final verification.
 - `--project-name`, `--package-import-name`, `--asset-glob`, `--python-version`:
@@ -120,9 +120,10 @@ setup. Complete follows every step below.
 4. Use the serialized content-only preparation helper, then create-pr's review,
    validation, complete-tree commit, base synchronization, push and PR reuse.
    An initially dirty worktree is normal. Preparation itself never commits.
-5. Bind the exact pushed PR/head to the checkpoint. Wait for checks and human
-   approvals. Continue through merge-pr when ready; refresh its required gates
-   and guard the exact head. A queued PR is pending, never a completed merge.
+5. Run local review-pr and safe repairs through create-pr's private preparation
+   handoff. Bind the final reviewed pushed PR/head to the checkpoint, then invoke
+   merge-pr for Actions approval and guarded merge. Do not wait for human approval
+   before dispatching the Actions broker. Refresh all gates for the exact head. A queued PR is pending, never a completed merge.
 6. Observe actual merge, freeze its method-specific resulting SHA, and require
    merge-pr's remote-default ancestry and exact-result CI verification. Failed,
    pending or unverified applicable CI blocks tagging. No configured CI is
@@ -142,13 +143,15 @@ setup. Complete follows every step below.
 
 ## Waiting And Resume
 
-Show `Waiting for approval on GitHub: <link>` immediately when approval is needed.
+Routine PR approval is supplied by Actions after local review. Show
+`Waiting for approval on GitHub: <link>` only for an actual additional protection
+or release-environment approval that the built-in token cannot satisfy.
 Explain that an eligible reviewer must approve and that continuation is automatic.
 Poll every 15 seconds, update progress at least once per minute, and wait at most
 600 seconds for a PR approval or a release run's environment approvals. Partial
 approval or reordered API responses never restart that deadline.
 
-Checks, merge queue and release execution each have independent 3600-second
+Checks, merge settlement and release execution each have independent 3600-second
 phase budgets. Failed checks, rejected reviews, closed PRs, conflicts and identity
 drift are blockers; do not mislabel them as pending approval.
 

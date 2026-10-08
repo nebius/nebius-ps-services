@@ -3419,8 +3419,10 @@ and receive a verified GitHub Release URL.
   staging, commits, synchronization and PR publication to create-pr's canonical
   transaction. Reuse feature branches; create a release branch from default.
 - AC-002: Use an explicit or unambiguous prepared version; otherwise ask once.
-- AC-003: Show the GitHub approval link, poll every 15 seconds with progress at
-  least once per minute, and wait up to 600 seconds for each human approval gate.
+- AC-003: Local review-pr and safe canonical repairs precede merge-pr App
+  approval. Do not wait for routine human PR approval before App dispatch. For
+  additional human or publication-environment gates, show the approval link,
+  poll every 15 seconds and wait up to 600 seconds with minute progress.
   Timeout preserves resumable progress. Checks, queue and workflow waits have
   separate 3600-second limits. Approval never bypasses other readiness checks.
 - AC-004: Resume reconciles repository, PR, merged result, tag and workflow
@@ -3455,5 +3457,42 @@ routing and unchanged repository gates. Live publication requires its own target
 
 <!-- /REQUIREMENT: REQ-042 -->
 
+<!-- REQUIREMENT: REQ-043 status=active priority=P1 type=feature -->
+### REQ-043: Reviewed ordinary PR and publication completion
+
+#### User Story
+
+Ordinary create-pr completes through local review-pr, safe validated repairs and merge-pr. Preserve prepare-only and publication partial modes. Route Helm, image and GitHub Release preparation through canonical repository-wide commits and tag only the verified merged result. Agentic SDLC is excluded.
+
+#### Acceptance Criteria
+
+- AC-001: All ordinary merge effects use the merge-pr deterministic helper and an Actions approval tied to the exact admitted head.
+- AC-002: Local review attestations and Dependabot provenance are distinct admission policies; stale evidence, missing expected CI and human objections block merging.
+- AC-003: Use least-privilege per-job GITHUB_TOKEN permissions; no agent, PR code, PAT fallback or bypass runs in the privileged workflow.
+- AC-004: Same-feature reuse, default-to-feature preparation, canonical whole-repository commits and post-merge destination/CI verification are preserved.
+- AC-005: Publishing consumes the actual merge result and cannot tag failed or unverified applicable CI.
+
+- AC-006: PR-gated protection replaces the empty push-actor restriction; one approval, stale dismissal, conversations and strict required CI remain. Shared Actions identity is an explicit trust boundary.
+- AC-007: Unsupported queue or workflow-file merges stop for a maintainer without credential substitution.
+- AC-008: A trusted receipt precedes merge effects; interrupted completion reconciles exact-result CI and a Pages build containing the result.
+
+#### Negative Criteria
+
+- NC-001: Do not change Agentic SDLC, dependency schedules/ecosystem scope, unrelated user work or existing credentials by revocation.
+- NC-002: No direct default-branch pushes, force-pushes, protection bypass, stale approval, duplicate effects or agent runner in GitHub.
+
+#### Validation Method
+
+Run scoped Python, shell, workflow, skill and specification checks plus independent code/security review.
+
+#### Test Method
+
+Use disposable repositories and mocked GitHub APIs for identity, admission, CI, retries, queue/head races, canonical preparation and exact-result tags.
+
+#### Evaluation Method
+
+Separate static, installed, native and live evidence. Live rollout uses a bootstrap maintainer review followed by ordinary and Dependabot PR trials.
+
+<!-- /REQUIREMENT: REQ-043 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

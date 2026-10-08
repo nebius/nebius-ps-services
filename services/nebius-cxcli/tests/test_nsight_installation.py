@@ -15,6 +15,25 @@ from nebius_cxcli import nsight_installation_files as files
 from nebius_cxcli.deployment_state import digest
 
 
+def preserved_file_state(path):
+    # Reading content can advance atime, including during the snapshot itself.
+    # Keep the inode, ownership, links, permissions, content and write timestamps.
+    # Use stat directly to retain nanoseconds outside the root-owner lstat fixture.
+    info = path.stat(follow_symlinks=False)
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_nlink,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+        path.read_bytes(),
+    )
+
+
 def test_composed_repair_job_only_verifies_after_restoring_omissions(tmp_path, monkeypatch):
     from nebius_cxcli import nsight_profiling as profiling
 
@@ -108,10 +127,10 @@ def test_missing_file_publication_and_replay_preserve_exact_content_and_inode(ow
     checksum = hashlib.sha256(content).hexdigest()
     assert files.regular_state(owned, checksum, 0o755)["path"] == str(owned)
     files.create_file(owned, io.BytesIO(content), 0o755, checksum)
-    before = owned.stat()
+    before = preserved_file_state(owned)
     assert files.regular_state(owned, checksum, 0o755) is None
     files.create_file(owned, io.BytesIO(content), 0o755, checksum)
-    assert owned.stat() == before
+    assert preserved_file_state(owned) == before
 
 
 @pytest.mark.parametrize("kind", ["changed", "symlink", "hardlink", "mode"])
@@ -126,12 +145,12 @@ def test_conflicting_file_is_never_overwritten(owned, kind):
         os.link(owned, owned.with_suffix(".link"))
     elif kind == "mode":
         owned.chmod(0o666)
-    before = owned.lstat(), owned.read_bytes()
+    before = preserved_file_state(owned)
     with pytest.raises(RuntimeError, match="changed or foreign"):
         files.create_file(
             owned, io.BytesIO(b"expected"), 0o644, hashlib.sha256(b"expected").hexdigest()
         )
-    assert (owned.lstat(), owned.read_bytes()) == before
+    assert preserved_file_state(owned) == before
 
 
 def test_interrupted_file_publication_retries_without_partial_target(owned, monkeypatch):
@@ -158,9 +177,9 @@ def test_restore_frozen_profile_omissions_allows_partial_replay_and_rejects_new_
     ]
     request = {"omissions": rows, "admission": {"artifacts": []}, "verification": {"binaries": {}}}
     files.restore(package, activation, request, rows[:1])
-    before = owned.stat()
+    before = preserved_file_state(owned)
     files.restore(package, activation, request, rows[1:])
-    assert owned.stat() == before and hook.read_text() == "hook\n"
+    assert preserved_file_state(owned) == before and hook.read_text() == "hook\n"
     with pytest.raises(RuntimeError, match="preimage changed"):
         files.restore(package, activation, request, [{**rows[0], "sha256": "different"}])
 

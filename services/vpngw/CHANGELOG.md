@@ -14,6 +14,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Align CI regression assertions with validated post-merge dispatch, retaining
+  the lint dependency and one wheel build per ordinary or manual execution lane.
+
 ## [nebius-vpngw-v0.6.2] - 2026-10-08
 
 - Report VM-HA package-preparation failures with the failed member and a safe

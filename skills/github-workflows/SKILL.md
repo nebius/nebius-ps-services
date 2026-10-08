@@ -73,7 +73,7 @@ files. Return candidate path, mode, provenance, and validation requirements.
 
 3. Start from the closest asset template.
    - `assets/project-name-ci.yml.template`
-   - `assets/project-name-dependabot-auto-merge.yml.template`
+   - `assets/protected-merge/README.md`
    - `assets/project-name-release-publish.yml.template`
    - `assets/project-name-image-publish.yml.template`
 
@@ -89,6 +89,14 @@ files. Return candidate path, mode, provenance, and validation requirements.
    - YAML parse the workflow.
    - If a paired script/template exists, run `bash -n`.
    - Run the same lint/test/build path the workflow expects when the target service can be validated locally.
+
+## Protected Ordinary Merge
+
+For ordinary skill or Dependabot merge automation, use
+[protected merge setup](assets/protected-merge/README.md) and the Actions protocol reference from the installed merge-pr skill. All ordinary skills route
+merge to merge-pr. Agentic SDLC is excluded. Install deterministic trusted-default
+workflows only; no agent runtime, PR checkout or PAT fallback in privileged jobs.
+Keep the CI workflow inventory, templates and installed helper aligned.
 
 ## Learning Loop
 
@@ -115,7 +123,7 @@ URLs, customer data, raw logs, or one-off local state.
 
 - Assets:
   - `assets/project-name-ci.yml.template`
-  - `assets/project-name-dependabot-auto-merge.yml.template`
+  - `assets/protected-merge/README.md`
   - `assets/project-name-release-publish.yml.template`
   - `assets/project-name-image-publish.yml.template`
 - References:

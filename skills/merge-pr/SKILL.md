@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: "Use only when explicitly asked to merge a ready GitHub PR outside Agentic SDLC after verifying checks, reviews, mergeability, branch state, and head SHA; never use admin bypass."
+description: "Use only when explicitly asked to complete an ordinary GitHub PR via local review-pr and a protected GitHub Actions merge; verifies exact head, checks and result. Agentic SDLC is excluded."
 disable-model-invocation: true
 ---
 
@@ -33,7 +33,7 @@ never permission to bypass a guard or claim unobserved behavior.
 
 Merge a GitHub pull request only after explicit merge intent and final
 readiness verification. Report the merge outcome, remote destination proof, and
-result-commit CI separately, or return after proving current queue membership.
+result-commit CI and configured Pages publication separately.
 
 ## Use This Skill For
 
@@ -41,14 +41,14 @@ result-commit CI separately, or return after proving current queue membership.
 - Completing a release-prep flow after `create-pr` opens or reuses a PR.
 - Verifying checks, review state, mergeability, base branch, and head SHA
   immediately before merge.
-- Merging with a selected non-admin method: `squash`, `merge`, or `rebase`, or
-  the no-strategy path required by GitHub merge queues.
+- Merging with a selected protected method: `squash`, `merge`, or `rebase`.
+  Merge queues are unsupported by this built-in-token path.
 
 ## Inputs Accepted
 
 - PR number, PR URL, or current branch PR.
-- Optional `--merge-method squash|merge|rebase`; default `squash` when the base
-  branch does not require a merge queue.
+- Optional `--merge-method squash|merge|rebase`; default `squash`.
+  A required merge queue stops for a maintainer.
 - Optional `--delete-branch`; default is to keep the branch unless the user or
   calling skill explicitly asks to delete it.
 
@@ -59,53 +59,41 @@ Public usage: `$merge-pr [<PR-number|PR-URL|current-branch>]`
 ## Required Reads
 
 For workflow execution, read [completion verification](references/completion-verification.md)
-before the merge attempt. It owns the GitHub queries, evidence rules, bounded
+before the merge attempt. Also read [Actions protocol](references/actions-protocol.md)
+for local review evidence, trusted dispatch and setup prerequisites. It owns the GitHub queries, evidence rules, bounded
 polling, CI conclusions, and branch cleanup. Help requests stop before this read.
 
 ## Workflow
 
-1. Confirm the user or calling skill explicitly requested the merge.
-2. Resolve the PR with `gh pr view` and API reads. Freeze its host, base
-   repository, target branch, number, and URL; collect:
-   - title, head branch, head repository, `state`, `mergedAt`
-   - `isDraft`, `mergeable`, `mergeStateStatus`, `reviewDecision`
-   - `headRefOid`, `statusCheckRollup`
-   Use this exact host/repository/PR for every subsequent query and command.
-3. If already merged, skip mutation and verify that merge. Otherwise stop when
-   draft, closed, conflicted, missing required checks/reviews, or unmergeable.
-4. Run `gh pr checks <pr-url> --watch --fail-fast` when checks are still pending.
-   If checks finish failing, report the failing checks and do not merge.
-5. Refresh all readiness evidence after checks finish. Stop if the base target
-   changed; if the head changed, repeat readiness checks for that head before
-   freezing `headRefOid` as the merge guard. Never reuse stale review evidence.
-6. If the base branch requires a merge queue, do not pass a merge strategy.
-   After checks/reviews are ready, run
-   `gh pr merge <pr-url> --match-head-commit <sha>`. An existing verified queue
-   entry needs no repeated enqueue attempt.
-7. Otherwise, merge with one explicit method and
-   `--match-head-commit <headRefOid>`:
-   - `squash`: `gh pr merge <pr-url> --squash --match-head-commit <sha>`
-   - `merge`: `gh pr merge <pr-url> --merge --match-head-commit <sha>`
-   - `rebase`: `gh pr merge <pr-url> --rebase --match-head-commit <sha>`
-8. Never pass `--admin` or attach branch deletion to the initial command.
-   After a command error or ambiguous response, read authoritative state before
-   reporting; do not blindly repeat a merge or enqueue operation.
-9. Follow the reference to distinguish merged, currently queued, removed from
-   queue, closed unmerged, and unverified outcomes. Read-retry unsettled evidence
-   for at most 60 seconds. An open PR or auto-merge request never proves queued.
-   Refresh a queue entry immediately before reporting; return when confirmed.
-10. For a merged PR, obtain the method-specific resulting SHA and prove it is
-    in the remote target's history. Accept an advanced target; do not require
-    tip equality or original PR-head ancestry. Preserve known merge success
-    when destination evidence is failed or unverified.
-11. Observe applicable CI on that exact result for up to 3600 seconds from the
-    first confirmed merged observation in this invocation, polling every 30
-    seconds. Settlement and read retries consume this same budget. Stop on a
-    conclusive result; CI reruns never reset the deadline. Report CI separately
-    as passed, failed, pending, not configured, or unverified; while queued,
-    destination and post-merge CI are not applicable.
-12. Perform explicitly requested branch cleanup only after actual merge and
-    destination verification. While queued, defer it and report that fact.
+1. Confirm explicit merge intent or delegated ordinary create-pr/complete
+   publication intent. Exclude active Agentic SDLC and propagate prepare-only,
+   help and report-only restrictions. Freeze host/repository/default/PR identity.
+2. If already merged, skip effects and verify that exact operation's result.
+   Otherwise require same-repository, non-draft, live-default target. Invoke
+   local review-pr when the current head/base lacks a passing attestation.
+   Delegate safe repairs to create-pr's private preparation handoff; do not
+   mutate branch history here. Unsafe findings and human objections stop.
+3. Wait for applicable current-head CI, synchronize/review again when default
+   advances, and freeze the exact head/base and COMMENT review ID. CI alone is
+   insufficient. The broker authorizes configured numeric operator IDs only.
+4. Follow the Actions protocol to dispatch the trusted default-branch broker.
+   A read-only job independently admits the exact review/base/CI and uploads its
+   intent before effects. The write job validates that receipt, approves as
+   github-actions, rechecks and requests direct protected async merge with
+   `bypass_rules: false`. Required queues stop before approval. Unsupported
+   workflow-file permissions stop for a maintainer; no App/PAT/bypass fallback.
+5. Dispatch/HTTP acceptance is pending, not merged. Reconcile authoritative PR
+   state after errors before any retry. Wait at most 3600 seconds with 30-second
+   polls; retain the caller grant on timeout and return the exact resume identity.
+   Externally queued PRs may be observed read-only, never enqueued by this skill.
+6. After actual merge, preserve known success even if later verification fails.
+   Use the trusted completion helper to verify exact-result CI artifacts and
+   configured Pages publication. The completion workflow owns explicit dispatch
+   and Pages effects; local observation is read-only. Observe for at most 3600
+   seconds from first confirmed merge. Do not substitute the workflow revision,
+   a green feature head or a newer main tip for the tested result SHA.
+7. Delete branches only when explicitly requested and actual merge/destination
+   verification passed. Otherwise retain them. Return exact evidence/blocker.
 
 ## Guardrails
 
@@ -113,15 +101,12 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
   state or SDLC authorization files.
 - Do not merge without explicit merge intent from the user or a calling skill
   that already has explicit publish/complete authorization.
-- Do not use `--auto` as the default. For merge queues, prefer the no-strategy
-  `gh pr merge <pr> --match-head-commit <sha>` path after checks are ready.
-  Report a blocker only when GitHub still requires delayed auto-merge or human
-  approval that the user did not explicitly authorize.
+- Never fall back to direct CLI merge, PATs, bypasses or delayed auto-merge.
 - Do not merge with failing, cancelled, timed-out, missing-required, or
   unknown required checks.
 - Do not dismiss or ignore unresolved requested changes.
 - Do not delete the branch unless `--delete-branch` was explicitly requested.
-- Do not rerun or dispatch CI, requeue a removed PR, undo a merge, or expand
+- Do not rerun or dispatch unrelated CI, requeue a removed PR, undo a merge, or expand
   credentials/permissions to repair verification. Report the exact limitation.
 - Missing checks, empty API responses, or access errors never establish that
   post-merge CI is not configured. Unknown applicability remains unverified.
@@ -143,14 +128,14 @@ Return:
 
 - PR number, URL, host, base repository, and target branch.
 - Merge method used, or queue-configured/unknown when not independently known.
-- Head SHA guarded by `--match-head-commit`; for an already-merged observation,
+- Head SHA guarded by the async merge API `sha`, review ID and broker run; for an already-merged observation,
   state that no guarded merge command was issued in this invocation.
 - Checks/review/mergeability status verified.
 - Merge outcome and timestamp, queue-entry evidence and observation time, or
   exact blocker; do not collapse these into one generic success claim.
 - Resulting commit SHA; destination verified/failed/unverified/not applicable,
   observed target tip, observation time, and comparison evidence.
-- Post-merge CI outcome, exact checked SHA, applicable checks/run links and
+- Post-merge CI and configured Pages outcomes, exact checked SHA, applicable checks/run links and
   actual conclusions, skipped/neutral disclosures, outstanding checks, and
   observation start/deadline when waiting or timing out.
 - Whether branch deletion was requested and performed.

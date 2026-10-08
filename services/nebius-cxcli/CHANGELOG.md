@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Make Nsight file-preservation tests independent of read-induced access-time
+  changes while retaining content, inode, ownership, permissions, link count,
+  and nanosecond modification/change timestamp checks.
+
+- Align CI contract tests with merge-identity and result-evidence jobs, preserving
+  Python compatibility, full Git history, and the one-build/many-consumer wheel
+  graph. Check trusted result checkout before dependency setup.
+
 - Inject the Kubernetes credential provider from the entrypoints, preserving the
   CLI dependency boundary and lightweight cache hits without changing token
   refresh, private-cache checks, or command output.

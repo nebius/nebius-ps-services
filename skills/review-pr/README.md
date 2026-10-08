@@ -59,3 +59,8 @@ Review checks, diffs, conflicts, and comments
 - `agents/openai.yaml`: UI metadata.
 - `references/command-reference.md`: exact GitHub CLI and Git command cookbook
   loaded when inspecting, syncing, or updating a PR branch.
+
+Ordinary review runs locally and delegates safe repair commits, base sync and
+pushes to create-pr's private preparation handoff. It revalidates/re-reviews the
+final head/base, returns an authenticated COMMENT attestation, and never merges.
+Unsafe findings or unresolved human objections stop. Agentic SDLC remains read-only.

@@ -1,0 +1,99 @@
+{
+  "schema": "merge-policy/v1",
+  "dependabot_workflow": "dependabot-auto-merge.yml",
+  "excluded_checks": [
+    "dependency-admission",
+    "merge-candidates",
+    "protected-merge",
+    "required-ci-status",
+    "completion-candidates",
+    "dispatch-result-ci",
+    "verify-pages",
+    "merge-admission"
+  ],
+  "ci_workflows": [
+    {
+      "file": "vpngw-ci.yml",
+      "paths": [
+        "services/vpngw/**",
+        ".github/workflows/vpngw-ci.yml",
+        ".github/workflows/vpngw-release.yml"
+      ]
+    },
+    {
+      "file": "nebius-cxcli-ci.yml",
+      "paths": [
+        ".github/helm-chart-publish.json",
+        "services/nebius-cxcli/**",
+        "services/nccl-test/**",
+        "helm-charts/nccl-test/**",
+        "platform-infra/modules/**",
+        ".github/workflows/nebius-cxcli-ci.yml",
+        ".github/workflows/nebius-cxcli-release.yml"
+      ]
+    },
+    {
+      "file": "nebius-cxcli-nsight.yml",
+      "paths": [
+        "services/nebius-cxcli/src/nebius_cxcli/nsight*.py",
+        "services/nebius-cxcli/src/nebius_cxcli/flux_render.py",
+        "services/nebius-cxcli/scripts/verify_nsight*.py",
+        "services/nebius-cxcli/tests/test_nsight*.py",
+        ".github/workflows/nebius-cxcli-nsight.yml"
+      ]
+    },
+    {
+      "file": "github-report-ci.yml",
+      "paths": [
+        "misc/github-report/**",
+        ".github/workflows/github-report-ci.yml",
+        ".github/workflows/github-report-release.yml"
+      ]
+    },
+    {
+      "file": "skills-project-specs-ci.yml",
+      "paths": [
+        "skills/**",
+        ".github/workflows/skills-project-specs-ci.yml",
+        "skills/maintain-project-specs/**",
+        "skills/task-implementer/**",
+        "skills/worktree/**",
+        "skills/sdlc-create-requirements/**",
+        "skills/sdlc-create-design/**",
+        "skills/sdlc-align-specs/**",
+        "skills/sdlc-start/**",
+        "skills/sdlc-prepare-execution/**",
+        "skills/sdlc-implement-plan/**",
+        "skills/project-agent-instructions/**",
+        "skills/align-skill/**",
+        "skills/global-context-management/**",
+        "skills/config-codex/**",
+        "skills/config-claude/**",
+        "skills/commit/**",
+        "skills/prompt-session-intake/**",
+        "skills/troubleshoot/**",
+        "skills/.codex-plugin/**",
+        "skills/.claude-plugin/**",
+        ".agents/plugins/marketplace.json",
+        ".claude-plugin/marketplace.json",
+        "skills/agent-nebius-auth-setup/**",
+        "skills/**/SKILL.md",
+        "skills/**/agents/openai.yaml",
+        "skills/install-skills.sh",
+        "skills/docs/requirements.md",
+        "skills/docs/design.md",
+        "skills/README.md",
+        "skills/CHANGELOG.md"
+      ]
+    },
+    {
+      "file": "merge-automation-ci.yml",
+      "paths": [
+        "**"
+      ]
+    }
+  ],
+  "merge_workflow": "skills-merge-pr.yml",
+  "completion_workflow": "merge-completion.yml",
+  "pages_enabled": true
+}
