@@ -39,6 +39,21 @@ trusted default code remain essential. Queues, additional human/CODEOWNER
 requirements and unsupported workflow-file permissions stop for a maintainer.
 Never substitute credentials or bypass protection.
 
+GitHub clears `block_creations` when push restrictions are removed, including
+when an update explicitly requests `block_creations: true` with
+`restrictions: null`. That field extends push-actor restrictions to branch
+creation; it is not an independent prohibition. Record this normalization in
+the settings readback and compare every independent protection field with the
+captured configuration.
+
+The reviewed broker bootstrap landed in
+[PR #216](https://github.com/nebius/nebius-ps-services/pull/216).
+Strict `Required CI` is bound to App ID `15368`, the numeric operator allowlist
+is configured, and the empty push restriction is removed. The default token
+remains read-only with Actions approvals enabled. Legacy main/root Pages built
+the bootstrap result. These deployment observations do not establish a live
+broker merge or live Dependabot acceptance; record those separately below.
+
 ## Review and acceptance
 
 Review the complete diff, breaking changes, dependency/security information and

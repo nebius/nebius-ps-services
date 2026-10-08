@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Record the reviewed broker deployment and verified repository protection;
+  document GitHub's dependent branch-creation setting normalization and the
+  configured Pages publication path. Keep live acceptance evidence separate.
+
 - Unify ordinary and Dependabot PRs, including Docker, behind local review,
   safe repairs, fresh head/base review and CI, then explicit operator-dispatched
   protected merge. Remove the dependency metadata producer and rollout toggles;
