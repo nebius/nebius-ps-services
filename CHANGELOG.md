@@ -6,6 +6,9 @@ project folder.
 
 ## [Unreleased]
 
+- Fix release-session repository discovery to use GitHub's canonical endpoint
+  without a trailing slash, preventing a false access failure during release intake.
+
 - Simplify all eighteen PyTorch lessons for scanning: shorter explanations,
   focused examples and brief performance connections. Keep broadcasting to one
   matrix-plus-bias addition, remove unrelated API detours, and simplify model,

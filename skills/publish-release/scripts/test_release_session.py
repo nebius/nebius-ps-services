@@ -62,6 +62,26 @@ def pr(**changes):
     return result
 
 
+class GitHubApiTests(unittest.TestCase):
+    def test_repository_and_nested_endpoints(self):
+        github = rs.GitHub(SCOPE)
+        for endpoint, expected in (
+            ("", "repos/example/demo"),
+            ("pulls/12", "repos/example/demo/pulls/12"),
+        ):
+            with (
+                self.subTest(endpoint=endpoint),
+                patch.object(
+                    rs, "command", return_value='{"default_branch": "main"}'
+                ) as command,
+            ):
+                self.assertEqual(github.api(endpoint), {"default_branch": "main"})
+                command.assert_called_once_with(
+                    ["gh", "api", "--hostname", "github.com", expected],
+                    Path(SCOPE["root"]),
+                )
+
+
 class ObservationTests(unittest.TestCase):
     def setUp(self):
         self.value = state()

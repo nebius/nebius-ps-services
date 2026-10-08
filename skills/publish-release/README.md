@@ -46,6 +46,9 @@ Checks, merge queue and release execution have separate one-hour wait limits.
 Failures, conflicting identities and missing assets produce precise blockers.
 A queued PR, pushed tag or draft release is not a completed publication.
 
+Repository discovery uses GitHub's canonical repository endpoint without a
+trailing slash; nested release and workflow reads retain their resource paths.
+
 ## Workflow and ownership
 
 ```text
