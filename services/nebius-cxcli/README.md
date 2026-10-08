@@ -540,3 +540,5 @@ is in [CHANGELOG.md](CHANGELOG.md).
 
 CI retains its Python 3.12–3.14 matrix and one-build/many-consumer wheel checks.
 Merge-identity and result-evidence jobs also verify authenticated post-merge runs.
+File-preservation tests check content and write metadata while allowing reads to
+update access times.
