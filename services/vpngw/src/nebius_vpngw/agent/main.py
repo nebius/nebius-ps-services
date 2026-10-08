@@ -47,6 +47,7 @@ from .vm_ha.auto_healing import (
     decode_policy_request,
     load_peer_policy_heartbeat,
     peer_policy_agrees,
+    require_auto_healing_transactions_quiescent,
     require_auto_healing_writer_quiescent,
 )
 from .vm_ha.inhibition import (
@@ -846,6 +847,64 @@ class VMHASnapshotAdapter:
         self.last_apply_operation_id: str | None = None
         self.last_transfer_inhibition_operation_id: str | None = None
 
+    def _retire_prior_generation_adoption_state(
+        self, *, adoption: Mapping[str, Any], operation_id: str
+    ) -> None:
+        from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+        receipt_path = self.state_dir / VM_HA_PROMOTION_RECEIPT_PATH.name
+        restoration = StandbyRestorationStore(self.state_dir)
+
+        def retirement_required() -> bool:
+            try:
+                receipt = _read_promotion_receipt(receipt_path, config=self.config)
+            except _PriorGenerationPromotionReceipt:
+                return True
+            return receipt is None and restoration.path.exists()
+
+        # Retirement gates govern only retirement. Once complete, the ordinary
+        # controller must be able to observe its own pending materialization.
+        if not retirement_required():
+            return
+        descriptor = _acquire_rearm_lock(self.state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+        if descriptor is None:
+            raise RuntimeError("rearm writer did not quiesce for generation adoption")
+        try:
+            if not retirement_required():
+                return
+            current_operation = self.providers.apply_lock_operation_id()
+            current_adoption = _read_apply_owner_adoption(
+                self.state_dir / VM_HA_APPLY_OWNER_ADOPTION_PATH.name,
+                config=self.config,
+                apply_operation_id=current_operation,
+            )
+            cloud = self.providers.cloud()
+            if not (
+                current_operation == operation_id
+                and current_adoption == adoption
+                and cloud.allocation_id == self.allocation_id
+                and cloud.local_attachment_exact(self.local_node_id)
+                and self.providers.transfer_inhibition_operation_id() is None
+                and not (self.state_dir / "accepted-cloud-operation.json").exists()
+                and not (self.state_dir / "rearm-cloud-operation.json").exists()
+                and VMHACheckpointFileStore(self.state_dir / VM_HA_CHECKPOINT_PATH.name)
+                .load()
+                .pending_action
+                is None
+            ):
+                raise RuntimeError("generation adoption retirement authority changed")
+            restoration.retire_terminal_for_generation_adoption(
+                cluster_id=self.cluster_id,
+                owner_node_id=self.local_node_id,
+                peer_node_id=self.peer_node_id,
+                allocation_id=self.allocation_id,
+                generation_id=self.generation_id,
+                ownership_epoch=cloud.ownership_epoch,
+            )
+            _durably_unlink(receipt_path)
+        finally:
+            os.close(descriptor)
+
     def observe(self) -> ControllerSnapshot:
         peer, peer_received_at = self.providers.peer()
         cloud = self.providers.cloud()
@@ -881,19 +940,14 @@ class VMHASnapshotAdapter:
         if adoption is not None and not adoption_authorized:
             raise ValueError("VM-HA apply-owner adoption does not match cloud ownership")
         promotion_receipt_path = self.state_dir / VM_HA_PROMOTION_RECEIPT_PATH.name
-        if (
-            adoption_authorized
-            and apply_operation_id is not None
-            and promotion_receipt_path.exists()
-        ):
-            try:
-                _read_promotion_receipt(promotion_receipt_path, config=self.config)
-            except _PriorGenerationPromotionReceipt:
-                # The exact apply declaration and current-generation lock make
-                # the prior receipt replaceable without trusting its old route
-                # or policy digests. A current receipt is still committed only
-                # after the ordinary terminal controller gates.
-                _durably_unlink(promotion_receipt_path)
+        if adoption_authorized and apply_operation_id is not None:
+            assert adoption is not None
+            # Retire dependent terminal state while its receipt still proves it.
+            # The exact adoption gate also admits an interrupted retirement;
+            # current promotion remains subject to ordinary terminal gates.
+            self._retire_prior_generation_adoption_state(
+                adoption=adoption, operation_id=apply_operation_id
+            )
         if transfer_intent is TransferIntent.AUTOMATIC_FAILOVER and transfer_effect_started:
             lineage_path = self.state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
             if adoption_authorized:
@@ -3781,6 +3835,61 @@ def vm_ha_status(
     )
 
 
+def verify_vm_ha_apply_lock_quiescent(
+    lock_path: Path,
+    *,
+    config_path: Path = CONFIG_PATH,
+    state_dir: Path = VM_HA_STATE_DIR,
+) -> None:
+    """Check apply-only admission while the deploy caller holds the rearm lock."""
+
+    payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("VM-HA apply-lock record is invalid")
+    config = _read_vm_ha_config(config_path)
+    cluster_id = str((config or payload).get("cluster_id") or "")
+    node_id = (
+        str((config.get("node") or {}).get("node_id") or "")
+        if config
+        else str(payload.get("node_id") or "")
+    )
+    if (
+        not cluster_id
+        or not node_id
+        or _strict_apply_lock_record(
+            lock_path,
+            cluster_id=cluster_id,
+            node_id=node_id,
+            generation_id=str(payload.get("generation_id") or ""),
+        )
+        is None
+    ):
+        raise ValueError("VM-HA apply-lock identity is unavailable")
+    if config is None:
+        # Initial deployment has no installed identity and no recoverable residue.
+        require_auto_healing_writer_quiescent(state_dir)
+        return
+    binding = VMHARuntimeBinding.model_validate(config.get("runtime_binding"))
+    generation = config.get("generation") or {}
+    peer_ids = [node.node_id for node in binding.nodes if node.node_id != node_id]
+    if not (
+        len(peer_ids) == 1
+        and binding.cluster_id == cluster_id
+        and binding.generation_id == generation.get("generation_id")
+        and binding.configuration_digest == (generation.get("digests") or {}).get("configuration")
+    ):
+        raise ValueError("VM-HA apply-lock admission cannot bind the installed runtime")
+    StandbyRestorationStore(state_dir).require_apply_lock_quiescent(
+        cluster_id=cluster_id,
+        owner_node_id=node_id,
+        peer_node_id=peer_ids[0],
+        allocation_id=binding.shared_allocation_id,
+        generation_id=binding.generation_id,
+        target_generation_id=payload["generation_id"],
+    )
+    require_auto_healing_transactions_quiescent(state_dir)
+
+
 def install_vm_ha_removal_inhibition(
     operation_id: str,
     *,
@@ -4859,8 +4968,9 @@ def main() -> None:
     group.add_argument("--vm-ha-standby-replacement-release", metavar="OPERATION_ID")
     group.add_argument("--vm-ha-mtls-action", choices=ACTION_NAMES)
     group.add_argument(
-        "--vm-ha-auto-healing-quiescent",
-        action="store_true",
+        "--vm-ha-apply-lock-quiescent",
+        type=Path,
+        metavar="LOCK_RECORD",
         help=argparse.SUPPRESS,
     )
     group.add_argument(
@@ -4905,6 +5015,7 @@ def main() -> None:
                 {
                     "features": [
                         "ordinary-apply-v1",
+                        "ipsec-replay-window-v1",
                         "force-reconcile-v1",
                         "vm-ha-authority-bound-force-reconcile-v1",
                         "vm-ha-controller-route-reconcile-v1",
@@ -4922,11 +5033,11 @@ def main() -> None:
         )
         return
 
-    if args.vm_ha_auto_healing_quiescent:
+    if args.vm_ha_apply_lock_quiescent:
         try:
-            require_auto_healing_writer_quiescent(VM_HA_STATE_DIR)
-        except AutoHealingPolicyError as error:
-            parser.exit(2, f"standby auto-healing writer is active: {error}\n")
+            verify_vm_ha_apply_lock_quiescent(args.vm_ha_apply_lock_quiescent)
+        except (AutoHealingPolicyError, StandbyRestorationError, ValueError, OSError) as error:
+            parser.exit(2, f"VM-HA apply-lock admission failed: {error}\n")
         return
 
     if args.vm_ha_mtls_action:

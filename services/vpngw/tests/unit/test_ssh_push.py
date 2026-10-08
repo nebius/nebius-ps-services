@@ -32,6 +32,7 @@ from nebius_vpngw.deploy.ssh_push import (
     VMHAApplyLockReceipt,
     VMHAStandbyReplacementNotReady,
 )
+from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
 from nebius_vpngw.schema import (
     VMHARole,
     VMHARouteTarget,
@@ -836,6 +837,58 @@ def test_vm_ha_agent_activation_is_controller_owned() -> None:
     assert SSHPush._agent_activation_commands(agent_cmd=agent_cmd, vm_ha=False) == (agent_cmd,)
 
 
+@pytest.mark.parametrize(
+    ("command_fragment", "reason"),
+    [
+        ("mktemp -d", "staging directory creation failed"),
+        ("sha256sum --check --status", "bytes did not match the approved artifact"),
+        ("--ignore-installed", "package installation failed (remote command failed)"),
+        ("--force-reinstall", "exact agent package installation failed"),
+        ("import cffi,cryptography", "package verification failed"),
+        ("--agent-capabilities", "capability verification failed"),
+        ("nebius_vpngw/systemd/", "service asset installation failed (remote command failed)"),
+    ],
+)
+def test_vm_ha_package_failures_keep_safe_reason_and_stop(
+    tmp_path, monkeypatch, command_fragment, reason
+) -> None:
+    manifest, _binding = _vm_ha_manifest_and_binding()
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel)
+    client = _ManagedMTLSClient()
+    execute = client.exec_command
+
+    def fail_selected(command, **kwargs):
+        result = execute(command, **kwargs)
+        if command_fragment in command:
+            return BytesIO(), _CommandStream(b"TOP_SECRET_REMOTE_DETAIL", 1), BytesIO()
+        return result
+
+    client.exec_command = fail_selected
+    push = SSHPush(ssh_policy=object())
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
+        lambda *args, **kwargs: None,
+    )
+
+    with pytest.raises(VMHAAgentPackageError) as failed:
+        push.ensure_vm_ha_agent_package(
+            "203.0.113.10",
+            manifest,
+            {},
+            artifact=VMHAAgentArtifact.from_wheel(wheel, source="test"),
+        )
+
+    assert reason in str(failed.value)
+    assert "TOP_SECRET" not in str(failed.value)
+    failed_index = next(
+        i for i, command in enumerate(client.commands) if command_fragment in command
+    )
+    assert all(command.startswith("rm -f -- ") for command in client.commands[failed_index + 1 :])
+    assert client.closed
+
+
 def test_vm_ha_package_preparation_proves_cryptography_and_cffi(tmp_path, monkeypatch) -> None:
     manifest, _binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
@@ -1343,6 +1396,10 @@ def test_vm_ha_apply_lock_is_exact_atomic_and_cleared_only_by_receipt(tmp_path) 
     assert "import nebius_vpngw" not in runner
     assert "/usr/bin/flock" not in install_wrapper
     assert install_command.index("apply.lock.new") < install_command.index("sudo mv")
+    assert "--vm-ha-apply-lock-quiescent /tmp/nebius-vpngw-vm-ha-apply-lock-" in install_command
+    assert install_command.index("--vm-ha-apply-lock-quiescent") < install_command.index(
+        "apply.lock.new"
+    )
     assert "/var/lib/nebius-vpngw/vm-ha/mtls/inhibition.json" in install_command
     assert install_command.index("mtls/inhibition.json") < install_command.index("apply.lock.new")
     assert "root:root:600" in install_command

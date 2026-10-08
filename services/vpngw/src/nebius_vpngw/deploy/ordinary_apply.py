@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from pathlib import Path
@@ -24,6 +25,13 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 from .. import ordinary_bootstrap, ordinary_routes
 from ..config_loader import InstanceResolvedConfig
+from ..replay_window import (
+    REPLAY_WINDOW_CAPABILITY,
+    ReplayWindowCapabilityError,
+    has_replay_window,
+    require_replay_window_capability,
+    wheel_supports_replay_window,
+)
 from .ssh_policy import configure_paramiko_host_verification
 
 ASSETS = (
@@ -68,6 +76,10 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
         names = archive.namelist()
         if len(names) != len(set(names)):
             raise RuntimeError("Agent artifact contains duplicate members")
+        require_replay_window_capability(
+            resolved,
+            (REPLAY_WINDOW_CAPABILITY,) if wheel_supports_replay_window(archive) else (),
+        )
         meta_name = next(name for name in names if name.endswith(".dist-info/METADATA"))
         meta = BytesParser().parsebytes(archive.read(meta_name))
         package = {
@@ -125,6 +137,32 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
             if isinstance(resolved, dict) and resolved.get("vm_ha") is None
             else None,
         }
+
+
+def pin_replay_window_artifact(
+    ssh: Any, instances: tuple[InstanceResolvedConfig, ...], local: dict, lifetimes: ExitStack
+) -> Path | None:
+    """Admit the exact optional-feature wheel before provisioning or retiring any VM."""
+    if not has_replay_window(local):
+        return None
+    selected = ssh._build_wheel()
+    if selected is None:
+        raise ReplayWindowCapabilityError(
+            "replay_window requires a deployable matching agent wheel"
+        )
+    directory = Path(
+        lifetimes.enter_context(tempfile.TemporaryDirectory(prefix="vpngw-replay-wheel-"))
+    )
+    pinned = directory / selected.name
+    shutil.copyfile(selected, pinned)
+    pinned.chmod(0o600)
+    for instance in instances:
+        artifact(pinned, instance.config_yaml)
+    # Keep one private snapshot even if the selected source wheel changes later.
+    # inspect_plan/execute_plan retain their exact artifact digest revalidation.
+    ssh._wheel_path = pinned
+    ssh._wheel_is_installed_fallback = False
+    return pinned
 
 
 def dependencies_satisfied(requirements: list[str], observed: dict[str, Any]) -> bool:

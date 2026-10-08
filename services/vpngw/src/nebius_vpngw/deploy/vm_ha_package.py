@@ -15,6 +15,15 @@ from ..config_loader import InstanceResolvedConfig
 from ..ordinary_operations import digest
 from . import ordinary_apply
 
+
+class VMHAAgentPackageError(RuntimeError):
+    """Package rejection composed only of fixed text and closed failure categories.
+
+    Never construct this exception from raw SSH output, paths, or another
+    exception's text: its message is safe for the operator-facing CLI.
+    """
+
+
 # Deliberately owned here, rather than weakening the ordinary approval contract.
 PACKAGE_FIELDS = (
     "boot_id",

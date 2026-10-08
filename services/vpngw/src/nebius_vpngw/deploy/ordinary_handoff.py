@@ -18,6 +18,7 @@ from typing import Any
 from ..handoff_bootstrap import streamed_source
 from ..ordinary_operations import digest
 from .ssh_policy import configure_paramiko_host_verification
+from .vm_ha_package import VMHAAgentPackageError
 
 # Source is embedded so a 0.6.0 ordinary guest can participate before installation.
 _REMOTE = "import _vpngw_handoff_remote as handoff; handoff.main()"
@@ -148,15 +149,15 @@ class Handoff:
 
     def prepare_package(self, plan: Any) -> dict:
         if self.package is None or plan.digest != self.package.digest:
-            raise RuntimeError("HA handoff package plan changed")
+            raise VMHAAgentPackageError("HA handoff package plan changed")
         wheel = plan.wheel.read_bytes()
         from .ordinary_apply import sha
 
         if sha(wheel) != plan.manifest["wheel_sha256"]:
-            raise RuntimeError("HA package changed after approval")
+            raise VMHAAgentPackageError("HA package changed after approval")
         for path in plan.dependency_paths:
             if sha(path.read_bytes()) != plan.manifest["dependency_wheels"][path.name]:
-                raise RuntimeError("HA dependency changed after approval")
+                raise VMHAAgentPackageError("HA dependency changed after approval")
         # Reservation already staged the bound wheels. Probe the peer only after
         # upload, immediately before this small named package-write request.
         _send(
@@ -165,7 +166,7 @@ class Handoff:
         )
         receipt = _receive(self.stdout)
         if receipt.get("artifact_sha256") != plan.manifest["wheel_sha256"]:
-            raise RuntimeError("HA handoff package receipt is unverified")
+            raise VMHAAgentPackageError("HA handoff package receipt is unverified")
         self.package_receipt = receipt
         return receipt
 

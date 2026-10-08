@@ -21,24 +21,27 @@
 
 Estimated guided hours: 3. Basic Python is the entry requirement; no PyTorch,
 machine-learning, GPU or cluster experience is required. Lessons 1–7 own tensor
-representation and operations; 8–11 connect them to execution and models;
-12–18 develop performance-reading and optimization habits.
+representation and operations; 8–11 connect them to execution and models; 12–18
+develop performance-reading and optimization habits.
 
 Read before GPU Fundamentals. GPU Performance Tools supplies optional command
 reference context, not required tensor knowledge. Every lesson has an observable
-objective, definition-first teaching, contextual diagrams, small commented
-examples and a Performance connection. Exact PyTorch API names use bold monospace;
-example variables and values use ordinary code; application meanings stay plain.
-Headings and callout labels may remain bold.
+objective, definition-first teaching, contextual diagrams, short examples that
+each teach one relationship and a brief Performance connection. Exact PyTorch
+API names use bold monospace; example variables and values use ordinary code;
+application meanings stay plain. Headings and callout labels may remain bold.
 
 Define concepts affirmatively and explain terminology before notation. Lesson 2
-uses one grid example for indexing, slicing and reshaping. Lesson 6 adds inferred
-sizes and axis reordering; lesson 9 explains the linear layer's feature-axis rule.
+uses one grid example for indexing, slicing and reshaping. Lesson 6 adds
+inferred sizes and axis reordering; lesson 9 explains the linear layer's
+feature-axis rule.
 
-Batching and compilation receive focused lessons with equivalence checks and
-explicit tradeoffs. The final explained inference step demonstrates transfer
-and delayed recall without an exercise or completion gate. Distinct explanations
-and caveats are preserved while genuine duplication is consolidated.
+Batching compares a row loop with one whole-tensor calculation. Compilation
+reuses the preceding function and checks its result. The final explained
+inference step demonstrates transfer and delayed recall without an exercise or
+completion gate. Keep the conditions needed for each example, without unrelated
+API catalogues or advanced setup. Broadcasting teaches one matrix-plus-bias
+addition; reductions teach row means; transfers show prepare, copy and compute.
 
 There are no labs, Practice sections, assessments, runtime setup or required
 execution. Profiling commands, hardware details, distributed execution and

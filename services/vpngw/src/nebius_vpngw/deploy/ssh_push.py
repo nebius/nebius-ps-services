@@ -40,6 +40,12 @@ from ..agent.vm_ha.mtls import MTLSReceipt, PeerLeaf
 from ..agent.vm_ha.mtls_actions import ACTION_NAMES, ACTION_SCHEMA, encode_action_request
 from ..agent.vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY
 from ..config_loader import InstanceResolvedConfig
+from ..replay_window import (
+    REPLAY_WINDOW_CAPABILITY,
+    REPLAY_WINDOW_SOURCES,
+    require_replay_window_capability,
+    wheel_supports_replay_window,
+)
 from ..schema import VMHARuntimeBinding
 from ..vm_ha_credentials import (
     VMHACredentialIdentityError,
@@ -50,7 +56,7 @@ from ..vm_ha_credentials import (
 from .ssh_client_auth import SSHClientAuth, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
-from .vm_ha_package import VMHAPackagePlan
+from .vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan
 
 _LEGACY_VM_HA_IDENTITY_SCRIPT = r"""
 import json
@@ -633,6 +639,11 @@ class VMHAAgentArtifact:
                     required["nebius_vpngw/agent/vm_ha/inhibition.py"],
                     required["nebius_vpngw/agent/main.py"],
                 )
+                replay_supported = wheel_supports_replay_window(wheel)
+                if replay_supported:
+                    for source_name in REPLAY_WINDOW_SOURCES:
+                        member_name = "nebius_vpngw/" + source_name
+                        cls._validate_recorded_member(records, member_name, wheel.read(member_name))
             after_sha256 = cls._sha256(stream)
         except VMHAAgentArtifactError:
             raise
@@ -668,6 +679,7 @@ class VMHAAgentArtifact:
             capabilities=(
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
+                *((REPLAY_WINDOW_CAPABILITY,) if replay_supported else ()),
             ),
             device=identity.st_dev,
             inode=identity.st_ino,
@@ -1462,7 +1474,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 f"if sudo test -e {replacement_inhibition} || "
                 f"sudo test -L {replacement_inhibition}; then exit 47; fi && "
                 "sudo /usr/bin/python3 -m nebius_vpngw.agent.main "
-                "--vm-ha-auto-healing-quiescent && "
+                f"--vm-ha-apply-lock-quiescent {temporary} && "
                 f"sudo install -o root -g root -m 0600 {temporary} {pending} && "
                 f"sudo test \"$(sudo stat -c '%U:%G:%a' {pending})\" = root:root:600 && "
                 f"echo '{receipt.record_sha256}  {pending}' | "
@@ -2048,14 +2060,20 @@ printf "VM_HA_DEACTIVATED=1\\n"
         if artifact is None:
             wheel_path = self._build_wheel(allow_installed_fallback=False)
             if wheel_path is None or not wheel_path.is_file():
-                raise RuntimeError("VM-HA package preparation requires a deployable agent wheel")
+                raise VMHAAgentPackageError(
+                    "VM-HA package preparation requires a deployable agent wheel"
+                )
             artifact = VMHAAgentArtifact.from_wheel(wheel_path, source="direct-apply-build")
+        require_replay_window_capability(local_cfg, artifact.capabilities)
+        require_replay_window_capability(
+            yaml.safe_load(inst_cfg.config_yaml), artifact.capabilities
+        )
         wheel_path = artifact.path
         wheel_sha256 = artifact.sha256
         dependency_plan = dict(artifact.dependency_plans).get(inst_cfg.hostname)
         if handoff is not None:
             if dependency_plan is None:
-                raise RuntimeError("HA handoff requires its approved package plan")
+                raise VMHAAgentPackageError("HA handoff requires its approved package plan")
             if handoff.finished:
                 from .ordinary_apply import remote
                 from .vm_ha_package import package_predecessor
@@ -2083,12 +2101,12 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 # wheel bytes and were verified before repair completion.
                 expected["requirements"] = dependency_plan.manifest["expected_requirements"]
                 if current != expected or handoff.package_receipt is None:
-                    raise RuntimeError("HA repaired package predecessor changed")
+                    raise VMHAAgentPackageError("HA repaired package predecessor changed")
                 receipt = handoff.package_receipt
             else:
                 receipt = handoff.prepare_package(dependency_plan)
             if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
-                raise RuntimeError("HA handoff package capabilities changed")
+                raise VMHAAgentPackageError("HA handoff package capabilities changed")
             return receipt
         if dependency_plan is not None:
             from .ordinary_apply import digest, remote
@@ -2102,7 +2120,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 {"action": "inspect-package", "manifest": dependency_plan.manifest},
             )["observation"]
             if digest(package_predecessor(current)) != digest(dependency_plan.observation):
-                raise RuntimeError("VM-HA package predecessor changed after approval")
+                raise VMHAAgentPackageError("VM-HA package predecessor changed after approval")
         remote_directory: str | None = None
         remote_wheel: str | None = None
         paramiko = self._ensure_paramiko()
@@ -2128,10 +2146,10 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 timeout=10,
             )
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA agent package staging directory creation failed")
+                raise VMHAAgentPackageError("VM-HA agent package staging directory creation failed")
             remote_directory = stdout.read().decode("ascii").strip()
             if re.fullmatch(r"/tmp/nebius-vpngw-agent\.[A-Za-z0-9]{10}", remote_directory) is None:
-                raise RuntimeError("VM-HA agent package staging directory was invalid")
+                raise VMHAAgentPackageError("VM-HA agent package staging directory was invalid")
             remote_wheel = f"{remote_directory}/{wheel_path.name}"
             with artifact.open_verified() as wheel_stream, client.open_sftp() as sftp:
                 sftp.putfo(
@@ -2144,7 +2162,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
                     for path in dependency_plan.dependency_paths:
                         expected = dependency_plan.manifest["dependency_wheels"][path.name]
                         if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-                            raise RuntimeError("VM-HA dependency artifact changed after approval")
+                            raise VMHAAgentPackageError(
+                                "VM-HA dependency artifact changed after approval"
+                            )
                         sftp.put(str(path), f"{remote_directory}/{path.name}")
             verify_wheel_command = (
                 f"echo {shlex.quote(f'{wheel_sha256}  {remote_wheel}')} "
@@ -2152,7 +2172,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
             )
             _stdin, stdout, _stderr = client.exec_command(verify_wheel_command, timeout=30)
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA agent package bytes did not match the approved artifact")
+                raise VMHAAgentPackageError(
+                    "VM-HA agent package bytes did not match the approved artifact"
+                )
             install_command = (
                 "sudo /usr/bin/python3 -m pip install "
                 f"--ignore-installed --break-system-packages {shlex.quote(remote_wheel)}"
@@ -2169,7 +2191,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
                         timeout=30,
                     )
                     if stdout.channel.recv_exit_status() != 0:
-                        raise RuntimeError("VM-HA dependency upload integrity failed")
+                        raise VMHAAgentPackageError("VM-HA dependency upload integrity failed")
                     dependency_targets.append(shlex.quote(target))
                 install_command = (
                     "sudo /usr/bin/python3 -m pip install --no-index --no-deps "
@@ -2189,7 +2211,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
             safe_stderr = self._read_bounded_remote_output(stderr)
             if stdout.channel.recv_exit_status() != 0:
                 failure_class = self._remote_failure_class(safe_stdout, safe_stderr)
-                raise RuntimeError(f"VM-HA agent package installation failed ({failure_class})")
+                raise VMHAAgentPackageError(
+                    f"VM-HA agent package installation failed ({failure_class})"
+                )
             # pip preserves compatible dependencies. Reinstall only the exact
             # approved product wheel to handle equal-version source rebuilds.
             _stdin, stdout, _stderr = client.exec_command(
@@ -2198,7 +2222,7 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 timeout=120,
             )
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA exact agent package installation failed")
+                raise VMHAAgentPackageError("VM-HA exact agent package installation failed")
             verification = (
                 "import cffi,cryptography,importlib.metadata as m,json,nebius_vpngw;"
                 "from cryptography.hazmat.primitives.asymmetric import ec;"
@@ -2210,11 +2234,13 @@ printf "VM_HA_DEACTIVATED=1\\n"
             verify_command = f"/usr/bin/python3 -c {shlex.quote(verification)}"
             _stdin, stdout, _stderr = client.exec_command(verify_command, timeout=30)
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA agent package verification failed")
+                raise VMHAAgentPackageError("VM-HA agent package verification failed")
             try:
                 receipt = json.loads(stdout.read().decode("ascii"))
             except (UnicodeError, json.JSONDecodeError):
-                raise RuntimeError("VM-HA agent package verification was malformed") from None
+                raise VMHAAgentPackageError(
+                    "VM-HA agent package verification was malformed"
+                ) from None
             if not (
                 isinstance(receipt, dict)
                 and set(receipt)
@@ -2234,17 +2260,19 @@ printf "VM_HA_DEACTIVATED=1\\n"
                     )
                 )
             ):
-                raise RuntimeError("VM-HA agent package verification was invalid")
+                raise VMHAAgentPackageError("VM-HA agent package verification was invalid")
             capability_command = (
                 "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --agent-capabilities"
             )
             _stdin, stdout, _stderr = client.exec_command(capability_command, timeout=30)
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA agent capability verification failed")
+                raise VMHAAgentPackageError("VM-HA agent capability verification failed")
             try:
                 capability = json.loads(stdout.read().decode("ascii"))
             except (UnicodeError, json.JSONDecodeError):
-                raise RuntimeError("VM-HA agent capability verification was malformed") from None
+                raise VMHAAgentPackageError(
+                    "VM-HA agent capability verification was malformed"
+                ) from None
             features = capability.get("features") if isinstance(capability, dict) else None
             if not (
                 isinstance(capability, dict)
@@ -2253,9 +2281,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 and all(isinstance(feature, str) for feature in features)
                 and STANDBY_RESTORATION_CAPABILITY in features
             ):
-                raise RuntimeError("VM-HA agent capability verification was invalid")
+                raise VMHAAgentPackageError("VM-HA agent capability verification was invalid")
             if not set(artifact.capabilities).issubset(features):
-                raise RuntimeError(
+                raise VMHAAgentPackageError(
                     "VM-HA agent capability verification did not match the approved artifact"
                 )
             asset_command = self._install_vm_ha_assets_from_artifact_command(remote_wheel)
@@ -2268,7 +2296,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
             safe_stderr = self._read_bounded_remote_output(stderr)
             if stdout.channel.recv_exit_status() != 0:
                 failure_class = self._remote_failure_class(safe_stdout, safe_stderr)
-                raise RuntimeError(f"VM-HA service asset installation failed ({failure_class})")
+                raise VMHAAgentPackageError(
+                    f"VM-HA service asset installation failed ({failure_class})"
+                )
             receipt["artifact_sha256"] = wheel_sha256
             receipt["capabilities"] = features
             return receipt

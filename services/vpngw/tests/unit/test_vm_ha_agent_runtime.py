@@ -36,6 +36,7 @@ from nebius_vpngw.agent.main import (
     release_vm_ha_standby_replacement_inhibition,
     request_manual_failback,
     request_manual_failover,
+    verify_vm_ha_apply_lock_quiescent,
     verify_vm_ha_removal_quiescent,
     verify_vm_ha_standby_replacement_quiescent,
     vm_ha_status,
@@ -50,11 +51,16 @@ from nebius_vpngw.agent.routing_guard import (
 )
 from nebius_vpngw.agent.vm_ha import AtomicGenerationStore
 from nebius_vpngw.agent.vm_ha.auto_healing import (
+    AutoHealingPolicyError,
     AutoHealingPolicyPhase,
     AutoHealingPolicyRecord,
     AutoHealingPolicyStore,
+    AutoHealingRecoveryPhase,
+    AutoHealingRecoveryRecord,
+    AutoHealingRecoveryStore,
     StandbyAutoHealing,
     policy_decision_digest,
+    require_auto_healing_writer_quiescent,
 )
 from nebius_vpngw.agent.vm_ha.inhibition import (
     STANDBY_REPLACEMENT_INHIBITION_FILENAME,
@@ -2919,6 +2925,308 @@ def test_apply_owner_adoption_retires_completed_restoration_before_receipt_repla
     assert not store.path.exists()
     assert not adoption_path.exists()
     assert completed.phase is RestorationPhase.COMPLETED
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "orphan",
+        "intact",
+        "active",
+        "blocked",
+        "corrupt",
+        "bad-receipt",
+        "forged-receipt-id",
+        "foreign-cluster",
+        "foreign-owner",
+        "foreign-peer",
+        "foreign-allocation",
+        "current-generation",
+        "target-generation",
+        "incoming-cluster",
+        "incoming-node",
+        "incoming-operation",
+        "prepared-policy",
+        "armed-recovery",
+        "consumed-recovery",
+    ],
+)
+def test_apply_lock_admission_recovers_only_inert_exact_residue(tmp_path: Path, case: str) -> None:
+    store = _awaiting_restoration(tmp_path)
+    record = store.load()
+    assert record is not None
+    if case == "blocked":
+        store.block(
+            receipt_id=str(record.promotion_receipt_id),
+            reason="compute-start-failed",
+            updated_at=25.0,
+        )
+    elif case != "active":
+        store.complete(receipt_id=str(record.promotion_receipt_id), updated_at=25.0)
+    if case != "intact":
+        store.receipt_path.unlink()
+    if case == "bad-receipt":
+        store.receipt_path.write_text("{}")
+    if case == "corrupt":
+        store.path.write_text("{}")
+    if case == "forged-receipt-id":
+        payload = json.loads(store.path.read_text())
+        payload["promotion_receipt_id"] = "0" * 64
+        store.path.write_text(json.dumps(payload))
+
+    config = _runtime_config()
+    generation_id = "a" * 64 if case == "current-generation" else "d" * 64
+    config["generation"]["generation_id"] = generation_id
+    config["generation"]["digests"]["configuration"] = generation_id
+    binding = config["runtime_binding"]
+    binding.update(generation_id=generation_id, configuration_digest=generation_id)
+    if case == "foreign-cluster":
+        config["cluster_id"] = binding["cluster_id"] = "cluster-other"
+    if case == "foreign-owner":
+        config["node"]["node_id"] = binding["nodes"][0]["node_id"] = "node-other"
+    if case == "foreign-peer":
+        binding["nodes"][1]["node_id"] = "node-other"
+    if case == "foreign-allocation":
+        binding["shared_allocation_id"] = "allocation-other"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"vm_ha": config}))
+    lock_path = tmp_path / "incoming-lock.json"
+    lock = {
+        "schema": "nebius-vpngw/vm-ha-apply-lock-v2",
+        "apply_locked": True,
+        "cluster_id": config["cluster_id"],
+        "node_id": config["node"]["node_id"],
+        "generation_id": "a" * 64 if case == "target-generation" else "e" * 64,
+        "operation_id": "f" * 64,
+    }
+    if case.startswith("incoming-"):
+        lock[
+            {
+                "incoming-cluster": "cluster_id",
+                "incoming-node": "node_id",
+                "incoming-operation": "operation_id",
+            }[case]
+        ] = "invalid"
+    lock_path.write_text(json.dumps(lock))
+    if case == "prepared-policy":
+        policy_store = AutoHealingPolicyStore(tmp_path)
+        policy = policy_store.load()
+        assert policy is not None
+        policy_store.path.write_text(
+            json.dumps(replace(policy, phase=AutoHealingPolicyPhase.PREPARED).to_dict())
+        )
+    if case in {"armed-recovery", "consumed-recovery"}:
+        recovery_store = AutoHealingRecoveryStore(tmp_path)
+        recovery_store.arm(
+            AutoHealingRecoveryRecord(
+                cluster_id="cluster-a",
+                node_id="node-a",
+                target_node_id="node-b",
+                generation_id="d" * 64,
+                desired=StandbyAutoHealing.ENABLED,
+                operation_id="b" * 64,
+                approval_digest="c" * 64,
+                policy_digest="d" * 64,
+                predecessor_digest="d" * 64,
+                promotion_receipt_id="receipt-a",
+                allocation_id="allocation-a",
+                ownership_epoch="7",
+                stopped_revision="8",
+                phase=AutoHealingRecoveryPhase.ARMED,
+                rearm_operation_id=None,
+                updated_at=1.0,
+            )
+        )
+        if case == "consumed-recovery":
+            recovery_store.consume(
+                operation_id="b" * 64, rearm_operation_id="rearm-a", updated_at=2.0
+            )
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+    if case in {"orphan", "intact"}:
+        verify_vm_ha_apply_lock_quiescent(lock_path, config_path=config_path, state_dir=tmp_path)
+        if case == "orphan":
+            with pytest.raises(StandbyRestorationError, match="receipt is unavailable"):
+                require_auto_healing_writer_quiescent(tmp_path)
+    else:
+        with pytest.raises((StandbyRestorationError, AutoHealingPolicyError, ValueError)):
+            verify_vm_ha_apply_lock_quiescent(
+                lock_path, config_path=config_path, state_dir=tmp_path
+            )
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
+
+
+@pytest.mark.parametrize(
+    ("receipt_missing", "interrupt_retirement", "rejected_gate"),
+    [(False, False, None), (True, False, None), (False, True, None)]
+    + [
+        (False, False, gate)
+        for gate in ("lock", "adoption", "cloud", "writer", "pending", "accepted")
+    ],
+)
+def test_generation_adoption_retires_completed_restoration_before_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    receipt_missing: bool,
+    interrupt_retirement: bool,
+    rejected_gate: str | None,
+) -> None:
+    store = _awaiting_restoration(tmp_path)
+    prior = store.load()
+    assert prior is not None
+    store.complete(receipt_id=str(prior.promotion_receipt_id), updated_at=25.0)
+    if receipt_missing:
+        store.receipt_path.unlink()  # Interrupted retirement must resume under exact authority.
+    config = _runtime_config()
+    generation = {
+        "generation_id": "d" * 64,
+        "digests": {"configuration": "d" * 64, "static_routes": "b" * 64, "bgp_policy": "c" * 64},
+    }
+    config["generation"] = generation
+    config["runtime_binding"].update(  # type: ignore[union-attr]
+        generation_id="d" * 64, configuration_digest="d" * 64
+    )
+    adoption = {
+        **_apply_owner_adoption(),
+        **generation,
+        "node_id": "node-a",
+        "peer_node_id": "node-b",
+    }
+    adoption_path = tmp_path / "apply-owner-adoption.json"
+    adoption_path.write_text(json.dumps(adoption), encoding="utf-8")
+    (tmp_path / "guard.json").write_text(json.dumps({"guard_boot_id": "boot-a"}))
+    cloud = CloudObservation(
+        True,
+        "allocation-a",
+        "node-a",
+        "node-b",
+        ComputeState.RUNNING,
+        True,
+        True,
+        True,
+        str(prior.ownership_epoch),
+    )
+    operation_reads = 0
+    cloud_reads = 0
+
+    def operation():
+        nonlocal operation_reads
+        operation_reads += 1
+        if operation_reads == 2:
+            if rejected_gate == "lock":
+                return None
+            if rejected_gate == "adoption":
+                adoption_path.unlink()
+        return "f" * 64
+
+    def observe_cloud():
+        nonlocal cloud_reads
+        cloud_reads += 1
+        return (
+            replace(cloud, authoritative=False)
+            if rejected_gate == "cloud" and cloud_reads > 1
+            else cloud
+        )
+
+    adapter = VMHASnapshotAdapter(
+        config=config,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, None),
+            readiness=lambda: LocalReadiness(True, True, True, True),
+            cloud=observe_cloud,
+            data_plane=lambda: DataPlaneMode.PASSIVE,
+            routes=lambda: None,
+            apply_lock_operation_id=operation,
+        ),
+        state_dir=tmp_path,
+        clock=lambda: 30.0,
+        boot_id=lambda: "boot-a",
+    )
+    if rejected_gate is not None:
+        before = store.path.read_bytes(), store.receipt_path.read_bytes()
+        writer = None
+        if rejected_gate == "writer":
+            writer = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+            assert writer is not None
+        elif rejected_gate == "accepted":
+            (tmp_path / "accepted-cloud-operation.json").write_text("{}")
+        elif rejected_gate == "pending":
+            monkeypatch.setattr(
+                VMHACheckpointFileStore,
+                "load",
+                lambda self: SimpleNamespace(pending_action=object()),
+            )
+        try:
+            with pytest.raises(RuntimeError, match="quiesce|authority changed"):
+                adapter.observe()
+        finally:
+            if writer is not None:
+                os.close(writer)
+        assert (store.path.read_bytes(), store.receipt_path.read_bytes()) == before
+        return
+    original_unlink = Path.unlink
+
+    def ordered_unlink(path: Path, *args, **kwargs):
+        if path == store.receipt_path:
+            assert not store.path.exists(), "dependent restoration must be retired first"
+            if interrupt_retirement:
+                raise OSError("interrupted receipt retirement")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", ordered_unlink)
+    if interrupt_retirement:
+        with pytest.raises(OSError, match="interrupted receipt retirement"):
+            adapter.observe()
+        assert not store.path.exists()
+        assert store.receipt_path.exists()
+        interrupt_retirement = False
+    assert adapter.observe().apply_owner_adoption
+    assert not store.path.exists()
+    assert not store.receipt_path.exists()
+    assert adapter.observe().apply_owner_adoption  # Retry is idempotent.
+    # After retirement, ordinary materialization can persist its pending action.
+    # Cleanup must become a no-op so the controller can observe and finish it.
+    with monkeypatch.context() as pending_patch:
+        pending_patch.setattr(
+            VMHACheckpointFileStore, "load", lambda self: SimpleNamespace(pending_action=object())
+        )
+        assert adapter.observe().apply_owner_adoption
+        writer = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+        assert writer is not None
+        try:
+            assert adapter.observe().apply_owner_adoption
+        finally:
+            os.close(writer)
+    status = {
+        "promotion_ready": True,
+        "data_plane_mode": "active",
+        "observed_owner_node_id": "node-a",
+        "cluster_id": "cluster-a",
+        "allocation_id": "allocation-a",
+        **generation,
+        "former_owner_compute_state": "running",
+        "former_attachment_absent": True,
+        "candidate_attachment_exact": True,
+        "ownership_re_read_exact": True,
+        "apply_locked": False,
+        "pending_operation_id": None,
+        "ownership_epoch": str(prior.ownership_epoch),
+        "route_reconciliation": {
+            "operation_id": "new-route-effect",
+            "owner_node_id": "node-a",
+            "allocation_id": "allocation-a",
+        },
+    }
+    receipt = _commit_promotion_receipt(
+        status=status,
+        config=config,
+        lineage_path=tmp_path / "transfer-lineage.json",
+        receipt_path=store.receipt_path,
+        adoption_path=adoption_path,
+        request_paths=(),
+        clock=lambda: 35.0,
+    )
+    assert receipt is not None and receipt["generation_id"] == "d" * 64
+    assert not adoption_path.exists()
 
 
 def test_apply_owner_adoption_preserves_active_restoration_and_prior_receipt(

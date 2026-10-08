@@ -239,6 +239,8 @@ network:
             if tun["esp_props"]:
                 swanctl_lines.append(f"        esp_proposals = {','.join(tun['esp_props'])}")
             swanctl_lines.append(f"        rekey_time = {int(tun['esp_life'])}s")
+            if "replay_window" in tun:
+                swanctl_lines.append(f"        replay_window = {tun['replay_window']}")
             swanctl_lines.append("        mode = tunnel")
             swanctl_lines.append(f"        start_action = {'start' if activate else 'none'}")
             swanctl_lines.append(f"        close_action = {'restart' if activate else 'none'}")

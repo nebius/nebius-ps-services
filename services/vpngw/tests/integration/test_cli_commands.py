@@ -147,6 +147,7 @@ def _static_wizard_input() -> str:
         "ONPREM_STATIC_PSK",
         "",  # generated APIPA
         "yes",
+        "1024",  # receive replay window
         "yes",  # write
         "no",  # prep network
     ]
@@ -192,11 +193,13 @@ def _vm_ha_wizard_input() -> str:
         "HA_STATIC_VM0_PSK",
         "",  # APIPA
         "yes",
+        "1024",  # VM 0 receive replay window
         "",  # VM 1 tunnel name
         "198.51.100.31",
         "HA_STATIC_VM1_PSK",
         "",  # APIPA
         "yes",
+        "",  # VM 1 inherits replay window
         "yes",  # write
         "no",  # prep network
     ]
@@ -237,6 +240,7 @@ def test_create_config_wizard_outputs_validate(
     validated = VPNGatewayConfig.model_validate(payload)
     assert validated.gateway_group.vm_ha is not None
     assert validated.gateway_group.vm_ha.enabled is vm_ha_enabled
+    assert validated.connections[0].tunnels[0].replay_window == 1024
     if vm_ha_enabled:
         assert validated.gateway_group.instance_count == 2
         assert {t.gateway_instance_index for t in validated.connections[0].tunnels} == {0, 1}

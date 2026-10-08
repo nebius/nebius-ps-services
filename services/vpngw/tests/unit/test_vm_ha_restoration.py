@@ -313,6 +313,102 @@ def test_terminal_restoration_superseded_by_exact_apply_owner_adoption_is_retire
     assert not store.retire_terminal_for_apply_owner_adoption()
 
 
+@pytest.mark.parametrize("missing_receipt", [False, True])
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "cluster_id",
+        "owner_node_id",
+        "peer_node_id",
+        "allocation_id",
+        "ownership_epoch",
+        "generation_id",
+    ],
+)
+def test_generation_adoption_preserves_restoration_on_authority_mismatch(
+    tmp_path: Path, mismatch: str, missing_receipt: bool
+) -> None:
+    store = _completed(tmp_path)
+    if missing_receipt:
+        store.receipt_path.unlink()
+    before = store.path.read_bytes()
+    authority = {
+        "cluster_id": "cluster-a",
+        "owner_node_id": "node-a",
+        "peer_node_id": "node-b",
+        "allocation_id": "allocation-a",
+        "ownership_epoch": "revision-10",
+        "generation_id": "d" * 64,
+    }
+    authority[mismatch] = "a" * 64 if mismatch == "generation_id" else "foreign"
+    with pytest.raises(StandbyRestorationError, match="conflicts with generation adoption"):
+        store.retire_terminal_for_generation_adoption(**authority)
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["active", "blocked", "corrupt", "receipt_id", "first_operation_id", "present_invalid"],
+)
+def test_generation_adoption_missing_receipt_requires_exact_completed_authority(
+    tmp_path: Path, damage: str
+) -> None:
+    store = _completed(tmp_path)
+    record = json.loads(store.path.read_text())
+    if damage == "active":
+        record["phase"] = "awaiting-standby"
+    elif damage == "blocked":
+        record.update(phase="blocked", blocked_reason="automatic-retry-exhausted")
+    elif damage == "corrupt":
+        record["authorization_id"] = "f" * 64
+    elif damage == "receipt_id":
+        record["promotion_receipt_id"] = "f" * 64
+    elif damage == "first_operation_id":
+        record["first_operation_id"] = "another-effect"
+    store.path.write_text(json.dumps(record))
+    if damage == "present_invalid":
+        store.receipt_path.write_text("{}")
+    else:
+        store.receipt_path.unlink()
+    before = store.path.read_bytes()
+    with pytest.raises(StandbyRestorationError):
+        store.retire_terminal_for_generation_adoption(
+            cluster_id="cluster-a",
+            owner_node_id="node-a",
+            peer_node_id="node-b",
+            allocation_id="allocation-a",
+            ownership_epoch="revision-10",
+            generation_id="d" * 64,
+        )
+    assert store.path.read_bytes() == before
+
+
+def test_generation_adoption_rechecks_authorization_before_retirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _completed(tmp_path)
+    original = store._retire_exact_terminal
+
+    def raced(record):
+        changed = record.to_dict()
+        changed["updated_at"] += 1
+        store.path.write_text(json.dumps(changed))
+        original(record)
+
+    monkeypatch.setattr(store, "_retire_exact_terminal", raced)
+    with pytest.raises(StandbyRestorationError, match="changed before retirement"):
+        store.retire_terminal_for_generation_adoption(
+            cluster_id="cluster-a",
+            owner_node_id="node-a",
+            peer_node_id="node-b",
+            allocation_id="allocation-a",
+            ownership_epoch="revision-10",
+            generation_id="d" * 64,
+        )
+    assert store.path.exists()
+    assert store.receipt_path.exists()
+
+
 def test_apply_owner_adoption_repair_preserves_active_or_foreign_restoration(
     tmp_path: Path,
 ) -> None:

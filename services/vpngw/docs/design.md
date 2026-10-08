@@ -4082,6 +4082,11 @@ preflight uses a typed HA-specific package contract, omits fresh/replaced member
 using the existing lifecycle enrollment set, and retains exact immutable predecessor
 checks on every retained member independently of ordinary runtime admission. Fresh/recovery
 HA installation without a preflight plan retains its existing package path.
+Package preparation uses a typed error for its own fixed diagnostics and closed
+remote-failure categories. The CLI projects that reason with the configuration-order member number;
+unknown exceptions receive a fixed safe category. This restores actionable
+errors without changing package admission, single-VM dispatch, locking, approval,
+installation, activation, or recovery behavior.
 
 Use one synchronous private `--ordinary-apply` action, with a fresh request ID,
 raw config SHA256 and boot ID. Under the routing lock, validate one snapshot,
@@ -4770,7 +4775,270 @@ with redundancy ready. This closes the shared-static kernel verification gap;
 it does not establish complete systemd-suite, ordinary-deployment or HA-failover
 acceptance.
 
+Package diagnostics use `VMHAAgentPackageError` in `deploy/vm_ha_package.py`
+for fixed product rejections shared by SSH preparation and migration handoff.
+The CLI package boundary adds the configuration-order member number and maps
+transport failures to closed categories, including SSH authentication/channel
+errors and EOF. Unknown exception contents remain hidden. Typed member-bound
+failures survive direct and chained apply convergence, standby owner refresh,
+artifact recovery, and public text/JSON output. Artifact and replay capability
+errors retain their specialized VM-HA routing. Installation order, admission,
+approvals, lock handling, activation and ordinary single-VM dispatch are unchanged.
+
+Verification covers seven required remote-command failures, first-member and
+later-member CLI failures, typed artifact rejection, unknown-error redaction,
+transport failures, handoff rejections and direct-consumer failure ordering.
+Four SSH/EOF fault cases failed before the alignment repair; all 800 distinct
+focused unit/integration tests then passed, including ordinary single-VM/package
+transactions, recovery, CLI/help and wheel checks. Scoped Ruff, formatting, mypy,
+Markdown and exact wheel/source parity passed. A separate read-only final review
+passed 45 focused tests and found no remaining diagnostic issue.
+
+Before this follow-up alignment, a clean normal HA upgrade from an independently
+healthy baseline passed; two fresh independent observations agreed HEALTHY and
+unchanged reapply verified a no-op. The latest reporting changes were validated
+offline only. An earlier isolated package replay was diagnostic intervention and
+is not treated as original-failure proof. The original incident did not reproduce.
+Live ordinary apply was not exercised. The subsequent repository PR gate supplied
+locked optional PyInstaller tools in a temporary directory and passed standalone
+binary startup and embedded-source verification. The full local gate passed
+2,769 unit tests and 101 integration checks; 31 Linux fixture cases were skipped
+on macOS and remain separate CI evidence. No project dependencies were changed.
+
 <!-- /FEATURE: FEAT-017 -->
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-018: Per-tunnel replay window and sampled receive health
+
+#### Requirements Covered
+
+- REQ-019: Configurable receive replay window and concise packet health.
+
+#### Context Evidence
+
+strongSwan 5.9 CHILD replay_window defaults to inherited charon.replay_window (normally
+32); Linux Netlink supports larger non-power-of-two windows. Zero disables protection.
+Extended XFRM replay_window is distinct from the legacy header and replay-window
+statistics. A receive sequence failure is not proof of authentication failure.
+
+#### Design Details
+
+Use a presence-aware TunnelConfig serializer so only explicit strict integers 32..1024
+reach normalized and resolved data. Project and render the optional value in the
+strongSwan CHILD block. The wizard retains Enter-as-omission separately from explicit
+32. HA conversion copies the field; concrete member tunnel choices remain independent.
+Peer imports must not overwrite the local receive setting.
+
+Prove selected-wheel parsing/projection/rendering and capability-advertisement support
+before deployment for explicit settings. Ordinary apply validates and pins a private wheel
+copy before IAM or provisioning effects, then reuses those bytes for inspection and
+execution. HA admission also checks each resolved configuration and retains post-install
+capability verification before activation. Do not require an old installed agent to
+advertise the new capability before its approved upgrade. Existing apply activation and
+approvals own all service changes; deployment success does not require an established
+peer SA. Package readable proof sources and the probe in frozen CLI builds.
+
+Classify replay-window capability rejection with a dedicated exception. The public
+apply boundary renders a concise rebuild/selection instruction and exits nonzero;
+VM-HA projects the same condition as an incompatible-artifact prerequisite. Disable
+traceback locals explicitly across CLI apps, including supported Typer versions that
+enable them by default. Keep source identity checks and prebuilt-only HA selection;
+developers rebuild after source edits before selecting an exact wheel. Validate stale
+and matching artifacts, dry-run and normal apply, structured VM-HA output and real
+terminal exception rendering with synthetic secret sentinels. Ordinary replay-window
+admission uses the same typed rejection when wheel preparation returns no artifact.
+Exercise missing/stale wheels through ordinary apply before provisioning, including
+dry-run and recreation, and model older Typer defaults in the subprocess regression.
+Wheel-test staging copies only declared package inputs (manifest, README, license and
+source), excluding operator configuration, caches and generated package metadata.
+
+Add a stdlib-only packet_health module, streamed over existing trusted SSH to
+`sudo -n /usr/bin/python3 -B -`, with only configured tunnel names and explicit expected
+windows. One session samples twice, three seconds apart; at most four gateways run
+concurrently, each bounded to 30 seconds. Both remote commands and local SSH collection
+bound stdout while reading and discard unused stderr. SSH sends stdin concurrently with
+stdout reads under the same deadline, and kills/reaps a failed or timed-out child.
+Commands use LC_ALL=C and TZ=UTC. Read swanctl --list-sas --raw, ip -s xfrm state list nokeys,
+ip -j -d -s link, boot_id and /proc/net/xfrm_stat. Return only allowlisted structured
+fields and closed errors; never raw stdout/stderr or cryptographic material.
+
+Parse balanced VICI sections; SPI and if-id are hexadecimal, reqid decimal. Match all
+inbound CHILD SAs to ESP kernel states using endpoints, SPI, reqid and if-id, retaining
+address family, mark/mask, boot ID, CHILD unique ID and kernel creation timestamp in
+identity. Match XFRM interfaces by if-id. Prefer extended replay_window over legacy
+replay-window and keep window/duplicate/integrity statistics separate. Difference
+only stable identities; set changes, reset, missing data or ambiguous matches yield
+partial evidence while preserving stable positive drops. Never subtract across SAs.
+
+Render Tunnel | RX window | Receive health after the existing primary table. Show
+current positive reasons first; complete zero-drop samples distinguish idle from active.
+Explicit expected-window mismatch and disabled protection are visible. Increasing
+interface receive errors or drops also warn when SA counters stay quiet. Label gateways
+when multiple hosts are displayed. Warm standby SAs are sampled normally; only a fresh
+post-sample authority check with matching boot identity can explain an absent SA as cold
+standby. Packet evidence never affects HA readiness, status exit codes or automated actions.
+`--packet-details` shows actual measured intervals and per-SA, interface and gateway
+counter before/after/deltas, clearly scoped. Matching counters support correlation but
+are not required to be equal or added together. Do not extend the HA wire schema.
+
+#### Selected Option
+
+An optional per-tunnel control and a separate read-only packet table preserve current
+configuration and lifecycle contracts while making receive drops understandable.
+
+#### Alternatives Considered
+
+A global 1024 default would change existing behavior. Restricting values to 32/1024
+would reject supported intermediate windows. Installed-agent-only telemetry would
+prevent observation before upgrade. Cumulative totals alone cannot show current health.
+
+#### HA generation retirement correction
+
+A live replay-window apply exposed a private ordering defect: the exact owner-adoption
+snapshot removed a prior-generation promotion receipt while retaining its completed
+restoration authorization. Strict status loading then failed on the missing receipt.
+Retire the dependent terminal authorization before receipt removal under the existing
+rearm writer lock and revalidated apply declaration, apply lock and fresh cloud ownership.
+For an interrupted retirement with no receipt, admit only a structurally valid completed
+prior-generation authorization whose cluster, members, allocation and ownership epoch
+match that authority and whose committed promotion identity recomputes exactly. Preserve
+normal strict loading and reject active, malformed, foreign, current-generation or
+changed-owner state. This is private invariant restoration, with no new public interface,
+authority source, persisted format or compatibility reader. Prove retirement order,
+interruption recovery, identity refusals and compare-before-remove behavior before
+replaying normal apply and independently checking status and kernel receive windows.
+
+Apply-lock admission uses a dedicated private check under the same rearm writer lock.
+Incoming cluster/member identity must match the installed runtime. Only missing-receipt,
+completed non-operator residue bound to the installed cluster, members, allocation and
+prior generation, with independently recomputed receipt identity, can pass this check.
+Admission leaves records unchanged and grants no health or restoration authority.
+Prepared policy and active recovery still block; all non-apply writer checks stay strict.
+The package is installed before admission; subsequent fenced adoption owns retirement.
+Once obsolete records are absent, retirement is a no-op: its writer/pending-action
+guards must not prevent the controller from completing ordinary materialization.
+Recheck retirement necessity under the writer lock before any record mutation.
+
+#### Implementation Boundaries
+
+Schema, wizard, projection, rendering, artifact admission and public status presentation.
+Existing lifecycle, ownership and recovery owners retain all mutation authority.
+
+#### Test-First Success Criteria
+
+- Explicit windows survive every configuration boundary; omitted outputs stay unchanged.
+- Untrusted or ambiguous observations cannot produce a healthy claim or expose keys.
+- Partial observations retain confirmed positive drops; HA readiness remains independent.
+
+#### Validation Plan
+
+Run source gates, paired specification validation and scoped alignment.
+
+#### Test Plan
+
+Synthetic fixtures cover strict types, preserved omission, wizard round trips, extended
+windows, nested VICI, duplicate/integrity reasons, rekey/reset and unavailable probes.
+Artifact tests reject stale support before effects; existing ordinary/HA suites guard lifecycle.
+
+#### Evaluation Plan
+
+Inspect compact and detailed output, secret-free collection, exact identities and unchanged
+legacy serialization. Report source, installed package and live evidence separately.
+
+#### Rollout And Rollback
+
+Install the matching CLI and use existing reviewed apply to deploy optional overrides.
+Use the same reviewed apply to restore 32 or inherited behavior; changes can disrupt VPN
+traffic. Do not assert a fixed outage duration. Live qualification requires an explicitly
+authorized target and preserves the same fenced lifecycle workflow.
+
+#### Done Definition
+
+The feature and compatibility regressions pass locally, documentation agrees and the
+observed scope and remaining limits of live qualification are explicitly recorded.
+
+#### Implementation Evidence
+
+Implemented presence-aware schema serialization, per-tunnel wizard input, resolved
+projection and CHILD rendering. The replay_window module proves selected-artifact support;
+ordinary and HA deployment paths enforce it before effects. The packet_health module
+provides bounded key-free collection, strict parsing and conservative classification;
+status integrates compact output and optional packet details. README and changelog cover
+configuration, compatibility, observation scope and apply disruption. Existing lifecycle
+activation, fencing and recovery paths retain their authority.
+
+#### Verification Evidence
+
+Local verification passes: 2,673 unit tests and 100 integration tests, including wheel
+build/install, agent capability smoke and real PyInstaller frozen packaging. Another 31
+integration tests require disposable Linux/systemd fixtures and were skipped. Ruff, mypy,
+Markdown lint, CLI help smoke, paired specification validation and diff hygiene pass.
+Focused synthetic regressions cover omission/hash compatibility, strict validation,
+ordinary/HA artifact admission before effects, source pinning, real iproute formatting,
+extended windows, ambiguous and unmatched SAs, rekey/reset, partial positive evidence,
+interface-only drops, cold-role transitions, malformed input and collection bounds.
+The streamed probe also executes with isolated standard-library-only Python. A subsequent
+alignment pass reproduced and repaired unbounded local SSH output buffering. Regression
+checks cover oversized stdout rejection before the producer finishes, discarded noisy
+stderr, simultaneous stdin/stdout pressure and blocked-stdin timeout/child cleanup.
+The CLI table test mocks the packet-collection boundary and forbids subprocess escape.
+Read-only correctness and security re-review found no remaining blocker. The initial
+verification above established local delivery only.
+
+The subsequent authorized non-production HA apply exposed prior-generation receipt
+retirement before dependent completed authorization cleanup. Regression tests prove
+retirement order, interrupted-retirement recovery, exact authority refusals, apply-only
+inhibition admission without mutation and controller progress after cleanup. The final
+source passes 2,720 unit tests, scoped Ruff/format/type checks and documentation checks;
+34 CLI/package integration tests include a real frozen binary build.
+
+Normal apply resumed its own interrupted checkpoint using the corrected source-derived
+wheel, installed both packages before admission, activated standby then owner, verified
+routed forwarding and released standby last. No manual guest record edits, service
+restarts, fabricated receipts or cloud ownership changes pre-satisfied product steps.
+Post-apply status reports all four IPsec/BGP sessions established, services and routes
+healthy, HA healthy, redundancy ready, identities verified and auto-healing enabled.
+All four receive windows are 1024, with packets received and no new late, duplicate or
+integrity drops in the three-second sample. Independent reads confirm exact installed
+source hashes, rendered and kernel windows, cleared apply locks, owner forwarding only,
+and a current owner receipt with the orphaned authorization absent. This qualifies the
+requested configuration apply and recovery; it does not establish forced failover,
+load performance, long-duration stability or other deployment environments.
+
+A subsequent local apply rejection came from a prebuilt wheel whose agent/main.py
+bytes lagged the source CLI. The strict capability check correctly rejected it, but
+an untyped error escaped apply and supported Typer 0.20 printed configuration locals.
+ReplayWindowCapabilityError now reaches a concise apply diagnostic and the existing
+VM-HA incompatible-artifact prerequisite, including partial-convergence reporting.
+All CLI apps explicitly disable traceback locals. HA selection still requires one
+existing artifact; developers rebuild after source changes.
+
+This correction passed 689 scoped unit tests and 32 CLI/package integration tests,
+including wheel build/install and agent capability smoke, plus scoped Ruff, format,
+mypy, Markdown and diff checks. Five negative-control regressions failed before the
+repair and passed afterward. Real subprocess checks verify synthetic secret omission
+with both Typer 0.24.1 and the installed Typer 0.20.0. The rebuilt selected wheel matches
+all 75 local Python package sources, verifies its identity, and passes replay-window
+admission for the original configuration and both resolved members using the installed
+CLI interpreter. Read-only code/security review found no blocker in this correction.
+These are local admission and packaging results; live apply, activation and gateway
+health were not rerun for this correction.
+
+Follow-up alignment repaired the remaining missing-wheel ordinary diagnostic and
+strengthened traceback regression coverage against both supported Typer defaults.
+Four missing-wheel cases failed before repair; missing/stale artifacts now fail cleanly
+through ordinary apply across dry-run and recreation without provisioning. A negative
+control confirms the subprocess sentinel is observable when unsafe locals are enabled.
+Packaging review also identified whole-project fixture copying; a synthetic test failed
+before repair and now verifies operator configuration and stale egg metadata exclusion.
+Real package builds use only declared inputs. The exact temporary source staging from
+the affected validation run was removed after verifying its task-owned temporary path.
+Final validation passes 698 scoped unit tests, 34 CLI/package integration tests, scoped
+Ruff/format checks, four-file mypy, Markdown checks and paired specification validation.
+Independent code/security review found no remaining scoped finding. The refreshed wheel
+again matches all 75 Python package sources and admits the original configuration and
+resolved members through the installed CLI interpreter. This is local proof only.
+
+<!-- /FEATURE: FEAT-018 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 

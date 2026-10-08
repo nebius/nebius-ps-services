@@ -793,7 +793,12 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--recover-vm-ha-migration",),
             ("--replace-failed-vm-ha-passive",),
         ),
-        ("status",): (("--local-config-file", "-c"), ("--project-id",), ("--region",)),
+        ("status",): (
+            ("--local-config-file", "-c"),
+            ("--project-id",),
+            ("--region",),
+            ("--packet-details",),
+        ),
         ("add-routes-local",): (
             ("--local-config-file", "-c"),
             ("--project-id",),

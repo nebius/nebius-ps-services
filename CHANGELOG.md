@@ -6,6 +6,12 @@ project folder.
 
 ## [Unreleased]
 
+- Simplify all eighteen PyTorch lessons for scanning: shorter explanations,
+  focused examples and brief performance connections. Keep broadcasting to one
+  matrix-plus-bias addition, remove unrelated API detours, and simplify model,
+  transfer and batching code. Align diagrams, glossary, references and the
+  generated reading course while preserving its lessons-only profile.
+
 - Preserve reading-course subsection heading levels when rendering diagrams,
   so PyTorch lesson subsections use `h4` beneath lesson fields instead of `h6`.
 

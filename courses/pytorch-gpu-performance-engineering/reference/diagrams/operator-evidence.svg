@@ -16,7 +16,7 @@
     <text x="160" y="204" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">add</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">relu</tspan><tspan> · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
     <path d="M160 231 V262" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
     <rect x="16" y="274" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
-    <text x="160" y="305" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Dispatcher / backend</tspan></text>
+    <text x="160" y="305" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Dispatcher</tspan></text>
     <text x="160" y="336" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Choose implementations</tspan></text>
     <path d="M160 363 V394" fill="none" stroke="#206757" stroke-width="2.5" marker-end="url(#pt-operator-evidence-arrow)" />
     <rect x="16" y="406" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
