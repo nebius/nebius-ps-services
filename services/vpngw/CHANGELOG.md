@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.2] - 2026-10-08
+
 - Report VM-HA package-preparation failures with the failed member and a safe
   reason instead of only a generic banner. Preserve existing lock handling,
   approval behavior, and regular single-VM apply; omit raw SSH and exception

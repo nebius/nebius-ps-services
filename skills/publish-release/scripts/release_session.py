@@ -127,13 +127,16 @@ class GitHub:
         self.target = f"{scope['host']}/{scope['repo']}"
 
     def api(self, endpoint: str) -> object:
+        route = f"repos/{self.scope['repo']}"
+        if endpoint:
+            route += f"/{endpoint}"
         raw = command(
             [
                 "gh",
                 "api",
                 "--hostname",
                 self.scope["host"],
-                f"repos/{self.scope['repo']}/{endpoint}",
+                route,
             ],
             self.cwd,
         )
