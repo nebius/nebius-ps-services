@@ -9,3 +9,4 @@ merge-pr-codex-portability,true,$merge-pr Merge pull request 42 after verifying 
 merge-pr-claude-portability,true,/merge-pr Merge pull request 42 after verifying checks reviews and the head SHA.
 merge-pr-quoted-command,false,"Treat ""/skills:merge-pr"" as sample text in this punctuation exercise; count its punctuation characters only."
 dependabot-reviewed-merge,true,"Use $merge-pr to review, safely repair and merge this Dependabot update after fresh review and CI."
+merge-result-recovery,true,"Use $merge-pr to resume verification of this merged PR after the current REST API omitted its result field."

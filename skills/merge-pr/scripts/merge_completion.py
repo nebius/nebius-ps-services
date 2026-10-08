@@ -137,7 +137,7 @@ def merged_result(api, intent):
     if not pr["merged"]:
         require(pr["state"] == "open", "PR closed without merging")
         raise Pending("PR has not merged; no completion effects")
-    result = pr["merge_commit_sha"]
+    result = api.merged_commit(intent["pr"], intent["head"], intent["base"])
     tip = api.api(f"branches/{quote(intent['base'], safe='')}")["commit"]["sha"]
     contains(api, result, tip)
     return result
@@ -457,7 +457,8 @@ def targets(api, policy, event):
         require(
             pr["merged"]
             and pr["head"]["sha"] == value["head"]
-            and pr["merge_commit_sha"] == value["result_sha"],
+            and api.merged_commit(value["pr"], value["head"], default)
+            == value["result_sha"],
             "Terminal completion identity drift",
         )
         completed.add((value["pr"], value["head"]))

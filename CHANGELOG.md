@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Resolve merged results through identity-bound GraphQL evidence after GitHub
+  removed the REST result field. Preserve fail-closed recovery, exact-result
+  checkout and duplicate suppression for already-authorized merges.
+
 - Record the reviewed broker deployment and verified repository protection;
   document GitHub's dependent branch-creation setting normalization and the
   configured Pages publication path. Keep live acceptance evidence separate.

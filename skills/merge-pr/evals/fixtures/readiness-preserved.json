@@ -24,7 +24,6 @@
     "merged": false,
     "merged_at": null,
     "state": "open",
-    "merge_commit_sha": "4444444444444444444444444444444444444444",
     "head": {
       "sha": "1111111111111111111111111111111111111111"
     },
@@ -87,5 +86,19 @@
     "required_checks": "success",
     "headRefOid": "3333333333333333333333333333333333333333",
     "previously_reviewed_head": "1111111111111111111111111111111111111111"
+  },
+  "graphql_pr": {
+    "number": 42,
+    "merged": false,
+    "mergedAt": null,
+    "headRefOid": "1111111111111111111111111111111111111111",
+    "baseRefName": "release/stable",
+    "baseRepository": {
+      "nameWithOwner": "example/widget"
+    },
+    "mergeCommit": null,
+    "potentialMergeCommit": {
+      "oid": "4444444444444444444444444444444444444444"
+    }
   }
 }

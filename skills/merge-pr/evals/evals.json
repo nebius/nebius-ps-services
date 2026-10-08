@@ -146,7 +146,7 @@
       ],
       "assertions": [
         "Reports merged rather than removed from queue or still queued.",
-        "Uses the authoritative REST resulting commit, verifies containment, and reports exact-result CI.",
+        "Uses the authoritative identity-bound GraphQL mergeCommit.oid, verifies containment, and reports exact-result CI.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
     },
@@ -402,6 +402,19 @@
       "assertions": [
         "All these automatic events produce no merge candidate regardless of bot identity, metadata, green CI or an existing review.",
         "Only explicit trusted dispatch with positive actual COMMENT review can initiate a new merge; completion may recover an already-authorized operation."
+      ]
+    },
+    {
+      "id": "current-api-merged-result",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $merge-pr to resume an already merged PR. REST API 2026-03-10 reports merged but omits the old result field. The GraphQL observation in the fixture binds the exact PR, reviewed head and target and supplies mergeCommit.oid.",
+      "expected_output": "Resolves the authoritative result through GraphQL and verifies that exact result without repeating any merge or publication.",
+      "files": [
+        "evals/fixtures/squash-result.json"
+      ],
+      "assertions": [
+        "Uses only the identity-bound merged GraphQL result; never downgrades REST or substitutes a test merge or newer target tip.",
+        "Preserves the confirmed merge and reports missing or inconsistent GraphQL result evidence as a completion blocker before effects.",
+        "Keeps local observation read-only and leaves explicit CI and Pages effects to the completion owner."
       ]
     }
   ]

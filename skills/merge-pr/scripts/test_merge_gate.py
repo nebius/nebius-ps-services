@@ -120,6 +120,11 @@ class API:
     def repo_info(self):
         return {"default_branch": "main"}
 
+    def merged_commit(self, number, head, base):
+        assert (number, head, base) == (1, HEAD, "main")
+        assert self.pr["merged"]
+        return BASE
+
     def api(self, path, method="GET", data=None):
         if method != "GET":
             self.effects.append((path, method, copy.deepcopy(data)))
@@ -529,7 +534,7 @@ class MergeTests(unittest.TestCase):
             self.execute()
 
     def test_already_merged_is_read_only_and_identity_bound(self):
-        self.api.pr.update(merged=True, merge_commit_sha=BASE, state="closed")
+        self.api.pr.update(merged=True, state="closed")
         self.assertEqual(self.execute()["result_sha"], BASE)
         self.assertFalse(self.api.effects)
         self.api.pr["head"]["sha"] = BASE
@@ -651,6 +656,87 @@ class MergeTests(unittest.TestCase):
                 r"^    workflows:.*$", f"    workflows: {triggers}", value, flags=re.M
             )
             self.assertEqual(value, (templates / f"{name}.yml.template").read_text())
+
+
+class MergedResultTests(unittest.TestCase):
+    def setUp(self):
+        self.pr = {
+            "number": 1,
+            "merged": True,
+            "mergedAt": "2026-01-01T00:00:00Z",
+            "headRefOid": HEAD,
+            "baseRefName": "main",
+            "baseRepository": {"nameWithOwner": REPO},
+            "mergeCommit": {"oid": BASE},
+        }
+
+    def result(self, response=None):
+        if response is None:
+            response = {"data": {"repository": {"pullRequest": self.pr}}}
+        with patch.object(gate, "gh", return_value=response) as transport:
+            result = gate.GitHub(REPO).merged_commit(1, HEAD, "main")
+        args, payload = transport.call_args.args
+        self.assertEqual(
+            args, ["api", "--hostname", "github.com", "graphql", "--input", "-"]
+        )
+        self.assertEqual(
+            payload["variables"], {"owner": "example", "name": "project", "number": 1}
+        )
+        return result
+
+    def test_actual_graphql_result_is_canonical(self):
+        # Neither a REST result field nor a synthetic test merge is authority.
+        self.pr["potentialMergeCommit"] = {"oid": HEAD}
+        self.assertEqual(self.result(), BASE)
+
+    def test_result_requires_matching_pr_head_and_target(self):
+        for key, value in (
+            ("number", 2),
+            ("number", True),
+            ("headRefOid", BASE),
+            ("baseRefName", "other"),
+            ("baseRepository", {"nameWithOwner": "other/project"}),
+            ("baseRepository", None),
+        ):
+            with self.subTest(key=key, value=value):
+                prior = self.pr[key]
+                self.pr[key] = value
+                with self.assertRaises(gate.Blocked):
+                    self.result()
+                self.pr[key] = prior
+
+    def test_unconfirmed_or_missing_result_fails_closed(self):
+        for key, value in (
+            ("merged", False),
+            ("merged", "true"),
+            ("mergedAt", None),
+            ("mergedAt", ""),
+            ("mergeCommit", None),
+            ("mergeCommit", {}),
+            ("mergeCommit", {"oid": "main"}),
+            ("mergeCommit", {"oid": 1}),
+        ):
+            with self.subTest(key=key, value=value):
+                prior = self.pr[key]
+                self.pr[key] = value
+                with self.assertRaises(gate.Blocked):
+                    self.result()
+                self.pr[key] = prior
+
+    def test_graphql_errors_or_missing_object_fail_closed(self):
+        for response in (
+            {},
+            [],
+            {"data": None},
+            {"data": {"repository": None}},
+            {"data": {"repository": {"pullRequest": None}}},
+            {
+                "errors": [{"message": "unavailable"}],
+                "data": {"repository": {"pullRequest": self.pr}},
+            },
+        ):
+            with self.subTest(response=response), self.assertRaises(gate.Blocked):
+                self.result(response)
 
 
 if __name__ == "__main__":
