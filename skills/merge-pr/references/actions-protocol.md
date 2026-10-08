@@ -39,7 +39,7 @@ python3 <merge-pr>/scripts/merge_gate.py attest --repo owner/repository \
 
 The broker independently validates the review ID, COMMENTED state, numeric
 operator allowlist, commit ID, repository/PR/head/base, verdict and validation.
-Only configured operators can request ordinary merges. Actions cannot approve
+Only configured operators can request any new merge, including Dependabot updates. Actions cannot approve
 its own PR, so Actions-authored PRs require maintainer handling.
 
 ## Dispatch and merge authority
@@ -52,9 +52,11 @@ gh workflow run skills-merge-pr.yml --repo owner/repository --ref <default> \
 ```
 
 Bind the broker run by event, inputs, PR/head and time; never assume the latest
-run is yours. Repository variables `MERGE_AUTOMATION_MODE` and
-`MERGE_CANARY_PR_NUMBERS` select disabled, named canaries, or enabled operation.
-Missing mode defaults to disabled. `MERGE_OPERATOR_IDS` is a JSON numeric list.
+run is yours. `MERGE_OPERATOR_IDS` is the sole merge-specific repository
+variable, a JSON list of trusted numeric operator IDs. Every new merge requires
+explicit workflow_dispatch and a positive actual review ID. Missing, zero,
+malformed, forged or stale review evidence fails closed. PR/CI events and
+schedules produce no merge candidates; they continue updating Required CI.
 
 The trusted default workflow separates permissions by job: CI status writes,
 read-only admission, then Contents/PR write for approval and merge. Before any
@@ -72,7 +74,7 @@ The API has no base-SHA compare-and-swap. Current base inclusion, repeated
 checks and GitHub strict required CI protect against a moving base.
 
 `Required CI` is a CI-only status, available to human and fork PRs independently
-of automation activation or local review evidence. It checks the explicit
+of merge dispatch or local review evidence. It checks the explicit
 workflow/path inventory and other checks/statuses. Broker admission remains a
 separate gate. All write-enabled workflows share `github-actions[bot]`; this
 design does not provide custom-App isolation. Keep each job least-privileged.
@@ -83,7 +85,7 @@ An accepted request is pending. Confirm actual merge and the authoritative
 result SHA, then remote default-branch containment. Token-generated pushes do
 not trigger ordinary CI or legacy Pages builds. A trusted completion workflow,
 triggered by workflow completion and a schedule, resumes from the uploaded
-intent even if the original broker failed after merge.
+operator-dispatched positive-review intent even if the broker failed after merge.
 
 The dispatcher uploads its attempted-work journal before explicitly dispatching
 applicable CI. Each dispatch binds repository, PR, result SHA, original intent,
@@ -123,21 +125,28 @@ should read that skill's template README because source-relative links may not
 exist. Missing setup is a blocker.
 
 A normal maintainer-reviewed bootstrap must place trusted workflows on default
-before activation. Keep required review, stale-approval dismissal, strict CI
+before dispatch. Keep required review, stale-approval dismissal, strict CI
 and conversation resolution. A push restriction that cannot admit the built-in
 identity requires an explicitly authorized protection redesign; never remove
 it opportunistically. Additional human/CODEOWNER/environment requirements remain
 blockers. Do not delete old credentials as part of migration.
 
-## Dependabot admission
+## Reviewed dependency updates
 
-Dependabot needs no laptop review. The secretless `pull_request_target` producer
-fetches metadata without PR checkout and uploads exact-identity evidence. The
-common broker validates its successful trusted producer, numeric bot identity,
-verified bot-only commits, file count, supported ecosystem/type/path, CI and
-human objections. Docker and unrecognized changes remain ineligible. Existing
-schedules/groups stay unchanged. This is deterministic policy admission, never
-represented as a local review-pr attestation.
+Dependabot uses the same complete local review and safe repair path as ordinary
+PRs, including Docker updates. Review breaking changes and dependency/security
+information, route Python, Actions and Docker to the matching specialists and
+run meaningful validation. Safe source repairs are allowed through create-pr;
+every changed head or base invalidates the prior review. Unsafe findings,
+missing validation and human objections stop merging. No metadata producer,
+bot identity, label or green CI can replace the COMMENT review. Schedules,
+groups, labels, limits, target branch and configured ecosystems stay unchanged.
+Dependabot waits for a local operation; there is no scheduled local agent.
+
+Before retiring earlier admission, reconcile outstanding effects and prove old
+broker runs quiescent. Completion and CI checkout accept only trusted operator
+dispatch with a positive review ID. Preserve recovery for authorized completed
+merges when stopping new broker runs; never undo merges/releases automatically.
 
 Official contracts: [built-in token](https://docs.github.com/en/actions/concepts/security/github_token),
 [async merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously),

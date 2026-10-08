@@ -4,13 +4,22 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Unify ordinary and Dependabot PRs, including Docker, behind local review,
+  safe repairs, fresh head/base review and CI, then explicit operator-dispatched
+  protected merge. Remove the dependency metadata producer and rollout toggles;
+  keep the numeric operator list as the only merge-specific variable.
+- Require operator-dispatched positive-review intents in completion and CI
+  checkout. Automatic events report CI or recover admitted completion only.
+  Preserve bootstrap evidence and distinguish source, installed, CI and live
+  acceptance; keep standalone review, preparation-only and publication ownership.
+
 - Revalidate merge receipts at each CI checkout boundary with read-only job
   permissions and process-local fetch credentials. Reject write requests through
   completion verification and return pending status consistently.
 
 - Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
-  direct merge and recoverable explicit result-CI/Pages publication. Add
-  disabled/canary/enabled rollout; stop for unsupported queues or workflow-file
+  direct merge and recoverable explicit result-CI/Pages publication. Stop
+  for unsupported queues or workflow-file
   permissions. Remove custom-App setup without changing Agentic SDLC.
 
 ### Protected ordinary merge
@@ -19,7 +28,7 @@ All notable changes to the reusable Agent Skills are tracked here.
   local review-pr, safe canonical repair commits and a shared GitHub Actions merge
   owner. Add explicit create-pr preparation-only mode; exclude Agentic SDLC.
 - Add authenticated exact-head/base review evidence, deterministic protected
-  broker and Dependabot admission templates, with no PAT or bypass fallback.
+  broker and reusable templates, with no PAT or bypass fallback.
 - Make Helm/image preparation content-only and tag/push primitives bind the exact
   verified merge result and annotated tag object; align generated templates.
 

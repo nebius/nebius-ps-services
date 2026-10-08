@@ -8,3 +8,4 @@ review-pr-negative-03,false,Merge this ready pull request now.
 review-pr-codex-portability,true,$review-pr Review GitHub pull request 42 and report merge readiness.
 review-pr-claude-portability,true,/review-pr Review GitHub pull request 42 and report merge readiness.
 review-pr-quoted-command,false,"Treat ""/skills:review-pr"" as sample text in this punctuation exercise; count its punctuation characters only."
+dependabot-docker-review,true,Use $review-pr to review and safely repair this Dependabot Docker update; report readiness without merging.

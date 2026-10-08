@@ -12,8 +12,8 @@ Use these defaults unless the repository already has a stronger constraint.
   - `.github/workflows/vpngw-release.yml`
 - Container image publish:
   - `.github/workflows/sample-service-image.yml`
-- Bot-only merge automation:
-  - `.github/workflows/dependabot-auto-merge.yml`
+- Reviewed protected merge:
+  - `.github/workflows/skills-merge-pr.yml`
 
 ## Baseline rules
 

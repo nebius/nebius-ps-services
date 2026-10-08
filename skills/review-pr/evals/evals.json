@@ -31,6 +31,27 @@
         "Excludes Agentic SDLC and preserves its exact promoted SHA and separate sdlc-merge-pr owner.",
         "Does not repair, approve or merge through the ordinary route."
       ]
+    },
+    {
+      "id": "reviewed-docker-repair",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $review-pr on a same-repository Dependabot Docker PR. A safe source repair is needed after a breaking base-image update. CI is green on the original head A; the repair yields B.",
+      "expected_output": "Preserves the unified reviewed merge ownership and evidence boundaries.",
+      "files": [],
+      "assertions": [
+        "Routes Docker review to container, inspects the full diff and breaking/security information, and requires meaningful validation.",
+        "Uses create-pr private preparation for safe source repair, fresh CI and complete review on B and the current base.",
+        "Records COMMENT evidence when eligible but never dispatches or starts a merge from standalone review."
+      ]
+    },
+    {
+      "id": "metadata-is-not-review",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $review-pr on a Dependabot Python dependency PR with trusted bot identity, update labels and green CI but no local review.",
+      "expected_output": "Preserves the unified reviewed merge ownership and evidence boundaries.",
+      "files": [],
+      "assertions": [
+        "Performs complete local review of dependency and security information with the matching Python specialist.",
+        "Does not treat metadata or CI as review evidence and never starts merging."
+      ]
     }
   ]
 }

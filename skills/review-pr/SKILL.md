@@ -100,6 +100,8 @@ Route selectively like this:
   `values.yaml`, templates, schema, or chart publication contracts.
 - `python-project`: when the PR centers on Python packaging, `pyproject.toml`,
   `src/`, CLI structure, pytest, Ruff, or general Python project hygiene.
+- `container`: when the PR changes Dockerfiles, base images, image build inputs
+  or container dependency updates, including Dependabot Docker PRs.
 - `shell-scripting`: when the PR changes `.sh` files, shell helpers, or Bash
   CLI flows.
 - `linter`: when the PR needs shell, Markdown, or Python lint cleanup as part
@@ -125,7 +127,11 @@ surfaces.
    the commit continuation reference from that same skill.
    Honor report-only restrictions and externally owned/fork branch limits.
 3. Inspect the complete base-to-head diff, specs, review comments, unresolved
-   threads, checks and conflicts. Select relevant sibling skills. Review locally;
+   threads, checks and conflicts. For dependency updates, including Docker, review
+   breaking changes and dependency/security information with meaningful validation.
+   Select the matching Python, Actions or container specialist. Bot identity,
+   metadata and green CI never replace review. Safe repairs may include source
+   changes and invalidate earlier head/base review. Review locally;
    never install or run an AI agent on GitHub Actions.
 4. Before editing, use the canonical owner to establish intake and select the
    correct PR checkout. Prove its HEAD matches the remote PR head and preserve

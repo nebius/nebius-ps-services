@@ -64,3 +64,10 @@ Ordinary review runs locally and delegates safe repair commits, base sync and
 pushes to create-pr's private preparation handoff. It revalidates/re-reviews the
 final head/base, returns an authenticated COMMENT attestation, and never merges.
 Unsafe findings or unresolved human objections stop. Agentic SDLC remains read-only.
+
+## Reviewed dependency updates
+
+Dependabot updates, including Docker, require complete local review, meaningful
+validation and fresh evidence after every head/base change. Safe source repairs
+use create-pr. Bot metadata and green CI alone cannot authorize merging.
+Standalone review records readiness and never initiates merging.

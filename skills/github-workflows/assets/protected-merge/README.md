@@ -22,14 +22,17 @@ cancel result verification when a newer main or manual run starts.
 
 Customize both workflow-run trigger lists and the complete CI/path policy
 inventory together. Retain at least one unfiltered PR CI workflow. The native
-`Required CI` aggregate runs independently of merge activation and review
+`Required CI` aggregate runs independently of merge dispatch and review
 attestations. Expected workflow evidence, checks/statuses and fork association
 must all be readable. Merge queues are unsupported by this built-in-token path.
 
 Read merge-pr's `references/actions-protocol.md` for the authority and evidence
-contract. Set repository numeric `MERGE_OPERATOR_IDS`, begin with
-`MERGE_AUTOMATION_MODE=disabled`, then canary PR numbers in
-`MERGE_CANARY_PR_NUMBERS` before enabling. Keep the default token read-only and
+contract. Set the sole merge-specific variable `MERGE_OPERATOR_IDS` to a JSON
+list of verified operator numeric IDs. Every new merge, including Dependabot
+and Docker updates, requires explicit operator dispatch and a positive exact
+head/base COMMENT review. Automatic PR/CI events and schedules only report CI;
+completion recovery accepts previously authorized positive-review intents.
+Keep the default token read-only and
 allow Actions PR approvals. Only effect jobs request write permissions. There
 are no App credentials or PAT fallbacks, and all write-enabled workflows share
 the Actions identity. Changes to branch protection require explicit authority;
@@ -40,9 +43,10 @@ repository uses legacy default-branch/root publication and adapting that
 contract when needed; remove the unused Pages-write permission if disabled.
 Do not copy this publisher into an Actions-deployment Pages site unchanged.
 
-Use a normal maintainer-reviewed bootstrap, then a small ordinary PR canary and
-an eligible Dependabot canary. Workflow-file token denial stops for a maintainer.
+Reconcile old broker effects and prove writers quiescent before retiring an
+earlier admission path. Use a protected bootstrap, then a small ordinary PR and
+a real locally reviewed Dependabot acceptance PR, including Docker when eligible. Workflow-file token denial stops for a maintainer.
 The pre-effect journals and completion receipts are retained for 30 days;
 unknown effects and expired evidence require reconciliation, not blind retries.
-Disabling new merges must leave recovery for completed merges operational.
+Stopping new broker runs must leave recovery for completed merges operational.
 Local release skills retain tag ownership. Agentic SDLC is excluded.

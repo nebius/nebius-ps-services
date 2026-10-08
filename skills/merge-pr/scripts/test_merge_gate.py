@@ -17,11 +17,9 @@ POLICY = {
     "schema": "merge-policy/v1",
     "ci_workflows": [{"file": "ci.yml", "paths": ["**"]}],
     "excluded_checks": [],
-    "dependabot_workflow": "dependabot-auto-merge.yml",
 }
 ENV = {
     "MERGE_OPERATOR_IDS": "[123]",
-    "MERGE_AUTOMATION_MODE": "enabled",
     "GITHUB_RUN_ID": "100",
     "GITHUB_RUN_ATTEMPT": "1",
     "GITHUB_SHA": BASE,
@@ -102,9 +100,6 @@ class API:
         self.comparison = "ahead"
         self.unresolved = False
         self.on_approve = None
-        self.producers = []
-        self.artifacts = []
-        self.admission = {}
         self.intent = None
         self.open_prs = [self.pr]
         self.suite = {
@@ -148,14 +143,12 @@ class API:
             return self.suite
         if path == "pulls/1/reviews/10":
             return copy.deepcopy(self.review)
-        if path == "actions/runs/7":
-            return self.producers[0]
         if path.startswith("compare/"):
             return {"status": self.comparison}
         raise AssertionError(path)
 
     def pages(self, path, key=None):
-        if path.startswith("pulls?state=open&head="):
+        if path.startswith("pulls?state=open&"):
             return self.open_prs
         if path == "actions/runs/100/artifacts":
             return self.intents
@@ -163,17 +156,6 @@ class API:
             return self.files
         if path == "pulls/1/reviews":
             return self.reviews
-        if path == "pulls/1/commits":
-            return [
-                {
-                    "author": {"id": gate.BOT_ID},
-                    "commit": {"verification": {"verified": True}},
-                }
-            ]
-        if path.startswith("actions/workflows/"):
-            return self.producers
-        if path.startswith("actions/artifacts?"):
-            return self.artifacts
         if path.startswith("actions/runs?"):
             return self.runs
         if "/check-runs?" in path:
@@ -187,8 +169,9 @@ class API:
     def threads(self, number):
         gate.require(not self.unresolved, "Unresolved review threads")
 
-    def artifact(self, artifact_id, filename="admission.json"):
-        return self.intent if filename == "intent.json" else self.admission
+    def artifact(self, artifact_id, filename):
+        assert artifact_id == 900 and filename == "intent.json"
+        return self.intent
 
 
 class MergeTests(unittest.TestCase):
@@ -223,20 +206,74 @@ class MergeTests(unittest.TestCase):
         )
         self.assertEqual(self.api.effects[0][2]["commit_id"], HEAD)
 
-    def test_activation_never_inherits_authority(self):
-        for settings in (
-            {"MERGE_AUTOMATION_MODE": "disabled"},
-            {"MERGE_AUTOMATION_MODE": "canary", "MERGE_CANARY_PR_NUMBERS": "[2]"},
+    def test_automatic_events_never_select_or_admit_merges(self):
+        for event in (
+            "pull_request_target",
+            "pull_request",
+            "workflow_run",
+            "schedule",
+            "push",
+            "",
         ):
-            with self.subTest(settings=settings), patch.dict(os.environ, settings):
+            with (
+                self.subTest(event=event),
+                patch.dict(os.environ, {"GITHUB_EVENT_NAME": event}),
+            ):
+                self.assertEqual(gate.candidates(self.api, {}), [])
+                for review_id in (0, 10):
+                    with self.assertRaises(gate.Blocked):
+                        gate.admitted_intent(
+                            self.api, 1, HEAD, review_id, "squash", POLICY
+                        )
+                self.assertFalse(self.api.effects)
+
+    def test_dispatch_requires_trusted_operator_and_positive_review(self):
+        event = {"inputs": {"pr": "1", "head": HEAD, "review_id": "10"}}
+        self.assertEqual(
+            gate.candidates(self.api, event),
+            [{"pr": 1, "head": HEAD, "review_id": 10, "method": "squash"}],
+        )
+        for review_id in (None, "", "0", "-1", "bogus", True, 10, "1.0"):
+            with self.subTest(review_id=review_id):
+                event["inputs"]["review_id"] = review_id
+                with self.assertRaises(gate.Blocked):
+                    gate.candidates(self.api, event)
+        os.environ["GITHUB_ACTOR_ID"] = "456"
+        with self.assertRaisesRegex(gate.Blocked, "Unauthorized"):
+            self.execute()
+        self.assertFalse(self.api.effects)
+
+    def test_missing_malformed_or_forged_review_blocks_before_effects(self):
+        for review_id in (None, 0, -1, True, "10", 1.5):
+            with self.subTest(review_id=review_id):
+                with self.assertRaises(gate.Blocked):
+                    gate.snapshot(self.api, 1, HEAD, POLICY, review_id)
+                with self.assertRaises(gate.Blocked):
+                    gate.execute(self.api, 1, HEAD, review_id, "squash", POLICY)
+                self.assertFalse(self.api.effects)
+        for field, value in (
+            ("id", 11),
+            ("state", "APPROVED"),
+            ("commit_id", BASE),
+            ("body", "{}"),
+        ):
+            with self.subTest(field=field):
+                self.api.review = {**API().review, field: value}
                 with self.assertRaises(gate.Blocked):
                     self.execute()
                 self.assertFalse(self.api.effects)
-        with patch.dict(
-            os.environ,
-            {"MERGE_AUTOMATION_MODE": "canary", "MERGE_CANARY_PR_NUMBERS": "[1]"},
-        ):
-            self.assertEqual(self.execute()["outcome"], "requested")
+
+    def test_ci_targets_include_ordinary_and_fork_without_review(self):
+        fork = copy.deepcopy(self.api.pr)
+        fork["number"] = 2
+        fork["head"]["repo"]["full_name"] = "contributor/fork"
+        self.api.open_prs.append(fork)
+        self.api.review = {}
+        self.assertEqual(
+            gate.ci_targets(self.api),
+            [{"pr": 1, "head": HEAD}, {"pr": 2, "head": HEAD}],
+        )
+        self.assertFalse(self.api.effects)
 
     def test_missing_or_changed_intent_prevents_effects(self):
         self.api.intents = []
@@ -260,7 +297,6 @@ class MergeTests(unittest.TestCase):
         self.api.runs[0]["head_repository"]["full_name"] = "contributor/fork"
         self.api.review["body"] = "No agent attestation on an ordinary human PR"
         self.api.statuses[0]["state"] = "pending"
-        os.environ["MERGE_AUTOMATION_MODE"] = "disabled"
         result = gate.publish_ci(self.api, 1, HEAD, POLICY)
         self.assertEqual(result["state"], "success")
         self.assertEqual(self.api.effects[0][0], f"statuses/{HEAD}")
@@ -456,6 +492,21 @@ class MergeTests(unittest.TestCase):
         with self.assertRaises(gate.Blocked):
             self.check()
 
+    def test_malformed_review_body_fails_closed(self):
+        for body in ("[]", "null", "true", "broken"):
+            with self.subTest(body=body):
+                self.api.review["body"] = body
+                with self.assertRaises(gate.Blocked):
+                    self.execute()
+                self.assertFalse(self.api.effects)
+
+    def test_changed_review_after_approval_stops_merge(self):
+        self.api.on_approve = lambda api: api.review.update(state="DISMISSED")
+        with self.assertRaises(gate.Blocked):
+            self.execute()
+        self.assertEqual(len(self.api.effects), 1)
+        self.assertEqual(self.api.effects[0][0], "pulls/1/reviews")
+
     def test_fork_blocks(self):
         self.api.pr["head"]["repo"]["full_name"] = "fork/project"
         with self.assertRaises(gate.Blocked):
@@ -485,87 +536,64 @@ class MergeTests(unittest.TestCase):
         with self.assertRaises(gate.Blocked):
             self.execute()
 
-    def test_dependabot_policy_preserves_supported_updates(self):
-        for eco, path in [
-            ("pip", "pkg/requirements.txt"),
-            ("uv", "pkg/uv.lock"),
-            ("github_actions", ".github/workflows/ci.yml"),
-        ]:
-            for kind in ["major", "minor", "patch"]:
-                gate.dependency_policy(
-                    {
-                        "schema": gate.ADMISSION_SCHEMA,
-                        "ecosystem": eco,
-                        "update_type": "version-update:semver-" + kind,
-                    },
-                    [{"filename": path, "status": "modified"}],
-                )
+    def test_reviewed_human_and_dependency_updates_share_admission(self):
+        for author in (123, 49699333):
+            for path in (
+                "src/main.py",
+                "pkg/requirements.txt",
+                "pkg/uv.lock",
+                ".github/workflows/ci.yml",
+                "Dockerfile",
+            ):
+                with self.subTest(author=author, path=path):
+                    self.api = API()
+                    self.api.pr["user"]["id"] = author
+                    # Safe source repairs are allowed alongside dependency changes.
+                    self.api.files = [
+                        {"filename": path, "status": "modified"},
+                        {"filename": "src/repair.py", "status": "modified"},
+                    ]
+                    self.api.pr["changed_files"] = 2
+                    self.api.intent = gate.admitted_intent(
+                        self.api, 1, HEAD, 10, "squash", POLICY
+                    )
+                    self.assertEqual(self.execute()["outcome"], "requested")
+                    self.assertEqual(len(self.api.effects), 2)
+                    self.api.effects.clear()
+                    with self.assertRaises(gate.Blocked):
+                        gate.execute(self.api, 1, HEAD, 0, "squash", POLICY)
+                    self.assertFalse(self.api.effects)
 
-    def test_dependabot_docker_and_source_edits_block(self):
-        for eco, path in [
-            ("docker", "Dockerfile"),
-            ("pip", "src/main.py"),
-            ("github_actions", ".github/merge-policy.json"),
-        ]:
-            with self.assertRaises(gate.Blocked):
-                gate.dependency_policy(
-                    {
-                        "schema": gate.ADMISSION_SCHEMA,
-                        "ecosystem": eco,
-                        "update_type": "version-update:semver-patch",
-                    },
-                    [{"filename": path, "status": "modified"}],
-                )
-
-    def test_dependabot_artifact_identity(self):
-        self.api.pr["user"] = {"id": gate.BOT_ID, "login": "dependabot[bot]"}
-        self.api.files = [{"filename": "uv.lock", "status": "modified"}]
-        self.api.producers = [
-            {
-                "id": 7,
-                "status": "completed",
-                "conclusion": "success",
-                "path": ".github/workflows/dependabot-auto-merge.yml",
-                "actor": {"id": gate.BOT_ID},
-                "head_sha": BASE,
-                "event": "pull_request_target",
-                "repository": {"full_name": REPO},
-            }
-        ]
-        self.api.artifacts = [
-            {
-                "id": 9,
-                "name": "dependabot-1-" + HEAD,
-                "expired": False,
-                "workflow_run": {"id": 7},
-            }
-        ]
-        self.api.admission = {
-            "schema": gate.ADMISSION_SCHEMA,
-            "repository": REPO,
-            "pr": 1,
-            "head": HEAD,
-            "base": "main",
-            "base_sha": BASE,
-            "run_id": 7,
-            "ecosystem": "uv",
-            "update_type": "version-update:semver-major",
-        }
-        gate.snapshot(self.api, 1, HEAD, POLICY)
-        self.api.admission["head"] = BASE
+    def test_dependabot_repair_requires_fresh_head_base_review_and_ci(self):
+        self.api.pr["user"]["id"] = 49699333
+        repaired = "c" * 40
+        self.api.pr["head"]["sha"] = repaired
         with self.assertRaises(gate.Blocked):
-            gate.snapshot(self.api, 1, HEAD, POLICY)
+            gate.snapshot(self.api, 1, repaired, POLICY, 10)
+        self.api.review["commit_id"] = repaired
+        record = evidence()
+        record["head"] = repaired
+        self.api.review["body"] = json.dumps(record)
+        with self.assertRaises(gate.Pending):
+            gate.snapshot(self.api, 1, repaired, POLICY, 10)
+        self.api.runs[0]["head_sha"] = repaired
+        gate.snapshot(self.api, 1, repaired, POLICY, 10)
+        self.api.pr["base"]["sha"] = "d" * 40
+        with self.assertRaises(gate.Blocked):
+            gate.snapshot(self.api, 1, repaired, POLICY, 10)
+        record["base_sha"] = "d" * 40
+        self.api.review["body"] = json.dumps(record)
+        gate.snapshot(self.api, 1, repaired, POLICY, 10)
+        self.assertFalse(self.api.effects)
 
     def test_workflow_has_no_personal_token_fallback_or_pr_checkout(self):
         root = Path(__file__).resolve().parents[3]
         if not (root / ".github/workflows/skills-merge-pr.yml").exists():
             self.skipTest("Installed skill without repository deployment")
         broker = (root / ".github/workflows/skills-merge-pr.yml").read_text()
-        producer = (root / ".github/workflows/dependabot-auto-merge.yml").read_text()
-        self.assertNotIn("DEPENDABOT_AUTOMERGE_TOKEN", broker + producer)
+        self.assertNotIn("DEPENDABOT_AUTOMERGE_TOKEN", broker)
         self.assertNotIn("pull_request.head", broker)
-        self.assertNotIn("secrets.", producer)
-        self.assertNotIn("actions/checkout", producer)
+        self.assertNotIn("secrets.", broker)
         self.assertIn("persist-credentials: false", broker)
         self.assertNotIn("create-github-app-token", broker)
         self.assertIn("types: [in_progress, completed]", broker)
@@ -613,19 +641,14 @@ class MergeTests(unittest.TestCase):
         if not (root / ".github/workflows/skills-merge-pr.yml").exists():
             self.skipTest("Installed skill without repository deployment")
         templates = root / "skills/github-workflows/assets/protected-merge"
-        for name in ("skills-merge-pr", "merge-completion", "dependabot-auto-merge"):
+        for name in ("skills-merge-pr", "merge-completion"):
             value = (root / f".github/workflows/{name}.yml").read_text()
             value = value.replace("skills/merge-pr/scripts/", ".github/scripts/")
-            producer = (
-                "Protected merge"
-                if name == "merge-completion"
-                else "dependabot-auto-merge"
+            triggers = (
+                '["Protected merge", "CI"]' if name == "merge-completion" else '["CI"]'
             )
             value = re.sub(
-                r"^    workflows:.*$",
-                f'    workflows: ["{producer}", "CI"]',
-                value,
-                flags=re.M,
+                r"^    workflows:.*$", f"    workflows: {triggers}", value, flags=re.M
             )
             self.assertEqual(value, (templates / f"{name}.yml.template").read_text())
 

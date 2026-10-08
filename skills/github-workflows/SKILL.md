@@ -48,7 +48,7 @@ files. Return candidate path, mode, provenance, and validation requirements.
 
 - Creating or updating `.github/workflows/*.yml` files.
 - Standardizing service-scoped PR and merge CI in this monorepo.
-- Adding or reviewing bot-only merge automation.
+- Adding or reviewing explicitly dispatched protected merge automation.
 - Adding or reviewing tag-driven GitHub Release publication workflows.
 - Adding or reviewing container image publish workflows.
 - Translating a `container` build, platform, SBOM, provenance, vulnerability,
@@ -117,7 +117,9 @@ URLs, customer data, raw logs, or one-off local state.
 - Container workflows own CI orchestration only. Image/runtime design and
   validation requirements remain with `container`; registry release execution
   remains with `publish-image`.
-- Merge automation should be bot-scoped and narrowly authorized.
+- Merge automation requires trusted operator dispatch and exact-head/base local
+  review for every PR, including Dependabot updates. Automatic events only report
+  CI or recover already-authorized completion.
 
 ## Resources
 

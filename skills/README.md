@@ -2065,3 +2065,7 @@ and unresolved human objections stop. Agentic SDLC is excluded.
 See [Actions protocol](merge-pr/references/actions-protocol.md) and
 [repository setup](../.github/merge-automation.md). Helm/image prep is content-only;
 canonical whole-repository commits are followed by tagging the exact merge result.
+Dependabot updates, including Docker, use the same local review path and wait for
+an explicit operator dispatch. Standalone review never merges; automatic events
+only report CI or recover authorized completion. Skill installation and workflow
+deployment are separate from protection setup and live acceptance evidence.
