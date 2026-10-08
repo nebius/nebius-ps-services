@@ -1,11 +1,56 @@
 from __future__ import annotations
 
+import io
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from nebius_vpngw import ordinary_operations as ops
 from nebius_vpngw.deploy import ordinary_remote
+from nebius_vpngw.deploy.ordinary_handoff import Handoff
+from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
+
+
+@pytest.mark.parametrize(
+    ("fault", "reason"),
+    (
+        ("plan", "HA handoff package plan changed"),
+        ("wheel", "HA package changed after approval"),
+        ("dependency", "HA dependency changed after approval"),
+        ("receipt", "HA handoff package receipt is unverified"),
+    ),
+)
+def test_handoff_package_rejections_preserve_safe_reason(tmp_path, fault, reason):
+    from nebius_vpngw.deploy.ordinary_apply import sha
+
+    wheel = tmp_path / "agent.whl"
+    wheel.write_bytes(b"approved wheel")
+    dependency = tmp_path / "dependency.whl"
+    dependency.write_bytes(b"approved dependency")
+    plan = SimpleNamespace(
+        digest="a" * 64,
+        wheel=wheel,
+        dependency_paths=[dependency],
+        manifest={
+            "wheel_sha256": sha(wheel.read_bytes()),
+            "dependency_wheels": {dependency.name: sha(dependency.read_bytes())},
+        },
+    )
+    sent = io.StringIO()
+    handoff = Handoff(sent, io.StringIO('{"artifact_sha256":"TOP_SECRET"}\n'), ha={}, package=plan)
+    if fault == "plan":
+        handoff.package = SimpleNamespace(digest="b" * 64)
+    elif fault == "wheel":
+        wheel.write_bytes(b"TOP_SECRET")
+    elif fault == "dependency":
+        dependency.write_bytes(b"TOP_SECRET")
+    with pytest.raises(VMHAAgentPackageError) as raised:
+        handoff.prepare_package(plan)
+    assert str(raised.value) == reason
+    assert handoff.package_receipt is None
+    assert handoff.finished is False
+    assert sent.getvalue().count("prepare-package") == (1 if fault == "receipt" else 0)
 
 
 def test_real_observation_accepts_only_handoff_owned_runtime_changes(

@@ -14,6 +14,32 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Report VM-HA package-preparation failures with the failed member and a safe
+  reason instead of only a generic banner. Preserve existing lock handling,
+  approval behavior, and regular single-VM apply; omit raw SSH and exception
+  details. Cover SSH authentication, transport and early connection closure,
+  preserve diagnostics through `vm-ha` convergence and recovery, and retain
+  specific migration handoff package rejections.
+- Report missing ordinary replay-window wheels as actionable apply errors and
+  stale selected wheels as apply errors or VM-HA artifact prerequisites,
+  preserving strict admission and partial-convergence
+  reporting. Disable CLI traceback locals explicitly to avoid exposing configuration
+  on supported Typer versions. Document rebuilding prebuilt HA wheels after source edits.
+- Restrict wheel-test staging to package build inputs so ignored operator
+  configurations and stale package metadata are not copied into test artifacts.
+- Fix VM-HA generation changes orphaning completed restoration state by
+  retiring it before its promotion receipt. Recover interrupted retirement
+  only under exact fenced ownership, preserving strict receipt validation
+  and refusing active, foreign or changed-owner restoration state. Apply-only
+  admission permits fencing exact completed residue so recovery remains reachable.
+- Add optional per-tunnel `replay_window` (strict integers 32–1024), wizard
+  input, ordinary/HA propagation and selected-agent capability checks. Omitted
+  settings retain existing configuration, rendering and inheritance behavior.
+- Add a compact, read-only three-second packet-health observation to `status`,
+  with effective receive windows and distinct late/duplicate/integrity errors.
+  `--packet-details` shows scoped counter deltas; partial samples and rekeys
+  remain explicit without changing HA readiness or status exit behavior.
+  Bound captured SSH output while streaming and discard unused stderr.
 - Require `cryptography>=50.0.0,<51.0.0` and lock 50.0.1 to fix
   CVE-2026-69247 (Dependabot alert #44), preventing runtime and development
   installs from selecting the affected releases.

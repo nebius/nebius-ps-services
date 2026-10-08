@@ -2452,6 +2452,11 @@ in-place upgrade, never an automatic recreation or a version-only rejection.
   failed provisioning or SSH deployment cannot produce a success banner.
 - HA fencing, controller-only activation, staged receipts, and existing exact
   lifecycle approvals remain authoritative. No upgrade can bypass them.
+- Normal apply remains usable for both regular single-VM gateways and VM-HA.
+  Package-preparation errors identify the failed member and a product-owned,
+  sanitized reason, preserving the existing safe stop and lock state. Diagnostic
+  improvements add no flags, approval gates, retries, or operator workarounds;
+  untrusted exception and remote output remain undisclosed.
 
 - HA package planning binds immutable artifact, dependency, environment, target and
   configuration predecessors independently from runtime admission. The retained
@@ -2645,6 +2650,112 @@ network snapshots remain unchanged, and both deployments remain healthy afterwar
 This verifies route writing and verification on real XFRM interfaces; the complete
 systemd suite, ordinary deployment lifecycle and HA failover are separate evidence.
 
+Package-preparation diagnostics are implemented with product-owned safe errors,
+member identification, and redaction of unexpected exceptions. Fault injection
+covers the first non-owner and later owner, artifact drift, permissions, timeouts,
+SSH authentication/channel failures, early connection closure, and required remote
+steps while retaining safe stop and existing lock behavior. The same safe details
+survive VM-HA convergence, owner refresh and artifact recovery; migration handoff
+preserves its fixed package rejections. The alignment passed 800 distinct focused
+unit and integration tests, including ordinary single-VM and package transactions,
+plus scoped lint/type checks and rebuilt wheel/source parity. The subsequent
+repository PR gate passed all 2,769 unit tests and 101 integration checks,
+including standalone binary startup and embedded-source verification using
+locked optional PyInstaller tools in a temporary directory. The 31 Linux fixture
+checks were skipped on the local macOS host and remain a separate CI lane.
+
+Before this diagnostic alignment, a scoped non-production HA apply using the
+rebuilt wheel completed, two independent observations agreed HEALTHY, and an
+unchanged apply verified both members without deployment effects. The latest
+reporting changes were validated offline only. The original generic package
+failure did not reproduce, so its triggering cause remains unproven; this evidence
+does not claim a live ordinary deployment.
+
 <!-- /REQUIREMENT: REQ-018 -->
+<!-- REQUIREMENT: REQ-019 status=satisfied priority=P1 type=feature -->
+### REQ-019: Configurable receive replay window and concise packet health
+
+#### User Story
+
+Operators can tolerate legitimate reordered IPsec packets by selecting a receive
+replay window per tunnel and can observe current receive drops without interpreting
+unrelated cumulative counters. Existing ordinary and HA configurations stay valid.
+
+#### Acceptance Criteria
+
+- Optional `connections[].tunnels[].replay_window` accepts strict integers 32 through
+  1024 inclusive. Reject null, booleans, strings, fractions and out-of-range values.
+  Omission preserves strongSwan inheritance and existing serialized configuration,
+  rendered configuration and generation/hash inputs. Explicit 32 remains explicit.
+- The interactive wizard prompts each concrete tunnel. Enter preserves its existing
+  value or omission; explicit input is retained. Manual YAML, resolution, peer merge,
+  conversion, ordinary apply and HA apply preserve the receiver-local selection.
+- A selected deployment artifact must prove support before an explicit setting can
+  cause effects. Old installed agents remain upgradeable. Existing disruption approval,
+  fencing, ownership, standby and recovery contracts stay authoritative.
+  A stale selected wheel or unavailable ordinary replay-window wheel fails with an
+  actionable rebuild/selection diagnostic and no traceback containing configuration
+  values; VM-HA reports an artifact prerequisite for its incompatible selected wheel.
+  Planning does not rebuild or silently replace the selected HA artifact.
+- A configuration-generation change preserves HA health after a completed restoration.
+  Exact fenced owner adoption retires the prior terminal restoration before its promotion
+  receipt. Interrupted retirement of a completed prior-generation authorization is
+  recoverable only under the same cluster, member, allocation and unchanged cloud ownership
+  epoch, with independently valid committed receipt identity. Active, foreign, malformed
+  or current-generation authority remains blocking; normal receipt-bound reads stay strict.
+  Apply-lock admission may classify that exact completed residue as quiescent without
+  retiring it or granting authority, so the fenced recovery path remains reachable.
+- Normal status adds a compact packet-health table after the existing tunnel table,
+  using a fresh three-second observation. Show effective inbound window and concise
+  late/duplicate/integrity drop reasons, idle, mismatch or incomplete evidence.
+  `--packet-details` reveals scoped supporting counters. Existing status exit behavior,
+  primary columns and HA readiness semantics are unchanged.
+- Collection uses trusted SSH and a CLI-bundled standard-library probe on older and
+  newer agents. Collect only key-free XFRM data; do not read configuration or credentials,
+  import the installed agent, change state, retry with key-bearing output, or expose
+  unfiltered remote output. Bound gateway concurrency to four and each probe to 30 seconds.
+- Attribute inbound SAs by CHILD identity, SPI, reqid, endpoints and interface binding.
+  Handle extended windows, overlapping SAs, reset/rekey, partial evidence and warm/cold
+  standby conservatively. Preserve observed positive drops even in partial samples.
+  Gateway-global and interface counters are context, never tunnel-specific invariants.
+
+#### Negative Criteria
+
+- No automatic tuning, restart or failover; no new global default, disabled replay
+protection, outage-duration promise, or claim that a larger window locates reordering.
+
+#### Validation Method
+
+Run focused compatibility, parser, classification, CLI, artifact and HA regressions,
+then existing source and packaging gates. Keep offline and live evidence separate.
+
+#### Test Method
+
+Use synthetic key-free observations and effect spies. Compare omitted-field outputs
+against existing fixtures; test explicit values, invalid types, ambiguity and failures.
+
+#### Evaluation Method
+
+Require correct effective-state reporting and zero probe mutations. Local source,
+synthetic observation, CLI and packaging checks pass, including omission compatibility
+and rejection of unsupported artifacts before effects. An authorized non-production
+HA apply verified four effective receive windows of 1024, established IPsec/BGP,
+healthy services/routes and HA readiness, enabled auto-healing and no new receive drops
+during the three-second traffic sample. Normal apply recovered the product-created
+interrupted retirement checkpoint without manual guest-state changes. Forced failover,
+load performance and other deployments remain outside this live qualification.
+
+The stale selected-wheel diagnostic correction is verified locally: explicit settings
+remain blocked before deployment, while source-matching rebuilt artifacts pass the
+same admission for the original configuration and resolved members. Public apply and
+structured VM-HA diagnostics have regression coverage; traceback locals are suppressed
+on both the installed older supported Typer and the project test environment. This
+correction does not add a new live deployment or HA health qualification.
+
+Follow-up alignment covers unavailable ordinary replay-window wheels with the same
+safe diagnostic before provisioning, including dry-run and recreation. Local regression
+and packaging checks pass; no additional live deployment is claimed.
+
+<!-- /REQUIREMENT: REQ-019 -->
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

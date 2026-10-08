@@ -829,6 +829,11 @@ def require_auto_healing_writer_quiescent(state_dir: Path) -> None:
     from .restoration import require_standby_restoration_writer_quiescent
 
     require_standby_restoration_writer_quiescent(state_dir)
+    require_auto_healing_transactions_quiescent(state_dir)
+
+
+def require_auto_healing_transactions_quiescent(state_dir: Path) -> None:
+    """Reject unfinished policy and operator recovery transactions."""
 
     policy = AutoHealingPolicyStore(state_dir).load()
     if policy is not None and policy.phase is AutoHealingPolicyPhase.PREPARED:

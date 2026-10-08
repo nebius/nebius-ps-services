@@ -55,6 +55,7 @@ def _bgp_wizard_input(
         psk,
         "",  # APIPA /30
         "yes",  # Nebius uses first host
+        "",  # inherited receive replay window
         "yes",  # write reviewed config
         prepare_network,
     ]
@@ -85,6 +86,7 @@ def _static_wizard_input(*, psk: str = "literal-secret-123") -> str:
         psk,
         "",  # APIPA /30
         "yes",
+        "",  # inherited receive replay window
         "yes",
         "no",
     ]

@@ -110,6 +110,7 @@ def collect_tunnel_state(
                     "ike_life": ike_life,
                     "esp_life": esp_life,
                     "dpd": dpd,
+                    **({"replay_window": tun["replay_window"]} if "replay_window" in tun else {}),
                 }
             )
 

@@ -56,6 +56,7 @@ from nebius_vpngw.cli import (
     _vm_ha_status_spinner,
     _VMHAActivationFailed,
     _VMHAActivationUnsafe,
+    _VMHAAgentPackagePreparationFailed,
     _VMHAApplyConvergenceFailed,
     _VMHAApplyPlanCaptured,
     _VMHAApplyPlanningFailed,
@@ -623,10 +624,13 @@ def test_missing_standby_owner_upgrade_impact_is_explicit() -> None:
     )
 
 
-@pytest.mark.parametrize("owner_refresh_required", (False, True))
+@pytest.mark.parametrize(
+    ("owner_refresh_required", "package_fails"), ((False, False), (True, False), (True, True))
+)
 def test_missing_standby_orchestration_inhibits_owner_before_create(
     monkeypatch: pytest.MonkeyPatch,
     owner_refresh_required: bool,
+    package_fails: bool,
 ) -> None:
     trace: list[str] = []
     operation_id = "a" * 64
@@ -659,6 +663,7 @@ def test_missing_standby_orchestration_inhibits_owner_before_create(
 
     owner = SimpleNamespace(
         hostname="gateway-0",
+        instance_index=0,
         vm_ha_node=SimpleNamespace(node_id="node-0"),
         vm_ha_generation=SimpleNamespace(generation_id="b" * 64),
     )
@@ -689,6 +694,8 @@ def test_missing_standby_orchestration_inhibits_owner_before_create(
     class SSH:
         def ensure_vm_ha_agent_package(self, *_args, **_kwargs) -> None:
             trace.append("package-owner")
+            if package_fails:
+                raise paramiko.AuthenticationException("TOP_SECRET")
 
         def refresh_vm_ha_control_services(self, *_args, **_kwargs) -> None:
             trace.append("refresh-owner")
@@ -721,20 +728,32 @@ def test_missing_standby_orchestration_inhibits_owner_before_create(
         lambda *_args, **_kwargs: trace.append("replan") or replacement,
     )
 
-    observed = _create_missing_vm_ha_standby_under_owner_inhibition(
-        plan=plan,
-        planned_instances=(owner,),
-        existing_members={"gateway-0": "203.0.113.10"},
-        local_config={},
-        apply_report=SimpleNamespace(
-            artifact=object(),
-            owner_refresh_required=owner_refresh_required,
-        ),
-        lifecycle_journal=Journal(),
-        vm_manager=Manager(),
-        ssh=SSH(),
-        replacement=replacement,
-    )
+    def run():
+        return _create_missing_vm_ha_standby_under_owner_inhibition(
+            plan=plan,
+            planned_instances=(owner,),
+            existing_members={"gateway-0": "203.0.113.10"},
+            local_config={},
+            apply_report=SimpleNamespace(
+                artifact=object(),
+                owner_refresh_required=owner_refresh_required,
+            ),
+            lifecycle_journal=Journal(),
+            vm_manager=Manager(),
+            ssh=SSH(),
+            replacement=replacement,
+        )
+
+    if package_fails:
+        with pytest.raises(_VMHAAgentPackagePreparationFailed) as failed:
+            run()
+        assert failed.value.reason == "package-preparation-failed-member-1"
+        assert "authentication failed" in failed.value.next_action
+        assert "TOP_SECRET" not in str(failed.value)
+        assert trace[-1] == "package-owner"
+        assert not {"refresh-owner", "inhibit-owner", "create-missing-target"}.intersection(trace)
+        return
+    observed = run()
 
     assert observed == (inhibition, provisioning)
     initial_revalidation = [
@@ -1360,9 +1379,11 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
     )
 
 
+@pytest.mark.parametrize("failed_target", (None, "owner-target", "standby-target"))
 def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     monkeypatch,
     tmp_path: Path,
+    failed_target: str | None,
 ) -> None:
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -1381,10 +1402,12 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     )
     owner = SimpleNamespace(
         hostname="gateway-0",
+        instance_index=0,
         vm_ha_node=SimpleNamespace(node_id="node-0"),
     )
     standby = SimpleNamespace(
         hostname="gateway-1",
+        instance_index=1,
         vm_ha_node=SimpleNamespace(node_id="node-1"),
     )
     context = _VMHAArtifactRecoveryContext(
@@ -1419,6 +1442,8 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         def ensure_vm_ha_agent_package(self, target, *_args, artifact=None, **_kwargs) -> None:
             assert artifact is report.artifact
             order.append(f"install:{target}")
+            if target == failed_target:
+                raise EOFError("TOP_SECRET_REMOTE_DETAIL")
 
         def refresh_vm_ha_control_services(self, target, *_args, **_kwargs) -> None:
             order.append(f"refresh:{target}")
@@ -1481,6 +1506,20 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         "nebius_vpngw.cli._execute_vm_ha_apply_convergence",
         lambda *_a, **_k: order.append("canonical-apply"),
     )
+
+    if failed_target is not None:
+        with pytest.raises(_VMHAAgentPackagePreparationFailed) as failed:
+            _execute_vm_ha_artifact_standby_recovery(
+                config_path, report, region=None, progress_sink=None
+            )
+        member = 1 if failed_target == "owner-target" else 2
+        assert failed.value.reason == f"package-preparation-failed-member-{member}"
+        assert "connection closed unexpectedly" in failed.value.next_action
+        assert "TOP_SECRET" not in str(failed.value)
+        assert order[-1] == f"install:{failed_target}"
+        assert f"refresh:{failed_target}" not in order
+        assert "canonical-apply" not in order
+        return
 
     _execute_vm_ha_artifact_standby_recovery(
         config_path,
@@ -1564,10 +1603,16 @@ def test_vm_ha_apply_executor_projects_typed_activation_exit_as_convergence_fail
         _execute_vm_ha_apply_convergence(tmp_path / "gateway.config.yaml", report)
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("replay", [False, True])
 def test_vm_ha_apply_executor_preserves_artifact_failure_from_apply_exit(
     monkeypatch,
     tmp_path: Path,
+    wrapped: bool,
+    replay: bool,
 ) -> None:
+    from nebius_vpngw.replay_window import ReplayWindowCapabilityError
+
     report = _VMHAApplyPlanReport(
         kind="apply-convergence",
         digest="d" * 64,
@@ -1576,19 +1621,70 @@ def test_vm_ha_apply_executor_preserves_artifact_failure_from_apply_exit(
         has_destructive_changes=False,
         managed_ssh_action=None,
     )
-    artifact_error = VMHAAgentArtifactError(
-        VMHAAgentArtifactProblem.CHANGED,
-        "PRIVATE_ARTIFACT_DETAIL",
+    artifact_error = (
+        ReplayWindowCapabilityError("PRIVATE_ARTIFACT_DETAIL")
+        if replay
+        else VMHAAgentArtifactError(
+            VMHAAgentArtifactProblem.CHANGED,
+            "PRIVATE_ARTIFACT_DETAIL",
+        )
     )
 
     def fail_package(**_kwargs) -> None:
-        raise typer.Exit(code=1) from artifact_error
+        if wrapped:
+            raise typer.Exit(code=1) from artifact_error
+        raise artifact_error
 
     monkeypatch.setattr("nebius_vpngw.cli._apply_impl", fail_package)
 
-    with pytest.raises(VMHAAgentArtifactError) as raised:
+    with pytest.raises(type(artifact_error)) as raised:
         _execute_vm_ha_apply_convergence(tmp_path / "gateway.config.yaml", report)
     assert raised.value is artifact_error
+
+
+@pytest.mark.parametrize("origin", ("apply-exit", "owner-refresh", "artifact-recovery"))
+def test_vm_ha_executor_preserves_member_bound_package_failure(monkeypatch, tmp_path, origin):
+    report = _VMHAApplyPlanReport(
+        kind="artifact-standby-recovery" if origin == "artifact-recovery" else "apply-convergence",
+        digest="d" * 64,
+        engine_digest="e" * 64,
+        effects=("typed-effect",),
+        has_destructive_changes=False,
+        managed_ssh_action=None,
+    )
+    error = _VMHAAgentPackagePreparationFailed(2, "VM-HA exact agent package installation failed")
+
+    def fail(*_args, **_kwargs):
+        if origin == "apply-exit":
+            raise typer.Exit(code=1) from error
+        raise error
+
+    monkeypatch.setattr(
+        cli_module,
+        "_execute_vm_ha_artifact_standby_recovery"
+        if origin == "artifact-recovery"
+        else "_apply_impl",
+        fail,
+    )
+    with pytest.raises(_VMHAAgentPackagePreparationFailed) as raised:
+        _execute_vm_ha_apply_convergence(tmp_path / "gateway.config.yaml", report)
+    assert raised.value is error
+    assert raised.value.reason == "package-preparation-failed-member-2"
+    assert "exact agent package installation failed" in raised.value.next_action
+
+
+def test_apply_projects_owner_refresh_package_failure_without_traceback(monkeypatch, tmp_path):
+    path = tmp_path / "gateway.yaml"
+    path.write_text("version: 1\n")
+    error = _VMHAAgentPackagePreparationFailed(1, "SSH package preparation authentication failed")
+    monkeypatch.setattr(cli_module, "_apply_impl", Mock(side_effect=error))
+    monkeypatch.setattr(cli_module, "load_local_config", lambda *_a, **_k: {})
+    monkeypatch.setattr(cli_module, "merge_with_peer_configs", lambda *_a: SimpleNamespace())
+    result = CliRunner().invoke(app, ["apply", "--local-config-file", str(path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Package preparation failed on member 1" in result.output
+    assert "Reason: SSH package preparation authentication failed" in result.output
 
 
 def test_vm_ha_apply_executor_projects_untyped_apply_exit_as_convergence_failure(
@@ -4512,12 +4608,17 @@ def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
             "agent-artifact-changed",
             "obtain a new exact plan",
         ),
+        (
+            None,
+            "agent-artifact-incompatible",
+            "rebuild the agent wheel from the current source",
+        ),
     ),
 )
 def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
     monkeypatch,
     tmp_path: Path,
-    problem: VMHAAgentArtifactProblem,
+    problem: VMHAAgentArtifactProblem | None,
     reason: str,
     action_fragment: str,
 ) -> None:
@@ -4530,7 +4631,20 @@ def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
             reasons=("route-next-hop-not-exact",),
         )
     )
-    planner = Mock(side_effect=VMHAAgentArtifactError(problem, "PRIVATE_ARTIFACT_DETAIL"))
+    from nebius_vpngw.replay_window import require_replay_window_capability
+
+    def reject_replay_artifact(*_args, **_kwargs):
+        require_replay_window_capability(
+            {"connections": [{"tunnels": [{"replay_window": 1024}]}]}, ()
+        )
+
+    planner = Mock(
+        side_effect=(
+            VMHAAgentArtifactError(problem, "PRIVATE_ARTIFACT_DETAIL")
+            if problem is not None
+            else reject_replay_artifact
+        )
+    )
     lock = Mock(side_effect=AssertionError("artifact prerequisite acquired the lock"))
     effect = Mock(side_effect=AssertionError("artifact prerequisite executed apply"))
     monkeypatch.setattr(
@@ -4651,10 +4765,14 @@ def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effe
     assert "authentication-or-provider-unavailable" not in text_result.stdout
 
 
+@pytest.mark.parametrize("replay", [False, True])
 def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     monkeypatch,
     tmp_path: Path,
+    replay: bool,
 ) -> None:
+    from nebius_vpngw.replay_window import ReplayWindowCapabilityError
+
     config_path = tmp_path / "gateway.vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
     drift = _inspection(
@@ -4674,9 +4792,13 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     )
     planner = Mock(side_effect=(report, report))
     effect = Mock(
-        side_effect=VMHAAgentArtifactError(
-            VMHAAgentArtifactProblem.CHANGED,
-            "PRIVATE_ARTIFACT_DETAIL",
+        side_effect=(
+            ReplayWindowCapabilityError("PRIVATE_ARTIFACT_DETAIL")
+            if replay
+            else VMHAAgentArtifactError(
+                VMHAAgentArtifactProblem.CHANGED,
+                "PRIVATE_ARTIFACT_DETAIL",
+            )
         )
     )
 
@@ -4726,7 +4848,8 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     assert payload["classification"] == "external-prerequisite"
     assert payload["health"] == "blocked"
     assert payload["actions"] == ["convergence-effects-may-have-started"]
-    assert payload["reasons"] == ["agent-artifact-changed-during-convergence"]
+    problem = "incompatible" if replay else "changed"
+    assert payload["reasons"] == [f"agent-artifact-{problem}-during-convergence"]
     assert "durable checkpoints and resume idempotently" in payload["next_action"]
     assert "gateway changes may already have started" in payload["next_action"]
     assert "PRIVATE_ARTIFACT_DETAIL" not in result.output
@@ -4737,6 +4860,11 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
 @pytest.mark.parametrize(
     ("failure", "expected_reason", "expected_next_fragment"),
     (
+        (
+            _VMHAAgentPackagePreparationFailed(2, "VM-HA exact agent package installation failed"),
+            "package-preparation-failed-member-2",
+            "VM-HA exact agent package installation failed",
+        ),
         (
             _VMHAApplyConvergenceFailed("PRIVATE_APPLY_DETAIL"),
             "apply-convergence-interrupted",

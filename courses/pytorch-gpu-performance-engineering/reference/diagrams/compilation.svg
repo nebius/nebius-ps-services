@@ -17,7 +17,7 @@
     <text x="160" y="404" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>add → ReLU → </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
     <text x="160" y="434" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>May avoid intermediates</tspan></text>
     <text x="160" y="464" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result still has </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2]</tspan></text>
-    <text x="160" y="526" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Grouping is backend-dependent</tspan></text>
+    <text x="160" y="526" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Possible grouping, not fixed</tspan></text>
     <text x="160" y="562" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compile cost precedes reuse</tspan></text>
   </g>
 </svg>

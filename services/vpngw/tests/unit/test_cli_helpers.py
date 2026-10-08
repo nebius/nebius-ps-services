@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import paramiko
 import pytest
 import typer
 import yaml
@@ -159,6 +160,7 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     vm_ha_missing_standby_replacement_effect,
     vm_ha_passive_replacement_binding_key,
 )
+from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
 from nebius_vpngw.deploy.vm_manager import PublicAllocationCandidate
 from nebius_vpngw.nebius_auth import NebiusCLIAuthenticationError
 from nebius_vpngw.schema import HARole, RoutingMode, VMHARouteTarget
@@ -309,7 +311,7 @@ def _isolate_vm_ha_apply_identity_preflight(monkeypatch: pytest.MonkeyPatch) -> 
             token_identity=SimpleNamespace(token="managed-token"),
         ),
     )
-    artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=())
+    artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=())
     monkeypatch.setattr("nebius_vpngw.cli._unchanged_vm_ha_apply", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_package_dependencies", lambda artifact, **kwargs: artifact
@@ -4401,6 +4403,15 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         (None, "after-write", (("gcp", "static"),), False),
         (None, "relock-failure", (("gcp", "static"),), False),
         (None, "package-failure", (("gcp", "static"),), False),
+        (None, "package-known-failure", (("gcp", "static"),), False),
+        (None, "package-first-failure", (("gcp", "static"),), False),
+        (None, "package-artifact", (("gcp", "static"),), False),
+        (None, "package-permission", (("gcp", "static"),), False),
+        (None, "package-timeout", (("gcp", "static"),), False),
+        (None, "package-authentication", (("gcp", "static"),), False),
+        (None, "package-ssh", (("gcp", "static"),), False),
+        (None, "package-channel", (("gcp", "static"),), False),
+        (None, "package-eof", (("gcp", "static"),), False),
         (None, None, (("gcp", "bgp"),), True),
     ],
 )
@@ -4659,8 +4670,35 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             assert artifact is not None
             role = inst_cfg.vm_ha_node.role.value
             observed.append(("package", role, binding))
-            if final_transition_fault == "package-failure" and role == "active":
-                raise RuntimeError("injected active package failure")
+            if (
+                final_transition_fault
+                and final_transition_fault.startswith("package-")
+                and role
+                == ("passive" if final_transition_fault == "package-first-failure" else "active")
+            ):
+                from nebius_vpngw.deploy.ssh_push import (
+                    VMHAAgentArtifactError,
+                    VMHAAgentArtifactProblem,
+                )
+
+                raise {
+                    "package-failure": RuntimeError("injected active package failure TOP_SECRET"),
+                    "package-known-failure": VMHAAgentPackageError(
+                        "VM-HA exact agent package installation failed"
+                    ),
+                    "package-first-failure": VMHAAgentPackageError(
+                        "VM-HA package predecessor changed after approval"
+                    ),
+                    "package-artifact": VMHAAgentArtifactError(
+                        VMHAAgentArtifactProblem.CHANGED, "TOP_SECRET_PATH"
+                    ),
+                    "package-permission": PermissionError("TOP_SECRET_PATH"),
+                    "package-timeout": TimeoutError("TOP_SECRET_ENDPOINT"),
+                    "package-authentication": paramiko.AuthenticationException("TOP_SECRET"),
+                    "package-ssh": paramiko.SSHException("TOP_SECRET"),
+                    "package-channel": paramiko.ChannelException(1, "TOP_SECRET"),
+                    "package-eof": EOFError("TOP_SECRET_REMOTE_DETAIL"),
+                }[final_transition_fault]
             return {
                 "schema": "nebius-vpngw/vm-ha-package-v1",
                 "package_version": "test",
@@ -5114,13 +5152,32 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 "passive",
             ]
             assert "Apply completed successfully" not in result.stdout
-        elif final_transition_fault == "package-failure":
+        elif final_transition_fault and final_transition_fault.startswith("package-"):
+            assert isinstance(result.exception, SystemExit)
             assert "no apply-lock installation was attempted" in result.stdout
             assert "pre-existing locks were preserved" in result.stdout
-            assert [role for phase, role, _ in observed if phase == "package"] == [
-                "passive",
-                "active",
-            ]
+            member = 2 if final_transition_fault == "package-first-failure" else 1
+            assert f"Package preparation failed on member {member}" in result.stdout
+            reason = {
+                "package-failure": "unexpected package-preparation error",
+                "package-known-failure": "VM-HA exact agent package installation failed",
+                "package-first-failure": "VM-HA package predecessor changed after approval",
+                "package-artifact": "approved agent artifact rejected (changed)",
+                "package-permission": "package preparation permission denied",
+                "package-timeout": "SSH package preparation timed out",
+                "package-authentication": "SSH package preparation authentication failed",
+                "package-ssh": "SSH package preparation transport failed",
+                "package-channel": "SSH package preparation transport failed",
+                "package-eof": "SSH package preparation connection closed unexpectedly",
+            }[final_transition_fault]
+            assert f"Reason: {reason}" in result.stdout
+            assert "injected active package failure" not in result.stdout
+            assert "TOP_SECRET" not in result.stdout
+            assert [role for phase, role, _ in observed if phase == "package"] == (
+                ["passive"]
+                if final_transition_fault == "package-first-failure"
+                else ["passive", "active"]
+            )
             assert all(
                 phase not in {"lock", "adopt", "activate", "clear"} for phase, _, _ in observed
             )
@@ -8430,6 +8487,7 @@ def test_status_partial_runtime_observation_keeps_every_configured_tunnel(
             }
         ],
     }
+    instance.config_yaml = yaml.safe_dump(local_cfg)
     table = _vpn_gateway_status_table()
     commands: list[str] = []
 
@@ -8484,9 +8542,16 @@ def test_status_partial_runtime_observation_keeps_every_configured_tunnel(
         patch("nebius_vpngw.cli.VMManager", return_value=manager),
         patch("nebius_vpngw.cli._vpn_gateway_status_table", return_value=table),
         patch("subprocess.run", side_effect=run_command),
+        patch("subprocess.Popen", side_effect=AssertionError("unexpected external process")),
+        patch("nebius_vpngw.packet_health.collect_gateways", return_value={}) as packet_probe,
     ):
         status(local_config_file=config_path, project_id=None, region=None)
 
+    packet_probe.assert_called_once()
+    assert packet_probe.call_args.args[0]["gateway-0"][1] == {
+        "tunnel-active": None,
+        "tunnel-passive": None,
+    }
     rows = [
         [str(cell) for cell in row]
         for row in zip(*(column._cells for column in table.columns), strict=True)
@@ -14206,3 +14271,79 @@ def test_pending_handoff_without_package_effects_repairs_before_credentials(
         ["peer", "reserve", "prepare", "finish", "credentials"] if pending else ["credentials"]
     ), (result.stdout, result.exception)
     assert "boundary reached" in result.stdout
+
+
+@pytest.mark.parametrize("recreate", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("missing", [False, True])
+def test_replay_window_rejects_unusable_wheel_before_ordinary_provisioning(
+    ordinary_deployment_boundary, tmp_path, recreate, dry_run, missing
+):
+    import zipfile
+
+    config_path = tmp_path / "ordinary.yaml"
+    config_path.write_text("version: 1\n")
+    local = {
+        "tenant_id": "tenant-test",
+        "project_id": "project-test",
+        "region_id": "eu-west1",
+        "gateway_group": {"vm_spec": {}},
+        "gateway": {"local_prefixes": ["10.0.0.0/16"]},
+        "defaults": {"routing": {"mode": "static"}},
+        "connections": [{"tunnels": [{"name": "sample", "replay_window": 1024}]}],
+    }
+    plan = _static_route_plan()
+    plan.per_instance[0].config_yaml = yaml.safe_dump(local)
+    stale = tmp_path / "nebius_vpngw-0.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(stale, "w"):
+        pass
+    effects = []
+
+    class Manager(_ContextManagedFake):
+        def __init__(self, **kwargs):
+            pass
+
+        def check_changes(self, spec):
+            return [
+                (
+                    "nebius-vpn-gw-0",
+                    VMDiff(
+                        change_type=ChangeType.SAFE,
+                        differences=["VM does not exist (will create)"],
+                        destructive_fields=[],
+                    ),
+                )
+            ]
+
+        def ensure_group(self, *args, **kwargs):
+            effects.append("provision")
+            raise AssertionError("Must not provision before artifact admission")
+
+    ssh = SimpleNamespace(_build_wheel=lambda: None if missing else stale)
+    with (
+        patch("nebius_vpngw.cli.load_local_config", return_value=local),
+        patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
+        patch("nebius_vpngw.cli._ensure_authentication", return_value="test-token"),
+        patch("nebius_vpngw.cli.VMManager", Manager),
+        patch("nebius_vpngw.cli.SSHPush", return_value=ssh),
+        patch(
+            "nebius_vpngw.cli.publish_vm_ha_ssh_trust",
+            side_effect=lambda *a, **kw: effects.append("publish"),
+        ),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "apply",
+                "--local-config-file",
+                str(config_path),
+                *(["--recreate-gw"] if recreate else []),
+                *(["--dry-run"] if dry_run else []),
+            ],
+        )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "replay_window" in result.stdout
+    assert "VPNGW_AGENT_WHEEL" in result.stdout
+    assert "Traceback" not in result.output
+    assert effects == []

@@ -35,18 +35,13 @@ def _build_wheel(tmp_path: Path) -> Path:
     project_root = Path(__file__).resolve().parents[2]
     source_root = tmp_path / "source"
     wheel_dir = tmp_path / "wheel"
+    source_root.mkdir()
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        shutil.copy2(project_root / name, source_root / name)
     shutil.copytree(
-        project_root,
-        source_root,
-        ignore=shutil.ignore_patterns(
-            ".mypy_cache",
-            ".pytest_cache",
-            ".ruff_cache",
-            ".venv",
-            "__pycache__",
-            "build",
-            "dist",
-        ),
+        project_root / "src",
+        source_root / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"),
     )
     wheel_dir.mkdir()
     result = subprocess.run(
@@ -72,6 +67,39 @@ def _build_wheel(tmp_path: Path) -> Path:
     return wheels[0]
 
 
+def test_wheel_staging_excludes_operator_configuration(monkeypatch, tmp_path) -> None:
+    project = tmp_path / "project"
+    package = project / "src" / "nebius_vpngw"
+    package.mkdir(parents=True)
+    for name in ("pyproject.toml", "README.md", "LICENSE"):
+        (project / name).write_text("synthetic build input\n")
+    (package / "__init__.py").write_text("# synthetic package\n")
+    (project / "operator.config.yaml").write_text("synthetic private configuration\n")
+    stale_metadata = project / "src" / "nebius_vpngw.egg-info"
+    stale_metadata.mkdir()
+    (stale_metadata / "SOURCES.txt").write_text("operator.config.yaml\n")
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "__file__",
+        str(project / "tests" / "integration" / "test_release_build.py"),
+    )
+
+    def build(argv, **kwargs):
+        destination = Path(argv[argv.index("--outdir") + 1])
+        (destination / "nebius_vpngw-0.0.0-py3-none-any.whl").touch()
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", build)
+    work = tmp_path / "work"
+    work.mkdir()
+    _build_wheel(work)
+    staged = work / "source"
+    assert not (staged / "operator.config.yaml").exists()
+    assert not (staged / "src" / "nebius_vpngw.egg-info").exists()
+    assert (staged / "src" / "nebius_vpngw" / "__init__.py").is_file()
+    assert all((staged / name).is_file() for name in ("pyproject.toml", "README.md", "LICENSE"))
+
+
 def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     wheel_path = _build_wheel(tmp_path)
 
@@ -81,6 +109,8 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     assert "nebius_vpngw/_version.py" in names
     assert "nebius_vpngw/tunnel_state.py" in names
     assert "nebius_vpngw/ordinary_routes.py" in names
+    assert "nebius_vpngw/replay_window.py" in names
+    assert "nebius_vpngw/packet_health.py" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.service" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.timer" in names
@@ -132,6 +162,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     )
     assert capability.returncode == 0, capability.stderr
     assert "vm-ha-standby-restoration-v2" in json.loads(capability.stdout)["features"]
+    assert "ipsec-replay-window-v1" in json.loads(capability.stdout)["features"]
 
     bootstrap = subprocess.run(
         [
@@ -224,6 +255,13 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     from nebius_vpngw import ordinary_routes
 
     reader = CArchiveReader(str(binary_path))
+    from nebius_vpngw import packet_health, replay_window
+
+    for source in (*replay_window.REPLAY_WINDOW_SOURCES, "packet_health.py"):
+        assert (
+            reader.extract("nebius_vpngw/" + source)
+            == (Path(packet_health.__file__).parent / source).read_bytes()
+        )
     for source in ordinary_routes.OWNERSHIP_SOURCES:
         assert (
             reader.extract("nebius_vpngw/" + source)

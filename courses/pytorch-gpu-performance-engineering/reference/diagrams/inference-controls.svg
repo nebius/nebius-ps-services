@@ -14,7 +14,7 @@
     <rect x="16" y="173" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
     <text x="160" y="204" font-size="22.0" font-weight="400" fill="#206757" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode</tspan><tspan>()</tspan></text>
     <text x="160" y="235" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Disable gradient tracking</tspan></text>
-    <text x="160" y="287" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>No backward graph here</tspan></text>
+    <text x="160" y="287" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>No gradient recording</tspan></text>
     <text x="160" y="326" font-size="20.0" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Use both for this inference path</tspan></text>
   </g>
 </svg>

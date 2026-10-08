@@ -31,7 +31,7 @@ import yaml
 from rich import print
 from typer.core import TyperGroup
 
-from . import __version__
+from . import __version__, packet_health
 from .agent.vm_ha.auto_healing import (
     AUTO_HEALING_CAPABILITY,
     AUTO_HEALING_REQUEST_SCHEMA,
@@ -54,6 +54,7 @@ from .agent.vm_ha.progress import planned_request_fingerprint, validate_transfer
 from .agent.vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY
 from .config_loader import (
     GatewayGroupSpec,
+    InstanceResolvedConfig,
     MissingEnvironmentVariablesError,
     ResolvedDeploymentPlan,
     build_config_from_peer_files,
@@ -132,9 +133,15 @@ from .deploy.vm_ha_lifecycle import (
     vm_ha_passive_replacement_effect,
     vm_ha_resource_binding_matches_observation,
 )
+from .deploy.vm_ha_package import VMHAAgentPackageError
 from .deploy.vm_manager import PublicAllocationCandidate, VMManager
 from .nebius_auth import error_chain_has_cli_authentication_failure
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
+from .replay_window import (
+    ReplayWindowCapabilityError,
+    has_replay_window,
+    require_replay_window_capability,
+)
 from .vm_ha_command import (
     VMHACommandApproval,
     VMHACommandClassification,
@@ -456,6 +463,7 @@ class _WorkflowOrderTyperGroup(TyperGroup):
 
 app = typer.Typer(
     cls=_WorkflowOrderTyperGroup,
+    pretty_exceptions_show_locals=False,
     add_completion=False,
     help="""
 Nebius VM-based VPN Gateway orchestrator
@@ -470,6 +478,7 @@ Run nebius-vpngw COMMAND --help for command-specific guidance and examples.
 
 failover_app = typer.Typer(
     cls=_WorkflowOrderTyperGroup,
+    pretty_exceptions_show_locals=False,
     add_completion=False,
     no_args_is_help=True,
     help="Fail over VM ownership or a tunnel path.",
@@ -477,6 +486,7 @@ failover_app = typer.Typer(
 )
 failback_app = typer.Typer(
     cls=_WorkflowOrderTyperGroup,
+    pretty_exceptions_show_locals=False,
     add_completion=False,
     no_args_is_help=True,
     help="Fail back VM ownership or a tunnel path.",
@@ -2396,7 +2406,8 @@ def _create_missing_vm_ha_standby_under_owner_inhibition(
             assert transaction is not None
             if prepare_owner_effect not in transaction.completed_effects:
                 lifecycle_journal.begin(prepare_owner_effect)
-                ssh.ensure_vm_ha_agent_package(
+                _prepare_vm_ha_agent_package(
+                    ssh,
                     owner_target,
                     owner_config,
                     local_config,
@@ -3429,6 +3440,63 @@ class _VMHAApplyConvergenceFailed(RuntimeError):
         super().__init__(message)
         self.reason = reason
         self.next_action = next_action
+
+
+class _VMHAAgentPackagePreparationFailed(_VMHAApplyConvergenceFailed):
+    """Safe member-bound package failure for apply and the vm-ha facade."""
+
+    def __init__(self, member: int, detail: str) -> None:
+        super().__init__(
+            f"Package preparation failed on member {member}.\nReason: {detail}",
+            reason=f"package-preparation-failed-member-{member}",
+            next_action=f"{detail}; correct the reported problem and rerun vm-ha",
+        )
+
+
+def _vm_ha_package_failure_reason(error: Exception) -> str:
+    if isinstance(error, VMHAAgentPackageError):
+        return str(error)
+    if isinstance(error, VMHAAgentArtifactError):
+        return f"approved agent artifact rejected ({error.problem.value})"
+    if isinstance(error, TimeoutError):
+        return "SSH package preparation timed out"
+    if isinstance(error, PermissionError):
+        return "package preparation permission denied"
+    if isinstance(error, paramiko.AuthenticationException):
+        return "SSH package preparation authentication failed"
+    if isinstance(error, paramiko.SSHException):
+        return "SSH package preparation transport failed"
+    if isinstance(error, EOFError):
+        return "SSH package preparation connection closed unexpectedly"
+    if isinstance(error, OSError):
+        return "SSH or local artifact I/O failed during package preparation"
+    return "unexpected package-preparation error"
+
+
+def _prepare_vm_ha_agent_package(
+    ssh: SSHPush,
+    target: str,
+    inst_cfg: InstanceResolvedConfig,
+    local_config: dict,
+    *,
+    artifact: VMHAAgentArtifact,
+    handoff: t.Any = None,
+) -> dict[str, object]:
+    """Preserve bounded package diagnostics across every CLI preparation path."""
+    try:
+        return ssh.ensure_vm_ha_agent_package(
+            target,
+            inst_cfg,
+            local_config,
+            artifact=artifact,
+            **({"handoff": handoff} if handoff is not None else {}),
+        )
+    except (VMHAAgentArtifactError, ReplayWindowCapabilityError):
+        raise
+    except (OSError, RuntimeError, ValueError, EOFError, paramiko.SSHException) as error:
+        raise _VMHAAgentPackagePreparationFailed(
+            inst_cfg.instance_index + 1, _vm_ha_package_failure_reason(error)
+        ) from error
 
 
 def _validate_vm_ha_agent_status(
@@ -5945,6 +6013,16 @@ def _apply_impl(
     raw_management_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
     management_key_path = Path(raw_management_key).expanduser() if raw_management_key else None
     planned_instances = tuple(plan.iter_instance_configs())
+    ordinary_replay_wheel: Path | None = None
+    if plan.vm_ha is None and has_replay_window(local_cfg):
+        from .deploy.ordinary_apply import pin_replay_window_artifact
+
+        lifetimes = _VM_MANAGER_LIFETIMES.get()
+        assert lifetimes is not None
+        # Purely local admission precedes even optional --sa provisioning.
+        ordinary_replay_wheel = pin_replay_window_artifact(
+            SSHPush(), planned_instances, local_cfg, lifetimes
+        )
     vm_ha_node_ids = tuple(
         str(getattr(getattr(instance, "vm_ha_node", None), "node_id", "") or "")
         for instance in planned_instances
@@ -6886,6 +6964,7 @@ def _apply_impl(
             f"{vm_ha_credential_plan.action}-managed-vm-ha-runtime-credential",
         )
         artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+        require_replay_window_capability(local_cfg, artifact.capabilities)
         if (
             plan_kind == "apply-convergence"
             and has_no_change
@@ -7026,17 +7105,21 @@ def _apply_impl(
     ordinary_targets: dict = {}
     ordinary_approved = False
     ordinary_ssh: SSHPush | None = None
-    if plan.vm_ha is None and not former_vm_ha_members:
+    if plan.vm_ha is None and (not former_vm_ha_members or ordinary_replay_wheel is not None):
         ordinary_ssh = SSHPush(ssh_policy=ssh_policy)
-        ordinary_plans, ordinary_targets, ordinary_approved = _prepare_ordinary_apply(
-            discovery_manager,
-            ordinary_ssh,
-            planned_instances,
-            local_cfg,
-            supplied=approve_disruption,
-            dry_run=dry_run,
-            recreate=recreate_gw,
-        )
+        if ordinary_replay_wheel is not None:
+            ordinary_ssh._wheel_path = ordinary_replay_wheel
+            ordinary_ssh._wheel_is_installed_fallback = False
+        if not former_vm_ha_members:
+            ordinary_plans, ordinary_targets, ordinary_approved = _prepare_ordinary_apply(
+                discovery_manager,
+                ordinary_ssh,
+                planned_instances,
+                local_cfg,
+                supplied=approve_disruption,
+                dry_run=dry_run,
+                recreate=recreate_gw,
+            )
     elif plan.vm_ha is not None and apply_report is not None:
         # The vm-ha facade already approved this exact artifact/effect digest.
         # Direct apply must present the same impact before package/service effects.
@@ -8439,7 +8522,8 @@ def _apply_impl(
                         and inst_cfg.vm_ha_node.node_id == current_owner_node_id
                     ):
                         continue
-                    ssh.ensure_vm_ha_agent_package(
+                    _prepare_vm_ha_agent_package(
+                        ssh,
                         target,
                         inst_cfg,
                         local_cfg,
@@ -8452,6 +8536,11 @@ def _apply_impl(
                     )
                     print(f"[green]✓ Prepared {inst_cfg.vm_ha_node.node_id} agent package[/green]")
         except (OSError, RuntimeError, ValueError) as error:
+            if isinstance(error, _VMHAAgentPackagePreparationFailed):
+                typer.echo(str(error))
+            else:
+                typer.echo(f"Package preparation failed on member {inst_cfg.instance_index + 1}.")
+                typer.echo(f"Reason: {_vm_ha_package_failure_reason(error)}")
             print(
                 "[red]VM-HA agent package preparation failed; no apply-lock installation "
                 "was attempted and any pre-existing locks were preserved.[/red]"
@@ -9271,19 +9360,31 @@ def apply(
     Use --recreate-gw only when infrastructure changes require VM recreation.
     """
 
-    _apply_impl(
-        local_config_file=local_config_file,
-        recreate_gw=recreate_gw,
-        sa=sa,
-        project_id=project_id,
-        region=region,
-        dry_run=dry_run,
-        approve_disruption=approve_disruption,
-        prepare_vm_ha_peer_rotation=prepare_vm_ha_peer_rotation,
-        approve_vm_ha_migration=approve_vm_ha_migration,
-        recover_vm_ha_migration=recover_vm_ha_migration,
-        replace_failed_vm_ha_passive=replace_failed_vm_ha_passive,
-    )
+    try:
+        _apply_impl(
+            local_config_file=local_config_file,
+            recreate_gw=recreate_gw,
+            sa=sa,
+            project_id=project_id,
+            region=region,
+            dry_run=dry_run,
+            approve_disruption=approve_disruption,
+            prepare_vm_ha_peer_rotation=prepare_vm_ha_peer_rotation,
+            approve_vm_ha_migration=approve_vm_ha_migration,
+            recover_vm_ha_migration=recover_vm_ha_migration,
+            replace_failed_vm_ha_passive=replace_failed_vm_ha_passive,
+        )
+    except _VMHAAgentPackagePreparationFailed as error:
+        typer.echo(str(error))
+        raise typer.Exit(code=1) from None
+    except ReplayWindowCapabilityError:
+        print("[red]Apply stopped: replay_window requires a matching agent wheel.[/red]")
+        print(
+            "[yellow]For a source checkout, rebuild with "
+            "'python -m build --wheel --no-isolation' in the prepared project environment. "
+            "Select the matching wheel with VPNGW_AGENT_WHEEL, then rerun apply.[/yellow]"
+        )
+        raise typer.Exit(code=1) from None
 
 
 @app.command(
@@ -12125,6 +12226,95 @@ def _mark_service_probe_recovered(
     return True
 
 
+def _render_packet_health(
+    console: t.Any,
+    *,
+    plan: ResolvedDeploymentPlan,
+    vm_ips: dict[str, str],
+    ssh_context: _StatusSSHContext,
+    ha_snapshot: _VMHAStatusSnapshot | None,
+    details: bool,
+    refresh_ha: t.Callable[[], _VMHAStatusSnapshot] | None = None,
+) -> None:
+    from rich.table import Table
+    from rich.text import Text
+
+    expected_by_host: dict[str, dict[str, int | None]] = {}
+    jobs: dict[str, tuple[list[str], dict[str, int | None]]] = {}
+    for instance in plan.iter_instance_configs():
+        resolved = yaml.safe_load(instance.config_yaml)
+        expected = {
+            tunnel["name"]: tunnel.get("replay_window")
+            for connection in resolved.get("connections", [])
+            for tunnel in connection.get("tunnels", [])
+        }
+        expected_by_host[instance.hostname] = expected
+        target = vm_ips.get(instance.hostname)
+        if target and expected:
+            try:
+                command = _status_ssh_target_command(
+                    ssh_context, hostname=instance.hostname, target=target
+                )
+            except _VMHAStatusSSHUnavailable:
+                continue
+            jobs[instance.hostname] = command, expected
+    observations = packet_health.collect_gateways(jobs)
+    # A same-boot promotion can occur during the packet sample. Only endpoint
+    # authority may explain an absent SA as expected cold standby.
+    needs_cold_evidence = ha_snapshot is not None and any(
+        sample is not None and any(not tunnel["sas"] for tunnel in sample["tunnels"].values())
+        for observation in observations.values()
+        for sample in observation["samples"][1:]
+    )
+    if needs_cold_evidence:
+        try:
+            ha_snapshot = refresh_ha() if refresh_ha is not None else None
+        except Exception:
+            ha_snapshot = None
+    table = Table(title="Packet health — 3s observation", header_style="bold cyan")
+    table.add_column("Tunnel", overflow="fold")
+    table.add_column("RX window")
+    table.add_column("Receive health", overflow="fold")
+    detail_lines = []
+    for hostname, expected in expected_by_host.items():
+        observation = observations.get(
+            hostname, {"schema": packet_health.SCHEMA, "samples": [None, None]}
+        )
+        second = observation["samples"][1]
+        cold = False
+        if ha_snapshot is not None and ha_snapshot.authority.condition == "exact":
+            for member in ha_snapshot.members:
+                record = member.record or {}
+                if member.name == hostname:
+                    cold = bool(
+                        member.condition == "exact"
+                        and member.node_id != ha_snapshot.authority.owner_node_id
+                        and record.get("observed_owner_node_id")
+                        == ha_snapshot.authority.owner_node_id
+                        and record.get("data_plane_mode") == "passive"
+                        and record.get("standby_ready") is True
+                        and record.get("standby_tunnel_state") == "cold"
+                        and record.get("pending_operation_id") is None
+                        and record.get("apply_locked") is False
+                        and second is not None
+                        and record.get("guard_boot_id") == second["boot"]
+                    )
+        for name, window in expected.items():
+            row = packet_health.summarize(observation, name, window, cold_standby=cold)
+            label = f"{name}\n{hostname}" if len(expected_by_host) > 1 else name
+            table.add_row(Text(label), Text(row["window"]), Text(row["health"]))
+            if details:
+                detail_lines.extend([f"{name} ({hostname})", *row["details"]])
+    console.print(table)
+    if details:
+        console.print(Text("\n".join(detail_lines)))
+        console.print(
+            "Counters have different scopes and are not additive. Matching increases support "
+            "correlation; equality is not required. Late means outside the replay window. "
+            "Integrity failures do not identify an attacker."
+        )
+
+
 @app.command(epilog=_command_help_epilog("status"))
 @_with_vm_manager_lifetimes
 def status(
@@ -12138,6 +12328,9 @@ def status(
     ),
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     region: str | None = typer.Option(None, help=_NEBIUS_REGION_HELP),
+    packet_details: bool = typer.Option(
+        False, "--packet-details", help="Show scoped receive-counter samples and deltas."
+    ),
 ):
     """Show status of VPN tunnels and gateway health."""
     import json
@@ -12939,6 +13132,24 @@ def status(
             status_notes.append(f"{hostname}: Recovered during this status check")
 
     console.print(table)
+    _render_packet_health(
+        console,
+        plan=plan,
+        vm_ips=vm_ips,
+        ssh_context=status_ssh_context,
+        ha_snapshot=vm_ha_snapshot,
+        details=packet_details is True,
+        refresh_ha=lambda: _collect_vm_ha_status_snapshot(
+            local_config_file=local_config_file,
+            local_cfg=local_cfg,
+            plan=plan,
+            project_id=proj_id,
+            vm_manager=vm_mgr,
+            vm_ips=vm_ips,
+            ssh_context=status_ssh_context,
+            require_local_generation=require_local_generation,
+        ),
+    )
     if status_notes:
         console.print(
             Panel.fit(
@@ -17485,13 +17696,15 @@ def _execute_vm_ha_apply_convergence(
                 vm_ha_progress_sink=progress_sink,
                 expected_vm_ha_plan=report,
             )
-    except VMHAAgentArtifactError:
+    except (VMHAAgentArtifactError, ReplayWindowCapabilityError):
         raise
     except _VMHAApplyConvergenceFailed:
         raise
     except typer.Exit as error:
         cause = error.__cause__
-        if isinstance(cause, VMHAAgentArtifactError):
+        if isinstance(cause, (VMHAAgentArtifactError, ReplayWindowCapabilityError)):
+            raise cause from None
+        if isinstance(cause, _VMHAAgentPackagePreparationFailed):
             raise cause from None
         if isinstance(
             cause,
@@ -18537,6 +18750,7 @@ def _inspect_vm_ha_artifact_standby_recovery(
         trust_scope=_vm_ha_ssh_trust_scope(local_config, plan),
     )
     artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+    require_replay_window_capability(local_config, artifact.capabilities)
     engine_digest = _canonical_digest(
         {
             "domain": "nebius-vpngw/artifact-standby-recovery-engine-v1",
@@ -18657,7 +18871,8 @@ def _execute_vm_ha_artifact_standby_recovery(
         raise RuntimeError("artifact standby recovery has no exact approved artifact")
     artifact.verify_current()
     ssh = SSHPush(ssh_policy=context.ssh_policy)
-    ssh.ensure_vm_ha_agent_package(
+    _prepare_vm_ha_agent_package(
+        ssh,
         context.owner_target,
         context.owner_instance,
         context.local_config,
@@ -18720,7 +18935,8 @@ def _execute_vm_ha_artifact_standby_recovery(
     )
     if preparation.outcome != "standby-ssh-ready":
         raise RuntimeError("artifact standby recovery did not reach exact standby SSH")
-    ssh.ensure_vm_ha_agent_package(
+    _prepare_vm_ha_agent_package(
+        ssh,
         context.standby_target,
         context.standby_instance,
         context.local_config,
@@ -20750,8 +20966,13 @@ def vm_ha(
                 reason=error.reason,
                 next_action=error.next_action,
             )
-    except VMHAAgentArtifactError as error:
-        reason, next_action = _VM_HA_AGENT_ARTIFACT_PREREQUISITES[error.problem]
+    except (VMHAAgentArtifactError, ReplayWindowCapabilityError) as error:
+        problem = (
+            VMHAAgentArtifactProblem.INCOMPATIBLE
+            if isinstance(error, ReplayWindowCapabilityError)
+            else error.problem
+        )
+        reason, next_action = _VM_HA_AGENT_ARTIFACT_PREREQUISITES[problem]
         if convergence_effects_may_have_started:
             reason = f"{reason}-during-convergence"
             next_action = (

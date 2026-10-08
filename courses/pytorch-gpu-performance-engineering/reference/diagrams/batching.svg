@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 458" role="img" aria-labelledby="pt-batching-title pt-batching-desc" style="max-width: 360px; margin-inline: auto">
   <title id="pt-batching-title">Independent rows can share one batched expression</title>
-  <desc id="pt-batching-desc">Three independent two-feature rows undergo the same matrix product, bias addition and ReLU. A loop processes each row; a batched expression processes the matrix. Both outputs contain three rows of two FP32 values in CPU memory.</desc>
+  <desc id="pt-batching-desc">Three independent two-value rows undergo the same multiplication by two and addition of one. A loop processes each row; a batched expression processes the matrix. The loop returns three row tensors; the batched expression returns one matrix with the same six FP32 values in CPU memory.</desc>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
     <rect x="16" y="48" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
     <text x="160" y="78" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Input </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan>: [3, 2]</tspan></text>
     <text x="160" y="108" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>3 independent rows</tspan></text>
-    <path d="M160 136 V164 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
+    <path d="M160 136 V164 m-6 -8 l6 8 l6 -8 M160 136 H7 V323 H14 m-6 -6 l6 6 l-6 6" stroke="#206757" stroke-width="2" fill="none" />
     <rect x="16" y="178" width="288" height="82" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
     <text x="160" y="208" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>Loop: process 1 row × 3</tspan></text>
-    <text x="160" y="238" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Matrix product → add → ReLU</tspan></text>
+    <text x="160" y="238" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Multiply by 2 → add 1</tspan></text>
     <rect x="16" y="282" width="288" height="82" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
     <text x="160" y="312" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>Batched: process 3 rows</tspan></text>
-    <text x="160" y="342" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Matrix product → add → ReLU</tspan></text>
-    <text x="160" y="406" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Both outputs: </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [3, 2]</tspan></text>
+    <text x="160" y="342" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Multiply by 2 → add 1</tspan></text>
+    <text x="160" y="406" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Same values in both routes</tspan></text>
     <text x="160" y="444" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compare results before timing</tspan></text>
   </g>
 </svg>

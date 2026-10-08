@@ -22,7 +22,15 @@ import re
 import typing as t
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 # ============================================================================
 # Enums for controlled vocabularies
@@ -509,6 +517,13 @@ class TunnelConfig(BaseModel):
     inner_local_ip: str = Field(..., description="Inner local IP (must be within inner_cidr)")
     inner_remote_ip: str = Field(..., description="Inner remote IP (must be within inner_cidr)")
     crypto: CryptoProposals | None = Field(default=None, description="Crypto proposals override")
+    replay_window: int = Field(
+        default=32,
+        strict=True,
+        ge=32,
+        le=1024,
+        description="Receive replay window; omit to inherit strongSwan's default (normally 32)",
+    )
     static_routes: StaticRoutes | None = Field(
         default=None, description="Static routing configuration (for static mode only)"
     )
@@ -517,6 +532,15 @@ class TunnelConfig(BaseModel):
     extensions: dict[str, t.Any] = Field(
         default_factory=dict, description="Custom extensions (opaque metadata)"
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_tunnel(self, handler: SerializerFunctionWrapHandler) -> dict[str, t.Any]:
+        result: dict[str, t.Any] = handler(self)
+        # Presence is meaningful: omission inherits charon's setting, explicit 32 pins it.
+        # Do not inject a new field into legacy resolved manifests or generation hashes.
+        if "replay_window" not in self.model_fields_set:
+            result.pop("replay_window", None)
+        return result
 
     @field_validator("remote_public_ip")
     @classmethod

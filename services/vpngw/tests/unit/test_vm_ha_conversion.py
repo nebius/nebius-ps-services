@@ -582,7 +582,7 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
         patch(
             "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
-            return_value=SimpleNamespace(sha256="f" * 64, dependency_plans=()),
+            return_value=SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=()),
         ),
         patch(
             "nebius_vpngw.cli._plan_vm_ha_package_dependencies",

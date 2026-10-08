@@ -705,6 +705,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
     assert json.loads(capsys.readouterr().out) == {
         "features": [
             "ordinary-apply-v1",
+            "ipsec-replay-window-v1",
             "force-reconcile-v1",
             "vm-ha-authority-bound-force-reconcile-v1",
             "vm-ha-controller-route-reconcile-v1",

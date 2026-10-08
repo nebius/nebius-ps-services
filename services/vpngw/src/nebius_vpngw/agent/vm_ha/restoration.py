@@ -1108,6 +1108,102 @@ class StandbyRestorationStore:
             raise StandbyRestorationError("active restoration cannot be retired")
         self._retire_exact_terminal(record)
 
+    def retire_terminal_for_generation_adoption(
+        self,
+        *,
+        cluster_id: str,
+        owner_node_id: str,
+        peer_node_id: str,
+        allocation_id: str,
+        generation_id: str,
+        ownership_epoch: str,
+    ) -> bool:
+        """Retire a prior generation under the caller's locked, exact owner adoption.
+
+        Normal reads remain receipt-bound. Only a completed, independently
+        verifiable authorization can resume retirement after its receipt was lost.
+        The caller holds the rearm lock and rechecks apply/cloud authority.
+        """
+
+        record = self._load_authorization()
+        if record is None:
+            return False
+        if not (
+            record.phase in {RestorationPhase.COMPLETED, RestorationPhase.BLOCKED}
+            and record.cluster_id == cluster_id
+            and record.owner_node_id == owner_node_id
+            and record.former_owner_node_id == peer_node_id
+            and record.allocation_id == allocation_id
+            and record.ownership_epoch == ownership_epoch
+            and record.generation_id != generation_id
+            and record.digests["configuration"] == record.generation_id
+        ):
+            raise StandbyRestorationError("restoration conflicts with generation adoption")
+        if self.receipt_path.exists():
+            self._prove_receipt_binding(
+                record,
+                self._load_durable_receipt(),
+                compare_source=record.source is not RestorationSource.OPERATOR_RESTORATION,
+            )
+        else:
+            self._prove_completed_receipt_identity(record)
+        self._retire_exact_terminal(record)
+        return True
+
+    @staticmethod
+    def _prove_completed_receipt_identity(record: StandbyRestorationAuthorization) -> None:
+        if not (
+            record.phase is RestorationPhase.COMPLETED
+            and record.source is not RestorationSource.OPERATOR_RESTORATION
+            and record.first_operation_id is not None
+            and record.route_operation_id is not None
+            and record.ownership_epoch is not None
+            and record.promotion_receipt_id
+            == promotion_receipt_id_v1(
+                allocation_id=record.allocation_id,
+                first_operation_id=record.first_operation_id,
+                generation_id=record.generation_id,
+                intent=record.source.value,
+                owner_node_id=record.owner_node_id,
+                ownership_epoch=record.ownership_epoch,
+                route_operation_id=record.route_operation_id,
+            )
+        ):
+            raise StandbyRestorationError("completed restoration receipt identity is unavailable")
+
+    def require_apply_lock_quiescent(
+        self,
+        *,
+        cluster_id: str,
+        owner_node_id: str,
+        peer_node_id: str,
+        allocation_id: str,
+        generation_id: str,
+        target_generation_id: str,
+    ) -> None:
+        """Admit fencing of exact completed residue, never restoration authority.
+
+        The caller holds the rearm lock through apply-lock installation. Normal
+        reads remain strict; only subsequent locked adoption may retire residue.
+        """
+
+        if self.receipt_path.exists():
+            require_standby_restoration_writer_quiescent(self.path.parent)
+            return
+        record = self._load_authorization()
+        if record is None:
+            return
+        if not (
+            record.cluster_id == cluster_id
+            and record.owner_node_id == owner_node_id
+            and record.former_owner_node_id == peer_node_id
+            and record.allocation_id == allocation_id
+            and record.generation_id not in {generation_id, target_generation_id}
+            and record.digests["configuration"] == record.generation_id
+        ):
+            raise StandbyRestorationError("restoration conflicts with apply-lock admission")
+        self._prove_completed_receipt_identity(record)
+
     def retire_terminal_for_apply_owner_adoption(self) -> bool:
         """Retire one terminal authorization superseded by exact owner adoption.
 

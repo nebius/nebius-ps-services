@@ -1,5 +1,46 @@
 # Publication review
 
+## Scan-focused revision — 2026-10-07
+
+Reviewed `index.html` SHA-256:
+`39c6087d653ff7451f9b3d7b0df079311cc4578f34dbcc91550aa041bfa34247`.
+
+All eighteen lessons were reviewed and simplified around their core concepts.
+Broadcasting now has one matrix-plus-bias example; reductions focus on row
+means; models use built-in composition; transfers show a prepared batch and
+its copy. Removed unrelated expand/repeat, softmax, mixed-precision setup,
+loader collation and compiler-internals detours. The twenty diagrams remain;
+five have simpler labels or examples matching the revised teaching. Glossary,
+references, mission, syllabus and README align with the lessons-only profile.
+Source length is about 36% lower, with 146 code lines instead of 224; these are
+editorial counts, not evidence of learning outcomes. The three-hour reading
+estimate remains an authoring estimate.
+
+| Lane | Status | Evidence and limits |
+| --- | --- | --- |
+| Source/static | Passed | 112 focused reading, source-integrity and shared-format regressions; all three native reading validators; selected build/freshness; Markdown lint and whitespace checks. All 23 Python blocks parse. Shared guide and catalog bytes remain unchanged. |
+| Semantic | Passed | Full-course review and independent read-only follow-up found no remaining concrete issue. The review's FP16 first-use definition finding was corrected. Examples, diagrams, glossary and API notation agree. Official PyTorch 2.14 documentation supports the retained semantics. |
+| CPU example execution | Passed | All 17 CPU blocks executed unchanged on existing PyTorch 2.14.1; 37 independent checks cover values, shapes, shared storage, copies, rounding, gradients, inference and batched equivalence. |
+| CUDA/compiler execution | Pending | Five CUDA examples and the optional compiler continuation were syntax-checked but not executed. CUDA is unavailable in the local example environment. No runtime or performance qualification is claimed. |
+| Browser/visual | Passed | Three final isolated headless Chrome 154.0.8037.98 checks at 1440px, 390px and 320px; navigation, fragments, keyboard controls, local scrolling, doubled-text reflow, API emphasis, SVG text bounds and absence of automatic network requests pass. All figures were visually reviewed at phone width; changed lesson captures were inspected. |
+| Installed environment | Not applicable | Existing tools were reused; this course adds no runtime environment or dependency installation. |
+| Live target/publication | Not applicable | No live lab, cluster, deployment or external publication was requested or performed. |
+
+Local evidence group `pytorch-scan-xtj08dam` contains `check_cpu.py`,
+`cpu-results.json`, `pytest.log`, `native.log`, `freshness.log`, lint results,
+the browser test source and `browser-results.json`. Final captures, SVG
+geometry, browser identity and artifact digest are in `browser/`.
+Playwright Test 1.57.0 owned and closed its headless browser and isolated
+contexts, with page JavaScript disabled. Earlier passing captures are retained
+separately and do not identify the final artifact.
+
+The generic authoring checker reports the same six standard-profile and
+shared-shell diagnostics on the before and after HTML, including its required
+Practice section. Native lessons-only acceptance passes; neither the generic
+checker nor the course's explicit profile was weakened. The alignment review
+found no new secret, private reference or active-resource issue in the scoped
+sources and passive assets. No skill-source or memory changes were made.
+
 ## Reading subsection hierarchy — 2026-10-07
 
 Reviewed `index.html` SHA-256:

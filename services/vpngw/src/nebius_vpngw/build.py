@@ -43,8 +43,11 @@ def build_binary() -> None:
         ]
     )
     from .ordinary_routes import OWNERSHIP_SOURCES
+    from .replay_window import REPLAY_WINDOW_SOURCES
 
-    for source_name in (*OWNERSHIP_SOURCES, "ordinary_bootstrap.py"):
+    for source_name in dict.fromkeys(
+        (*OWNERSHIP_SOURCES, *REPLAY_WINDOW_SOURCES, "ordinary_bootstrap.py", "packet_health.py")
+    ):
         source_path = Path(__file__).parent / source_name
         destination = str(Path("nebius_vpngw") / Path(source_name).parent)
         add_data_args.extend(["--add-data", f"{source_path}{os.pathsep}{destination}"])

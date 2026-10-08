@@ -124,7 +124,8 @@ Workflow:
 ### 4. Complete peer gateway/tunnel details
 
 The wizard collects peer public IPs, hybrid PSK inputs, inner `/30` CIDRs,
-static prefixes, and BGP ASNs in dependency order. It asks routing mode before
+an optional receive replay window per tunnel, static prefixes, and BGP ASNs
+in dependency order. It asks routing mode before
 routing-specific fields and asks the local ASN only once, on the first BGP
 connection. For a
 network-first workflow, rerun with `--interactive --force` after peer-side
@@ -833,6 +834,15 @@ route-runtime receipt, and unlocked passive non-forwarding state. Durable
 `provisioning` is written and reread before the first cloud effect,
 `activating` is retained through both unlock proofs, and `active` is written
 last. An unchanged interrupted apply resumes the same checkpointed operation.
+If package preparation fails, apply reports the member number (configuration
+order, starting at 1) and a sanitized reason. It stops before installing new
+apply locks and preserves existing locks. Correct the reported problem and
+rerun the same `apply` command; no diagnostic flag or separate recovery command
+is required. This reporting does not change regular single-VM apply.
+SSH authentication, transport and early connection-close failures use fixed
+diagnostics. The `vm-ha` command also preserves the member and safe reason when
+apply convergence, standby owner refresh, or artifact recovery encounters a
+package failure. Migration handoff reports failed package checks the same way.
 When the checkpoint is already `activating`, apply validates two stable cloud
 observations and the exact persisted member, shared-alias, route-target, and
 runtime identities, then resumes host activation directly; it does not call the
@@ -1525,6 +1535,98 @@ non-production trial with independently observed cloud, route, component-log,
 and bidirectional workload-traffic evidence; that evidence does not claim
 production validation for this warm-standby refactor or a different
 environment.
+
+### Receive replay window and packet health
+
+Add `replay_window: 1024` to an existing tunnel entry under
+`connections[].tunnels[]`, or select it in the interactive wizard:
+
+```yaml
+connections:
+  - name: site-a
+    tunnels:
+      - name: site-a-tunnel-1
+        replay_window: 1024
+        # Keep this tunnel's existing endpoints, PSK reference and other fields.
+```
+
+This fragment is an edit example, not a complete configuration. The optional
+field accepts whole numbers **32 through 1024 inclusive**, including values
+such as 64, 128, or 1000. Quoted numbers, booleans, fractions, null, and values
+outside that range are rejected. Omitting the field preserves strongSwan's
+inherited setting, normally 32; an explicit `32` pins that value even if a
+manual global override exists. Enter in the wizard keeps the existing value
+or omission. Ordinary and HA gateways use the same field. Set each concrete
+tunnel entry that needs the change; HA members may have independent values.
+
+Install the matching CLI release, then use the existing reviewed `apply` flow:
+
+```bash
+nebius-vpngw apply --local-config-file my-vpn.config.yaml
+nebius-vpngw status --local-config-file my-vpn.config.yaml
+nebius-vpngw status --local-config-file my-vpn.config.yaml --packet-details
+```
+
+Installing the CLI alone does not change a gateway. Apply deploys the matching
+agent and configuration, rejects an incompatible selected wheel before applying
+the setting, and retains the existing disruption approval and HA safety checks.
+In a source checkout, rebuild the wheel after source edits with
+`python -m build --wheel --no-isolation` in the prepared project environment.
+VM-HA selects one existing wheel from `dist/`, or the exact file specified by
+`VPNGW_AGENT_WHEEL`; it does not rebuild during planning. A stale wheel produces
+a concise rebuild/selection diagnostic. The check compares source bytes, so
+matching CLI and wheel version numbers alone are insufficient.
+Ordinary apply reports the same prerequisite if no deployable wheel is available,
+before provisioning or recreating VMs.
+Activating an IPsec change can restart strongSwan and interrupt tunnels on an
+affected gateway; there is no fixed downtime guarantee. Removing the field or
+restoring `32` uses the same reviewed apply flow. The effective value is visible
+after the peer has an installed inbound SA (Security Association).
+
+For VM-HA generation changes, apply retires completed restoration state before
+replacing its promotion receipt. An interrupted retirement is recovered only
+under the exact fenced owner, allocation and unchanged ownership epoch; active
+or conflicting restoration remains blocking. Apply can install its protective
+lock over exact completed residue without granting restoration authority or
+changing the residue; other writer admission checks remain strict. After apply, run `status` and
+confirm healthy HA, established tunnels/BGP, and the intended receive windows.
+
+Every normal `status` includes a fresh three-second receive observation after
+the main tunnel table:
+
+```text
+Packet health — 3s observation
+Tunnel              RX window  Receive health
+site-a-tunnel-1      1024       No new drops
+site-b-tunnel-1      32         18 late drops
+```
+
+`RX window` is the effective kernel value, including extended windows.
+`Idle` means no newly accepted packets or observed drops during a complete
+sample. Late drops, duplicate drops, and integrity failures are distinct;
+interface-only error increases remain visible. A mismatch with an explicit
+YAML value reports `Expected 1024; not active`. Missing, ambiguous, rekeyed or
+reset observations are reported as unavailable or incomplete, preserving any
+confirmed increases. Established warm-standby SAs are sampled normally; only
+fresh authoritative cold-standby evidence explains an absent SA. Multiple
+gateways are identified underneath their tunnel names.
+
+`--packet-details` adds sample timing and before/after/deltas for inbound-SA
+window, duplicate and integrity counters, XFRM-interface RX errors/drops, and
+gateway-wide `XfrmInStateSeqError`. These scopes overlap: matching increases
+support correlation, but equality is not required and the counts are not added
+together. Packet health is read-only and does not change HA readiness, trigger
+restarts/failover, or alter status exit codes. Collection uses key-free kernel
+output, size-limited SSH stdout, discarded stderr, bounded commands, at most
+four concurrent gateways and a 30-second deadline per packet probe. Older
+agents can be observed before upgrading.
+
+A larger window allows more out-of-order packets while retaining duplicate
+rejection and authentication. It does not locate or repair the source of
+reordering. Drops inside a larger window are not automatically authentication
+failures, and an integrity failure alone does not identify an attacker. See
+the [strongSwan CHILD configuration reference](https://docs.strongswan.org/docs/5.9/swanctl/swanctlConf.html)
+and the [Linux XFRM counter reference](https://docs.kernel.org/networking/xfrm/xfrm_proc.html).
 
 ### Provider-neutral VM-HA peer credential rotation
 
@@ -3375,9 +3477,11 @@ python -m build --wheel --no-isolation
 nebius-vpngw apply --local-config-file <file>
 ```
 
-Source/editable installs rebuild and upload the fresh wheel automatically. Wheel-based release/pipx
-installs reuse the original wheel URL/file metadata (or `VPNGW_AGENT_WHEEL`) instead of rebuilding
-from source.
+Ordinary source/editable applies rebuild and upload the fresh wheel automatically.
+VM-HA planning requires a prebuilt wheel: rebuild after source edits, and use
+`VPNGW_AGENT_WHEEL` to select an exact wheel if `dist/` contains more than one.
+Ordinary wheel-based release/pipx installs reuse the original wheel URL/file metadata
+(or `VPNGW_AGENT_WHEEL`) instead of rebuilding from source.
 
 ### Testing Changes
 

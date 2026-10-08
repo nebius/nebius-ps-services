@@ -146,6 +146,12 @@ class _Prompter:
         )
 
 
+def _validate_replay_window(value: str) -> str:
+    if value and (not value.isascii() or not value.isdecimal() or not 32 <= int(value) <= 1024):
+        raise ValueError("Enter a whole number from 32 through 1024, or leave blank to inherit.")
+    return value
+
+
 def _validate_name(value: str) -> str:
     if not _NAME_RE.fullmatch(value) or len(value) > 64:
         raise ValueError(
@@ -685,6 +691,17 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
                 local_ip, remote_inner_ip = (hosts[0], hosts[1])
                 if not local_first:
                     local_ip, remote_inner_ip = remote_inner_ip, local_ip
+                replay_window = prompt.ask(
+                    f"Receive replay window for {tunnel_name} (32-1024)",
+                    default=str(old_tunnel.get("replay_window", "")),
+                    allow_empty=True,
+                    help_text=(
+                        "Enter a packet window from 32 through 1024. A larger window tolerates "
+                        "more reordering while retaining replay protection. Enter keeps the "
+                        "existing choice; blank on a new tunnel inherits strongSwan (normally 32)."
+                    ),
+                    validator=_validate_replay_window,
+                )
                 tunnels.append(
                     {
                         "name": tunnel_name,
@@ -696,6 +713,7 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
                         "inner_cidr": inner_cidr,
                         "inner_local_ip": str(local_ip),
                         "inner_remote_ip": str(remote_inner_ip),
+                        **({"replay_window": int(replay_window)} if replay_window else {}),
                     }
                 )
                 tunnel_number += 1
