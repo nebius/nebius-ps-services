@@ -3979,7 +3979,7 @@ existing build hook remains the packaging authority for generated wheel data.
 - Stale or missing lock state, missing uv, unsupported Python, and whitespace-containing, unsafe, symlinked, or unrecognized `VENV` paths fail before environment mutation.
 - Exact sync removes undeclared packages, ignores unrelated active environments, and converges under concurrent `make env` calls.
 - Isolated build backends are present in and hash-constrained by the committed lock.
-- Every cxcli workflow job pins the approved setup-uv action/version and preserves the existing Python matrices and one-build/many-consumer wheel graph.
+- Every cxcli workload job pins the approved setup-uv action/version and preserves the existing Python matrices and one-build/many-consumer wheel graph. Read-only merge-identity and result-evidence jobs wrap post-merge execution; workload jobs validate the authoritative checkout before dependency setup.
 - Installed-wheel verification imports from the temporary environment and never rebuilds a downloaded artifact.
 
 #### Validation Plan

@@ -106,7 +106,18 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
 
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
-    assert set(jobs) == {"python-compatibility", "verify", "wheel-compatibility"}
+    assert set(jobs) == {
+        "merge-inputs",
+        "python-compatibility",
+        "verify",
+        "wheel-compatibility",
+        "result-evidence",
+    }
+    expected_checkout = {
+        "ref": "${{ github.sha }}",
+        "persist-credentials": "false",
+        "fetch-depth": "0",
+    }
     compatibility = jobs["python-compatibility"]
     assert isinstance(compatibility, dict)
     strategy = compatibility["strategy"]
@@ -117,7 +128,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     compatibility_steps = compatibility["steps"]
     assert isinstance(compatibility_steps, list)
     compatibility_checkout = _uses_step(compatibility_steps, "actions/checkout@v7")
-    assert compatibility_checkout["with"] == {"fetch-depth": "0"}
+    assert compatibility_checkout["with"] == expected_checkout
     _assert_pinned_uv(compatibility_steps)
     _uses_step(compatibility_steps, "azure/setup-helm@v5")
     assert "make ci-python" in "\n".join(str(step) for step in compatibility_steps)
@@ -127,7 +138,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     steps = verify["steps"]
     assert isinstance(steps, list)
     verify_checkout = _uses_step(steps, "actions/checkout@v7")
-    assert verify_checkout["with"] == {"fetch-depth": "0"}
+    assert verify_checkout["with"] == expected_checkout
     _assert_pinned_uv(steps)
     _assert_grafana_api_qualification(steps)
     _uses_step(steps, "azure/setup-helm@v5")
@@ -154,7 +165,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
 
     wheel_compatibility = jobs["wheel-compatibility"]
     assert isinstance(wheel_compatibility, dict)
-    assert wheel_compatibility["needs"] == "verify"
+    assert set(wheel_compatibility["needs"]) == {"merge-inputs", "verify"}
     wheel_strategy = wheel_compatibility["strategy"]
     assert isinstance(wheel_strategy, dict)
     wheel_matrix = wheel_strategy["matrix"]
@@ -163,7 +174,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     wheel_steps = wheel_compatibility["steps"]
     assert isinstance(wheel_steps, list)
     wheel_checkout = _uses_step(wheel_steps, "actions/checkout@v7")
-    assert wheel_checkout["with"] == {"fetch-depth": "0"}
+    assert wheel_checkout["with"] == expected_checkout
     _assert_pinned_uv(wheel_steps)
     serialized_wheel_steps = "\n".join(str(step) for step in wheel_steps)
     download_step = _uses_step(wheel_steps, "actions/download-artifact@v8")
@@ -172,6 +183,30 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
         "path": "services/nebius-cxcli/dist",
     }
     assert "make verify-wheel-cli-dist" in serialized_wheel_steps
+
+    for job in (compatibility, verify, wheel_compatibility):
+        assert job["permissions"] == {
+            "contents": "read",
+            "pull-requests": "read",
+            "actions": "read",
+        }
+        job_steps = job["steps"]
+        checkout = _uses_step(job_steps, "actions/checkout@v7")
+        result_checkout = _named_step(job_steps, "Check out the authoritative merged result")
+        identity = _named_step(job_steps, "Verify exact checkout identity")
+        setup = _uses_step(job_steps, "actions/setup-python@v7")
+        assert result_checkout["if"] == "needs.merge-inputs.outputs.post_merge == 'true'"
+        assert "ci-checkout --workflow nebius-cxcli-ci.yml" in result_checkout["run"]
+        assert job_steps.index(checkout) < job_steps.index(result_checkout)
+        assert job_steps.index(result_checkout) < job_steps.index(identity) < job_steps.index(setup)
+
+    for job_steps, step_name in (
+        (compatibility_steps, "Run full offline suite"),
+        (steps, "Verify service with local make contract"),
+    ):
+        assert _named_step(job_steps, step_name)["env"]["RELEASE_REF"] == (
+            "${{ needs.merge-inputs.outputs.checkout_sha }}"
+        )
 
     workflow_text = _workflow_path("nebius-cxcli-ci.yml").read_text(encoding="utf-8")
     assert ".venv/bin/python" not in workflow_text
