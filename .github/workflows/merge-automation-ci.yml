@@ -38,6 +38,8 @@ concurrency:
   cancel-in-progress: ${{ inputs.result_sha == '' }}
 
 jobs:
+  # Load the validator from the trusted workflow revision. For completion runs,
+  # the exact-result artifact identifies the tested commit, not the run's SHA.
   merge-inputs:
     name: Validate CI checkout identity
     runs-on: ubuntu-latest
