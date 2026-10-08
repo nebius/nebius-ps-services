@@ -26,12 +26,13 @@ In monorepos:
 
 Use merge automation narrowly.
 
-- Bot-only workflows are preferred.
-- `pull_request_target` is acceptable only when the workflow does not check out or execute untrusted PR code.
-- In `pull_request_target` workflows, do not embed dynamic `${{ ... }}` values directly inside shell `run:` blocks; pass them through step-level `env:` first.
-- For Dependabot auto-merge, require both actor scoping and changed-file scoping.
-- Prefer auto-merging GitHub Actions ecosystem PRs only when every changed file is under `.github/workflows/` or automation-only action metadata.
-- GitHub Actions major bumps can be auto-merged when the file scope is limited to workflow automation and the repository accepts bot approvals for branch protection.
+- Require explicit trusted operator dispatch and local exact-head/base COMMENT
+  review for every merge, including Dependabot and Docker updates.
+- PR events, CI events and schedules may report Required CI, never initiate merges.
+- Review the complete diff, breaking changes, security/dependency information and
+  meaningful validation; safely repaired heads and changed bases need fresh review.
+- `pull_request_target` is acceptable only for metadata observation without PR checkout.
+- Pass dynamic expressions through step-level environment variables before shell use.
 - Keep write permissions limited to workflows that approve, label, comment, or merge.
 - Route approval/merge through the protected merge templates and merge-pr owner.
 - The built-in token cannot enqueue queues; report a maintainer blocker.
@@ -41,4 +42,4 @@ Use merge automation narrowly.
 
 - `.github/workflows/nebius-cxcli-ci.yml`: compact PR + main merge CI with build verification.
 - `.github/workflows/vpngw-ci.yml`: split lint/unit/manual integration pipeline.
-- `.github/workflows/dependabot-auto-merge.yml`: secretless bot metadata admission for the shared broker.
+- `.github/workflows/skills-merge-pr.yml`: CI observation and explicitly dispatched reviewed merges.

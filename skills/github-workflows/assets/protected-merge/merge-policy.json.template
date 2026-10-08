@@ -1,8 +1,6 @@
 {
   "schema": "merge-policy/v1",
-  "dependabot_workflow": "dependabot-auto-merge.yml",
   "excluded_checks": [
-    "dependency-admission",
     "merge-candidates",
     "protected-merge",
     "required-ci-status",

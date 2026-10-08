@@ -83,7 +83,7 @@ def read_intent(api, run_id, attempt, number, head, policy):
     run = api.api(f"actions/runs/{run_id}/attempts/{attempt}")
     trusted_run(api, run, policy["merge_workflow"], default)
     require(
-        run["event"] in {"workflow_dispatch", "workflow_run", "schedule"},
+        run["event"] == "workflow_dispatch",
         "Unsupported intent producer event",
     )
     name = f"merge-intent-{number}-{head}-{attempt}"
@@ -108,15 +108,13 @@ def read_intent(api, run_id, attempt, number, head, policy):
         and value["source_sha"] == run["head_sha"],
         "Merge intent identity mismatch",
     )
-    if run["event"] == "workflow_dispatch":
-        require(
-            run["actor"]["id"] in operator_ids() and value["review_id"] > 0,
-            "Untrusted operator intent",
-        )
-    else:
-        require(
-            value["review_id"] == 0, "Automatic intent must use Dependabot admission"
-        )
+    require(
+        type(run["actor"]["id"]) is int
+        and run["actor"]["id"] in operator_ids()
+        and type(value.get("review_id")) is int
+        and value["review_id"] > 0,
+        "Untrusted operator intent",
+    )
     allowed = {w["file"] for w in policy["ci_workflows"]}
     require(
         value["ci_workflows"]
@@ -491,6 +489,8 @@ def targets(api, policy, event):
         trusted_run(api, run, policy["merge_workflow"], default)
         pr = api.api(f"pulls/{number}")
         if pr["merged"] and pr["head"]["sha"] == head:
+            intent = read_intent(api, producer, attempt, number, head, policy)
+            merged_result(api, intent)
             key = (number, head)
             value = {
                 "pr": number,

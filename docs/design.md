@@ -86,7 +86,7 @@ No independent verification evidence was recorded before schema migration.
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-002: Shared protected merge automation
 
 #### Requirements Covered
@@ -95,15 +95,17 @@ No independent verification evidence was recorded before schema migration.
 
 #### Context Evidence
 
-Existing create-pr ends before merge; review-pr permits independent branch mutation; Helm/image helpers commit selected paths and require clean default entry. Existing Dependabot automation uses a personal-token fallback.
+The deployed broker has separate ordinary-review and Dependabot metadata admission plus rollout controls. The accepted redesign replaces both paths with universal local review while preserving the existing completion and publication safeguards.
 
 #### Design Details
 
-Ordinary skills and deterministic Dependabot automation use the repository GITHUB_TOKEN for protected approval and merge. Local agent review and safe repair remain mandatory for ordinary skills. Agentic SDLC is excluded. Custom Apps and PAT fallback are not supported.
+All ordinary PRs and configured Dependabot updates, including Docker, use local review-pr, safe repairs through create-pr, fresh exact-head/base review and CI, then merge-pr. Standalone review records evidence without starting a merge; a complete review-and-merge request authorizes the sequence. Route Python, Actions and Docker changes to the matching specialists and stop for unsafe findings, unavailable meaningful validation or human objections. Every changed head or base invalidates earlier review.
 
-Keep the canonical whole-repository transaction and exact-head/base review evidence. Use a trusted-default metadata-only Required CI aggregate for all PRs, including human/fork review paths. Ordinary broker admission additionally requires a local review attestation; Dependabot uses verified secretless metadata. Separate per-job status, approval/merge, dispatch and Pages permissions. Upload an immutable admission receipt before effects. Use guarded asynchronous direct merge with no bypass; queues and rejected workflow-file merges stop for a maintainer. Shared github-actions identity is not exclusive to this broker.
+Only an explicit trusted numeric operator workflow_dispatch can initiate a merge. Independently fetch and validate the positive GitHub COMMENT review ID, author, repository/PR/head/base and validation before intent and again before effects. Bot identity, metadata, labels and CI cannot replace review. Remove metadata admission and rollout toggles without compatibility paths; MERGE_OPERATOR_IDS is the only merge-specific variable. Preserve same-feature reuse, canonical repository-wide commits and preparation-only publication modes.
 
-Completion reacts to broker/CI completion and schedule, validates receipt provenance and authoritative merge state, dispatches applicable CI on trusted default with a frozen result SHA, and verifies exact checkout evidence. Each execution job first loads the validator from github.sha, then independently revalidates the receipt and authoritative merged result before checkout and before setup or cache restoration. Jobs use Contents, Pull requests and Actions read permissions; fetch credentials exist only in the Git process environment. Job outputs and raw dispatch refs are not checkout authority. Correlate and reconcile ambiguous submissions. Retain legacy Pages publication and request a build explicitly; a successful build must contain the result. Publishers keep local exact-result tag ownership. Activation defaults disabled, with restricted canaries before full enablement. Preserve existing secrets and dependency update scope. Include the user's existing CODEOWNERS edit in the bootstrap PR.
+PR, CI and scheduled events maintain the CI-only Required CI aggregate for ordinary and fork PRs and return no merge candidates. Upload an immutable admission receipt before approval. Keep per-job least privilege, protected asynchronous merge with bypass_rules false, exact-head approval, repeated CI/objection checks and maintainer handoff for queues or workflow-file permission denial. The shared Actions identity is a trust boundary.
+
+Completion schedules recover only already-authorized operator-dispatched positive-review intents. Preserve duplicate suppression, uncertain-effect journals, authoritative result ancestry, explicit result CI and Pages dispatch. Each CI execution job loads its checkout validator from the trusted workflow revision and validates receipt and authoritative result before setup/cache restoration; fetch credentials remain process-local. Release publishers tag only the verified actual merge result. Agentic SDLC, existing credentials and Dependabot scheduling/configuration stay unchanged.
 
 #### Selected Option
 
@@ -111,17 +113,18 @@ Python, Bash, gh and deterministic GitHub Actions using GITHUB_TOKEN. Agentic re
 
 #### Alternatives Considered
 
-Custom App installation is unavailable. PAT fallback is rejected. Keeping the existing actor restriction requires a maintainer for every merge; the selected policy permits PR-gated Actions merges with explicit unsupported-case handoff.
+Unattended metadata-only merging violates universal review. Manual merges for every PR defeat the requested completion flow. Retain the existing local agent and Python/Bash/Actions stack; no scheduled local agent, new model runtime, custom App or credential fallback.
 
 #### Implementation Boundaries
 
-Selected ordinary skills, direct commit-owner contracts, reusable workflow assets, root merge/Dependabot workflows, documentation and tests. Preserve SDLC and optional existing project helper copies.
+Ordinary review/merge/create and publication owners, reusable workflows, broker/completion/CI checkout helpers, root merge workflows, paired specifications, documentation and evaluations. Delete the separate Dependabot producer workflow and template. Preserve Agentic SDLC and all configured Dependabot updates.
 
 #### Test-First Success Criteria
 
-- TDD-001: Unsafe, stale or forged admission never approves or merges.
-- TDD-002: Authorized safe repairs re-review the new head before merge.
-- TDD-003: Publication tags the verified result even when default advances.
+- TDD-001: Ordinary, Python, Actions and Docker PRs use identical positive-review dispatch admission. Missing, zero, malformed, forged or stale evidence blocks all effects.
+- TDD-002: Safe Dependabot source repairs invalidate old review; head/base changes, objections and missing/failed CI stop the operation.
+- TDD-003: Standalone review and automatic events cannot initiate merging; ordinary/fork Required CI still reports.
+- TDD-004: Interrupted completion, exact checkout, duplicate suppression, Pages and verified-result tags retain their safeguards.
 
 #### Validation Plan
 
@@ -129,7 +132,7 @@ Run focused deterministic regressions, lint/syntax, host skill structure, specif
 
 #### Test Plan
 
-Cover both admission lanes, missing checks, API errors, requested changes, provenance, concurrency, merge queue and exact-result publication.
+Run merge, completion, publication and template suites, covering dispatch identity, reviewed dependency repairs, missing checks, objections, artifact provenance, recovery, checkout, queue/workflow permission handoff and exact-result publication.
 
 #### Evaluation Plan
 
@@ -137,7 +140,7 @@ Update trigger and quality cases; report unavailable native evaluation rather th
 
 #### Rollout And Rollback
 
-Bootstrap under current protection with one maintainer review. Keep effects disabled, establish Required CI, apply the reviewed PR-gated policy, then run ordinary, Dependabot and workflow-file canaries. Enable only after declared outcomes pass. Disable new effects and restore captured protection on rollback; continue verifying completed merges and never undo public releases automatically.
+Capture current repository settings and reconcile old broker effects before retiring the producer. Verify old runs are quiescent. Deploy through the existing feature PR and protection, using maintainer bootstrap if workflow permission requires it. Configure the numeric operator list, read-only default token, Actions approvals and strict Required CI bound to the verified built-in publisher. Remove only the agreed empty push restriction; retain all other protection and repository merge methods. No Environment or new secret. Run ordinary and real Dependabot acceptance PRs without a permanent trial mode. Rollback stops new broker runs, reconciles in-flight effects and restores captured settings when necessary; retain completion recovery and never undo merges/releases automatically.
 
 #### Done Definition
 
@@ -145,11 +148,15 @@ Code, instructions, templates and tests agree; independent review passes. Report
 
 #### Implementation Evidence
 
-Implemented per-job Actions authority, CI-only aggregate, uploaded intent before effects, exact-result CI inputs/checkout receipts, deterministic completion and Pages journals, and disabled/canary/enabled controls. Ordinary skill owners, templates, documentation and publication primitives agree. Agentic SDLC and Dependabot scheduling remain unchanged. Bootstrap and live activation are pending.
+Implemented universal positive COMMENT review admission and explicit trusted operator dispatch. Deleted dependency metadata admission, its producer/template, policy key and obsolete check exclusion. Removed rollout controls with no replacement or compatibility path. Completion selection and CI checkout require operator-dispatched positive-review intents; immutable receipts, repeated CI/review gates, exact-result checkout, journals and publication ownership remain. Dependabot configuration is unchanged. Updated instructions, reusable assets, evaluations, READMEs and Unreleased changelogs; installed the four changed skill payloads from their verified source owners.
 
 #### Verification Evidence
 
-Passed 179 focused tests: 65 merge/recovery, 10 disposable publication, 60 canonical transaction, 5 commit contract and 39 release tests. Also passed workflow actionlint, Python lint/format, shell syntax/ShellCheck, portable/Codex/Claude structure and stateful profiles, and eight-skill npx copy/repeat/isolation checks. Code/security review findings for fork association, rerun invalidation, result concurrency and recovery provenance were fixed with regression coverage. CI repair validation also passed all six vpngw build-contract tests, negative checkout-admission cases and a real disposable Git checkout that preserves tags and leaves Git configuration unchanged. Fresh PR CI and CodeQL verification remain pending. Native trigger/quality runners remain authentication-unavailable; no runtime or live merge claim. Maintainer bootstrap, protection activation and controlled live canaries remain pending.
+Historical foundation evidence: 179 focused tests and initial skill/workflow checks passed; the maintainer bootstrap PR passed 41 checks with 13 expected skips, and cxcli passed 8,278 tests. The bootstrap merged on 2026-10-08 and legacy Pages built that result. A later alignment passed 77 merge/completion/publication/template tests and 21 service checks with source/installed parity. These results do not verify this redesign or token-driven completion. Current source, installed, CI and live evidence must be recorded separately after implementation; delivery remains unverified until acceptance is observed.
+
+Current redesign evidence: 122 focused merge, completion, publication, release and template tests pass, including reviewed Python/Actions/Docker changes and safe source repairs, automatic-event non-initiation, malformed/stale review rejection and completion checkout provenance. Workflow actionlint, Python lint/format, publication shell checks, changed Markdown and paired spec validation pass. Independent code/security review found no blocking source issue. Eight skills pass portable/Codex/Claude structure checks and actual npx copy/repeat/isolation tests; all eight source/installed payloads and executable modes match. Native trigger and comparative quality probes are authentication-unavailable, not passing runtime evidence.
+
+Live preflight confirmed the authorized numeric account and administration access, the built-in publisher App identity, read-only default workflow token and enabled Actions approvals. Old merge workflows were quiescent and the merge/effect receipt inventory was empty. Existing protection was captured and the narrow target configuration reviewed. Deployment, settings application/readback and live ordinary/real Dependabot acceptance remain pending; no eligible dependency PR was open at preflight. Source tests and bot fixtures do not establish live protected merge, exact-result CI or Pages completion.
 
 <!-- /FEATURE: FEAT-002 -->
 <!-- maintain-project-specs:design:end -->

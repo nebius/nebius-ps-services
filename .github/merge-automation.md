@@ -1,70 +1,72 @@
 # Protected merge setup
 
-Ordinary PR and publication skills run local review-pr and safe repairs, then
-merge-pr delegates to deterministic GitHub Actions using `GITHUB_TOKEN`.
-Dependabot uses the same merge broker after policy admission. No agent runs on
-Actions. Agentic SDLC retains its separate authorization and workflow.
+Every ordinary PR and configured Dependabot update, including Docker, follows
+local review-pr, safe repair, fresh review and CI, then merge-pr. The trusted
+GitHub Actions broker uses GITHUB_TOKEN for protected approval and merge.
+Dependabot waits until a local operation is started. Agents run locally;
+Agentic SDLC retains its separate authorization and workflow.
 
 ## Bootstrap and protection
 
-1. Merge the bootstrap PR through normal maintainer review before enabling
-   automation. The trusted broker must exist on the default branch. The initial
-   workflow-file PR cannot bootstrap its own approval or merge authority.
-2. Keep Actions' default token read-only and allow Actions to approve PRs in the
-   repository settings. Individual jobs request only their required permissions.
-   No custom App, Environment secret or PAT is used. Leave old secrets untouched.
-3. Set `MERGE_OPERATOR_IDS` to a JSON list of trusted local operator numeric IDs,
-   such as `[12345]`. Set `MERGE_AUTOMATION_MODE=disabled` initially and
-   `MERGE_CANARY_PR_NUMBERS=[]`. These are repository variables, not secrets.
-4. Capture the existing main protection configuration for rollback. For this
-   accepted deployment, replace its empty push restriction with required PR
-   approval plus strict `Required CI`. Keep one approval, stale dismissal,
-   conversation resolution and force-push/deletion restrictions. Preserve any
-   additional requirements. Bind the required status to GitHub Actions when the
-   repository API supports the observed publisher. Never add bypass actors.
-5. Verify `Required CI` reports applicable native CI for ordinary human and fork
-   PRs while merging is disabled. Local review attestations are broker admission,
-   not prerequisites for a maintainer's native PR workflow. The aggregate listens
-   for CI starts/completions and reconciles on a schedule; native status updates
-   are asynchronous, while the broker always rechecks live runs before effects.
-6. Review `.github/merge-policy.json` whenever CI changes. It contains all six
-   workflow/path mappings, an unfiltered CI workflow, the merge/completion
-   workflow filenames and legacy Pages publication setting.
+1. Capture the repository settings and inspect old broker runs and retained
+   intent/effect receipts. Before retiring an earlier admission path, prove its
+   writers are quiescent and reconcile any outstanding effects. Do not replay
+   obsolete receipts through the new admission contract.
+2. Deploy through a feature PR under existing protection. The trusted broker
+   must exist on default; a workflow-changing bootstrap may need a maintainer.
+   Report the exact approval/merge action if token permissions reject it.
+3. Keep the default workflow token read-only and Actions PR approvals enabled.
+   Individual jobs request only needed permissions. Create no Environment or
+   new secret and leave existing credentials untouched.
+4. Set the sole merge-specific repository variable, MERGE_OPERATOR_IDS, to a
+   JSON list of verified trusted operator numeric IDs, such as `[12345]`.
+   Remove retired rollout variables; there is no replacement activation toggle.
+5. Capture and review the protection payload before applying it, then read it
+   back. For this accepted deployment remove the empty push-actor restriction
+   and require strict `Required CI`, bound to the verified GitHub Actions
+   publisher App ID `15368`. Retain one approval, stale dismissal, conversation
+   resolution, force-push/deletion prohibitions and every other existing rule.
+   Preserve repository merge-method settings; squash remains the skill default.
+6. Verify ordinary and fork `Required CI` without a local review attestation.
+   PR events, CI starts/completions and schedules report CI but produce no merge
+   candidates. Only trusted explicit dispatch can initiate a new merge.
+7. Keep `.github/merge-policy.json` aligned with all six CI/path mappings, the
+   unfiltered CI workflow, broker/completion filenames and Pages configuration.
 
-All write-enabled workflows share `github-actions[bot]`. Removing the empty
-push restriction therefore changes repository authority beyond one workflow;
-job permissions and trusted default code provide the boundaries here. This was
-an explicit deployment decision, not a general permission-repair fallback.
-Required queues, extra human/CODEOWNER approvals and unsupported workflow-file
-merges stop for a maintainer. Do not weaken protection to make a canary pass.
+All write-enabled workflows share github-actions[bot]. Removing the empty push
+restriction is an explicitly accepted policy change; least-privilege jobs and
+trusted default code remain essential. Queues, additional human/CODEOWNER
+requirements and unsupported workflow-file permissions stop for a maintainer.
+Never substitute credentials or bypass protection.
 
-## Controlled activation
+## Review and acceptance
 
-Use `MERGE_AUTOMATION_MODE=canary` with only the intended PR numbers in
-`MERGE_CANARY_PR_NUMBERS`. First use a small feature-branch documentation PR and
-record its allowed operator's exact-head/base COMMENT review. Verify:
+Review the complete diff, breaking changes, dependency/security information and
+meaningful validation. Route Python, GitHub Actions and Docker changes to their
+matching specialists. Safe fixes may change source files; synchronize and
+re-review each changed head or base. Stop for unsafe findings, missing meaningful
+validation or unresolved human objections. Standalone review-pr never merges;
+review-and-merge authorizes the complete sequence without routine reconfirmation.
 
-- local review-pr and safe repairs finish before dispatch;
-- CI-only `Required CI` and independent admission both pass;
-- the pre-effect intent artifact exists before exact-head Actions approval;
-- the protected async API reports actual merge with no bypass/default push;
-- the authoritative result belongs to remote main history;
-- explicit post-merge CI checks out and verifies that exact result;
-- Pages has a successful build at the result or a descendant containing it.
+For a small ordinary PR and a real eligible Dependabot PR, record:
 
-Exercise a workflow-file PR separately. A token permission rejection is a
-maintainer handoff for that PR, not permission to introduce another credential
-or a reason to invalidate a successful supported canary. Test stale review,
-unsafe findings, human objections, failed CI, recovery and duplicate suppression
-with the offline suite before live activation. Observe an eligible Dependabot
-PR through the same outcome without a laptop agent, then set mode to `enabled`
-only after recording the canary evidence.
+- local review and passing validation/CI on the exact head and base;
+- a trusted positive COMMENT review ID independently fetched by the broker;
+- immutable intent before exact-head Actions approval and protected merge;
+- authoritative result and remote default-branch containment;
+- explicit CI checkout and verification of that exact result;
+- successful configured Pages publication containing the result.
 
-`.github/dependabot.yml` keeps schedules, groups, limits, branch and ecosystems.
-Major/minor/patch github_actions and pip/uv updates keep their path eligibility;
-Docker PRs remain ineligible for automatic merge. Existing Dependabot PRs need a
-fresh metadata producer run after bootstrap. The broker never rebases branches:
-a stale branch waits for Dependabot or an authorized maintainer update.
+There is no permanent trial mode. Test Python, Actions and Docker admission,
+safe source repairs, stale/malformed/zero/forged reviews, unauthorized dispatch,
+objections, missing/failed CI and automatic-event non-initiation offline. Cover
+Docker live when an eligible update exists and workflow-file success or the
+expected maintainer handoff separately. A simulated bot fixture is not live
+Dependabot evidence. No scheduled local agent is introduced.
+
+`.github/dependabot.yml` preserves schedules, groups, labels, limits, target
+branch and ecosystems. There is no separate dependency approval/merge producer.
+Bot identity, labels, metadata and green CI never substitute for local review.
 
 ## Completion and recovery
 
@@ -72,7 +74,7 @@ Token-generated pushes do not start ordinary CI or legacy Pages builds. The
 completion workflow dispatches the applicable push-equivalent CI explicitly,
 with a frozen result SHA, stable correlation and pre-effect dispatch journal.
 Each CI job loads its validator from `github.sha`, then independently validates
-the complete input identity, broker receipt and merged result before selecting
+the complete input identity, operator-dispatched positive-review broker receipt and merged result before selecting
 that commit. Checkout happens before setup or cache restoration, with read-only
 job permissions and process-local fetch credentials. Every required job asserts
 HEAD; the run uploads exact-result evidence. Manual-only integration/deployment
@@ -88,20 +90,19 @@ A timed-out local observer can resume read-only verification; it must not infer
 that another merge or publication is needed. Local release skills still own
 exact-result tags and downstream release verification.
 
-To roll back, set mode to `disabled`, inspect in-flight requests and restore the
-captured protection if necessary. Keep completion verification running for
-already-merged changes. Do not revoke/delete old credentials during rollback.
-Source tests prove contracts, not deployed token permissions or live completion.
+To roll back, stop new broker runs, reconcile in-flight effects and restore
+captured settings when necessary. Keep completion recovery for already-merged
+changes. Never undo merges/releases automatically or revoke existing credentials.
+Source, installed, CI and live acceptance evidence must be reported separately.
 
 ## Portability
 
 The canonical helpers are `skills/merge-pr/scripts/merge_gate.py` and
 `merge_completion.py`. Other repositories install them together under
-`.github/scripts` using the matching templates in github-workflows. Adapt every
-CI workflow with the input/checkout/evidence contract and explicit path policy.
-Pages is opt-in in generic templates. There is one Actions implementation and
-no compatibility fallback to the previous credential path.
+`.github/scripts` using the matching github-workflows templates. Adapt every CI
+workflow with the input/checkout/evidence contract and explicit path policy.
+Public examples use placeholders; repository-specific settings stay local.
 
-See the [Actions protocol](../skills/merge-pr/references/actions-protocol.md),
-[built-in token](https://docs.github.com/en/actions/concepts/security/github_token)
-and [Pages build API](https://docs.github.com/en/rest/pages/pages#request-a-github-pages-build).
+Official contracts: [built-in token](https://docs.github.com/en/actions/concepts/security/github_token),
+[branch protection](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection),
+[async merge](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously).

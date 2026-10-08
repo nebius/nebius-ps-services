@@ -1,0 +1,25 @@
+{
+  "skill_name": "github-workflows",
+  "evals": [
+    {
+      "id": "unified-reviewed-workflow",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $github-workflows to update a protected merge workflow for ordinary and Dependabot Docker PRs. Require local review before each merge.",
+      "expected_output": "Preserves the unified reviewed merge ownership and evidence boundaries.",
+      "files": [],
+      "assertions": [
+        "Uses one explicit operator-dispatched positive-review path with no dependency metadata producer or rollout toggles.",
+        "Keeps Required CI observation independent and limits completion recovery to already-authorized reviewed intents."
+      ]
+    },
+    {
+      "id": "workflow-bootstrap-handoff",
+      "prompt": "Offline contract simulation only. Read the skill and required local references; do not contact GitHub, mutate files, execute publication or wait. Use $github-workflows to assess a workflow-file bootstrap whose protected GITHUB_TOKEN merge is denied.",
+      "expected_output": "Preserves the unified reviewed merge ownership and evidence boundaries.",
+      "files": [],
+      "assertions": [
+        "Reports the exact maintainer action without substituting credentials or bypassing protection.",
+        "Preserves read-only default token, least-privilege jobs, existing credentials and recovery."
+      ]
+    }
+  ]
+}

@@ -56,28 +56,20 @@ project or chart.
 
 ## Dependency Automation
 
-The repository uses Dependabot for dependency update pull requests.
+Dependabot opens updates using the schedules, groups and ecosystems in
+`.github/dependabot.yml`. Every update, including Docker, waits for local review
+and meaningful validation before a trusted operator starts merging.
 
-- GitHub Actions major, minor, and patch update pull requests may be created by
-  `.github/dependabot.yml`.
-- GitHub Actions minor and patch updates are grouped for simpler review.
-- The companion auto-merge workflow decides which eligible Dependabot pull
-  requests may be auto-approved and auto-merged.
-- GitHub Actions updates, including majors, may be auto-merged only when the
-  pull request is Dependabot-authored, scoped to workflow automation files, and
-  verified by secretless admission metadata and the shared Actions
-  broker, with passing applicable CI and no unresolved review objections.
-- Python dependency updates from the `uv` and `pip` ecosystems may also be
-  auto-approved and auto-merged when every changed file stays within Python
-  dependency manifests or lockfiles such as `pyproject.toml`, `uv.lock`,
-  `requirements*.txt`, `constraints*.txt`, `poetry.lock`, `pdm.lock`,
-  `Pipfile`, and `Pipfile.lock`.
-- Dependabot pull requests that touch source code or other non-dependency files
-  remain ineligible for repo-level auto-merge.
+Ordinary and Dependabot PRs share one path: local review, safe repairs, fresh
+review and CI, protected Actions merge, then exact-result CI and Pages
+verification. Source repairs are allowed when safe; each new head or base
+requires fresh review. Standalone review never merges, and automatic PR/CI
+and scheduled events only report CI or recover already-authorized completion.
 
-Shared GitHub Actions merge setup and bootstrap verification are documented in
-[protected merge setup](.github/merge-automation.md). Ordinary skill review runs
-locally; Dependabot uses deterministic admission with the same Actions identity.
+[Protected merge setup](.github/merge-automation.md) documents the operator list,
+required protection, bootstrap and live acceptance. Verify skill installation
+and default-branch workflow deployment separately from source tests, CI and
+live completion.
 
 ## Reusable Skill CI
 

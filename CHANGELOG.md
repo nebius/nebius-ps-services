@@ -6,17 +6,26 @@ project folder.
 
 ## [Unreleased]
 
+- Unify ordinary and Dependabot PRs, including Docker, behind local review,
+  safe repairs, fresh head/base review and CI, then explicit operator-dispatched
+  protected merge. Remove the dependency metadata producer and rollout toggles;
+  keep the numeric operator list as the only merge-specific variable.
+- Require operator-dispatched positive-review intents in completion and CI
+  checkout. Automatic events report CI or recover admitted completion only.
+  Preserve bootstrap evidence and distinguish source, installed, CI and live
+  acceptance; keep standalone review, preparation-only and publication ownership.
+
 - Revalidate merge receipts inside each CI job before selecting the merged
   commit. Load the validator from the trusted workflow revision and keep Git
   fetch credentials process-local. Preserve ordinary PR and manual CI lanes.
 
 - Use per-job built-in Actions tokens, a CI-only required aggregate, guarded
-  direct merge and recoverable explicit result-CI/Pages publication. Add
-  disabled/canary/enabled rollout; stop for unsupported queues or workflow-file
+  direct merge and recoverable explicit result-CI/Pages publication. Stop
+  for unsupported queues or workflow-file
   permissions. Remove custom-App setup without changing Agentic SDLC.
 
 - Add a shared protected GitHub Actions merge broker for ordinary skill workflows
-  and deterministic Dependabot admission, with local agent review, exact-head
+  and reviewed Dependabot updates, with local agent review, exact-head
   guards, explicit CI policy and no personal-token fallback. Preserve Dependabot
   schedules/ecosystems and the separate Agentic SDLC workflow.
 

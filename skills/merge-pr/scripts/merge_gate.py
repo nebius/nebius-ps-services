@@ -18,9 +18,7 @@ from urllib.parse import quote
 import zipfile
 
 SCHEMA = "skills-review/v1"
-ADMISSION_SCHEMA = "dependabot-admission/v1"
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
-BOT_ID = 49699333  # github.com Dependabot; never trust a display name alone.
 ACTIONS_BOT_ID = 41898282  # github-actions[bot] on github.com.
 CI_CONTEXT = "Required CI"
 INTENT_SCHEMA = "merge-intent/v1"
@@ -163,7 +161,7 @@ class GitHub:
             cursor = threads["pageInfo"]["endCursor"]
         raise Blocked("Review thread pagination incomplete")
 
-    def artifact(self, artifact_id, filename="admission.json"):
+    def artifact(self, artifact_id, filename):
         raw = gh(
             [
                 "api",
@@ -213,7 +211,9 @@ def identity(pr, repo, head, default):
 
 def review_record(review, pr, allowed):
     require(
-        review["user"]["id"] in allowed and review["state"] == "COMMENTED",
+        type(review["user"]["id"]) is int
+        and review["user"]["id"] in allowed
+        and review["state"] == "COMMENTED",
         "Review attestation is not from an allowed operator",
     )
     require(review["commit_id"] == pr["head"]["sha"], "Review commit drift")
@@ -222,7 +222,8 @@ def review_record(review, pr, allowed):
     except ValueError as exc:
         raise Blocked("Review body is not a structured attestation") from exc
     require(
-        value.get("schema") == SCHEMA
+        isinstance(value, dict)
+        and value.get("schema") == SCHEMA
         and value.get("verdict") == "passed"
         and value.get("unresolved_findings") == 0,
         "Review did not pass",
@@ -242,95 +243,6 @@ def review_record(review, pr, allowed):
         "Review lacks validation evidence",
     )
     return value
-
-
-def dependency_policy(value, files):
-    require(
-        value.get("schema") == ADMISSION_SCHEMA, "Invalid dependency admission schema"
-    )
-    require(
-        value.get("update_type")
-        in {
-            "version-update:semver-major",
-            "version-update:semver-minor",
-            "version-update:semver-patch",
-        },
-        "Dependency update type is not eligible",
-    )
-    ecosystem = value.get("ecosystem")
-    require(
-        ecosystem in {"github_actions", "pip", "uv"},
-        "Dependency ecosystem is not eligible",
-    )
-    require(bool(files), "Empty dependency change")
-    for item in files:
-        path = item["filename"]
-        require(
-            item["status"] != "renamed", "Renamed dependency files require local review"
-        )
-        if ecosystem == "github_actions":
-            allowed = re.fullmatch(
-                r"\.github/workflows/[^/]+\.ya?ml|\.github/actions/.+/action\.ya?ml",
-                path,
-            )
-        else:
-            allowed = re.search(
-                r"(^|/)(pyproject\.toml|uv\.lock|poetry\.lock|pdm\.lock|Pipfile|Pipfile\.lock|(requirements|constraints)([-._/][^/]+)?\.txt)$",
-                path,
-            )
-        require(bool(allowed), "Dependency change contains an ineligible file")
-
-
-def dependabot_admission(api, pr, policy, files):
-    require(
-        pr["user"]["id"] == BOT_ID and pr["user"]["login"] == "dependabot[bot]",
-        "PR is not authenticated Dependabot work",
-    )
-    commits = api.pages(f"pulls/{pr['number']}/commits")
-    require(
-        len(commits) == pr["commits"] and commits, "Incomplete dependency commit list"
-    )
-    for commit in commits:
-        require(
-            (commit.get("author") or {}).get("id") == BOT_ID
-            and commit["commit"]["verification"]["verified"],
-            "Dependency branch contains unverified or human-authored commits",
-        )
-    producer = policy["dependabot_workflow"]
-    name = f"dependabot-{pr['number']}-{pr['head']['sha']}"
-    artifacts = api.pages(f"actions/artifacts?name={quote(name, safe='')}", "artifacts")
-    for artifact in sorted(artifacts, key=lambda item: item["id"], reverse=True):
-        if artifact["name"] != name or artifact["expired"]:
-            continue
-        run = api.api(f"actions/runs/{artifact['workflow_run']['id']}")
-        require(
-            run["path"] == f".github/workflows/{producer}"
-            and run["event"] == "pull_request_target"
-            and run["repository"]["full_name"] == api.repo,
-            "Wrong admission producer",
-        )
-        if run["status"] != "completed" or run["conclusion"] != "success":
-            continue
-        require(run["actor"]["id"] == BOT_ID, "Untrusted admission actor")
-        # pull_request_target run.head_sha is the BASE commit, not the PR head.
-        value = api.artifact(artifact["id"])
-        require(
-            value.get("repository") == api.repo
-            and value.get("pr") == pr["number"]
-            and value.get("head") == pr["head"]["sha"]
-            and value.get("base") == pr["base"]["ref"]
-            and value.get("base_sha") == run["head_sha"]
-            and value.get("run_id") == run["id"],
-            "Dependency artifact identity mismatch",
-        )
-        comparison = api.api(f"compare/{run['head_sha']}...{pr['base']['sha']}")
-        require(
-            comparison["status"] in {"ahead", "identical"},
-            "Untrusted producer revision",
-        )
-        dependency_policy(value, files)
-        return
-    raise Pending("No current verified Dependabot admission artifact")
 
 
 def no_objections(reviews):
@@ -433,7 +345,10 @@ def checks_ready(api, pr, files, policy):
         require(status["state"] == "success", "Commit status failed")
 
 
-def snapshot(api, number, head, policy, review_id=0):
+def snapshot(api, number, head, policy, review_id=None):
+    require(
+        type(review_id) is int and review_id > 0, "Positive local review ID required"
+    )
     default = api.repo_info()["default_branch"]
     pr = api.api(f"pulls/{number}")
     identity(pr, api.repo, head, default)
@@ -444,12 +359,12 @@ def snapshot(api, number, head, policy, review_id=0):
     )
     files = api.pages(f"pulls/{number}/files")
     require(len(files) == pr["changed_files"], "Incomplete changed-file listing")
-    if review_id:
-        review_record(
-            api.api(f"pulls/{number}/reviews/{review_id}"), pr, operator_ids()
-        )
-    else:
-        dependabot_admission(api, pr, policy, files)
+    review = api.api(f"pulls/{number}/reviews/{review_id}")
+    require(
+        type(review.get("id")) is int and review["id"] == review_id,
+        "Review ID mismatch",
+    )
+    review_record(review, pr, operator_ids())
     no_objections(api.pages(f"pulls/{number}/reviews"))
     api.threads(number)
     checks_ready(api, pr, files, policy)
@@ -475,37 +390,20 @@ def trusted_runtime(api):
     return default
 
 
-def activation(number):
-    mode = os.environ.get("MERGE_AUTOMATION_MODE") or "disabled"
-    require(mode in {"disabled", "canary", "enabled"}, "Invalid activation mode")
-    if mode == "canary":
-        allowed = json.loads(os.environ.get("MERGE_CANARY_PR_NUMBERS", "[]"))
-        require(
-            isinstance(allowed, list)
-            and all(type(n) is int and n > 0 for n in allowed),
-            "Invalid canary PR list",
-        )
-        require(number in allowed, "PR is not an enabled canary")
-    else:
-        require(mode == "enabled", "Merge automation is disabled")
-
-
 def admitted_intent(api, number, head, review_id, method, policy):
     trusted_runtime(api)
-    activation(number)
-    event = os.environ.get("GITHUB_EVENT_NAME")
     require(
-        event in {"workflow_dispatch", "workflow_run", "schedule"},
-        "Unsupported merge event",
+        os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
+        "New merges require explicit operator dispatch",
     )
-    if event == "workflow_dispatch":
-        require(
-            int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
-            "Unauthorized dispatcher",
-        )
-        require(review_id > 0, "Operator dispatch requires local review evidence")
-    else:
-        require(review_id == 0, "Automatic events accept Dependabot admission only")
+    require(
+        int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
+        "Unauthorized dispatcher",
+    )
+    require(
+        type(review_id) is int and review_id > 0, "Positive local review ID required"
+    )
+    require(method in {"squash", "merge", "rebase"}, "Invalid merge method")
     pr, files = snapshot(api, number, head, policy, review_id)
     require(
         pr["user"]["id"] != ACTIONS_BOT_ID,
@@ -533,7 +431,6 @@ def admitted_intent(api, number, head, review_id, method, policy):
 
 def execute(api, number, head, review_id, method, policy, intent=None):
     default = trusted_runtime(api)
-    activation(number)
     current = api.api(f"pulls/{number}")
     if current.get("merged"):
         require(
@@ -598,7 +495,7 @@ def execute(api, number, head, review_id, method, policy, intent=None):
             {
                 "commit_id": head,
                 "event": "APPROVE",
-                "body": f"Verified {'local review ' + str(review_id) if review_id else 'Dependabot policy'} for {head}.",
+                "body": f"Verified local review {review_id} for {head}.",
             },
         )
     # Repeat admission/CI/objections after approval. A new push cannot inherit it.
@@ -630,46 +527,29 @@ def execute(api, number, head, review_id, method, policy, intent=None):
 
 
 def candidates(api, event):
-    default = api.repo_info()["default_branch"]
-    if os.environ.get("GITHUB_EVENT_NAME") == "pull_request_target":
+    # Automatic events observe CI only; review evidence never implies merge intent.
+    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         return []
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-        require(
-            int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
-            "Unauthorized dispatcher",
-        )
-        inputs = event["inputs"]
-        number, review_id = int(inputs["pr"]), int(inputs["review_id"])
-        head, method = inputs["head"], inputs.get("method", "squash")
-        require(
-            number > 0 and review_id > 0 and SHA.fullmatch(head),
-            "Invalid dispatch identity",
-        )
-        require(method in {"squash", "merge", "rebase"}, "Invalid merge method")
-        identity(api.api(f"pulls/{number}"), api.repo, head, default)
-        activation(number)
-        return [{"pr": number, "head": head, "review_id": review_id, "method": method}]
-    targets = [
-        {
-            "pr": p["number"],
-            "head": p["head"]["sha"],
-            "review_id": 0,
-            "method": "squash",
-        }
-        for p in api.pages(f"pulls?state=open&base={quote(default, safe='')}")
-        if p["user"]["id"] == BOT_ID
-        and not p["draft"]
-        and p["head"]["repo"]
-        and p["head"]["repo"]["full_name"] == api.repo
-    ]
-    selected = []
-    for target in targets:
-        try:
-            activation(target["pr"])
-        except Blocked:
-            continue
-        selected.append(target)
-    return selected
+    require(
+        int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
+        "Unauthorized dispatcher",
+    )
+    inputs = event["inputs"]
+    require(
+        all(
+            isinstance(inputs.get(k), str) and re.fullmatch(r"[1-9][0-9]*", inputs[k])
+            for k in ("pr", "review_id")
+        ),
+        "Invalid dispatch identity",
+    )
+    number, review_id = int(inputs["pr"]), int(inputs["review_id"])
+    head, method = inputs["head"], inputs.get("method", "squash")
+    require(isinstance(head, str) and SHA.fullmatch(head), "Invalid dispatch identity")
+    require(method in {"squash", "merge", "rebase"}, "Invalid merge method")
+    identity(
+        api.api(f"pulls/{number}"), api.repo, head, api.repo_info()["default_branch"]
+    )
+    return [{"pr": number, "head": head, "review_id": review_id, "method": method}]
 
 
 def ci_targets(api):
@@ -760,7 +640,7 @@ def main():
     parser.add_argument("--policy", default=".github/merge-policy.json")
     parser.add_argument("--pr", type=int)
     parser.add_argument("--head")
-    parser.add_argument("--review-id", type=int, default=0)
+    parser.add_argument("--review-id", type=int)
     parser.add_argument(
         "--method", choices=["squash", "merge", "rebase"], default="squash"
     )

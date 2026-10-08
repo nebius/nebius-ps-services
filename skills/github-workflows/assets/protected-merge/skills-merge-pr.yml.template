@@ -23,7 +23,7 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
   workflow_run:
-    workflows: ["dependabot-auto-merge", "CI"]
+    workflows: ["CI"]
     types: [in_progress, completed]
   schedule:
     - cron: '7,22,37,52 * * * *'
@@ -53,8 +53,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
-          MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
-          MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
         run: |
           set -euo pipefail
           ci_targets=$(python3 .github/scripts/merge_gate.py ci-targets)
@@ -113,8 +111,6 @@ jobs:
       statuses: read
     env:
       MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
-      MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
-      MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
       PR_NUMBER: ${{ matrix.target.pr }}
       PR_HEAD: ${{ matrix.target.head }}
       REVIEW_ID: ${{ matrix.target.review_id }}
@@ -186,8 +182,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
-      MERGE_AUTOMATION_MODE: ${{ vars.MERGE_AUTOMATION_MODE }}
-      MERGE_CANARY_PR_NUMBERS: ${{ vars.MERGE_CANARY_PR_NUMBERS }}
       PR_NUMBER: ${{ matrix.target.pr }}
       PR_HEAD: ${{ matrix.target.head }}
       REVIEW_ID: ${{ matrix.target.review_id }}

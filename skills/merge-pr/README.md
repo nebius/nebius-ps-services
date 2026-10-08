@@ -103,3 +103,11 @@ are separate evidence lanes; none proves a live merge occurred.
 - `scripts/merge_completion.py`: Result CI, Pages and durable reconciliation.
 - `evals/trigger-prompts.csv`: Invocation selection cases.
 - `evals/evals.json` and `evals/fixtures/`: Completion behavior cases and inputs.
+
+## Reviewed dependency updates
+
+Dependabot updates, including Docker, require complete local review, meaningful
+validation and fresh evidence after every head/base change. Safe source repairs
+use create-pr. Bot metadata and green CI alone cannot authorize merging.
+Only trusted explicit dispatch initiates a merge; scheduled events observe CI
+and recover already-authorized completion.

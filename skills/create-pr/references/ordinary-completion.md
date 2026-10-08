@@ -2,6 +2,8 @@
 
 This contract excludes Agentic SDLC. All agent reasoning and review runs on the
 local host; GitHub Actions runs only deterministic verification and Actions effects.
+Dependabot updates, including Docker, use this same review and safe repair path.
+Bot metadata never substitutes for review; automatic events cannot start merges.
 
 1. Use the live default branch. Reuse the current feature branch; when on the
    default, begin canonical create-pr intake before creating the frozen feature
@@ -42,5 +44,6 @@ Standalone review-pr uses this same private preparation contract for authorized
 safe writable repairs and never merges. Standalone merge-pr invokes review-pr
 when current evidence is missing; repairs use the same owner. Explicit complete
 publish-release, publish-helm and publish-image requests authorize these necessary
-ordinary PR steps without another commit/PR/merge prompt. Preparation-only,
+ordinary PR steps without another commit/PR/merge prompt. A review-and-merge
+request likewise authorizes review, safe repair and protected merge together. Preparation-only,
 report-only, help and Agentic SDLC restrictions always propagate.

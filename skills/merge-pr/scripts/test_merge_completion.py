@@ -395,6 +395,61 @@ class CompletionTests(unittest.TestCase):
                     completion.ci_checkout(self.api, POLICY, event, "ci.yml")
                 run.assert_not_called()
 
+    def test_completion_and_checkout_require_reviewed_operator_dispatch(self):
+        for case in (
+            "missing",
+            "zero",
+            "negative",
+            "boolean",
+            "string",
+            "actor",
+            "schedule",
+            "workflow_run",
+            "pull_request_target",
+        ):
+            with (
+                self.subTest(case=case),
+                patch.object(completion.subprocess, "run") as run,
+            ):
+                self.api = API()
+                if case == "missing":
+                    del self.api.intent["review_id"]
+                elif case in ("zero", "negative", "boolean", "string"):
+                    self.api.intent["review_id"] = {
+                        "zero": 0,
+                        "negative": -1,
+                        "boolean": True,
+                        "string": "10",
+                    }[case]
+                elif case == "actor":
+                    self.api.broker["actor"]["id"] = 456
+                else:
+                    self.api.broker["event"] = case
+                self.api.artifacts = [
+                    self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100)
+                ]
+                with self.assertRaises(gate.Blocked):
+                    completion.read_intent(self.api, 100, 1, 1, HEAD, POLICY)
+                with self.assertRaises(gate.Blocked):
+                    completion.targets(self.api, POLICY, {})
+                with self.assertRaises(gate.Blocked):
+                    completion.ci_checkout(self.api, POLICY, self.inputs(), "ci.yml")
+                run.assert_not_called()
+                self.assertFalse(self.api.effects)
+
+    def test_completion_schedule_recovers_only_merged_authorized_operation(self):
+        self.api.artifacts = [
+            self.api.artifact_meta(900, f"merge-intent-1-{HEAD}-1", 100)
+        ]
+        os.environ["GITHUB_EVENT_NAME"] = "schedule"
+        self.assertEqual(
+            completion.targets(self.api, POLICY, {}),
+            [{"pr": 1, "head": HEAD, "run_id": 100, "run_attempt": 1}],
+        )
+        self.api.pr.update(merged=False, state="open")
+        self.assertEqual(completion.targets(self.api, POLICY, {}), [])
+        self.assertFalse(self.api.effects)
+
     def test_checkout_rejects_wrong_source_or_dirty_workspace_before_fetch(self):
         for outputs in [(HEAD + "\n",), (BASE + "\n", " M changed\n")]:
             with (

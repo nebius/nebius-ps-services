@@ -67,7 +67,9 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
 
 1. Confirm explicit merge intent or delegated ordinary create-pr/complete
    publication intent. Exclude active Agentic SDLC and propagate prepare-only,
-   help and report-only restrictions. Freeze host/repository/default/PR identity.
+   help and report-only restrictions. A request to review and merge authorizes
+   this full sequence without routine reconfirmation. Dependabot, including
+   Docker, follows the same review and repair path. Freeze host/repository/default/PR identity.
 2. If already merged, skip effects and verify that exact operation's result.
    Otherwise require same-repository, non-draft, live-default target. Invoke
    local review-pr when the current head/base lacks a passing attestation.
