@@ -38,10 +38,12 @@ unchanged `skills/` catalog. See the [installation guide](skills/README.md#nativ
 
 ## Repository Website
 
-The [repository website](https://nebius.github.io/nebius-ps-services/) is prepared
-for GitHub Pages and links to the course catalog. To publish it, configure
-Pages to deploy from branch `main` and folder `/(root)` after the website files
-merge. The root `.nojekyll` enables static publication without a custom
+The [repository website](https://nebius.github.io/nebius-ps-services/) is published
+through GitHub Pages and links to the course catalog. Pages deploys from branch
+`main` and folder `/(root)`. Protected broker merges explicitly request a Pages
+build after their exact-result CI passes; see
+[protected merge setup](.github/merge-automation.md#completion-and-recovery).
+The root `.nojekyll` enables static publication without a custom
 deployment workflow. Other eligible repository files become available through
 Pages as well. Initial setup, course build and validation instructions live in
 [course builder guide](courses/docs/course-builder.md).
