@@ -8,6 +8,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [nebius-cxcli-v0.1.9] - 2026-10-08
 
+- Keep documentation checks valid after release preparation by checking the
+  changelog and its linked detailed release notes together.
+
 - Expand Soperator configuration, installation, upgrades, checks, recovery,
   storage protection, and profiling workflows, with frozen release identities
   and resumable, validated execution.
