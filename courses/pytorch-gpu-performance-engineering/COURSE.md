@@ -40,17 +40,16 @@ two-row, three-column tensor.
 ![One tensor, three attributes and an element count](reference/diagrams/tensor-description.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
-print(x.shape)    # torch.Size([2, 3]): two rows, three columns
-print(x.dtype)    # torch.float32: four bytes per value
-print(x.device)   # cpu
-print(x.numel())  # 6 values: 2 * 3
+x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])  # Create a tensor with two rows and three columns.
+print(x.shape)  # Show the number of rows and columns.
+print(x.dtype)  # Show the number format used for each value.
+print(x.device)  # Show where the tensor is stored.
+print(x.numel())  # Print the total number of elements in the tensor.
 ```
 
-**`torch.tensor`** creates a tensor from supplied values; **`numel`** counts
-them. FP32 means 32-bit floating point, represented by **`torch.float32`**.
+FP32 means 32-bit floating point, represented by **`torch.float32`**.
 The CPU (central processing unit) runs Python. A GPU (graphics processing unit)
 can run tensor calculations in parallel.
 
@@ -75,8 +74,10 @@ still create the same number of rows and columns.
 ![Same shape, different sampling rules](reference/diagrams/random-values.svg)
 
 ```python
-uniform = torch.rand(2, 3)  # Two rows, three columns; values from 0 to below 1
-normal = torch.randn(2, 3)  # Same shape; values cluster around 0
+# Create two rows of three random values from 0 up to, but not including, 1.
+uniform = torch.rand(2, 3)
+# Create the same shape with random values from a standard normal distribution.
+normal = torch.randn(2, 3)
 ```
 
 A small random sample need not average to zero. Later examples use fixed
@@ -112,18 +113,18 @@ the number used to choose one of those tables.
 | 1 | A row in that grid | 3 | `0`, `1`, `2` |
 | 2 | A column in that row | 4 | `0`, `1`, `2`, `3` |
 
-Read `x[1, 2, 3]` from left to right: grid index `1`, row index `2`, column
-index `3`. These three indices select the second grid, its third row and its
-fourth column. The highlighted cell below contains the value `23`.
+Read the indices from left to right: grid, row, column. The highlighted cell
+below contains the value `23`.
 
 ![Choose a grid, a row and a column](reference/diagrams/shape-axes.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.arange(24).reshape(2, 3, 4)  # Arrange 0 through 23 into two grids
-print(x.ndim)                        # 3 axes: grid, row, column
-print(x[1, 2, 3])                    # tensor(23)
+# Arrange 0 through 23 into two grids of three rows and four columns.
+x = torch.arange(24).reshape(2, 3, 4)
+print(x.ndim)  # Count and print the axes: grid, row and column.
+print(x[1, 2, 3])  # Select and print the second grid, third row, fourth column.
 ```
 
 #### Selecting a grid, a row or one value
@@ -146,34 +147,29 @@ A slice selects a range of entries and keeps their axis. `0:1` means start at
 index `0` and stop just before index `1`, so it selects the first grid.
 
 ```python
-print(x[0].shape)    # torch.Size([3, 4]): one grid
-print(x[0:1].shape)  # torch.Size([1, 3, 4]): a group containing one grid
+print(x[0].shape)  # Select the first grid; show its row and column sizes.
+print(x[0:1].shape)  # Select a group of one grid; keep and show all three axes.
 ```
 
-Both results contain the first grid's twelve values. `[3, 4]` describes its
-rows and columns; `[1, 3, 4]` also keeps the grid axis, now with size one.
-The arrows show two separate selections from the original `x`.
+Both results contain the first grid's twelve values. The arrows show how
+indexing removes the grid axis while slicing keeps it.
 
 ![One grid and a group containing one grid](reference/diagrams/index-versus-slice.svg)
 
-A colon `:` on its own selects every entry on that axis. Read `x[:, :, 0]`
-as “every grid, every row, first column”:
+A colon `:` on its own selects every entry on that axis:
 
 ```python
-print(x[:, :, 0])  # One value from each row in each grid
-# tensor([[ 0,  4,  8],
-#         [12, 16, 20]])
+print(x[:, :, 0])  # Select and print the first column from every row in every grid.
 ```
 
 #### Giving the same values a new shape
 
 **`reshape`** arranges the same values into new axis sizes while preserving
-their reading order. Here it places the first grid's three rows followed by
-the second grid's three rows into one six-row matrix:
+their reading order:
 
 ```python
-flat = x.reshape(6, 4)  # Six rows, each with four values
-print(flat.shape)      # torch.Size([6, 4])
+flat = x.reshape(6, 4)  # Rearrange the same values into six rows of four columns.
+print(flat.shape)  # Show the new row and column sizes.
 ```
 
 Both shapes contain 24 values. Our application supplies the axis meanings: for
@@ -195,9 +191,11 @@ Explain how one bias row is added to every row of a matrix.
 
 ### How it works
 
-Broadcasting lets an operation reuse values from a smaller tensor across a
-larger one. Compare sizes from the right: each pair must match, or one size must
-be 1. A missing leading dimension behaves like size 1.
+Broadcasting allows compatible tensors with different shapes to participate
+in element-wise operations without explicitly copying repeated values. An
+element-wise operation acts on corresponding entries. Compare sizes from the
+right: each pair must match, or one size must be 1. A missing leading dimension
+behaves like size 1.
 
 Adding a `[3]` bias to a `[2, 3]` matrix reuses the same three values for both
 rows. A bias is simply an offset added to a value. The diagram shows each
@@ -206,15 +204,13 @@ column receiving its matching bias value.
 ![One bias row serves two input rows](reference/diagrams/broadcast.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
-bias = torch.tensor([10., 20., 30.])
-y = x + bias  # Add the same three values to each row
-print(y)      # Values: [[11, 22, 33], [14, 25, 36]]
+x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])  # Create two rows of three values.
+bias = torch.tensor([10., 20., 30.])  # Create one offset for each column.
+y = x + bias  # Add the same column offsets to each row.
+print(y)  # Show the two rows after adding the offsets.
 ```
-
-The result keeps shape `[2, 3]`: two rows, with three values in each row.
 
 **Performance connection:** broadcasting reuses the bias without storing an
 extra bias row. The addition still computes and stores all six output values.
@@ -241,13 +237,12 @@ matrix product adds several products together.
 ![The same inputs can mean different arithmetic](reference/diagrams/multiply.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-a = torch.tensor([[1., 2.], [3., 4.]])
-b = torch.tensor([[5., 6.], [7., 8.]])
-print(a * b)  # Values: [[5, 12], [21, 32]]
-print(a @ b)  # Values: [[19, 22], [43, 50]]
-# First matrix-product value: 1 * 5 + 2 * 7 = 19
+a = torch.tensor([[1., 2.], [3., 4.]])  # Create the first two-by-two matrix.
+b = torch.tensor([[5., 6.], [7., 8.]])  # Create the second two-by-two matrix.
+print(a * b)  # Multiply matching entries and print the result.
+print(a @ b)  # Multiply rows by columns, sum the products, and print the result.
 ```
 
 For two matrices, the left column count must equal the right row count.
@@ -270,31 +265,33 @@ Calculate one mean per row and explain what **`keepdim`** changes.
 
 ### How it works
 
-A reduction combines several values into fewer values. Sum, mean and maximum
-are examples. The **`dim`** argument selects the axis to combine: axis 0 is
-rows and axis 1 is columns in this matrix. `-1` also means the last axis.
+A reduction combines multiple values into fewer values. Sum, mean and maximum
+are examples.
 
-Averaging across columns gives one mean per row. Setting **`keepdim`** to `True` keeps the
-reduced axis with size 1, producing a one-column matrix. The arrows below
-show each row becoming its mean.
+- **`dim`**: Specifies which dimension to reduce.
+- **`mean()`**: Calculates averages, reducing multiple values into fewer values.
+- **`keepdim=True`**: Keeps the reduced dimension with size 1 instead of removing it.
+
+In this matrix, dimension 0 is rows and dimension 1 is columns; `-1` means the
+last dimension. The arrows show each row becoming its mean.
 
 ![Keep one mean per row](reference/diagrams/reduction.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])
-print(x.mean(dim=1))                # tensor([2., 5.]), shape [2]
-means = x.mean(dim=1, keepdim=True)  # Values: [[2], [5]], shape [2, 1]
-print(x - means)                    # Values: [[-1, 0, 1], [-1, 0, 1]]
+x = torch.tensor([[1., 2., 3.], [4., 5., 6.]])  # Create two rows of three values.
+print(x.mean(dim=1))  # Average across columns (dim 1); remove that axis.
+means = x.mean(dim=1, keepdim=True)  # Average across columns; keep that axis with size 1.
+print(x - means)  # Subtract each row's mean from every value in that row and print.
 ```
 
-The subtraction broadcasts each row's mean across that row. Without a
-**`dim`** argument, **`mean`** combines every value into one scalar tensor
-with shape `[]`.
+Without a **`dim`** argument, **`mean()`** combines every value into one scalar
+tensor with shape `[]`.
 
-**Performance connection:** even a one-value result can require reading a
-large input. A small output does not mean little work.
+**Performance connection:** a reduction can involve processing a large amount
+of GPU data even when the output contains only one value. It can be an
+expensive operation.
 
 ### Mental model
 
@@ -319,24 +316,23 @@ the original values. The arrows below connect both tensors to that storage.
 ![Two index maps share the same storage](reference/diagrams/views-strides.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.arange(6).reshape(2, 3)  # [[0, 1, 2], [3, 4, 5]]
-y = x.transpose(0, 1)            # [[0, 3], [1, 4], [2, 5]]
-print(x.stride())                # (3, 1)
-print(y.stride())                # (1, 3): the axis steps are swapped
+x = torch.arange(6).reshape(2, 3)  # Arrange 0 through 5 into two rows of three columns.
+y = x.transpose(0, 1)  # Swap rows and columns while sharing the stored values.
+print(x.stride())  # Show storage steps for moving to the next row or column.
+print(y.stride())  # Show the swapped storage steps after transposing.
 ```
 
-Both tensors share the same six values. Changing a value through `y` also
-changes the corresponding value in `x`.
+Changing a value through `y` also changes the corresponding value in `x`.
 
 Contiguous means values follow the tensor's logical order in the selected
 memory layout. In the row-by-row layout used here, the transposed `y` is not
 contiguous. **`contiguous`** makes a copy when needed:
 
 ```python
-z = y.contiguous()  # Copy y into row-by-row storage
-print(z.stride())   # (2, 1): two elements per row
+z = y.contiguous()  # Copy the transposed values into row-by-row storage.
+print(z.stride())  # Show the storage steps for the new row-by-row layout.
 ```
 
 **`reshape`** regroups values in their reading order; **`transpose`** swaps
@@ -374,12 +370,13 @@ The bars compare storage for the same six values; they do not show speed.
 ![Same shape, different byte counts](reference/diagrams/dtype-bytes.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x32 = torch.ones(2, 3, dtype=torch.float32)
-x16 = x32.to(dtype=torch.bfloat16)       # Convert to a smaller format
-print(x32.numel() * x32.element_size())  # 6 * 4 = 24 bytes
-print(x16.numel() * x16.element_size())  # 6 * 2 = 12 bytes
+x32 = torch.ones(2, 3, dtype=torch.float32)  # Create two rows of three ones in FP32.
+x16 = x32.to(dtype=torch.bfloat16)  # Convert the values to BF16 in new storage.
+# Count values, multiply by bytes per value, and print FP32 bytes.
+print(x32.numel() * x32.element_size())
+print(x16.numel() * x16.element_size())  # Calculate and print the bytes used by the BF16 values.
 ```
 
 **`element_size`** returns bytes per element. **`to`** with a different dtype
@@ -415,13 +412,13 @@ or several kernels. The arrows show submission and result flow, not duration.
 **CUDA example:**
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-cpu_x = torch.tensor([1., 2., 3.])
-x = cpu_x.to("cuda")  # Copy to GPU memory; keep the returned tensor
-y = x * 2             # Request GPU calculation
-total = y.sum()       # Value 12, still in a CUDA tensor
-print(total.item())   # Wait for the result; print Python number 12.0
+cpu_x = torch.tensor([1., 2., 3.])  # Create three values in CPU memory.
+x = cpu_x.to("cuda")  # Copy the values to GPU memory and keep the returned tensor.
+y = x * 2  # Double each value on the GPU.
+total = y.sum()  # Add all values into one tensor on the GPU.
+print(total.item())  # Wait for the GPU result, extract a Python number, and print it.
 ```
 
 A stream is an ordered queue of GPU operations. In the same stream, the sum
@@ -468,13 +465,14 @@ passes each module's output to the next, as the arrows show.
 ![A linear layer transforms the last dimension](reference/diagrams/module-shapes.svg)
 
 ```python
-import torch
-from torch import nn
+import torch  # Load the PyTorch library.
+from torch import nn  # Load the neural-network building blocks.
 
+# Build a four-input, two-output linear layer followed by ReLU.
 model = nn.Sequential(nn.Linear(4, 2), nn.ReLU())
-x = torch.ones(2, 3, 4)  # Sample, position, feature
-y = model(x)            # Linear, then ReLU
-print(y.shape)          # torch.Size([2, 3, 2])
+x = torch.ones(2, 3, 4)  # Create two samples, each with three positions and four features.
+y = model(x)  # Apply the linear layer, then ReLU, at every position.
+print(y.shape)  # Show the output sizes: samples, positions and output features.
 ```
 
 The same linear layer processes all six positions. Its input's last size must
@@ -507,22 +505,20 @@ scale. The diagram follows one weight from prediction to update.
 ![Forward values lead to gradients and an update](reference/diagrams/autograd.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-w = torch.tensor(2.0, requires_grad=True)  # Track this learnable weight
-optimizer = torch.optim.SGD([w], lr=0.1)
-optimizer.zero_grad()                    # Clear previous gradients
-prediction = w * 3                       # 6
-loss = (prediction - 4) ** 2             # Squared error: 4
-loss.backward()                         # Compute w.grad: 12
-optimizer.step()                        # Update w: 2 - 0.1 * 12 = 0.8
+w = torch.tensor(2.0, requires_grad=True)  # Create a learnable weight and track its gradient.
+optimizer = torch.optim.SGD([w], lr=0.1)  # Use SGD to update the weight with learning rate 0.1.
+optimizer.zero_grad()  # Clear gradients left by any previous training step.
+prediction = w * 3  # Multiply the weight by the input to make a prediction.
+loss = (prediction - 4) ** 2  # Square the difference between the prediction and target.
+loss.backward()  # Calculate the loss gradient and store it in w.grad.
+optimizer.step()  # Subtract the gradient times the learning rate from the weight.
 ```
 
-Setting **`requires_grad`** to `True` requests gradient tracking; **`grad`** holds the
-result. Here the gradient is `2 * (6 - 4) * 3 = 12`. **`backward`** computes
-it, and **`step`** changes the weight. Repeated training updates clear old
-gradients with **`zero_grad`**, because backward adds to any gradients already
-present.
+Here the gradient is `2 * (6 - 4) * 3 = 12`, so the updated weight is
+`2 - 0.1 * 12 = 0.8`. Clear old gradients before each step because
+**`backward`** adds to any gradients already present.
 
 Activations are intermediate values from the forward pass. Autograd saves
 some of them because the backward calculation needs them.
@@ -554,15 +550,16 @@ calculations. The diagram shows these two independent controls.
 ![Two independent controls for inference](reference/diagrams/inference-controls.svg)
 
 ```python
-import torch
-from torch import nn
+import torch  # Load the PyTorch library.
+from torch import nn  # Load the neural-network building blocks.
 
+# Build a linear layer and dropout, then select evaluation behavior.
 model = nn.Sequential(nn.Linear(4, 2), nn.Dropout()).eval()
-x = torch.ones(3, 4)
-print(model(x).requires_grad)  # True: eval alone still records gradients
-with torch.inference_mode():
-    output = model(x)
-print(output.requires_grad)   # False
+x = torch.ones(3, 4)  # Create three inputs with four features each.
+print(model(x).requires_grad)  # Show that evaluation mode still allows gradient recording.
+with torch.inference_mode():  # Disable gradient recording for the indented calculation.
+    output = model(x)  # Run the model without recording gradients.
+print(output.requires_grad)  # Show that this output does not require gradients.
 ```
 
 The output has shape `[3, 2]` in both calls. **`torch.no_grad`** is another
@@ -597,19 +594,19 @@ The model needs the copy to finish before it can use the data.
 **CUDA example:**
 
 ```python
-import torch
-from torch import nn
+import torch  # Load the PyTorch library.
+from torch import nn  # Load the neural-network building blocks.
 
+# Create a linear layer, move its parameters to the GPU, and select evaluation.
 model = nn.Linear(4, 2).to("cuda").eval()
-cpu_batch = torch.ones(2, 4)        # Prepare two inputs on the CPU
-gpu_batch = cpu_batch.to("cuda")    # Copy them to the GPU
-with torch.inference_mode():
-    output = model(gpu_batch)       # Compute output of shape [2, 2]
+cpu_batch = torch.ones(2, 4)  # Prepare two inputs with four features each on the CPU.
+gpu_batch = cpu_batch.to("cuda")  # Copy the input batch to the GPU.
+with torch.inference_mode():  # Disable gradient recording for the model call.
+    output = model(gpu_batch)  # Compute two output features for each input on the GPU.
 ```
 
-Calling **`to`** with `"cuda"` on this model moves its weights and bias to the GPU.
-The input has its own copy step. Keep results on the GPU while later GPU
-operations still need them, avoiding unnecessary trips back to the CPU.
+Keep results on the GPU while later GPU operations still need them, avoiding
+unnecessary trips back to the CPU.
 
 **Performance connection:** a model must wait for its next input. Preparing
 batches, copying them and computing on them are separate costs; making one
@@ -640,13 +637,14 @@ this pool.
 **CUDA example:** the counters depend on the device and other live tensors.
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-x = torch.ones(1024, device="cuda")
-print(torch.cuda.memory_allocated())  # Bytes occupied by tensors
-print(torch.cuda.memory_reserved())   # Bytes managed by the allocator
-del x                                # Release this reference to x
-torch.cuda.empty_cache()              # Release unused cached blocks
+x = torch.ones(1024, device="cuda")  # Create a GPU tensor containing 1,024 ones.
+print(torch.cuda.memory_allocated())  # Show GPU bytes currently occupied by live tensors.
+# Show GPU bytes held by the allocator, including reusable blocks.
+print(torch.cuda.memory_reserved())
+del x  # Remove this reference to the tensor.
+torch.cuda.empty_cache()  # Return unused cached blocks so other GPU applications can use them.
 ```
 
 Keeping a tensor in a variable or list keeps its storage needed.
@@ -685,19 +683,20 @@ matrix. The arrows represent equivalent calculations, not measured durations.
 ![Independent rows can share one batched expression](reference/diagrams/batching.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
+# Create three independent rows with two values each.
 x = torch.tensor([[1., 2.], [3., 4.], [5., 6.]])
-rows = []
-for row in x:
-    rows.append(row * 2 + 1)  # Work on one row at a time
-batched = x * 2 + 1          # Same rule for every row at once
-print(batched)              # Values: [[3, 5], [7, 9], [11, 13]]
+rows = []  # Start an empty list for the row results.
+for row in x:  # Visit each row separately.
+    rows.append(row * 2 + 1)  # Double each value, add one, and save the row result.
+batched = x * 2 + 1  # Apply the same calculation to the whole matrix.
+print(batched)  # Show all row results together in one matrix.
 ```
 
-`rows` contains three row tensors; `batched` contains the same values in one
-matrix. This works because no row needs another row's result. A loop whose
-next calculation depends on the previous result needs different reasoning.
+Both approaches produce the same values because no row needs another row's
+result. A loop whose next calculation depends on the previous result needs
+different reasoning.
 
 Throughput is work completed per unit time. Latency is time to finish one
 request. A larger batch may improve throughput while using more memory or
@@ -733,19 +732,20 @@ then shows the CPU waiting before reading the elapsed time.
 **CUDA example:** a timing pattern, with no claimed speedup.
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-a = torch.randn(256, 256, device="cuda")
-for _ in range(5):
-    result = a @ a  # Warm up the operation
-start = torch.cuda.Event(enable_timing=True)
-end = torch.cuda.Event(enable_timing=True)
-start.record()
-for _ in range(20):
-    result = a @ a  # Measure 20 calls
-end.record()
-end.synchronize()   # Wait for the end marker to complete
-print(start.elapsed_time(end) / 20)  # Average milliseconds per call
+a = torch.randn(256, 256, device="cuda")  # Create a random square matrix on the GPU.
+for _ in range(5):  # Repeat the warmup calculation five times.
+    result = a @ a  # Multiply the matrix by itself to warm up the operation.
+start = torch.cuda.Event(enable_timing=True)  # Create a GPU marker that can record the start time.
+end = torch.cuda.Event(enable_timing=True)  # Create a GPU marker that can record the end time.
+start.record()  # Place the start marker in the current GPU stream.
+for _ in range(20):  # Repeat the calculation twenty times inside the timed interval.
+    result = a @ a  # Multiply the matrix by itself.
+end.record()  # Place the end marker after the repeated calculations.
+end.synchronize()  # Wait until the GPU reaches the end marker.
+# Divide elapsed milliseconds by the call count and print the average.
+print(start.elapsed_time(end) / 20)
 ```
 
 All work uses the same stream, so warmup finishes before the start marker.
@@ -784,16 +784,17 @@ below uses CPU tensors so its values are easy to inspect.
 ![Follow an expression through the execution layers](reference/diagrams/operator-evidence.svg)
 
 ```python
-import torch
+import torch  # Load the PyTorch library.
 
-def transform(x, bias):
-    shifted = x + bias              # Add a bias to each row
-    positive = torch.relu(shifted)  # Replace negative values with zero
-    return positive.mean(dim=-1)   # One mean per row
+def transform(x, bias):  # Define a function that transforms the input rows.
+    shifted = x + bias  # Add the same column offsets to each row.
+    positive = torch.relu(shifted)  # Replace negative values with zero.
+    return positive.mean(dim=-1)  # Average across the last axis and return one mean per row.
 
+# Create two input rows, including a negative value.
 x = torch.tensor([[-2., 0., 2.], [1., 2., 3.]])
-bias = torch.ones(3)
-print(transform(x, bias))           # tensor([1.3333, 3.0000])
+bias = torch.ones(3)  # Create an offset of one for each column.
+print(transform(x, bias))  # Run the function and print the mean for each transformed row.
 ```
 
 **`torch.relu`** applies the ReLU rule from lesson 9. Eager execution runs
@@ -843,10 +844,11 @@ Running this optional example requires a working compiler backend: the
 component that generates executable code. Inputs remain on the CPU.
 
 ```python
-compiled = torch.compile(transform)
-expected = transform(x, bias)         # Eager result
-actual = compiled(x, bias)           # First call may compile
-torch.testing.assert_close(actual, expected)  # Check numerical agreement
+compiled = torch.compile(transform)  # Create a version of the function that PyTorch can compile.
+expected = transform(x, bias)  # Calculate the ordinary, uncompiled result for comparison.
+actual = compiled(x, bias)  # Run the compiled version; this first call may compile code.
+# Check that both results agree within numerical tolerances.
+torch.testing.assert_close(actual, expected)
 ```
 
 **`torch.testing.assert_close`** checks values against allowed numerical
@@ -882,26 +884,19 @@ arrows trace the tensor shapes and the final move to a Python number.
 **CUDA example:** model parameters and input values are FP32 on the same GPU.
 
 ```python
-import torch
-from torch import nn
+import torch  # Load the PyTorch library.
+from torch import nn  # Load the neural-network building blocks.
 
+# Create a four-input, eight-output layer on the GPU in evaluation mode.
 model = nn.Linear(4, 8).to("cuda").eval()
+# Create two samples with three positions and four features on the GPU.
 x = torch.ones(2, 3, 4, device="cuda")
-with torch.inference_mode():
-    y = model(x)          # [2, 3, 4] -> [2, 3, 8]
-    z = torch.relu(y)     # Keep [2, 3, 8]
-    score = z.mean()      # All 48 values -> one CUDA scalar
-print(score.item())       # Wait for a Python number; value depends on weights
+with torch.inference_mode():  # Disable gradient recording for the following calculations.
+    y = model(x)  # Turn the four input features at each position into eight outputs.
+    z = torch.relu(y)  # Replace negative outputs with zero and keep the shape.
+    score = z.mean()  # Average all output values into one scalar tensor on the GPU.
+print(score.item())  # Wait for the GPU result, extract a Python number, and print it.
 ```
-
-Read it in four passes:
-
-| Pass | What to notice |
-| --- | --- |
-| Shape | Four input features become eight; the mean reduces all outputs to `[]`. |
-| State | Input and model parameters are on CUDA; inference mode disables gradient recording. |
-| Work | Linear combines features; ReLU acts on each value; mean combines values. |
-| Completion | **`item`** obtains the completed result for the CPU. |
 
 This explains the requested work. Kernel choice and the largest cost still
 need execution evidence. GPU Fundamentals explains the hardware; GPU

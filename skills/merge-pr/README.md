@@ -29,6 +29,8 @@ ordinary branches; keep the head branch unless deletion is explicitly requested.
   remote target branch, allowing the target to have advanced.
 - Uploads intent before effects and recovers exact-result CI/Pages after merge.
 - Observes applicable CI on the exact resulting commit for up to one hour.
+- Observes externally queued PRs read-only within the merge deadline; it never
+  enqueues or treats a pending queue entry as a completed merge.
 
 ## Architecture
 
@@ -48,7 +50,7 @@ Authoritative outcome
 External queue       Merged result SHA
   |                  |
   v                  v
-Read-only blocker    Remote destination ancestry
+Read-only wait       Remote destination ancestry
                      |
                      v
                      Result-commit CI (up to 1 hour)

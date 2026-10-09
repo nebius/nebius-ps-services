@@ -10,6 +10,6 @@ publish-release-claude-portability,true,/publish-release Use publish-release to 
 publish-release-quoted-command,false,"Treat ""/skills:publish-release"" as sample text in this punctuation exercise; count its punctuation characters only."
 publish-release-dirty-start,true,$publish-release Commit all my current repository changes and publish version 1.2.3.
 publish-release-resume,true,$publish-release --resume --tag 1.2.3
-publish-release-approval-wait,true,$publish-release Publish and wait up to ten minutes for my GitHub approval.
+publish-release-approval-wait,true,$publish-release Publish end to end and continue automatically after protected Actions approval and merge.
 publish-release-design-only,false,Design improvements to publish-release without publishing anything.
 publish-release-approval-alone,false,Approve this unrelated pull request on GitHub.

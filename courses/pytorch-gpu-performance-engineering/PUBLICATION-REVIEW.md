@@ -1,5 +1,37 @@
 # Publication review
 
+## Plain-English snippet revision — 2026-10-08
+
+Reviewed `index.html` SHA-256:
+`2b9e8345029ff694ba9581110675a918651f231089dd12ea5961de0b611fa58b`.
+
+Reviewed all 23 Python snippets across all eighteen lessons. Each executable
+line now has a plain-English action comment; output-only annotations are
+replaced. Removed duplicated walkthrough prose, including the final step's
+repeat table. Kept definitions, diagram explanations and distinct numerical,
+storage, dependency and timing constraints. The glossary includes direct
+entries for dim, mean(), keepdim=True and broadcasting, plus reduction cost.
+All twenty diagrams and the lessons-only profile are preserved.
+
+| Lane | Status | Evidence and limits |
+| --- | --- | --- |
+| Source/static | Passed | 77 existing focused reading, source-integrity and format tests; three native reading validators; build/freshness; Markdown lint with repository configuration and whitespace checks. All 23 snippets parse and have identical executable ASTs to the prior source. Every code line has an adjacent action comment. |
+| Semantic | Passed | Full snippet/prose review and independent read-only review. Corrected one ambiguous numel comment to explicitly describe the number of elements. Mean, keepdim and broadcasting definitions checked against official PyTorch documentation. No remaining concrete review or changed-scope security finding. |
+| CPU example execution | Passed | All 17 CPU blocks execute unchanged with existing PyTorch 2.14.1; 37 independent checks cover values, shapes, storage, rounding, gradients, inference and batching. |
+| CUDA/compiler execution | Pending | Five CUDA snippets and the compiler continuation remain unexecuted; local CUDA is unavailable. AST identity establishes unchanged code, not GPU or compiler qualification. |
+| Browser/visual | Passed | Three final isolated headless Chrome 155.0.8059.39 checks at 1440px, 390px and 320px pass navigation, keyboard controls, local code scrolling, doubled-text reflow, API emphasis and all SVG text bounds. Representative reduction/mobile and batching/desktop captures were visually inspected. Diagram sources are unchanged. |
+| Installed environment | Not applicable | Reused existing tools and environments; installed no dependencies. |
+| Live target/publication | Not applicable | Editorial work requested no cluster operation, live measurement, deployment or external publication. |
+
+Local evidence group `pytorch-comments-b5wq5iu8` contains the snippet identity
+report, CPU harness/results, browser test source/results, final screenshots,
+SVG geometry and artifact identity. Playwright Test owns and closes its browser
+and isolated contexts; page JavaScript was disabled. Shared guide and catalog
+remain byte-identical in Git. The generic authoring checker reports the same
+six standard-profile/shared-shell diagnostics before and after; native
+lessons-only acceptance passes. Generic checker input-path errors during
+setup were corrected using contained temporary copies before comparing results.
+
 ## Scan-focused revision — 2026-10-07
 
 Reviewed `index.html` SHA-256:

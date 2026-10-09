@@ -22,19 +22,28 @@ native invocation, commit-owner delegation or real GitHub publication.
 
 ## Approval and continuation
 
-- Required review prints its GitHub link, polls every 15 seconds, and emits
-  progress at least every minute. Approval at 590 seconds continues after refresh;
-  lack of approval at 600 seconds returns a timeout and exact resume command.
+- Routine PR approval comes from the Actions broker after local review; never
+  wait for human approval before dispatch. Actual additional approval gates print
+  their GitHub link, poll every 15 seconds and emit minute progress. Approval after
+  600 seconds continues within the fixed one-hour phase; only phase exhaustion
+  returns a timeout and exact resume command.
 - Changes requested, failed checks, conflicts, closed PRs and API errors are not
   reported as waiting for approval. No self-approval or admin bypass is attempted.
-- Partial environment approval and reordered pending-environment responses do
-  not renew the release run's fixed approval deadline.
-- Pending checks, queue and workflow each have bounded one-hour phases. A queued
+- Partial environment approval and reordered pending-environment responses share
+  the release phase deadline and do not renew it. Saved gate-specific deadlines
+  cannot shorten the canonical phase budget.
+- PR readiness, merge settlement and release execution have bounded one-hour phases.
+  Direct async merge with no queue entry is pending; never infer removal without
+  previously observed membership. A queued
   PR never permits tagging. Removed queue entries are not silently re-enqueued.
 - Approval after timeout followed by explicit resume reuses the pushed PR/head,
   refreshes all gates, and continues without a duplicate commit or PR.
 - Fresh-session resume never replays a native-session-bound commit grant.
   Additional local commit work uses fresh owner intake after effect reconciliation.
+- A base advance after binding uses canonical synchronization, validation and a
+  fresh configured-operator review, then guarded reconcile-pr with expected old
+  and new heads before broker dispatch. Preserve deadlines and prior-head evidence.
+  Unselected drift, stale review, dirty checkout and post-merge/tag rebinding block.
 
 ## Exact publication and recovery
 

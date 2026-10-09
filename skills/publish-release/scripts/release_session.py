@@ -15,8 +15,8 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
+from release_reconcile import reconcile_pr
 
-APPROVAL_SECONDS = 600
 PHASE_SECONDS = 3600
 POLL_SECONDS = 15
 REMOTE_DEADLINE = contextvars.ContextVar("release_remote_deadline", default=None)
@@ -299,19 +299,22 @@ def observation(value: dict, github: GitHub, phase: str) -> dict:
                     "reason": "Queued PR closed without merging",
                 }
             entry = queue.get("mergeQueueEntry")
-            if not queue["isInMergeQueue"] and entry is None:
-                return {
-                    "status": "blocked",
-                    "reason": "PR is no longer in the merge queue; do not re-enqueue",
-                }
+            if queue["isInMergeQueue"] is False and entry is None:
+                if value.get("observed_queue_entry"):
+                    return {
+                        "status": "blocked",
+                        "reason": "PR is no longer in the merge queue; do not re-enqueue",
+                    }
+                return {"status": "waiting", "gate": "merge_settlement"}
             if (
-                not queue["isInMergeQueue"]
+                queue["isInMergeQueue"] is not True
                 or not entry
                 or entry["pullRequest"]["number"] != value["pr"]
                 or not entry.get("id")
                 or not entry.get("enqueuedAt")
             ):
                 raise ReleaseError("Merge queue membership is unverified")
+            value["observed_queue_entry"] = entry["id"]
             return {"status": "waiting", "gate": "merge_queue"}
         return {
             "status": "ready",
@@ -401,15 +404,9 @@ def observation(value: dict, github: GitHub, phase: str) -> dict:
 def timed_observation(value: dict, result: dict, phase: str, now: float) -> dict:
     if result["status"] != "waiting":
         return result
-    gate = result["gate"]
-    # One phase budget plus fixed gate-specific approval budgets; no sliding timeouts.
+    # Every gate consumes the same fixed phase budget, including approvals.
     waits = value["waits"]
-    phase_deadline = waits.setdefault(f"phase:{phase}", now + PHASE_SECONDS)
-    approval = gate.startswith("approval:")
-    deadline = min(
-        phase_deadline,
-        waits.setdefault(gate, now + (APPROVAL_SECONDS if approval else PHASE_SECONDS)),
-    )
+    deadline = waits.setdefault(f"phase:{phase}", now + PHASE_SECONDS)
     result = {
         **result,
         "deadline": deadline,
@@ -489,6 +486,7 @@ def parser() -> argparse.ArgumentParser:
             "resume",
             "status",
             "bind-pr",
+            "reconcile-pr",
             "observe",
             "wait",
             "record-tag",
@@ -508,6 +506,11 @@ def parser() -> argparse.ArgumentParser:
         help="Expected asset basename or glob; repeat for every required family",
     )
     p.add_argument("--pr", type=int)
+    p.add_argument("--expected-head", help="Frozen PR head before an authorized repair")
+    p.add_argument("--head", help="Exact newly reviewed PR head")
+    p.add_argument(
+        "--review-id", type=int, help="Fresh configured-operator COMMENT review"
+    )
     p.add_argument(
         "--checkout",
         type=Path,
@@ -644,6 +647,17 @@ def main() -> int:
                         )
                     value.update(pr=args.pr, head=head)
                     check_pr(value, pr)
+                    store.save(value)
+                    result = value
+                elif args.action == "reconcile-pr":
+                    value = reconcile_pr(
+                        value,
+                        github,
+                        git,
+                        expected_head=args.expected_head,
+                        head=args.head,
+                        review_id=args.review_id,
+                    )
                     store.save(value)
                     result = value
                 elif args.action in {"observe", "wait", "complete"}:

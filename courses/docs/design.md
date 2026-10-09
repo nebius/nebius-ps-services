@@ -5612,7 +5612,7 @@ The unchanged pre-repair cached-image reproducer failed the weak-chroot guard. T
 
 <!-- /FEATURE: FEAT-042 -->
 
-<!-- FEATURE: FEAT-043 reqs=REQ-027 status=ready delivery=verified priority=P1 version=5 -->
+<!-- FEATURE: FEAT-043 reqs=REQ-027 status=ready delivery=verified priority=P1 version=6 -->
 ### FEAT-043: Concise visual PyTorch reading course
 
 #### Requirements Covered
@@ -5636,6 +5636,8 @@ Batching uses equivalent independent computations and explains submission, memor
 Add an explicit lessons-only profile with ordered identities and declared visual manifest. Reuse the existing text renderer, shared stylesheet and safe SVG embedding; keep existing fixed-profile validators intact. The new profile rejects lab/runtime fields and artifacts, skips archive generation, enforces source/syllabus/metadata order and requires one contextual diagram per lesson. Registry-driven rendering updates every menu. Store the learning contract, appendices and public references beside the canonical teaching. Shared runtime discovery and log-directory preparation exclude lessons-only metadata alongside the existing text-only and reference-only profiles. Preserve strict lab-inventory validation for practical and unknown profiles. Synchronize the six standalone helper copies; test all reading profiles without runtime metadata and assert no result directories are created.
 
 The scan-focused revision reviews all eighteen lessons, keeps the existing diagrams and learning route, and narrows each example to its owning concept. Keep broadcasting to one matrix-plus-bias addition. Remove the expand/repeat, softmax, mixed-precision setup, loader collation and compiler-internals detours. Use a short built-in model composition instead of class boilerplate; keep training and timing long enough to show their full causal sequence. Explain retained APIs in context, shorten performance connections, and align objectives, glossary, references and affected diagram labels. Do not replace removed details with optional blocks that recreate the same reading burden.
+
+The plain-English comment revision annotates each executable line in all twenty-three examples with its action. Explain dimension reduction and retained axes in words rather than output dumps. Keep short definitions before examples, consolidate repeated walkthrough prose, and retain unique storage, numerical, dependency and performance constraints. Align the glossary and authoring README, regenerate the existing page, and verify unchanged executable statements through AST comparison. This is an editorial revision, not a change to example behavior or course profile.
 
 #### Selected Option
 
@@ -5677,6 +5679,8 @@ The complete no-lab course and all entry/navigation surfaces align; focused stat
 
 #### Implementation Evidence
 
+Plain-English snippet revision (2026-10-08): all 23 examples explain every code line with an action comment, replacing output-only annotations. Removed genuinely duplicated walkthrough prose and the repeated final-step table while preserving definitions, twenty diagrams and distinct correctness/performance constraints. Aligned dim, mean(), keepdim=True, broadcasting and reduction-cost definitions in the lesson and glossary. README, changelog and generated page reflect the revision; executable statements are unchanged.
+
 Scan-focused revision (2026-10-07): reviewed and shortened all eighteen lessons, retaining twenty diagrams and the lessons-only route. Each example focuses on its owning concept; broadcasting has one matrix-plus-bias addition, models use built-in composition, and transfers start from a prepared batch. Removed unnecessary API, mixed-precision, loader and compiler detours; simplified five diagram labels/examples. Glossary, references, mission, syllabus, README, changelog and generated HTML agree. Source length is about 36% lower and code lines fall from 224 to 146; these counts do not establish learner outcomes.
 
 Indexing clarity revision (2026-10-06): lesson 2 defines index/indices with zero-based grid, row and column positions and uses one consistent tensor for short selection, slice and reshape explanations. Both diagrams have concrete matching labels and descriptions; the selected value is highlighted. Lesson 6 teaches inferred sizes and layout changes; lesson 9 explains the linear-layer feature-axis contract. Related definitions use affirmative language, and glossary, mission, syllabus, README, manifest and generated HTML align. Eighteen lessons, twenty diagrams and the lessons-only profile are preserved; splitting examples yields twenty-four Python blocks.
@@ -5690,6 +5694,8 @@ Catalog-wide follow-up: shared catalog discovery and course_labs now skip lesson
 Implemented the complete sixteen-lesson, sixteen-diagram course with nineteen commented examples and a 1.75-hour reading estimate. Canonical sources, metadata and syllabus generate the self-contained HTML. Strict lessons-only metadata/parser/renderer/validator support preserves the existing reading profiles and excludes labs/runtime archives. The shared registry, README, guide, all menus, practical entry references and root changelog align with the ten-resource route. Six standalone validators are synchronized through their owner; practical runtimes and numbered labs are unchanged.
 
 #### Verification Evidence
+
+Plain-English snippet revision (2026-10-08): 77 existing focused tests, three native reading validators, build/freshness, repository-configured Markdown lint and whitespace checks pass. All 23 snippets parse with AST identity to the prior source; all 17 CPU blocks pass 37 independent checks on PyTorch 2.14.1. Three final isolated headless Chrome 155.0.8059.39 tests at 1440, 390 and 320 pixels pass navigation, keyboard, scrolling, reflow and SVG geometry checks; representative changed lesson captures were visually reviewed. Independent review found one ambiguous numel comment, corrected before final rebuild. Generic checker diagnostics are unchanged; guide/catalog bytes are unchanged. PUBLICATION-REVIEW binds the artifact and evidence. Five CUDA examples and the compiler continuation remain unexecuted; no runtime qualification or external publication is claimed.
 
 Scan-focused revision (2026-10-07): 112 focused regressions, all three native reading validators, selected build/freshness, Markdown lint and whitespace checks pass. All 23 snippets parse; all 17 CPU blocks execute unchanged with existing PyTorch 2.14.1 and pass 37 independent checks. Three final owned headless Chrome 154.0.8037.98 checks at 1440, 390 and 320 pixels pass navigation, keyboard controls, local scrolling, reflow, API emphasis and SVG geometry. Diagram and lesson captures were visually reviewed. Independent review's missing FP16 definition was fixed; no concrete findings remain. PUBLICATION-REVIEW binds the final artifact and evidence. Generic checker diagnostics match the baseline; shared guide/catalog bytes are unchanged. Five CUDA snippets and the optional compiler continuation remain unexecuted; no install, GPU measurement, runtime qualification or external publication is claimed.
 

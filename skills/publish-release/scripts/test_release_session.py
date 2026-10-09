@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -106,6 +107,33 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(result["gate"], "approval:pr:12")
         self.assertIn("/pull/12", result["url"])
 
+    def test_approval_after_ten_minutes_continues_in_same_phase(self):
+        result = {"status": "waiting", "gate": "approval:pr:12"}
+        rs.timed_observation(self.value, result, "pr", 0)
+        waiting = rs.timed_observation(self.value, result, "pr", 601)
+        self.assertEqual(waiting["status"], "waiting")
+        self.assertEqual(waiting["deadline"], 3600)
+
+    def test_saved_gate_deadline_does_not_shorten_phase(self):
+        self.value["waits"] = {"phase:pr": 3600, "approval:pr:12": 600}
+        result = rs.timed_observation(
+            self.value, {"status": "waiting", "gate": "approval:pr:12"}, "pr", 601
+        )
+        self.assertEqual(result["status"], "waiting")
+        self.assertEqual(result["deadline"], 3600)
+
+    def test_direct_async_merge_waits_without_queue_membership(self):
+        self.github.queue.return_value.update(
+            isInMergeQueue=False, mergeQueueEntry=None
+        )
+        result = rs.observation(self.value, self.github, "merge")
+        self.assertEqual(result, {"status": "waiting", "gate": "merge_settlement"})
+        self.github.pr.return_value = pr(state="MERGED")
+        self.github.api.return_value = {"status": "ahead"}
+        result = rs.observation(self.value, self.github, "merge")
+        self.assertEqual(result["commit"], MERGED)
+        self.assertEqual(self.value["merge"], MERGED)
+
     def test_fixed_timeout_and_explicit_new_attempt(self):
         result = {
             "status": "waiting",
@@ -113,16 +141,16 @@ class ObservationTests(unittest.TestCase):
             "url": "https://example.invalid/review",
         }
         first = rs.timed_observation(self.value, result, "pr", 100)
-        self.assertEqual(first["deadline"], 700)
+        self.assertEqual(first["deadline"], 3700)
         self.assertEqual(
-            rs.timed_observation(self.value, result, "pr", 699)["status"], "waiting"
+            rs.timed_observation(self.value, result, "pr", 3699)["status"], "waiting"
         )
-        expired = rs.timed_observation(self.value, result, "pr", 700)
+        expired = rs.timed_observation(self.value, result, "pr", 3700)
         self.assertEqual(expired["status"], "timed_out")
         self.assertIn("--resume --tag demo-v1.2.3", expired["resume"])
         self.value["waits"] = {}
         self.assertEqual(
-            rs.timed_observation(self.value, result, "pr", 800)["deadline"], 1400
+            rs.timed_observation(self.value, result, "pr", 3800)["deadline"], 7400
         )
 
     def test_phase_budget_does_not_slide_with_different_gates(self):
@@ -155,9 +183,9 @@ class ObservationTests(unittest.TestCase):
             emit=lambda text, **_: messages.append((now[0], text)),
         )
         self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(sum(sleeps), 600)
+        self.assertEqual(sum(sleeps), 3600)
         self.assertEqual(set(sleeps), {15})
-        self.assertEqual([t for t, _ in messages], list(range(0, 600, 60)))
+        self.assertEqual([t for t, _ in messages], list(range(0, 3600, 60)))
         self.assertIn("Waiting for approval on GitHub", messages[0][1])
 
     def test_remote_call_timeout_is_capped_by_wait_deadline(self):
@@ -174,7 +202,7 @@ class ObservationTests(unittest.TestCase):
         finally:
             rs.REMOTE_DEADLINE.reset(token)
 
-    def test_slow_observation_cannot_extend_approval_deadline(self):
+    def test_slow_observation_cannot_extend_phase_deadline(self):
         now = [0]
         pending = {
             "status": "waiting",
@@ -185,7 +213,7 @@ class ObservationTests(unittest.TestCase):
         def observe(*_):
             if now[0] == 0:
                 return pending
-            now[0] = 601
+            now[0] = 3601
             return {"status": "ready"}
 
         def sleep(seconds):
@@ -202,10 +230,12 @@ class ObservationTests(unittest.TestCase):
                 emit=Mock(),
             )
         self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(result["deadline"], 600)
+        self.assertEqual(result["deadline"], 3600)
 
     def test_approval_arrives_during_wait(self):
-        self.github.pr.side_effect = [pr(reviewDecision="REVIEW_REQUIRED"), pr()]
+        self.github.pr.side_effect = [pr(reviewDecision="REVIEW_REQUIRED")] * 41 + [
+            pr()
+        ]
         now = [0]
 
         def sleep(seconds):
@@ -221,7 +251,7 @@ class ObservationTests(unittest.TestCase):
             emit=Mock(),
         )
         self.assertEqual(result["status"], "ready")
-        self.assertEqual(now[0], 15)
+        self.assertEqual(now[0], 615)
         self.assertIn("merge-pr", result["next"])
 
     def test_drift_and_conflicts_never_merge(self):
@@ -277,12 +307,27 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(self.value["merge"], MERGED)
 
     def test_removed_queue_entry_blocks_instead_of_waiting(self):
+        rs.observation(self.value, self.github, "merge")
+        self.assertEqual(self.value["observed_queue_entry"], "queue-id")
         self.github.queue.return_value.update(
             isInMergeQueue=False, mergeQueueEntry=None
         )
         result = rs.observation(self.value, self.github, "merge")
         self.assertEqual(result["status"], "blocked")
         self.assertIn("do not re-enqueue", result["reason"])
+
+    def test_unknown_or_contradictory_queue_membership_is_unverified(self):
+        for membership, entry in (
+            (None, None),
+            (False, {"id": "queue-id"}),
+            (True, None),
+        ):
+            with self.subTest(membership=membership, entry=entry):
+                self.github.queue.return_value.update(
+                    isInMergeQueue=membership, mergeQueueEntry=entry
+                )
+                with self.assertRaises(rs.ReleaseError):
+                    rs.observation(self.value, self.github, "merge")
 
     def test_squashed_merge_and_advanced_default(self):
         self.github.pr.return_value = pr(state="MERGED")
@@ -356,7 +401,10 @@ class ObservationTests(unittest.TestCase):
             with self.assertRaises(rs.ReleaseError):
                 rs.observation(self.value, self.github, "release")
 
-    def test_environment_approval_gets_its_own_deadline(self):
+    def test_environment_approval_shares_release_phase_deadline(self):
+        rs.timed_observation(
+            self.value, {"status": "waiting", "gate": "release_workflow"}, "release", 0
+        )
         self.release(status="waiting", deployments=[{"environment": {"id": 3}}])
         result = rs.timed_observation(
             self.value,
@@ -364,11 +412,11 @@ class ObservationTests(unittest.TestCase):
             "release",
             800,
         )
-        self.assertEqual(result["deadline"], 1400)
+        self.assertEqual(result["deadline"], 3600)
         self.assertIn("approval:environment", result["gate"])
 
     def test_partial_and_reordered_environment_approvals_keep_deadline(self):
-        for now, ids in ((0, [1, 2]), (590, [2, 1]), (599, [2]), (600, [2])):
+        for now, ids in ((0, [1, 2]), (601, [2, 1]), (3599, [2]), (3600, [2])):
             self.release(
                 status="waiting", deployments=[{"environment": {"id": i}} for i in ids]
             )
@@ -378,7 +426,8 @@ class ObservationTests(unittest.TestCase):
                 "release",
                 now,
             )
-            self.assertEqual(result["deadline"], 600)
+            self.assertEqual(result["deadline"], 3600)
+            self.assertEqual(result["status"], "waiting" if now < 3600 else "timed_out")
         self.assertEqual(result["status"], "timed_out")
 
     def test_failed_workflow_draft_and_missing_assets(self):
@@ -542,7 +591,7 @@ class CommandFlowTests(unittest.TestCase):
             else {"status": "ahead"}
         )
 
-        def call(*args):
+        def call(*args, expected=0):
             with (
                 patch.object(
                     sys,
@@ -555,7 +604,7 @@ class CommandFlowTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output,
             ):
                 code = rs.main()
-            self.assertEqual(code, 0, output.getvalue())
+            self.assertEqual(code, expected, output.getvalue())
             return output.getvalue()
 
         call(
@@ -583,6 +632,75 @@ class CommandFlowTests(unittest.TestCase):
         fixture.git(fixture.work, "push", "origin", "HEAD:refs/heads/feature/demo")
         remote.pr.return_value = pr(headRefOid=commit)
         call("bind-pr", "--tag", "demo-v1.2.3", "--pr", "12")
+        # Simulate a later canonical base synchronization and fresh local review.
+        old_head = commit
+        fixture.git(fixture.work, "switch", "main")
+        (fixture.work / "base-update.txt").write_text("new base content")
+        fixture.git(fixture.work, "add", "-A")
+        fixture.git(fixture.work, "commit", "-m", "Advance fixture default")
+        base = fixture.git_output(fixture.work, "rev-parse", "HEAD")
+        fixture.git(fixture.work, "push", "origin", "HEAD:refs/heads/main")
+        fixture.git(fixture.work, "switch", "feature/demo")
+        fixture.git(fixture.work, "merge", "--no-edit", "main")
+        commit = fixture.git_output(fixture.work, "rev-parse", "HEAD")
+        fixture.git(fixture.work, "push", "origin", "HEAD:refs/heads/feature/demo")
+        remote.pr.return_value = pr(headRefOid=commit)
+        call("bind-pr", "--tag", "demo-v1.2.3", "--pr", "12", expected=2)
+        self.assertEqual(
+            json.loads(call("status", "--tag", "demo-v1.2.3"))["head"], old_head
+        )
+        rest_pr = {
+            "number": 12,
+            "state": "open",
+            "draft": False,
+            "head": {
+                "ref": "feature/demo",
+                "sha": commit,
+                "repo": {"full_name": SCOPE["repo"]},
+            },
+            "base": {"ref": "main", "sha": base, "repo": {"full_name": SCOPE["repo"]}},
+        }
+        evidence = {
+            "schema": "skills-review/v1",
+            "repository": SCOPE["repo"],
+            "pr": 12,
+            "head": commit,
+            "base": "main",
+            "base_sha": base,
+            "verdict": "passed",
+            "unresolved_findings": 0,
+            "validation": ["Fixture validation passed"],
+        }
+        remote.api.side_effect = lambda endpoint: {
+            "": {"default_branch": "main"},
+            "pulls/12": rest_pr,
+            f"compare/{base}...{commit}": {"status": "ahead"},
+            "actions/variables/MERGE_OPERATOR_IDS": {"value": "[7]"},
+            "pulls/12/reviews/42": {
+                "id": 42,
+                "user": {"id": 7},
+                "state": "COMMENTED",
+                "commit_id": commit,
+                "body": json.dumps(evidence),
+            },
+        }[endpoint]
+        remote.tag.return_value = (None, None)
+        result = json.loads(
+            call(
+                "reconcile-pr",
+                "--tag",
+                "demo-v1.2.3",
+                "--expected-head",
+                old_head,
+                "--head",
+                commit,
+                "--review-id",
+                "42",
+            )
+        )
+        self.assertEqual(result["head"], commit)
+        self.assertEqual(result["head_reconciliations"][0]["previous_head"], old_head)
+        remote.api.side_effect = lambda endpoint: {"status": "ahead"}
         remote.pr.return_value = pr(
             headRefOid=commit, state="MERGED", mergeCommit={"oid": commit}
         )

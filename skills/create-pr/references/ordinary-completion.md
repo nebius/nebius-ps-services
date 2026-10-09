@@ -30,7 +30,10 @@ Bot metadata never substitutes for review; automatic events cannot start merges.
    invokes merge-pr with PR, exact head/base and review ID. A publication caller
    may bind its release checkpoint here before merge; it keeps ownership of the
    grant until completion. Never dispatch before a release checkpoint binds the
-   final reviewed head. Unsafe findings return a blocker without merge.
+   final reviewed head. If later synchronization or repair changes that head,
+   return fresh review evidence to the publication owner for its guarded
+   checkpoint reconciliation before broker dispatch. Unsafe findings return a
+   blocker without merge.
 7. Merge-pr dispatches the protected Actions workflow. The create-pr/publication
    completion caller observes the request until actual merge or the fixed
    3600-second limit; pending is not completed and the grant stays open.

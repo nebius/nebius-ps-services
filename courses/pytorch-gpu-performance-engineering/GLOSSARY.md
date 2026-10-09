@@ -9,7 +9,7 @@
 - **Batch** — A group of samples processed together.
 - **BF16** — The 16-bit bfloat16 floating-point format; it has fewer significant bits and a wider exponent range than FP16.
 - **Bias** — An offset added to a value. In a linear layer, it is a learned parameter; examples can also use fixed offsets.
-- **Broadcasting** — Logical reuse of values across compatible dimensions without explicitly repeating input storage.
+- **Broadcasting** — Allows compatible tensors with different shapes to participate in element-wise operations without explicitly copying repeated values.
 - **Caching allocator** — A memory manager that retains unused blocks for reuse by later tensor allocations.
 - **Compiler backend** — The component that generates executable code from tensor operations.
 - **Contiguous** — Values follow the tensor's logical order in the selected memory layout; this course uses row-by-row storage.
@@ -17,6 +17,7 @@
 - **CUDA** — NVIDIA’s platform for GPU computing, including interfaces for device execution, memory and synchronization.
 - **CUDA event** — A marker recorded in a CUDA stream; timed event pairs measure a completed device interval.
 - **Device** — The location of a tensor’s values, such as CPU or a particular CUDA GPU.
+- **`dim`** — Specifies which dimension to reduce in a reduction operation.
 - **Dimension** — An axis with a size. The application assigns its meaning, such as time or space; **`shape`** records its size.
 - **Dispatcher** — The PyTorch mechanism that selects an operator implementation from tensor properties and execution context.
 - **Distribution** — A rule describing how likely different sampled values or intervals are.
@@ -37,12 +38,14 @@
 - **Index** — An integer choosing an entry along an axis, with counting starting at zero. Its plural is indices. In `x[1, 2, 3]`, the three indices choose a grid, a row and a column in the course example.
 - **Inference** — Using a model to produce outputs without updating it through training.
 - **Input pipeline** — The stages that load, prepare, batch and deliver data for model computation.
+- **`keepdim=True`** — Keeps the reduced dimension with size 1 instead of removing it.
 - **Kernel** — A function executed on the GPU; a framework operation need not map to exactly one kernel.
 - **Latency** — Elapsed time for a defined unit of work, such as one complete request.
 - **Learning rate** — The scale used by an optimizer when changing parameters.
 - **Loss** — A scalar measure of prediction error or another training objective.
 - **Matrix** — A tensor with two axes, commonly interpreted as rows and columns.
 - **Matrix multiplication** — Combining rows and columns through sums of products; written as `@` in the examples.
+- **`mean()`** — Calculates averages, reducing multiple values into fewer values.
 - **Metadata** — Information describing tensor values and their interpretation, including **`shape`**, **`dtype`**, **`device`** and strides.
 - **Module** — A PyTorch **`nn.Module`** that groups computation and model state.
 - **Normal distribution** — A bell-shaped sampling distribution. The standard normal used by **`torch.randn`** has mean zero and standard deviation one; sampled values can be negative or greater than one.
@@ -54,7 +57,7 @@
 - **Profiler** — A tool that records execution activity for diagnosis; recording can change execution cost.
 - **PyTorch** — A library for tensor computation, automatic differentiation and model building on CPUs and accelerators.
 - **Range** — How large or small a nonzero number a format can represent.
-- **Reduction** — Combining values along selected axes, as with sum, mean or maximum.
+- **Reduction** — Combines multiple values into fewer values. It can involve processing a large amount of GPU data even when the output contains only one value, so it can be expensive.
 - **ReLU** — Rectified linear unit; the element-wise rule `max(0, value)`.
 - **Reserved memory** — Memory managed by the CUDA allocator, including live tensor allocations and reusable cached blocks.
 - **Scalar** — A zero-dimensional tensor or single numeric value; a scalar tensor still has a **`dtype`** and **`device`**.

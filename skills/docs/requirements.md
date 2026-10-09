@@ -3419,15 +3419,24 @@ and receive a verified GitHub Release URL.
   staging, commits, synchronization and PR publication to create-pr's canonical
   transaction. Reuse feature branches; create a release branch from default.
 - AC-002: Use an explicit or unambiguous prepared version; otherwise ask once.
-- AC-003: Local review-pr and safe canonical repairs precede merge-pr App
-  approval. Do not wait for routine human PR approval before App dispatch. For
-  additional human or publication-environment gates, show the approval link,
-  poll every 15 seconds and wait up to 600 seconds with minute progress.
-  Timeout preserves resumable progress. Checks, queue and workflow waits have
-  separate 3600-second limits. Approval never bypasses other readiness checks.
+- AC-003: Local review-pr and safe canonical repairs precede merge-pr Actions
+  approval and protected automatic merge. Do not wait for routine human PR
+  approval before broker dispatch. Additional human or publication-environment
+  gates share their enclosing 3600-second phase budget, with approval links,
+  15-second polling and minute progress; there is no separate ten-minute cutoff.
+  PR readiness, merge settlement and release execution have independent fixed
+  phase deadlines. Changing gates or partial approvals never resets them; only
+  explicit resume renews waits. Timeout preserves progress and repository gates.
+  Direct asynchronous settlement is pending without a queue entry; a previously
+  observed external queue removal blocks rather than silently re-enqueueing.
 - AC-004: Resume reconciles repository, PR, merged result, tag and workflow
   identities with authoritative state, including across native sessions.
   A checkpoint is evidence, never authorization or a replayable commit grant.
+  Before merge/tag effects, an explicitly selected canonical repair may reconcile
+  the same PR from its expected old head to a reviewed descendant. Require a
+  clean matching checkout and fresh configured-operator attestation for the live
+  head/base; preserve prior-head evidence and deadlines. Arbitrary drift still
+  blocks, and the broker independently repeats merge admission.
 - AC-005: Tag only the verified merged commit in remote default history from an
   isolated checkout. Create its annotated tag before SCM runtime verification;
   push after success. Default advancement cannot change release contents.

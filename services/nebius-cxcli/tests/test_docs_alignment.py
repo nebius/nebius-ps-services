@@ -28,6 +28,15 @@ def _squash(value: str) -> str:
     return " ".join(value.split())
 
 
+def _changelog_history() -> str:
+    summary = _read("CHANGELOG.md")
+    history = [summary]
+    for note in sorted((REPO_ROOT / "docs/releases").glob("*.md")):
+        assert f"docs/releases/{note.name}" in summary
+        history.append(note.read_text(encoding="utf-8"))
+    return "\n".join(history)
+
+
 def test_specs_expose_only_the_current_canonical_contracts() -> None:
     requirements = _read("docs/requirements.md")
     design = _read("docs/design.md")
@@ -48,7 +57,7 @@ def test_docs_separate_bounded_discovery_summary_from_complete_json() -> None:
     readme = _squash(_read("docs/soperator.md"))
     requirements = _squash(_read("docs/requirements.md"))
     design = _squash(_read("docs/design.md"))
-    changelog = _squash(_read("CHANGELOG.md"))
+    changelog = _squash(_changelog_history())
 
     assert "concise support-safe Markdown summary" in readme
     assert "never prints individual nodes" in readme
@@ -78,7 +87,7 @@ def test_docs_define_strict_project_local_ssh_trust() -> None:
     readme = _squash(_read("README.md"))
     requirements = _squash(_read("docs/requirements.md"))
     design = _squash(_read("docs/design.md"))
-    changelog = _squash(_read("CHANGELOG.md"))
+    changelog = _squash(_changelog_history())
     combined = " ".join((readme, requirements, design, changelog))
 
     assert "--ssh-known-hosts-file" in readme
@@ -165,7 +174,7 @@ def test_docs_keep_terraform_out_of_in_cluster_installation() -> None:
 def test_docs_record_dynamic_release_and_delivery_contract() -> None:
     operator_docs = _squash(_read("README.md") + " " + _read("docs/soperator.md"))
     design = _squash(_read("docs/design.md"))
-    changelog = _squash(_read("CHANGELOG.md"))
+    changelog = _squash(_changelog_history())
 
     for phrase in (
         "freezes the tag, commit, tree, source archive",
@@ -196,17 +205,16 @@ def test_docs_preserve_protected_state_and_slurm_ownership() -> None:
     assert "exact Slurm state" in readme
 
 
-def test_unreleased_changelog_names_the_current_soperator_contract() -> None:
-    changelog = _read("CHANGELOG.md")
-    unreleased = changelog.split("## [Unreleased]", maxsplit=1)[1].split("\n## [", maxsplit=1)[0]
+def test_changelog_history_records_the_soperator_contract() -> None:
+    changelog = _changelog_history()
 
-    assert "`soperator create --release latest|X.Y.Z`" in unreleased
-    assert "`soperator onboard`" in unreleased
-    assert "`soperator upgrade --to-release latest|X.Y.Z`" in unreleased
-    assert "`migrate node-group`" in unreleased
-    assert "highest reachable" in unreleased
+    assert "`soperator create --release latest|X.Y.Z`" in changelog
+    assert "`soperator onboard`" in changelog
+    assert "`soperator upgrade --to-release latest|X.Y.Z`" in changelog
+    assert "`migrate node-group`" in changelog
+    assert "highest reachable" in changelog
     for command in PUBLIC_SOPERATOR_COMMANDS:
-        assert f"soperator {command}" in unreleased
+        assert f"soperator {command}" in changelog
 
 
 def test_docs_define_full_stack_upgrade_and_permanent_node_group_migration() -> None:

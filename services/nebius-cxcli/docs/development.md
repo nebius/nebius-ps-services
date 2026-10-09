@@ -119,6 +119,10 @@ evidence separate. Local results do not certify a customer environment.
 
 ## Releases
 
+`CHANGELOG.md` contains release summaries. Large releases link to their complete
+history under `docs/releases/`; documentation checks read both surfaces. Release
+preparation may leave `[Unreleased]` empty after moving its notes into a version.
+
 1. From a clean feature branch, run `./publish-release.sh --prep X.Y.Z`.
 2. Review and merge the branch to `main` through the repository workflow.
 3. From clean synced `main`, run `./publish-release.sh --publish X.Y.Z`.

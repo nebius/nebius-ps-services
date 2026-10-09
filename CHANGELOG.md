@@ -6,6 +6,16 @@ project folder.
 
 ## [Unreleased]
 
+- Align PR and release continuation with protected Actions merge: remove the
+  separate ten-minute approval cutoff, retain fixed one-hour phase budgets, and
+  distinguish pending direct async merges from removal of observed queue entries.
+  Reconcile reviewed pre-merge repairs through an explicit guarded checkpoint
+  transition. Align owner handoffs, release specs and regression coverage.
+
+- Explain every line in all 23 PyTorch examples with plain-English comments.
+  Remove duplicated walkthrough prose, clarify reductions and broadcasting,
+  align the glossary, and rebuild the reading course without changing its code.
+
 - Clarify the distinction between a completion run's trusted workflow revision
   and its tested merge result in the CI workflow and deployment documentation.
 
