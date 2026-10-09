@@ -10,8 +10,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Invoke `$publish-release --tag X.Y.Z` from this project to prepare, commit,
   push and merge the release PR, tag the verified merged commit in
   `__MAIN_BRANCH__` history, and verify published assets.
-- If GitHub requires approval, follow the displayed link. The skill waits up
-  to ten minutes and continues automatically when an eligible reviewer approves.
+- The Actions broker supplies routine PR approval after local review. Additional
+  required approvals show a link and consume the remaining one-hour phase budget;
+  the skill continues automatically after approval without bypassing protections.
 - After a timeout or interruption, use `$publish-release --resume --tag X.Y.Z`.
 - The generated shell helper exposes private content/tag/push/verify primitives;
   it does not commit or publish branches. The skill delegates those effects to

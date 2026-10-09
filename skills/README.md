@@ -2069,3 +2069,9 @@ Dependabot updates, including Docker, use the same local review path and wait fo
 an explicit operator dispatch. Standalone review never merges; automatic events
 only report CI or recover authorized completion. Skill installation and workflow
 deployment are separate from protection setup and live acceptance evidence.
+
+GitHub Release publication continues through protected merge, exact-result CI,
+tagging and asset verification in one invocation. Additional approvals share the
+fixed one-hour phase deadline; there is no separate ten-minute approval cutoff.
+Only explicit resume renews waiting budgets, and a pending direct async merge
+does not require queue membership.

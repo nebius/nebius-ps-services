@@ -28,9 +28,10 @@ Local review-pr runs before Actions approval: safe fixes use create-pr, followed
 fresh validation and review. merge-pr dispatches the protected broker, which
 supplies routine Actions approval. Unsafe findings and human objections stop.
 
-Additional required human or release-environment approvals retain a ten-minute
-wait with links and 15-second polling. Partial approvals do not restart that
-clock; repository protection remains authoritative.
+Additional required human or release-environment approvals use the remaining
+one-hour phase budget, with links and 15-second polling. There is no separate
+ten-minute cutoff. Partial approvals and changing gates do not restart the clock;
+repository protection remains authoritative.
 
 After timeout or interruption:
 
@@ -43,10 +44,15 @@ A tag disambiguates multiple unfinished releases. Resume verifies GitHub state,
 keeps completed work, and starts a fresh waiting attempt. It works across agent
 sessions without replaying old commit grants. Timeouts leave the PR/workflow
 intact; no local background publisher is left running.
+If the default branch advances after the PR was bound, canonical synchronization
+and a fresh review can reconcile the checkpoint to that exact repaired head before
+merge. This preserves prior-head evidence and deadlines; unrelated drift still blocks.
 
-Checks, merge settlement and release execution have separate one-hour wait limits.
+PR readiness, merge settlement and release execution have separate one-hour limits.
 Failures, conflicting identities and missing assets produce precise blockers.
 A queued PR, pushed tag or draft release is not a completed publication.
+Direct asynchronous merge remains pending while the PR is open, even without a
+queue entry. Removal from a previously observed external queue remains a blocker.
 
 Repository discovery uses GitHub's canonical repository endpoint without a
 trailing slash; nested release and workflow reads retain their resource paths.
@@ -103,6 +109,7 @@ Native invocation and live publication evidence must be verified separately.
 - `references/orchestration.md`: owner handoffs, exact helper calls and recovery.
 - `scripts/release_session.py`: GitHub observation, deadlines and release recovery.
 - `scripts/release_checkpoint.py`: private atomic checkpoints and locking.
+- `scripts/release_reconcile.py`: guarded reconciliation of reviewed pre-merge repairs.
 - `scripts/publish-release-doer.sh`: deterministic release primitives.
 - `assets/`: changelog, aligned runnable helper and release-workflow templates.
 - `scripts/test*.py`, `evals/`: executable and agent-evaluation coverage.

@@ -42,8 +42,8 @@ python3 <skill>/scripts/release_session.py open --project-dir <project> \
 3. Bind the final pushed head: `release_session.py bind-pr --project-dir <project>
    --tag <tag> --pr <number>`. This verifies local branch, remote PR head, same
    repository and base. Never freeze an earlier head before local review-pr and create-pr repairs.
-   Head drift after binding blocks until explicitly reconciled; do not silently
-   rewrite an immutable release checkpoint.
+   Head drift after binding blocks until explicitly reconciled through the guarded
+   transition below; ordinary bind-pr never replaces the frozen head.
 
 Do not append a raw changelog commit after a separate commit-push task. The shell
 helper intentionally no longer offers commit/push preparation or `--no-push`.
@@ -64,7 +64,41 @@ a read-only readiness view, not the ordinary flow's pre-dispatch approval gate.
 Observe the merge with `--phase merge` to freeze its resulting SHA. Have merge-pr
 verify that result's destination and applicable CI. Squash/rebase results can differ
 from the original head; never substitute feature-head ancestry for result proof.
+An open PR with no queue entry remains pending direct async settlement, not removed
+from a queue. The checkpoint records an observed external entry before treating its
+later disappearance as removal. Queue observation is read-only and never re-enqueues.
 The existing merge-pr observer owns exact-result CI and its 3600-second deadline.
+
+## Reviewed head reconciliation
+
+If the base advances after binding or a safe branch repair is needed, reconcile
+any earlier broker result first. If already merged, retain the frozen head and
+verify that operation. Otherwise use create-pr's canonical preparation handoff,
+validate, push and run a fresh full review-pr attestation. Preserve unrelated work;
+do not interpret remote head movement alone as an authorized repair.
+
+Before the next broker dispatch, use the publication owner's private transition:
+
+```text
+python3 <skill>/scripts/release_session.py reconcile-pr --project-dir <project> \
+  --tag <tag> --expected-head <previously-bound-sha> --head <reviewed-new-sha> \
+  --review-id <fresh-comment-review-id>
+```
+
+This requires a clean active checkout at the exact reviewed descendant, the same
+open PR/branch/repository/default, current base inclusion, no merge/tag/publication
+evidence and no remote tag. The installed merge-pr sibling verifies the actual
+COMMENT review against live `MERGE_OPERATOR_IDS` and the current head/base. Missing
+review or variable-read access blocks; never substitute credentials or invent a
+review. The transition records prior/new head and review identities while keeping
+wait deadlines. It provides no commit, approval or merge authorization; the broker
+independently repeats all admission gates. After an interrupted reconciliation,
+read status first and reuse the exact recorded transition if already applied.
+
+Unexpected head movement, rewritten history, dirty work, stale review or any
+post-merge/tag change cannot use this transition. Explicit resume still only
+renews wait budgets. Never edit checkpoints manually or recreate the release to
+bypass a rejected reconciliation.
 
 ## Isolated tag publication
 
@@ -110,7 +144,9 @@ pushing. Conflicting remote/local tags block; no force, deletion or replacement.
 
 Observe `--phase release`. The helper identifies the exact push workflow by
 workflow filename, tag and merged SHA, and freezes its run ID. It handles a run's
-pending environment approvals with one fixed 600-second budget. Workflow failure
+pending environment approvals within the release phase's fixed 3600-second budget.
+There is no separate approval timer. Gate changes and partial approvals do not
+renew that deadline. Workflow failure
 or missing expected release assets is a blocker; no implicit rerun/re-upload.
 
 When ready, download every expected asset from the frozen repository/tag into a
@@ -142,3 +178,11 @@ Timeout returns a precise resume command and preserves GitHub work. No backgroun
 local publisher remains. API errors are unverified evidence, not absent objects,
 missing checks or approval. Keep existing public effects intact. Cleanup applies
 only to exact task-created temporary paths; checkpoints remain for recovery.
+
+## GitHub behavior
+
+GitHub's [asynchronous merge API](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously)
+can accept a direct merge while it settles in the background. An accepted request
+does not prove actual merge or queue membership. Additional
+[deployment review gates](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
+remain enforced; local waiting policy cannot satisfy them.

@@ -78,6 +78,9 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
 3. Wait for applicable current-head CI, synchronize/review again when default
    advances, and freeze the exact head/base and COMMENT review ID. CI alone is
    insufficient. The broker authorizes configured numeric operator IDs only.
+   If a publication caller already bound its head, return any refreshed head and
+   review evidence to that owner for guarded checkpoint reconciliation before
+   dispatch. Keep the caller's completion task active through this handoff.
 4. Follow the Actions protocol to dispatch the trusted default-branch broker.
    A read-only job independently admits the exact review/base/CI and uploads its
    intent before effects. The write job validates that receipt, approves as

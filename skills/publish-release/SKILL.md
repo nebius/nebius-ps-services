@@ -124,6 +124,9 @@ setup. Complete follows every step below.
    handoff. Bind the final reviewed pushed PR/head to the checkpoint, then invoke
    merge-pr for Actions approval and guarded merge. Do not wait for human approval
    before dispatching the Actions broker. Refresh all gates for the exact head. A queued PR is pending, never a completed merge.
+   If base advancement requires a canonical repair after binding, use the guarded
+   `reconcile-pr` transition in the orchestration reference with fresh review
+   evidence before any new broker dispatch. Arbitrary head drift still blocks.
 6. Observe actual merge, freeze its method-specific resulting SHA, and require
    merge-pr's remote-default ancestry and exact-result CI verification. Failed,
    pending or unverified applicable CI blocks tagging. No configured CI is
@@ -147,12 +150,15 @@ Routine PR approval is supplied by Actions after local review. Show
 `Waiting for approval on GitHub: <link>` only for an actual additional protection
 or release-environment approval that the built-in token cannot satisfy.
 Explain that an eligible reviewer must approve and that continuation is automatic.
-Poll every 15 seconds, update progress at least once per minute, and wait at most
-600 seconds for a PR approval or a release run's environment approvals. Partial
-approval or reordered API responses never restart that deadline.
+Poll every 15 seconds and update progress at least once per minute. Additional
+approvals consume the enclosing phase's remaining budget; there is no separate
+ten-minute cutoff. Partial approval or reordered API responses never restart it.
 
-Checks, merge settlement and release execution each have independent 3600-second
-phase budgets. Failed checks, rejected reviews, closed PRs, conflicts and identity
+PR readiness, merge settlement and release execution each have independent fixed
+3600-second phase budgets. Changing gates never restarts a phase. An open PR
+without queue membership can be awaiting direct async merge; observe until actual
+merge or the phase deadline. Previously observed queue removal remains a blocker.
+Failed checks, rejected reviews, closed PRs, conflicts and identity
 drift are blockers; do not mislabel them as pending approval.
 
 At timeout, preserve progress and show `$publish-release --resume --tag <tag>`.

@@ -7471,7 +7471,7 @@ implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-041: Resumable end-to-end GitHub Release publication
 
 #### Requirements Covered
@@ -7495,11 +7495,41 @@ and bounded wait deadlines. It never commits, merges, approves or creates grants
 
 Bare invocation means complete and wait. --resume selects one project checkpoint;
 a tag disambiguates multiple releases. Explicit partial modes remain scoped.
-Local review-pr and safe repairs precede Actions approval through merge-pr. Only
-additional human/environment approval waits use 600 seconds, 15-second polling
-and minute progress;
-checks, merge settlement and release workflow waits use separate 3600-second budgets.
-A deliberate resume opens a fresh waiting attempt, with all identities rechecked.
+Local review-pr and safe repairs precede Actions approval and protected automatic
+merge through merge-pr. PR readiness, merge settlement and release execution each
+use one fixed 3600-second deadline. Additional human/environment approval gates
+consume that same phase budget, with 15-second polling and minute progress;
+there is no separate ten-minute timer or gate-specific deadline. Gate changes and
+partial approvals cannot extend the phase. Only explicit resume renews waits.
+Routine broker approval never requires a pre-dispatch human wait.
+
+An open PR without queue membership remains pending direct merge settlement.
+Record observed external queue membership so a later removal can be reported as
+blocked without re-enqueueing. Observe externally queued PRs read-only within the
+same deadline; actual merge still precedes destination and exact-result CI proof.
+The observer supplies progress evidence only; merge-pr retains all merge authority.
+
+If default advances after initial binding, create-pr owns canonical synchronization
+and any safe repair; review-pr validates and attests the complete new head/base.
+A private reconcile-pr transition takes expected old head, exact new head and
+positive review ID. It requires the same open non-draft PR/repository/default,
+clean active checkout at the new descendant, current base inclusion, no recorded
+merge/tag/workflow/completion and no remote tag. Reuse merge-pr's canonical
+identity and review-record validators with live configured operator IDs; record
+only head/base/review identities in checkpoint history. Re-read remote identity
+before saving. Ordinary bind-pr continues to reject every head change; resume
+only renews waits. Reconciliation neither resets deadlines nor supplies merge
+permission. The broker remains responsible for all independent CI/protection
+admission before any merge effect. A missing sibling owner fails closed.
+
+The local deterministic helper remains the state owner; no new service, model,
+credential or workflow is introduced. Alternatives rejected: silently rebinding
+on resume could absorb unrelated work; restarting the release could duplicate
+identities and effects; loosening ordinary bind would remove drift protection.
+Implement the focused helper and CLI wiring, negative/positive transition tests,
+then update orchestration/docs/evals and run scoped alignment. Test stale/forged
+review, wrong old/new head, dirty checkout, rewritten history, advanced base,
+merged/tagged state and successful canonical repair continuation.
 
 Pin the verified method-specific merge result; prove remote-default ancestry.
 An isolated clone permits SCM checks without changing the user's checkout or
@@ -7530,7 +7560,9 @@ No existing project helper migration, installed-home sync or real release.
 #### Test-First Success Criteria
 
 - TDD-001: Dirty entry includes all reviewed work once.
-- TDD-002: Approval timeout resumes without repeating completed effects.
+- TDD-002: Approval can arrive after ten minutes within its fixed phase budget;
+  timeout resumes without repeating effects. Direct async merge is pending until
+  authoritative merge evidence; observed queue removal remains a blocker.
 - TDD-003: Advancing default never changes the frozen tag SHA.
 
 #### Validation Plan
@@ -7562,28 +7594,42 @@ Report native/live lanes as unverified until independently observed.
 
 #### Implementation Evidence
 
-Implemented the complete/resume public contract, content-only preparation,
-create-pr caller handoff and exact-result merge-pr continuation. Added private
-atomic checkpoints, bounded GitHub observation, stable approval deadlines and
-cross-session tag-object restoration. Canonical and generated shell helpers
-share exact-commit tagging, runtime checks and one-object push behavior.
-Updated instructions, README, workflow guidance, help metadata and evaluations.
-Existing project helper copies and installed skills were not changed.
+Implemented complete/resume orchestration, content-only preparation and exact-result
+publication. The 2026-10-08 alignment removes the separate approval timer and uses
+one fixed deadline per phase, including additional approvals. Open direct async
+merges remain pending without queue membership; only disappearance of previously
+observed membership reports removal. Queue-observation guidance now agrees.
+
+Added the private guarded reconcile-pr transition for canonical pre-merge repair
+and synchronization. It reuses the sibling merge-pr identity/review validators,
+requires current configured-operator evidence and a clean exact descendant, retains
+prior-head history/deadlines and rejects publication or drift. Ordinary binding
+and resume keep their existing boundaries. Aligned owner handoffs, README,
+changelog template, evaluations and public instructions. No public flag or merge
+permission changed. Existing project helper copies and installed skills were not
+updated during this source-review task.
 
 #### Verification Evidence
 
-All 38 executable tests passed using disposable local Git repositories, mocked
-GitHub responses and a virtual clock. Coverage includes dirty preparation,
-source/template parity, exact merged tagging, SCM runtime mismatch cleanup,
-extra-tag push suppression, origin drift, approval deadlines, queue races,
-private-state recovery and downloaded-asset verification.
+Current source evidence: 52 release tests, 76 merge/completion tests and 10
+publication-helper tests pass. Three timer/direct-merge negative controls failed
+against the prior implementation and passed after repair. A disposable real-Git
+CLI scenario advances default, synchronizes the bound feature, rejects ordinary
+rebinding, reconciles a fresh mocked review and continues exact tagging/recovery.
+Nine reconciliation tests cover stale/wrong/failed review, checkout/head drift,
+rewritten history, publication evidence and racing base changes. These tests also
+pass from copied sibling payloads; they do not establish native owner execution.
 
-Bash syntax, ShellCheck, Ruff, Codex/Claude stateful skill validation, scoped
-Markdown and diff checks passed. The catalog changelog retains its pre-existing
-MD024 duplicate heading, independently reproduced from HEAD. Final read-only
-risk review approved the changes with no remaining blockers. Source alignment
-is complete; installation, native owner invocation and live protected-repository
-publication remain unverified and require separate target evidence.
+Bash syntax, ShellCheck, Ruff lint/format, scoped Markdown, diff checks and canonical
+paired specs pass. All four skills pass standard-field and Codex/Claude structure
+checks with explicit-only extensions retained; create-pr and publish-release also
+pass the stateful profile. The 49 trigger cases and six quality cases are statically
+validated. Actual npx discovery, both-host copy parity, repeat installation and
+isolation pass in disposable locations. Native trigger/comparative quality evaluation
+is authentication-unavailable. Independent code/security review found no remaining
+blocking source issue. No live GitHub merge or release was performed; personal
+installed copies remain unchanged. Delivery remains implemented pending native/live
+acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
@@ -7660,6 +7706,14 @@ Current redesign evidence: 127 focused merge, completion, publication, release a
 Live deployment evidence: maintainer bootstrap PR #216 landed on 2026-10-08. Its exact result passed skills CI, merge-contract CI, CodeQL and legacy main/root Pages publication. Authorized settings were applied and read back: the numeric operator list, strict Required CI bound to App ID 15368 and removal of the empty push restriction. Independent protection fields, read-only default token, Actions approvals and repository merge methods were retained. GitHub clears the dependent block_creations flag when restrictions are absent, even if explicitly requested true. No credentials or Environment were created. Old writers were quiescent and the earlier effect inventory was empty.
 
 The first ordinary acceptance PR #217 recorded a trusted COMMENT review and immutable intent, then received exact-head Actions approval and a protected squash merge. Its completion stopped before CI/Pages effects because REST 2026-03-10 removed merge_commit_sha. The source repair uses one identity-bound GraphQL mergeCommit.oid lookup for merged observation, recovery, completion receipts and CI checkout; no old API or field fallback exists. Updated REST fixtures reproduce the failure, and result-identity/error regressions cover the repair. Read-only live source validation resolves the authoritative result and containment. The retained intent is the known-good checkpoint for deployed recovery; record its live outcome on the acceptance PR without treating source validation as deployed proof.
+
+The 2026-10-08 source-only release alignment updates create-pr/merge-pr handoffs
+so a publication owner reconciles a freshly reviewed repaired head before broker
+dispatch. Externally queued observation is bounded and read-only. Current source
+verification passes 138 focused release, merge/completion and publication tests;
+review/merge permissions and Agentic SDLC are unchanged. Disposable installation
+checks pass for the four selected skills; this follow-up did not update personal
+installed copies or repeat live publication acceptance.
 
 Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
 

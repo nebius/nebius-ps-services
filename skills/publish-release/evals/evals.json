@@ -3,13 +3,14 @@
   "evals": [
     {
       "id": "safe-review-loop",
-      "prompt": "Offline contract simulation only. Read the skill and its required local references; do not contact GitHub, mutate files, execute publication or wait. Use $publish-release. The ordinary same-repository PR has one clear regression with a known safe fix. Its head is A; fixing it produces B. Explain the authorized continuation and evidence needed.",
+      "prompt": "Offline contract simulation only. Read the skill and its required local references; do not contact GitHub, mutate files, execute publication or wait. Use $publish-release. The ordinary same-repository PR has one clear regression with a known safe fix. The release checkpoint is bound to head A; fixing it produces B. Explain the authorized continuation and evidence needed.",
       "expected_output": "Applies the ordinary review and protected merge contract with precise boundaries.",
       "files": [],
       "assertions": [
         "Routes safe repair commits and base synchronization through create-pr private preparation, without recursive review or merge.",
         "Requires validation and a fresh local review for B; A review cannot authorize B.",
-        "Leaves all AI work local and routes any authorized merge through merge-pr and the protected Actions broker."
+        "Leaves all AI work local and routes any authorized merge through merge-pr and the protected Actions broker.",
+        "Reconciles the bound checkpoint explicitly from A to reviewed descendant B using the fresh review ID before broker dispatch; ordinary bind-pr cannot replace A."
       ]
     },
     {
@@ -41,6 +42,26 @@
         "Verifies R in remote default history and applicable result CI, then tags R in an isolated clean clone.",
         "Does not tag S or the old feature SHA and does not create raw path-limited commits.",
         "Records the annotated tag object and verifies frozen effective origin destinations before push."
+      ]
+    },
+    {
+      "id": "approval-after-ten-minutes",
+      "prompt": "Offline contract simulation only. Read the skill and local references; do not contact GitHub, mutate files, publish or wait. Use $publish-release. The release run has waited 12 minutes for a required environment reviewer within its current release phase. Describe continuation and the deadline.",
+      "expected_output": "Continues within the original one-hour release phase without bypassing approval.",
+      "files": [],
+      "assertions": [
+        "Does not time out at ten minutes or renew the phase when the approval set changes.",
+        "Waits with progress until approval, a real blocker or the original phase deadline; then preserves the exact resume identity."
+      ]
+    },
+    {
+      "id": "direct-merge-pending",
+      "prompt": "Offline contract simulation only. Read the skill and local references; do not contact GitHub, mutate files, publish or wait. Use $publish-release. After local review the Actions broker accepted direct asynchronous merge. The exact PR remains open and has no queue entry. Describe the next step.",
+      "expected_output": "Observes pending direct merge through its fixed deadline and never tags before confirmed merge and result CI.",
+      "files": [],
+      "assertions": [
+        "Does not infer removal from a queue that was never observed or enqueue the PR.",
+        "Requires actual merge, destination proof and exact-result CI before isolated tagging and artifact verification."
       ]
     }
   ]

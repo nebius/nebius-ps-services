@@ -5,7 +5,9 @@
 A visual PyTorch foundation for engineers who can read basic Python. Eighteen
 focused lessons use short examples and diagrams to explain tensor operations,
 model execution, memory, transfers, GPU timing, batching and compilation. Each
-example teaches one relationship, and each performance connection stays brief.
+example teaches one relationship. Every code line has a plain-English comment
+explaining its action; comments replace output-only annotations and duplicated
+walkthrough prose. Each performance connection stays brief.
 Definitions explain concepts before their examples. Lesson 2 follows grid, row
 and column indices through small selections and shape changes; lesson 9 explains
 how a linear layer uses the feature axis. PyTorch API names use bold monospace.

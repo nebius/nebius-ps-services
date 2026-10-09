@@ -140,9 +140,11 @@ query($owner: String!, $repo: String!, $number: Int!) {
 - Require a non-null entry with its ID, enqueue time, state, position, and the
   matching PR identity; verify `isInMergeQueue` agrees. Read errors or
   contradictory fields are unverified, not proof of absence.
-- Refresh immediately before returning queued. Report the evidence as of that
-  observation and stop; do not wait for the queue to finish. Destination and
-  post-merge CI are `not applicable`, and branch deletion is deferred.
+- Observe externally queued PRs read-only within the merge phase's fixed
+  3600-second deadline. Refresh immediately before reporting pending or timeout;
+  queued is never complete for an ordinary completion or publication caller.
+  While unmerged, destination and post-merge CI are `not applicable`, and branch
+  deletion is deferred. Do not enqueue or requeue through this path.
 - If the refresh shows merged, follow merged verification. If a previously
   observed entry disappears and the PR remains open/unmerged, report removed
   from queue. Without prior entry evidence, report membership not established.
