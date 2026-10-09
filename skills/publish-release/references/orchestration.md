@@ -67,7 +67,22 @@ from the original head; never substitute feature-head ancestry for result proof.
 An open PR with no queue entry remains pending direct async settlement, not removed
 from a queue. The checkpoint records an observed external entry before treating its
 later disappearance as removal. Queue observation is read-only and never re-enqueues.
-The existing merge-pr observer owns exact-result CI and its 3600-second deadline.
+The release checkpoint starts the independent 10,800-second verification deadline
+at the first confirmed merged observation. merge-pr owns exact-result CI and
+configured Pages verification; it consumes the checkpoint's remaining budget.
+Before verification reads and each poll, obtain the same stored deadline:
+
+```text
+python3 <skill>/scripts/release_session.py verification-budget \
+  --project-dir <project> --tag <tag>
+```
+
+This private action requires a frozen merged result and initializes a missing
+verification deadline for an already-merged checkpoint. It reports only the time
+budget, never CI success. Cap verification reads and sleeps to the remaining time;
+keep merge-pr's 30-second polling and minute progress. At `timed_out`, retain the
+checkpoint and return the exact resume command without cancelling GitHub work.
+Repeated verification, repairs and external reruns never renew the deadline.
 
 ## Reviewed head reconciliation
 
@@ -144,7 +159,7 @@ pushing. Conflicting remote/local tags block; no force, deletion or replacement.
 
 Observe `--phase release`. The helper identifies the exact push workflow by
 workflow filename, tag and merged SHA, and freezes its run ID. It handles a run's
-pending environment approvals within the release phase's fixed 3600-second budget.
+pending environment approvals within the release phase's fixed 10,800-second budget.
 There is no separate approval timer. Gate changes and partial approvals do not
 renew that deadline. Workflow failure
 or missing expected release assets is a blocker; no implicit rerun/re-upload.
@@ -163,6 +178,9 @@ Only complete emits `published` and marks the checkpoint complete.
 `resume --project-dir <project> [--tag <normalized-tag>]` selects one pending
 project release and opens a new wait attempt. `status` reads without extending
 budgets. An ordinary repeated invocation uses status/open, preserving deadlines.
+Existing stored deadlines, including older shorter deadlines, remain unchanged
+until explicit resume. The four phase budgets are independent; starting one phase
+does not consume or renew another phase's budget.
 `--mode publish` continues the merged checkpoint; if missing, recover the exact
 existing release PR/head via open/bind/merge observation before tagging.
 

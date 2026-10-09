@@ -25,14 +25,16 @@ native invocation, commit-owner delegation or real GitHub publication.
 - Routine PR approval comes from the Actions broker after local review; never
   wait for human approval before dispatch. Actual additional approval gates print
   their GitHub link, poll every 15 seconds and emit minute progress. Approval after
-  600 seconds continues within the fixed one-hour phase; only phase exhaustion
+  3601 seconds continues within the fixed three-hour phase; only phase exhaustion
   returns a timeout and exact resume command.
 - Changes requested, failed checks, conflicts, closed PRs and API errors are not
   reported as waiting for approval. No self-approval or admin bypass is attempted.
 - Partial environment approval and reordered pending-environment responses share
   the release phase deadline and do not renew it. Saved gate-specific deadlines
   cannot shorten the canonical phase budget.
-- PR readiness, merge settlement and release execution have bounded one-hour phases.
+- PR readiness, merge settlement, post-merge verification and release execution
+  have independent 10,800-second phases. Verification polls retain their
+  checkpoint deadline across reruns; old stored deadlines persist until resume.
   Direct async merge with no queue entry is pending; never infer removal without
   previously observed membership. A queued
   PR never permits tagging. Removed queue entries are not silently re-enqueued.

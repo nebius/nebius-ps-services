@@ -18,7 +18,7 @@
   },
   "clock": {
     "first_merged_observation": "2026-01-01T12:00:00Z",
-    "now": "2026-01-01T13:00:00Z",
+    "now": "2026-01-01T15:00:00Z",
     "settlement_elapsed_seconds": 5
   },
   "pr": {
@@ -90,7 +90,7 @@
       "html_url": "https://github.com/example/widget/actions/runs/11"
     }
   ],
-  "external_rerun_started_at": "2026-01-01T12:59:50Z",
+  "external_rerun_started_at": "2026-01-01T14:59:50Z",
   "graphql_pr": {
     "number": 42,
     "merged": true,

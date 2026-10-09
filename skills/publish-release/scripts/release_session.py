@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
 from release_reconcile import reconcile_pr
 
-PHASE_SECONDS = 3600
+PHASE_SECONDS = 10800
 POLL_SECONDS = 15
 REMOTE_DEADLINE = contextvars.ContextVar("release_remote_deadline", default=None)
 
@@ -402,6 +402,9 @@ def observation(value: dict, github: GitHub, phase: str) -> dict:
 
 
 def timed_observation(value: dict, result: dict, phase: str, now: float) -> dict:
+    if result.get("commit") == value.get("merge") and value.get("merge"):
+        # Start the independent verification phase at first confirmed merge.
+        value["waits"].setdefault("phase:verification", now + PHASE_SECONDS)
     if result["status"] != "waiting":
         return result
     # Every gate consumes the same fixed phase budget, including approvals.
@@ -418,6 +421,16 @@ def timed_observation(value: dict, result: dict, phase: str, now: float) -> dict
             status="timed_out", resume=f"$publish-release --resume --tag {value['tag']}"
         )
     return result
+
+
+def verification_budget(value: dict, now: float) -> dict:
+    if not value["merge"]:
+        raise ReleaseError("Confirm the merged result before verification")
+    result = timed_observation(
+        value, {"status": "waiting", "gate": "verification"}, "verification", now
+    )
+    # merge-pr owns verification and its existing 30-second polling cadence.
+    return {**result, "poll_seconds": 30}
 
 
 def watch(
@@ -487,6 +500,7 @@ def parser() -> argparse.ArgumentParser:
             "status",
             "bind-pr",
             "reconcile-pr",
+            "verification-budget",
             "observe",
             "wait",
             "record-tag",
@@ -599,6 +613,9 @@ def main() -> int:
                     value["waits"] = {}
                     store.save(value)
                     result = value
+                elif args.action == "verification-budget":
+                    result = verification_budget(value, time.time())
+                    store.save(value)
                 elif args.action == "prepare":
                     store.require_preparation_available(value["tag"])
                     if (

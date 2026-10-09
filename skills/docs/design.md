@@ -7148,7 +7148,7 @@ quality evidence; passing local fixtures do not claim model-output quality.
 
 <!-- /FEATURE: FEAT-038 -->
 
-<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-040 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-039: Evidence-based completion for general-purpose PR merges
 
 #### Requirements Covered
@@ -7194,8 +7194,11 @@ branch-update CI from the result revision and available provider configuration;
 exclude unrelated PR, queue, tag, scheduled, and manual-only executions. Unknown
 applicability or unreadable providers remain unverified. Expected missing checks
 remain pending. Poll every 30 seconds until a terminal result or the absolute
-3600-second deadline starting at first merged observation in this invocation;
-read retries and observed reruns never reset it. Neutral/skipped conclusions are
+10,800-second deadline starting at first merged observation in this invocation;
+read retries, repairs and observed reruns never reset it. A release caller uses
+its checkpointed verification deadline across repeated helper invocations; only
+explicit release resume renews it. Standalone merge observation keeps one fixed
+deadline for the current explicitly requested attempt. Neutral/skipped conclusions are
 explicitly disclosed as non-executed or non-successful tests even when accepted
 by check policy. No reruns, dispatch, requeue, or automatic rollback is performed.
 
@@ -7265,9 +7268,17 @@ explicit and never promoted to verified behavior.
 
 #### Implementation Evidence
 
+The three-hour update uses independent 10,800-second observation budgets. Release
+checkpoints own post-merge verification timing through a private budget action;
+repeated checks, gate changes, canonical repairs and reruns retain deadlines.
+Existing stored deadlines remain unchanged until explicit resume. API ceilings,
+polling intervals, progress cadence, public flags and GitHub protections remain.
+
+Earlier implementation evidence follows.
+
 Implemented in `merge-pr/SKILL.md` and the required completion-verification
 reference: method-specific result identity, remote ancestry, authoritative queue
-membership, one-hour result-CI observation, independent outcomes, and conditional
+membership, three-hour result-CI observation, independent outcomes, and conditional
 branch cleanup. The skill README, catalog, and Unreleased changelog describe the
 same behavior. Metadata and all nine trigger cases remain byte-identical.
 
@@ -7278,6 +7289,17 @@ The fixtures simulate clocks and forbid network effects; no runtime controller,
 public flag, shared validator, publishing caller, or SDLC change was introduced.
 
 #### Verification Evidence
+
+Three-hour source validation: 57 release tests and 86 merge/completion/publication
+helper tests pass. Simulated clocks prove waiting after one hour, exact three-hour
+expiry, independent budgets, persisted verification, old-deadline preservation,
+CLI resume renewal and checkpoint retention. Two negative controls fail against
+the prior one-hour implementation. Scoped Ruff, Markdown, whitespace, canonical
+spec validation and Codex/Claude skill structure pass; read-only code/security
+review found no blocking issue. Installed parity and live release continuation
+are separate operational evidence; source tests do not establish either.
+
+Earlier verification evidence follows.
 
 STATIC_PASS: strict repository Codex and Claude profiles plus portable core,
 canonical quality loader/payload safety and definition assertions for all 24
@@ -7471,7 +7493,7 @@ implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-041: Resumable end-to-end GitHub Release publication
 
 #### Requirements Covered
@@ -7496,11 +7518,19 @@ and bounded wait deadlines. It never commits, merges, approves or creates grants
 Bare invocation means complete and wait. --resume selects one project checkpoint;
 a tag disambiguates multiple releases. Explicit partial modes remain scoped.
 Local review-pr and safe repairs precede Actions approval and protected automatic
-merge through merge-pr. PR readiness, merge settlement and release execution each
-use one fixed 3600-second deadline. Additional human/environment approval gates
+merge through merge-pr. PR readiness, merge settlement, post-merge verification
+and release execution each use one fixed 10,800-second deadline. Additional human/environment approval gates
 consume that same phase budget, with 15-second polling and minute progress;
 there is no separate ten-minute timer or gate-specific deadline. Gate changes and
-partial approvals cannot extend the phase. Only explicit resume renews waits.
+partial approvals, canonical repairs and reruns cannot extend the phase. Only
+explicit resume renews waits. Existing stored deadlines are preserved until then.
+The release checkpoint starts phase:verification when it first confirms merge.
+A private verification-budget action exposes that deadline to merge-pr without
+claiming CI success or changing merge authority. Its first use also initializes
+a missing deadline for an already-merged checkpoint. The caller caps verification
+reads and sleeps to the remaining budget and stops at expiry with an exact
+resume command; GitHub work remains running. Keep existing short API timeouts,
+polling and progress intervals. No public option is added.
 Routine broker approval never requires a pre-dispatch human wait.
 
 An open PR without queue membership remains pending direct merge settlement.
@@ -7555,7 +7585,8 @@ introduced by FEAT-042 now supplies protected approval and merge. Latest-default
 
 publish-release source/templates/tests/docs/metadata/evals, create-pr caller
 contract, GitHub workflow guidance, catalog/changelog and this canonical pair.
-No existing project helper migration, installed-home sync or real release.
+No existing project helper migration. Distribute reviewed skill changes through
+the existing installer; resume an explicitly authorized release separately.
 
 #### Test-First Success Criteria
 
@@ -7594,6 +7625,14 @@ Report native/live lanes as unverified until independently observed.
 
 #### Implementation Evidence
 
+The three-hour update uses independent 10,800-second observation budgets. Release
+checkpoints own post-merge verification timing through a private budget action;
+repeated checks, gate changes, canonical repairs and reruns retain deadlines.
+Existing stored deadlines remain unchanged until explicit resume. API ceilings,
+polling intervals, progress cadence, public flags and GitHub protections remain.
+
+Earlier implementation evidence follows.
+
 Implemented complete/resume orchestration, content-only preparation and exact-result
 publication. The 2026-10-08 alignment removes the separate approval timer and uses
 one fixed deadline per phase, including additional approvals. Open direct async
@@ -7610,6 +7649,17 @@ permission changed. Existing project helper copies and installed skills were not
 updated during this source-review task.
 
 #### Verification Evidence
+
+Three-hour source validation: 57 release tests and 86 merge/completion/publication
+helper tests pass. Simulated clocks prove waiting after one hour, exact three-hour
+expiry, independent budgets, persisted verification, old-deadline preservation,
+CLI resume renewal and checkpoint retention. Two negative controls fail against
+the prior one-hour implementation. Scoped Ruff, Markdown, whitespace, canonical
+spec validation and Codex/Claude skill structure pass; read-only code/security
+review found no blocking issue. Installed parity and live release continuation
+are separate operational evidence; source tests do not establish either.
+
+Earlier verification evidence follows.
 
 Current source evidence: 52 release tests, 76 merge/completion tests and 10
 publication-helper tests pass. Three timer/direct-merge negative controls failed

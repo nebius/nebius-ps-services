@@ -4,6 +4,12 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Use independent, fixed 10,800-second budgets for PR readiness, merge settlement,
+  post-merge verification and release execution. Persist release verification
+  deadlines across repeated checks and reruns; only explicit resume renews them.
+  Existing checkpoints keep their deadlines until resume. Timeout preserves
+  progress, leaves GitHub work running and reports the exact resume command.
+
 - Read protected merge results through GraphQL instead of the result field
   removed in REST API `2026-03-10`. Bind result evidence to the exact merged PR,
   head and target before completion, checkout or publication effects.
@@ -40,7 +46,7 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 - Made `publish-release` default to complete publication with waiting, including
   current repository changes through create-pr's canonical commit owner.
-- Added private resumable checkpoints, visible ten-minute approval waits,
+- Added private resumable checkpoints, visible approval waits within phase budgets,
   bounded CI/queue waits, exact merged-commit tagging from an isolated clone,
   recoverable annotated tag objects and downloaded-asset verification.
 - Replaced raw-commit shell preparation with content-only primitives and aligned

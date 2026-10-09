@@ -36,6 +36,12 @@ and GitHub steps.
   summary in run evidence.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
 
+Ordinary completion gives PR readiness, merge settlement and post-merge
+verification independent, fixed 10,800-second budgets. Gate changes, repairs and
+reruns retain their deadlines. Release callers persist them in their checkpoint;
+only explicit release resume renews them. Timeout preserves progress and leaves
+GitHub work running, with the exact resume command in the completion report.
+
 ## Commit Continuation
 
 One explicit PR task covers successive validated stage/commit/push repairs.
