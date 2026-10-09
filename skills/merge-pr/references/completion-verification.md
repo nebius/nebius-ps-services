@@ -35,10 +35,15 @@ Never turn a failed/truncated page or an unsupported field into an empty result.
 Start a 60-second settlement window after the command returns (including an
 ambiguous error), or when first inspecting an already-merged/queued PR. Poll
 unsettled state every five seconds within this window. Do not reset it after a
-successful read. If merged state becomes known, start the per-invocation
-3600-second CI deadline then; result settlement consumes that budget too.
-Budget sleeps and API calls against the absolute deadline. No persistent
-cross-invocation local timer is introduced. The deployed completion workflow
+successful read. If merged state becomes known, start the independent
+10,800-second verification deadline then; result settlement consumes that budget too.
+For a release caller, use its checkpointed deadline through publish-release's
+private `verification-budget` action. Repeated helper calls, gate changes, repairs
+and CI reruns retain that deadline; only explicit release resume renews it. For
+standalone merge work, keep one fixed deadline for the explicitly requested attempt.
+Budget sleeps and API calls against the absolute deadline and report progress at
+least once per minute. Timeout preserves the caller checkpoint and exact resume
+identity, leaving GitHub work running. The deployed completion workflow
 separately reconciles retained intent receipts while the laptop is offline.
 
 ## Actions Broker Result Evidence
@@ -141,7 +146,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
   matching PR identity; verify `isInMergeQueue` agrees. Read errors or
   contradictory fields are unverified, not proof of absence.
 - Observe externally queued PRs read-only within the merge phase's fixed
-  3600-second deadline. Refresh immediately before reporting pending or timeout;
+  10,800-second deadline. Refresh immediately before reporting pending or timeout;
   queued is never complete for an ordinary completion or publication caller.
   While unmerged, destination and post-merge CI are `not applicable`, and branch
   deletion is deferred. Do not enqueue or requeue through this path.
@@ -177,7 +182,7 @@ configuration, provider identity, pagination, or visibility is incomplete,
 disclose the gap and do not claim complete CI success or `not configured`.
 An empty combined-status result can itself say `pending`; inspect its contexts.
 
-Refresh observations every 30 seconds, stopping at the absolute 3600-second
+Refresh observations every 30 seconds, stopping at the absolute 10,800-second
 deadline. Expected workflows/contexts that have not appeared remain pending;
 an early empty response cannot establish absence. Select the latest attempt
 per workflow/app/check identity and latest status per context, without mixing

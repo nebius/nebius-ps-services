@@ -46,8 +46,8 @@
     },
     {
       "id": "approval-after-ten-minutes",
-      "prompt": "Offline contract simulation only. Read the skill and local references; do not contact GitHub, mutate files, publish or wait. Use $publish-release. The release run has waited 12 minutes for a required environment reviewer within its current release phase. Describe continuation and the deadline.",
-      "expected_output": "Continues within the original one-hour release phase without bypassing approval.",
+      "prompt": "Offline contract simulation only. Read the skill and local references; do not contact GitHub, mutate files, publish or wait. Use $publish-release. The release run has waited 61 minutes for a required environment reviewer within its current release phase. Describe continuation and the deadline.",
+      "expected_output": "Continues within the original three-hour release phase without bypassing approval.",
       "files": [],
       "assertions": [
         "Does not time out at ten minutes or renew the phase when the approval set changes.",

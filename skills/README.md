@@ -1392,7 +1392,7 @@ direct CLI merge or bypass fallback is used. Unsafe findings, human objections,
 missing permissions and failing CI remain blockers.
 
 Completion records the method-specific resulting commit, proves ancestry in the
-remote target, and observes applicable exact-commit CI for up to one hour. A
+remote target, and observes applicable exact-commit CI for up to three hours. A
 separate completion workflow dispatches exact-result CI and configured Pages
 builds with durable receipts. Merge success, destination proof, CI and Pages
 outcomes remain separate; see the
@@ -2072,6 +2072,8 @@ deployment are separate from protection setup and live acceptance evidence.
 
 GitHub Release publication continues through protected merge, exact-result CI,
 tagging and asset verification in one invocation. Additional approvals share the
-fixed one-hour phase deadline; there is no separate ten-minute approval cutoff.
+fixed three-hour phase deadline; there is no separate ten-minute approval cutoff.
+PR readiness, merge settlement, post-merge verification and release execution have
+independent budgets. Verification retains its deadline in the release checkpoint.
 Only explicit resume renews waiting budgets, and a pending direct async merge
 does not require queue membership.

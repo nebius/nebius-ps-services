@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import tempfile
 import unittest
@@ -107,12 +108,12 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(result["gate"], "approval:pr:12")
         self.assertIn("/pull/12", result["url"])
 
-    def test_approval_after_ten_minutes_continues_in_same_phase(self):
+    def test_approval_after_one_hour_continues_in_same_phase(self):
         result = {"status": "waiting", "gate": "approval:pr:12"}
         rs.timed_observation(self.value, result, "pr", 0)
-        waiting = rs.timed_observation(self.value, result, "pr", 601)
+        waiting = rs.timed_observation(self.value, result, "pr", 3601)
         self.assertEqual(waiting["status"], "waiting")
-        self.assertEqual(waiting["deadline"], 3600)
+        self.assertEqual(waiting["deadline"], 10800)
 
     def test_saved_gate_deadline_does_not_shorten_phase(self):
         self.value["waits"] = {"phase:pr": 3600, "approval:pr:12": 600}
@@ -141,16 +142,16 @@ class ObservationTests(unittest.TestCase):
             "url": "https://example.invalid/review",
         }
         first = rs.timed_observation(self.value, result, "pr", 100)
-        self.assertEqual(first["deadline"], 3700)
+        self.assertEqual(first["deadline"], 10900)
         self.assertEqual(
-            rs.timed_observation(self.value, result, "pr", 3699)["status"], "waiting"
+            rs.timed_observation(self.value, result, "pr", 10899)["status"], "waiting"
         )
-        expired = rs.timed_observation(self.value, result, "pr", 3700)
+        expired = rs.timed_observation(self.value, result, "pr", 10900)
         self.assertEqual(expired["status"], "timed_out")
         self.assertIn("--resume --tag demo-v1.2.3", expired["resume"])
         self.value["waits"] = {}
         self.assertEqual(
-            rs.timed_observation(self.value, result, "pr", 3800)["deadline"], 7400
+            rs.timed_observation(self.value, result, "pr", 11000)["deadline"], 21800
         )
 
     def test_phase_budget_does_not_slide_with_different_gates(self):
@@ -158,10 +159,49 @@ class ObservationTests(unittest.TestCase):
             self.value, {"status": "waiting", "gate": "checks:pr"}, "pr", 0
         )
         next_gate = rs.timed_observation(
-            self.value, {"status": "waiting", "gate": "approval:pr:12"}, "pr", 3500
+            self.value, {"status": "waiting", "gate": "approval:pr:12"}, "pr", 10700
         )
         self.assertEqual(first["deadline"], next_gate["deadline"])
-        self.assertEqual(next_gate["deadline"], 3600)
+        self.assertEqual(next_gate["deadline"], 10800)
+
+    def test_independent_phase_budgets_and_verification_reruns(self):
+        for start, phase in enumerate(("pr", "merge", "verification", "release")):
+            rs.timed_observation(
+                self.value, {"status": "waiting", "gate": phase}, phase, start * 5000
+            )
+        self.assertEqual(
+            self.value["waits"],
+            {
+                "phase:pr": 10800,
+                "phase:merge": 15800,
+                "phase:verification": 20800,
+                "phase:release": 25800,
+            },
+        )
+        self.value["merge"] = MERGED
+        for now in (13601, 20799, 20800):
+            result = rs.verification_budget(self.value, now)
+            self.assertEqual(result["deadline"], 20800)
+            self.assertEqual(result["poll_seconds"], 30)
+            self.assertEqual(
+                result["status"], "waiting" if now < 20800 else "timed_out"
+            )
+
+    def test_first_merged_observation_starts_verification_once(self):
+        self.value["merge"] = MERGED
+        for now in (100, 3701, 10899):
+            rs.timed_observation(
+                self.value, {"status": "ready", "commit": MERGED}, "merge", now
+            )
+            self.assertEqual(self.value["waits"]["phase:verification"], 10900)
+        self.assertEqual(
+            rs.verification_budget(self.value, 10900)["status"], "timed_out"
+        )
+
+    def test_verification_budget_requires_confirmed_merge(self):
+        with self.assertRaises(rs.ReleaseError):
+            rs.verification_budget(self.value, 0)
+        self.assertEqual(self.value["waits"], {})
 
     def test_wait_polls_fifteen_seconds_and_prints_minute_progress(self):
         self.github.pr.return_value = pr(reviewDecision="REVIEW_REQUIRED")
@@ -183,9 +223,9 @@ class ObservationTests(unittest.TestCase):
             emit=lambda text, **_: messages.append((now[0], text)),
         )
         self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(sum(sleeps), 3600)
+        self.assertEqual(sum(sleeps), 10800)
         self.assertEqual(set(sleeps), {15})
-        self.assertEqual([t for t, _ in messages], list(range(0, 3600, 60)))
+        self.assertEqual([t for t, _ in messages], list(range(0, 10800, 60)))
         self.assertIn("Waiting for approval on GitHub", messages[0][1])
 
     def test_remote_call_timeout_is_capped_by_wait_deadline(self):
@@ -213,7 +253,7 @@ class ObservationTests(unittest.TestCase):
         def observe(*_):
             if now[0] == 0:
                 return pending
-            now[0] = 3601
+            now[0] = 10801
             return {"status": "ready"}
 
         def sleep(seconds):
@@ -230,7 +270,7 @@ class ObservationTests(unittest.TestCase):
                 emit=Mock(),
             )
         self.assertEqual(result["status"], "timed_out")
-        self.assertEqual(result["deadline"], 3600)
+        self.assertEqual(result["deadline"], 10800)
 
     def test_approval_arrives_during_wait(self):
         self.github.pr.side_effect = [pr(reviewDecision="REVIEW_REQUIRED")] * 41 + [
@@ -412,11 +452,11 @@ class ObservationTests(unittest.TestCase):
             "release",
             800,
         )
-        self.assertEqual(result["deadline"], 3600)
+        self.assertEqual(result["deadline"], 10800)
         self.assertIn("approval:environment", result["gate"])
 
     def test_partial_and_reordered_environment_approvals_keep_deadline(self):
-        for now, ids in ((0, [1, 2]), (601, [2, 1]), (3599, [2]), (3600, [2])):
+        for now, ids in ((0, [1, 2]), (601, [2, 1]), (10799, [2]), (10800, [2])):
             self.release(
                 status="waiting", deployments=[{"environment": {"id": i}} for i in ids]
             )
@@ -426,8 +466,10 @@ class ObservationTests(unittest.TestCase):
                 "release",
                 now,
             )
-            self.assertEqual(result["deadline"], 3600)
-            self.assertEqual(result["status"], "waiting" if now < 3600 else "timed_out")
+            self.assertEqual(result["deadline"], 10800)
+            self.assertEqual(
+                result["status"], "waiting" if now < 10800 else "timed_out"
+            )
         self.assertEqual(result["status"], "timed_out")
 
     def test_failed_workflow_draft_and_missing_assets(self):
@@ -470,6 +512,71 @@ class StoreTests(unittest.TestCase):
         self.store = rs.Store(self.root, SCOPE)
         self.value = state()
         self.store.save(self.value)
+
+    def test_wait_expiry_preserves_checkpoint_and_partial_poll(self):
+        now = [0]
+        self.value["waits"] = {"phase:merge": 10799.5}
+        self.value["observed_queue_entry"] = "entry-1"
+        original = copy.deepcopy(self.value)
+        pending = {"status": "waiting", "gate": "merge_queue"}
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        with patch.object(rs, "observation", return_value=pending):
+            result = rs.watch(
+                self.value,
+                Mock(),
+                self.store,
+                "merge",
+                clock=lambda: now[0],
+                sleep=sleep,
+                emit=Mock(),
+            )
+        self.assertEqual(result["status"], "timed_out")
+        self.assertEqual(now[0], 10799.5)
+        self.assertEqual(sleeps[-1], 14.5)
+        self.assertEqual(self.store.load(self.value["tag"]), original)
+        self.assertEqual(
+            result["resume"], "$publish-release --resume --tag demo-v1.2.3"
+        )
+
+    def test_cli_status_preserves_and_explicit_resume_renews_all_waits(self):
+        self.value.update(merge=MERGED, tag_object=OBJECT, run=17)
+        self.value["waits"] = {
+            f"phase:{phase}": 3600
+            for phase in ("pr", "merge", "verification", "release")
+        }
+        self.store.save(self.value)
+
+        def call(action, now):
+            with (
+                patch.object(rs, "identity", return_value=SCOPE),
+                patch.object(rs, "state_home", return_value=self.root),
+                patch.object(rs.time, "time", return_value=now),
+                patch(
+                    "sys.argv",
+                    ["release_session.py", action, "--tag", self.value["tag"]],
+                ),
+                patch("sys.stdout", new_callable=io.StringIO) as output,
+            ):
+                code = rs.main()
+            return code, json.loads(output.getvalue())
+
+        self.assertEqual(call("status", 4000), (0, self.value))
+        self.assertEqual(call("verification-budget", 4000)[1]["deadline"], 3600)
+        self.assertEqual(self.store.load(self.value["tag"]), self.value)
+        resumed = call("resume", 5000)
+        self.assertEqual(resumed, (0, {**self.value, "waits": {}}))
+        self.assertEqual(call("verification-budget", 5000)[1]["deadline"], 15800)
+        self.assertEqual(call("verification-budget", 8601)[1]["status"], "waiting")
+        expired = call("verification-budget", 15800)
+        self.assertEqual(expired[0], 2)
+        self.assertEqual(expired[1]["status"], "timed_out")
+        final = self.store.load(self.value["tag"])
+        self.assertEqual(final, {**self.value, "waits": {"phase:verification": 15800}})
 
     def test_roundtrip_fresh_session_and_selection(self):
         self.assertEqual(rs.Store(self.root, SCOPE).select(None), self.value)

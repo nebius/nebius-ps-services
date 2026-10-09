@@ -36,7 +36,13 @@ Bot metadata never substitutes for review; automatic events cannot start merges.
    blocker without merge.
 7. Merge-pr dispatches the protected Actions workflow. The create-pr/publication
    completion caller observes the request until actual merge or the fixed
-   3600-second limit; pending is not completed and the grant stays open.
+   10,800-second limit; pending is not completed and the grant stays open.
+   PR readiness, merge settlement and post-merge verification each have an
+   independent fixed 10,800-second budget. Use a publication caller's checkpoint
+   deadlines when supplied. Gate changes, safe repairs and reruns never reset
+   them; only explicit release resume renews release budgets. Preserve the
+   checkpoint, leave GitHub work running and report the exact resume command
+   on timeout. Keep existing short API timeouts, polling and minute progress.
    Exact-result CI and configured Pages must be verified by the completion
    helper before reporting complete. Missing setup/permissions, merge queues or
    unsupported workflow-file merges stop for a maintainer, never a PAT,

@@ -29,7 +29,7 @@ fresh validation and review. merge-pr dispatches the protected broker, which
 supplies routine Actions approval. Unsafe findings and human objections stop.
 
 Additional required human or release-environment approvals use the remaining
-one-hour phase budget, with links and 15-second polling. There is no separate
+three-hour phase budget, with links and 15-second polling. There is no separate
 ten-minute cutoff. Partial approvals and changing gates do not restart the clock;
 repository protection remains authoritative.
 
@@ -48,7 +48,10 @@ If the default branch advances after the PR was bound, canonical synchronization
 and a fresh review can reconcile the checkpoint to that exact repaired head before
 merge. This preserves prior-head evidence and deadlines; unrelated drift still blocks.
 
-PR readiness, merge settlement and release execution have separate one-hour limits.
+PR readiness, merge settlement, post-merge verification and release execution each
+have a separate 10,800-second (three-hour) limit. The checkpoint retains verification
+deadlines across repeated checks and CI reruns. Only explicit resume renews any
+phase budget; upgrading installed skills does not change stored deadlines.
 Failures, conflicting identities and missing assets produce precise blockers.
 A queued PR, pushed tag or draft release is not a completed publication.
 Direct asynchronous merge remains pending while the PR is open, even without a

@@ -78,6 +78,8 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
 3. Wait for applicable current-head CI, synchronize/review again when default
    advances, and freeze the exact head/base and COMMENT review ID. CI alone is
    insufficient. The broker authorizes configured numeric operator IDs only.
+   PR readiness has a fixed 10,800-second budget. Reuse the publication caller's
+   checkpoint deadline when present; repairs and refreshed gates never reset it.
    If a publication caller already bound its head, return any refreshed head and
    review evidence to that owner for guarded checkpoint reconciliation before
    dispatch. Keep the caller's completion task active through this handoff.
@@ -88,14 +90,18 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
    `bypass_rules: false`. Required queues stop before approval. Unsupported
    workflow-file permissions stop for a maintainer; no App/PAT/bypass fallback.
 5. Dispatch/HTTP acceptance is pending, not merged. Reconcile authoritative PR
-   state after errors before any retry. Wait at most 3600 seconds with 30-second
+   state after errors before any retry. Wait at most 10,800 seconds with 30-second
    polls; retain the caller grant on timeout and return the exact resume identity.
    Externally queued PRs may be observed read-only, never enqueued by this skill.
 6. After actual merge, preserve known success even if later verification fails.
    Use the trusted completion helper to verify exact-result CI artifacts and
    configured Pages publication. The completion workflow owns explicit dispatch
-   and Pages effects; local observation is read-only. Observe for at most 3600
-   seconds from first confirmed merge. Do not substitute the workflow revision,
+   and Pages effects; local observation is read-only. Observe for at most 10,800
+   seconds from first confirmed merge, using the release caller's checkpointed
+   verification deadline when present. Reruns and repeated checks never reset it;
+   only explicit release resume renews the caller's budgets. Keep short API
+   timeouts and minute progress; at expiry leave GitHub work running and report
+   the exact resume identity. Do not substitute the workflow revision,
    a green feature head or a newer main tip for the tested result SHA.
 7. Delete branches only when explicitly requested and actual merge/destination
    verification passed. Otherwise retain them. Return exact evidence/blocker.

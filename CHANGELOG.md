@@ -6,8 +6,14 @@ project folder.
 
 ## [Unreleased]
 
+- Extend PR readiness, merge settlement, post-merge verification and release
+  execution waits to 10,800 seconds each. Persist verification deadlines with
+  release checkpoints; only explicit resume renews budgets. Keep API timeouts,
+  polling and repository protections unchanged, and leave GitHub work running
+  when local observation times out.
+
 - Align PR and release continuation with protected Actions merge: remove the
-  separate ten-minute approval cutoff, retain fixed one-hour phase budgets, and
+  separate ten-minute approval cutoff, retain fixed three-hour phase budgets, and
   distinguish pending direct async merges from removal of observed queue entries.
   Reconcile reviewed pre-merge repairs through an explicit guarded checkpoint
   transition. Align owner handoffs, release specs and regression coverage.

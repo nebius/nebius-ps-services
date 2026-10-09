@@ -350,8 +350,11 @@ order, branch selection and base synchronization before the process below.
    keep working on the same branch until the failures are resolved or clearly
    blocked by external state.
    When GitHub checks are expected and available, watch or poll them until
-   they reach a terminal pass, fail, skip, or cancel state before reporting the
-   PR as ready. If checks remain pending because external CI is delayed or
+   they reach a terminal pass, fail, skip, or cancel state within the fixed
+   10,800-second PR-readiness budget before reporting the PR as ready. Ordinary
+   completion preserves the same deadline through repairs and reruns; use the
+   publication caller's checkpoint when present. Only explicit release resume
+   renews release budgets. If checks remain pending because external CI is delayed or
    unavailable, report the PR as pending instead of ready and include the last
    observed check state.
    In an Agentic SDLC run, include requirements covered, feature list,

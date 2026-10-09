@@ -11,7 +11,7 @@ All notable changes to this project are tracked here. This changelog follows
   push and merge the release PR, tag the verified merged commit in
   `__MAIN_BRANCH__` history, and verify published assets.
 - The Actions broker supplies routine PR approval after local review. Additional
-  required approvals show a link and consume the remaining one-hour phase budget;
+  required approvals show a link and consume the remaining three-hour phase budget;
   the skill continues automatically after approval without bypassing protections.
 - After a timeout or interruption, use `$publish-release --resume --tag X.Y.Z`.
 - The generated shell helper exposes private content/tag/push/verify primitives;

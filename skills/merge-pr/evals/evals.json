@@ -167,13 +167,13 @@
     {
       "id": "ci-deadline",
       "prompt": "Use $merge-pr to replay the offline observations in evals/fixtures/ci-deadline.json. This is a simulation: read the skill and fixture, then give the completion report and next permitted actions at the supplied clock times. Use only these supplied observations; do not contact GitHub, execute merge/delete/CI commands, edit files, or sleep. Do not assume missing evidence exists.",
-      "expected_output": "CI pending at the original one-hour deadline despite a recent rerun.",
+      "expected_output": "CI pending at the original three-hour deadline despite a recent rerun.",
       "files": [
         "evals/fixtures/ci-deadline.json"
       ],
       "assertions": [
-        "Reports pending with the outstanding run and the 12:00 start / 13:00 deadline.",
-        "Does not reset the 3600-second deadline for an external rerun, issue a rerun, or continue waiting beyond the supplied deadline.",
+        "Reports pending with the outstanding run and the 12:00 start / 15:00 deadline.",
+        "Does not reset the 10,800-second deadline for an external rerun, issue a rerun, or continue waiting beyond the supplied deadline.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
     },
@@ -199,7 +199,7 @@
       ],
       "assertions": [
         "Does not classify the early empty observations as not configured or passed.",
-        "Uses the later complete expected results to report passed before the one-hour deadline.",
+        "Uses the later complete expected results to report passed before the three-hour deadline.",
         "Uses only the supplied offline observations and does not perform external writes or real waiting."
       ]
     },

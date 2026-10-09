@@ -28,7 +28,7 @@ ordinary branches; keep the head branch unless deletion is explicitly requested.
 - Records GitHub's actual resulting commit and verifies its ancestry in the
   remote target branch, allowing the target to have advanced.
 - Uploads intent before effects and recovers exact-result CI/Pages after merge.
-- Observes applicable CI on the exact resulting commit for up to one hour.
+- Observes applicable CI on the exact resulting commit for up to three hours.
 - Observes externally queued PRs read-only within the merge deadline; it never
   enqueues or treats a pending queue entry as a completed merge.
 
@@ -53,7 +53,7 @@ External queue       Merged result SHA
 Read-only wait       Remote destination ancestry
                      |
                      v
-                     Result-commit CI (up to 1 hour)
+                     Result-commit CI (up to 3 hours)
 ```
 
 ## Core Concepts
@@ -71,8 +71,9 @@ Read-only wait       Remote destination ancestry
   and rebase. Verification uses GitHub's GraphQL `mergeCommit.oid`, bound to the
   merged PR identity. REST `2026-03-10` has no result SHA field; missing result
   evidence stops completion without dispatching CI or Pages.
-- CI polling uses a 3600-second deadline per invocation and a 30-second interval;
-  delayed checks and observed reruns do not reset it. Result settlement is
+- CI polling uses a fixed 10,800-second deadline and a 30-second interval.
+  Release callers retain this deadline in their checkpoint until explicit resume;
+  delayed checks, repairs and observed reruns do not reset it. Result settlement is
   bounded to 60 seconds. Local verification is read-only; a separate trusted
   completion workflow dispatches exact-result CI and configured Pages builds.
 - CI reports passed, failed, pending, not configured, or unverified. Neutral and

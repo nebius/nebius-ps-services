@@ -154,8 +154,10 @@ Poll every 15 seconds and update progress at least once per minute. Additional
 approvals consume the enclosing phase's remaining budget; there is no separate
 ten-minute cutoff. Partial approval or reordered API responses never restart it.
 
-PR readiness, merge settlement and release execution each have independent fixed
-3600-second phase budgets. Changing gates never restarts a phase. An open PR
+PR readiness, merge settlement, post-merge verification and release execution each
+have independent fixed 10,800-second phase budgets. Gate changes, repairs and
+reruns never restart a phase. The checkpoint owns the verification deadline;
+merge-pr consumes it while verifying the exact result. An open PR
 without queue membership can be awaiting direct async merge; observe until actual
 merge or the phase deadline. Previously observed queue removal remains a blocker.
 Failed checks, rejected reviews, closed PRs, conflicts and identity
@@ -166,6 +168,8 @@ Do not cancel GitHub work or leave a local background publisher. A later explici
 resume renews waiting budgets and rechecks actual state; it does not recreate
 commits, PRs, merges, tags or releases already completed. New-session commit work
 requires fresh owner intake, never replay of an old grant or manufactured receipt.
+Existing stored deadlines remain unchanged until explicit resume. These are local
+observation limits, independent of GitHub job execution limits.
 
 ## Idempotency
 

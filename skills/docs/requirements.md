@@ -3306,8 +3306,9 @@ request, a successful merge, and successful verification.
   head that advances beyond the explicitly expected SHA at deletion time.
 - AC-004: Observe all applicable post-merge CI on the resulting SHA, including
   check runs, statuses, and Actions provenance. Poll every 30 seconds for up to
-  3600 seconds per invocation; retries and observed CI reruns do not reset the
-  deadline. Missing result metadata has a 60-second settlement bound.
+  10,800 seconds per observation attempt; retries, repairs and observed CI
+  reruns do not reset the deadline. Release callers persist this independent
+  verification deadline and renew it only through explicit release resume. Missing result metadata has a 60-second settlement bound.
 - AC-005: Report merge, destination verification, and CI separately. CI outcomes
   include passed, failed, pending, not configured, unverified, and not applicable
   while queued. Preserve actual conclusions and disclose neutral/skipped checks.
@@ -3422,11 +3423,14 @@ and receive a verified GitHub Release URL.
 - AC-003: Local review-pr and safe canonical repairs precede merge-pr Actions
   approval and protected automatic merge. Do not wait for routine human PR
   approval before broker dispatch. Additional human or publication-environment
-  gates share their enclosing 3600-second phase budget, with approval links,
+  gates share their enclosing 10,800-second phase budget, with approval links,
   15-second polling and minute progress; there is no separate ten-minute cutoff.
-  PR readiness, merge settlement and release execution have independent fixed
-  phase deadlines. Changing gates or partial approvals never resets them; only
-  explicit resume renews waits. Timeout preserves progress and repository gates.
+  PR readiness, merge settlement, post-merge verification and release execution
+  have independent fixed phase deadlines. Gate changes, repairs, partial
+  approvals and reruns never reset them; only
+  explicit resume renews waits. Timeout preserves the checkpoint, leaves GitHub work running and reports the
+  exact resume command. Existing stored deadlines remain unchanged until resume.
+  Short API timeouts, polling intervals and immediate failure handling remain.
   Direct asynchronous settlement is pending without a queue entry; a previously
   observed external queue removal blocks rather than silently re-enqueueing.
 - AC-004: Resume reconciles repository, PR, merged result, tag and workflow
