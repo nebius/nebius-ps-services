@@ -330,18 +330,40 @@ def owned_groups(pid: int, observed: dict):
         descendants.update(found)
     for child in descendants:
         if child in processes:
-            _, group, _ = processes[child]
-            if group != os.getpgrp() and group in descendants and group in processes:
-                observed[group] = processes[group][2]
+            _, group, identity = processes[child]
+            if group != os.getpgrp():
+                observed.setdefault(group, {})[child] = identity
+    # A detached leader can exit before its workers. An observed living member
+    # proves that the group still belongs to this stage; remember its siblings
+    # too, without trusting a historical PGID after every member has disappeared.
+    for group, members in observed.items():
+        if any(
+            child in processes and processes[child][1:] == (group, identity)
+            for child, identity in members.items()
+        ):
+            members.update(
+                (child, identity)
+                for child, (_, current_group, identity) in processes.items()
+                if current_group == group
+            )
+
+
+def live_owned_groups(pid: int, observed: dict, processes: dict) -> set[int]:
+    groups = {pid} if any(group == pid for _, group, _ in processes.values()) else set()
+    groups.update(
+        group
+        for group, members in observed.items()
+        if any(
+            child in processes and processes[child][1:] == (group, identity)
+            for child, identity in members.items()
+        )
+    )
+    return groups
 
 
 def signal_owned_groups(pid: int, observed: dict, signum: int):
     processes = process_tree()
-    # A stage's original group remains ours while any child remains in it.
-    # Detached server groups must retain their observed leader identity.
-    for group, identity in {pid: None, **observed}.items():
-        if group != pid and (group not in processes or processes[group][2] != identity):
-            continue
+    for group in live_owned_groups(pid, observed, processes):
         try:
             os.killpg(group, signum)
         except ProcessLookupError:
@@ -350,10 +372,7 @@ def signal_owned_groups(pid: int, observed: dict, signum: int):
 
 def groups_remain(pid: int, observed: dict) -> bool:
     processes = process_tree()
-    return any(group == pid for _, group, _ in processes.values()) or any(
-        group in processes and processes[group][2] == identity
-        for group, identity in observed.items()
-    )
+    return bool(live_owned_groups(pid, observed, processes))
 
 
 def run(lab: str, launcher: Path, arguments: list[str]) -> int:

@@ -276,6 +276,65 @@ def test_aggregate_keeps_native_adapters_and_excludes_instrumented_originals(tmp
     )
 
 
+@pytest.mark.parametrize("leader_observed", [False, True])
+def test_detached_group_ownership_survives_leader_exit(monkeypatch, leader_observed):
+    import course_job
+    import signal
+
+    # The job subreaper adopts a worker whose detached group leader has exited.
+    processes = {100: (1, 100, "job"), 200: (100, 200, "leader"),
+                 201: (200, 200, "worker")}
+    monkeypatch.setattr(course_job, "process_tree", lambda: processes.copy())
+    monkeypatch.setattr(course_job.os, "getpgrp", lambda: 100)
+    observed = {}
+    if leader_observed:
+        course_job.owned_groups(100, observed)
+    del processes[200]
+    processes[201] = (100, 200, "worker")
+    course_job.owned_groups(100, observed)
+    assert course_job.groups_remain(150, observed)
+    signals = []
+    monkeypatch.setattr(course_job.os, "killpg", lambda group, sig: signals.append((group, sig)))
+    course_job.signal_owned_groups(150, observed, signal.SIGTERM)
+    assert (200, signal.SIGTERM) in signals
+
+    # The historical PGID and member PID cannot authorize a recycled process.
+    processes[201] = (1, 200, "replacement")
+    assert not course_job.groups_remain(150, observed)
+    signals.clear()
+    course_job.signal_owned_groups(150, observed, signal.SIGTERM)
+    assert (200, signal.SIGTERM) not in signals
+
+
+@pytest.mark.parametrize("leader_delay", [0, 1.2])
+def test_linux_cleans_detached_worker_after_group_leader_exit(tmp_path, leader_delay):
+    import shlex
+    import subprocess
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("Requires Linux child adoption")
+    program = (
+        "import os,time; from pathlib import Path; os.setsid(); child=os.fork(); "
+        "Path('child.pid').write_text(str(child)) if child else None; "
+        f"time.sleep({leader_delay} if child else 30)"
+    )
+    child = lifecycle_fixture(
+        tmp_path,
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(program)} & wait; return 0",
+        timeout=5,
+    )
+    stdout, stderr = child.communicate(timeout=12)
+    assert child.returncode != 0, (stdout, stderr)
+    document = result(tmp_path)
+    assert [row["status"] for row in document["stages"]] == ["failed", "unstarted"]
+    assert "cleanup_error" in document["stages"][0]
+    pid = (tmp_path / "child.pid").read_text().strip()
+    assert not subprocess.run(
+        ["ps", "-o", "stat=", "-p", pid], capture_output=True, text=True
+    ).stdout.strip()
+
+
 def test_linux_adopts_detached_server_before_early_stage_exit(tmp_path):
     import sys
     import subprocess

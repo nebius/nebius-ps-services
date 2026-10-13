@@ -1,5 +1,15 @@
 # Publication review
 
+## Full-branch PR review repairs — 2026-10-13
+
+Reviewed `index.html` SHA-256: `f5d0d547ee78d7be3bdb6a77748735a84ff0dc5ef0beca233fb07d2ee3c15e16`.
+
+Restored Lab 27's qualified GPU-memory comparison direction. Native validation,
+source/build parity and three fresh desktop/390px/320px browser cases pass.
+The shared lifecycle repair also passed the isolated 83-test Linux fixture scope.
+See the [full-branch review](../docs/course-format-validation.md#full-branch-pr-review-repairs--2026-10-13)
+for evidence and unchanged mobile/live-target limitations.
+
 ## Complete catalog review and alignment — 2026-10-13
 
 Reviewed `index.html` SHA-256: `1b51b58d11ab2b6e42d8d7108cb381c2bd9891c3de581dcace71bdf362eb65bd`.

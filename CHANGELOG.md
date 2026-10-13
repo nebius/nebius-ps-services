@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Retain ownership of detached lab workers after their process-group leader
+  exits, so cleanup fails the stage before another profiler starts. Restore
+  Advanced Lab 27's qualified GPU-memory comparison instructions.
+
 - Review all nine courses and align TOCs, numbered syllabus routes, glossary
   coverage, diagram labels and compact-guide directions. Correct the prefill
   example to include continuation, expose the CUDA capstone trial selection,

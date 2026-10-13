@@ -445,6 +445,8 @@ Asset rendering does not replace the separate full-page browser review.
 course-local copies support standalone checkouts. Native srun, profiler, worker
 and server commands remain visible in each canonical batch file. The lifecycle
 helper owns selection, atomic status, isolated stages and bounded cleanup.
+Cleanup tracks living group-member identities so detached workers remain owned
+after their group leader exits; forced cleanup fails the stage and stops later stages.
 The inspector reads eligible original measurements for the exact job, excluding
 the aggregate and instrumented timings. `tools/build_observability.py` renders
 116 dashboards from explicit measurement recipes. Run

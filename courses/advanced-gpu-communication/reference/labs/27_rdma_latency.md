@@ -4,6 +4,8 @@ Remote direct memory access, or RDMA, lets a network adapter access registered m
 
 ## Run
 
+Start with host memory, then replace `--memory host` with your qualified `--memory cuda-dmabuf` or `--memory cuda-peermem` path. Compare the same workload and payload size to isolate the memory path.
+
 ```bash
 # Normal execution
 sbatch slurm/27_rdma_latency.sbatch --workload small --server-device "$SERVER_HCA" --client-device "$CLIENT_HCA" --memory host

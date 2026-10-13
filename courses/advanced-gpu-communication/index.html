@@ -4415,7 +4415,7 @@ if __name__ == &quot;__main__&quot;:
     main()
 </code></pre></details>
 
-<div class="lab-submission" id="lab-27-rdma-latency-run"><pre tabindex="0"><code><span class="code-comment"># Normal execution</span>
+<div class="lab-submission" id="lab-27-rdma-latency-run"><p>Start with host memory, then replace <code>--memory host</code> with your qualified <code>--memory cuda-dmabuf</code> or <code>--memory cuda-peermem</code> path. Compare the same workload and payload size to isolate the memory path.</p><pre tabindex="0"><code><span class="code-comment"># Normal execution</span>
 sbatch slurm/27_rdma_latency.sbatch --workload small --server-device &quot;$SERVER_HCA&quot; --client-device &quot;$CLIENT_HCA&quot; --memory host
 
 <span class="code-comment"># Optional profiling</span>

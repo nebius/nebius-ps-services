@@ -5784,7 +5784,7 @@ Thirty-three isolated headless Chrome 154.0.8037.98 checks pass across all eleve
 
 <!-- /FEATURE: FEAT-043 -->
 
-<!-- FEATURE: FEAT-044 reqs=REQ-028 status=ready delivery=verified priority=P1 version=4 -->
+<!-- FEATURE: FEAT-044 reqs=REQ-028 status=ready delivery=verified priority=P1 version=5 -->
 ### FEAT-044: Compact source-first labs and consolidated batch stages
 
 #### Requirements Covered
@@ -5846,11 +5846,15 @@ All requested surfaces and local checks are aligned; original evidence is unchan
 
 #### Implementation Evidence
 
+Full-branch PR review repair: track verified living process-group members, including Linux-adopted workers, after the detached leader exits. Surviving workers fail the stage and prevent the next profiler stage; recycled member identities cannot authorize signalling. Restore the qualified GPU-memory comparison direction in Advanced Lab 27.
+
 Implemented all 110 compact guides and canonical launchers, twelve retained diagrams, source comments, selection/runtime metadata, atomic reader JSON with native adapters, fresh stage processes, explicit step resources and execution budgets. Linux child adoption retains detached server ownership across early shell exit; forced cleanup fails the stage. Preparation, campaign recipes, original-measurement filtering and copied helpers use the same selectors. Historical evidence remains separate.
 
 The alignment follow-up resolves actual fabric scope from validated allocation node counts for the nine existing one-/two-node labs while preserving fixed-step scope and truthful allocation metadata. Oversized JSON produces an explicit data error and failed stage with its original file retained. Host-copy evidence validation consumes the canonical sbatch/nsys recipe and rejects contradictory selections.
 
 #### Verification Evidence
+
+Full-branch PR review repair: both ownership regressions fail before the repair and pass afterward; 83 isolated Linux native-job/capture/lifecycle tests pass, including detached leader exit before and after observation. Independent real-subprocess review confirms termination. All nine native validators, build/freshness, helper parity and 33 fresh responsive browser cases pass. See the full-branch PR review entry in docs/course-format-validation.md for current artifacts and retained limitations.
 
 Full suite: 2,519 passed and one macOS skip; 71 isolated Linux native-job/capture/lifecycle tests pass, including the skipped child-adoption case. Final targeted preparation/evidence checks: 109 passed. All nine course validators, complete build/freshness, shared-helper and 27-file skill-payload parity, scoped Ruff/Markdown/Bash/ShellCheck and whitespace checks pass. Read-only small/large campaign planning resolves 220 units. Playwright Test in headless Chrome 155.0.8059.39 passes 33 desktop/390px/320px page cases plus three final Custom CUDA refresh cases; source bytes, compact order, disclosures, command/results paths and reflow are verified. Source preservation covers 97 Python ASTs with only the declared distributed-initialization/import repair, 13 CUDA token streams, twelve lab figures and 2,872 historical evidence/archive hashes. Code/security review defects are repaired and covered. See [the verification record](course-format-validation.md#compact-labs-and-consolidated-native-jobs--2026-10-12) for artifact identities and retained generic-checker limitations. Local evidence does not qualify live GPU/Slurm execution or publication.
 

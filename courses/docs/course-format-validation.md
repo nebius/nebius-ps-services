@@ -9,6 +9,42 @@ declared profiles. Each course closes with one Where to Go Next, one Glossary
 and final Official references.
 The earlier counts, field order and hashes below apply to their original revisions.
 
+## Full-branch PR review repairs — 2026-10-13
+
+The PR review covers the complete branch, including the earlier compact-guide,
+native-launcher and comment-rendering changes. Five bounded read-only reviews
+covered rendering, source/launcher preservation, campaign integration, teaching
+and process lifecycle. Two introduced findings were repaired:
+
+- Detached worker groups now retain ownership through living member PID, group
+  and start identities after their leader exits. Cleanup fails the stage and
+  leaves later stages unstarted; historical group numbers alone grant no authority.
+- Advanced Lab 27 again tells learners how to replace its host-memory baseline
+  with a qualified GPU-memory path for the same-payload comparison.
+
+Both member-ownership regression cases failed before the repair and pass after
+it. An isolated Python 3.12 Linux container passes 83 native job, capture and
+lifecycle tests, including leader exit before and after initial observation.
+The independent reviewer also confirmed worker termination with real subprocesses.
+The full macOS suite ran with the existing Python 3.12/PyTorch 2.14.1 environment:
+2,615 tests passed and three Linux-only cases skipped. Its single failure was a
+launcher-help fixture relying on the caller's working directory. The fixture now
+uses the required course directory explicitly; all 33 networking tests pass on
+rerun from the repository root. No product change was needed for that failure.
+All nine native validators, full build/freshness, shared-helper parity, 184-file
+configured Markdown lint, scoped Ruff and whitespace checks pass. A fresh set
+of 33 Playwright cases passes at desktop, 390px and 320px, and all recorded
+artifact hashes match. Advanced HTML is now
+`f5d0d547ee78d7be3bdb6a77748735a84ff0dc5ef0beca233fb07d2ee3c15e16`;
+other page hashes from the catalog review below remain unchanged.
+
+Evidence remains in `course-review-mv9sjep6`: `cleanup-negative.log`,
+`linux-pr.log`, `tests-pr-complete.log`, `networking-pr-rerun.log`,
+`browser-pr.log` and `browser-pr-reviewed`.
+The container installed its test-only process observer; no host packages or live
+GPU/Slurm workloads were changed. Prior desktop/mobile and live-target limits
+remain applicable. Earlier entries describe their original artifact identities.
+
 ## Complete catalog review and alignment — 2026-10-13
 
 Reviewed all nine course packages: 105 lesson/reference chapters, 110 compact
