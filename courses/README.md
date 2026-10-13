@@ -31,7 +31,7 @@ In the HTML editions, links to other courses, the Lab Guide and reference sites
 open in a new tab so you keep your place. Section links stay on the current page;
 results ZIP links download the file.
 
-Code comments appear in dark green throughout the HTML editions, including
+Code comments appear in saturated burnt orange throughout the HTML editions, including
 complete lab sources. Selecting and copying code preserves the original text.
 
 Every course ends with one Where to Go Next, one A–Z Glossary, and then

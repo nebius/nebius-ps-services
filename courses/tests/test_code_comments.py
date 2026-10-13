@@ -232,7 +232,7 @@ def test_every_reader_page_colors_comments(name):
     document = path.read_text()
     parsed = CodeBlocks(document)
     assert any(item["comments"] for item in parsed.blocks), name
-    assert "--code-comment: #236b36;" in document
+    assert "--code-comment: #b34700;" in document
     assert re.search(
         r"pre code \.code-comment\s*\{\s*color: var\(--code-comment\);", document
     )

@@ -6,7 +6,7 @@ project folder.
 
 ## [Unreleased]
 
-- Color embedded code comments dark green across all nine courses and the Lab
+- Color embedded code comments saturated burnt orange across all nine courses and the Lab
   Guide, preserving exact source text and offline reading through the shared
   standard-library renderer and stylesheet. Invalid snippets identify their source
   file and lesson or guide section in build errors.

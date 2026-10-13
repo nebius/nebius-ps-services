@@ -64,7 +64,7 @@ unchanged. Reading packages never enter the six-course runtime/preparation regis
 
 ### Code comments
 
-All course pages and the Lab Guide use dark green (`#236b36`) for code comments.
+All course pages and the Lab Guide use saturated burnt orange (`#b34700`) for code comments.
 The shared stylesheet gives this color at least 4.5:1 contrast against the code
 background. Styling is embedded and works offline without JavaScript or packages.
 

@@ -5915,7 +5915,7 @@ All nine native validators, complete build/freshness, 353 focused tests and six 
 
 <!-- /FEATURE: FEAT-045 -->
 
-<!-- FEATURE: FEAT-046 reqs=REQ-002 status=ready delivery=verified priority=P1 version=4 -->
+<!-- FEATURE: FEAT-046 reqs=REQ-002 status=ready delivery=verified priority=P1 version=5 -->
 ### FEAT-046: Visible comments in embedded code
 
 #### Requirements Covered
@@ -5939,7 +5939,9 @@ infer complete-source language from its extension. Wrap only comment ranges in
 code-comment spans. Preserve strings, docstrings, plain-text blocks, source
 attributes, source disclosures and keyboard-scrollable pre elements. Unknown
 explicit languages and lexical failures stop rendering with source context.
-Define #236b36 once in the shared course CSS; retain existing code typography.
+Define saturated burnt orange #b34700 once in the shared course CSS; retain
+existing code typography and at least 4.5:1 contrast against code backgrounds.
+The darker orange preserves contrast on the light code surface.
 
 #### Selected Option
 
@@ -6023,6 +6025,20 @@ Native selection matches the prior pages, disclosures and keyboard horizontal
 scrolling work, and no external requests occur. Desktop/mobile Lab01 screenshots
 were visually inspected, including the requested experiment-controls comment.
 This is local source/build/browser proof; no external publication was performed.
+
+Burnt-orange revision implementation: changed the single shared CSS value to
+`#b34700`, updated the existing color assertion and documentation, and rebuilt
+all reader pages. Earlier evidence above covers the prior color.
+
+Burnt-orange verification: 72 focused tests, all nine native validators and
+build/freshness pass. All 452 embedded code blocks retain exact text and markup
+semantics. Thirty isolated headless Chrome checks verify the computed color,
+5.112:1 code-background contrast, keyboard controls, local scrolling, reflow and
+offline behavior at 1440, 390 and 320 pixels. Desktop/phone captures were visually
+reviewed. Scoped lint and diff review pass with no changed-scope security finding.
+Initial artifact-capture harness timeouts and unavailable passing traces are
+recorded separately in the [shared publication review](lab-guide/PUBLICATION-REVIEW.md#shared-burnt-orange-comments--2026-10-13).
+No learner code, lab runtime or result archive changed; no external publication occurred.
 
 <!-- /FEATURE: FEAT-046 -->
 <!-- maintain-project-specs:design:end -->

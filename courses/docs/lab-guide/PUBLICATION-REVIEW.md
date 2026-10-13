@@ -1,5 +1,58 @@
 # Lab Guide publication review
 
+## Shared burnt-orange comments — 2026-10-13
+
+Scope: the shared stylesheet used by all nine course HTML pages and the Lab
+Guide. Comments now use saturated burnt orange `#b34700`, with measured
+**5.112:1** contrast against the `#f4f7f9` code background. This exceeds the
+[WCAG normal-text minimum](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).
+This bounded color check is not a whole-site accessibility certification.
+
+Source/static: **pass**. All 72 focused comment/presentation tests, all nine
+native course validators, full build/freshness, scoped Ruff, repository-configured
+Markdown lint and whitespace checks pass. All 452 embedded code blocks preserve
+their exact parsed text, attributes and comment ranges. Comparison of eleven HTML
+outputs shows only the shared color substitution and matching Lab Guide wording;
+the catalog is byte-identical. Executable sources and result archives are unchanged.
+Generic checker runs on before/after course snapshots retain identical diagnostics
+for existing profiles and undeclared shared links; they are not a passing gate.
+
+Browser/visual: **pass for this color change**. Playwright Test 1.57.0 drove owned,
+isolated headless Chrome 155.0.8059.40 with page JavaScript disabled. Thirty
+assertion cases cover all ten reader pages at 1440, 390 and 320 pixels: every
+comment's computed color/background, contrast, keyboard skip/menu/TOC operation,
+local code scrolling, normal/doubled-text reflow and no external requests.
+Desktop and 320px PyTorch screenshots were visually reviewed; color is clear,
+text remains legible, and phone code blocks retain horizontal scrolling.
+
+Local evidence group `course-burnt-orange-tj2900ci` contains
+`browser-assertions.json`, per-page/width JSON facts and
+`comments-{1440,390,320}.png`. Initial artifact-capture runs timed out during
+trace export and element-screenshot stability waits after page assertions had
+passed. Those runs remain separate. The final 30-case run disables traces;
+viewport captures use reduced motion, instant scrolling and background-throttling
+disabling flags in a separate owned browser. Screenshot capture passed at all
+three widths. All owned browser contexts and processes closed; no product change
+was made for the harness failures. Passing traces are not available.
+
+Installed-environment, runtime and live-target qualification: **not applicable
+to this CSS-only change**; no lab or environment behavior changed or was run.
+External publication was not performed. Earlier course-wide evidence retains
+its original scope and artifact identities.
+
+| Reviewed artifact (relative to courses) | SHA-256 |
+| --- | --- |
+| `advanced-gpu-communication/index.html` | `eec3e9a0047a93ebb7ce49ba94a48d89cdb59c429364748f7ae7715189dcb105` |
+| `custom-cuda-kernels/index.html` | `3c3aab3a22b33b822c7ff18d9639000e7843ae5856ba7530d214fd07786370ea` |
+| `gpu-fundamentals/index.html` | `9cf9b2ecb1bc4b0d05c2882c6d0deb86544f65a1bbceeb9e6c5e105ada3b1128` |
+| `gpu-optimizations/index.html` | `2c0925d01f604f93b94cdcacf187ac1632345f6ea5aceedddb9b6095c63a9c69` |
+| `gpu-performance-tools/index.html` | `dba514d24b06cb25a36f55369007ccef30c357ba97d140f96082342e59a390a5` |
+| `lab-guide.html` | `fd2256d04e4a7e585a6ca4dac9c8d812ef0cae4f575e3c300d37cd262463b05d` |
+| `llm-inference/index.html` | `2d9e0e532784b0b4660f4f19751ccf8e23b4bf58eab6e20604afbffe4894199f` |
+| `llm-training/index.html` | `96055518f48d2acd4bdaef705d19273fef4501ba44539b70332caffbe1a66631` |
+| `pytorch-gpu-performance-engineering/index.html` | `8748526dbd1785409d9ef4542c4f5062af48abc234f0804f7d4f6e0c3d2e3b92` |
+| `soperator/index.html` | `0d66c033cf82b9bb92abf4c2ccd427f72ebdf01af8df5416e837bd390b751aa5` |
+
 ## Nine-course alignment — 2026-10-05
 
 Reviewed `lab-guide.html` SHA-256: `1e536d93d4503059645c93c64f5fe21f0320a95329271a0523da8c22404f6725`.
