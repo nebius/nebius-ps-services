@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Synthetic blocking sink delay per output",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     if (
         not 1 <= args.slots <= 8
@@ -105,6 +106,7 @@ def run_pipeline(torch: Any, args: argparse.Namespace) -> tuple[float, int]:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         # Start the executor before timing; bounded slots limit submitted work.
         pool.submit(lambda: None).result()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         started = time.perf_counter()
         with torch.cuda.nvtx.range("d2h_loop"):
@@ -163,6 +165,7 @@ def main() -> None:
         for _ in range(args.warmup):
             run_pipeline(torch, args)
         samples = [run_pipeline(torch, args) for _ in range(args.iterations)]
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="20_d2h_pipeline",

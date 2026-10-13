@@ -47,12 +47,8 @@ barrier and buffer-management costs can erase either predicted benefit.
 With the prepared Lab 08 runtime, submit:
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sbatch --workload small --work-iterations 32
+sbatch slurm/08_async_pipeline.sbatch --workload small
+sbatch slurm/08_async_pipeline.sbatch --workload small --work-iterations 32
 ```
 
 The first command runs all four work points. The second isolates one point for

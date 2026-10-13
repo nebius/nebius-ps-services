@@ -6,19 +6,25 @@ Do not return to the user merely because the next stage requires agent tools.
 The state controller is intentionally separate from native GUI reasoning.
 
 Every execution stage submits the same explicit per-lab `.sbatch` file shown to
-students. Normal jobs run the lab directly; `.nsys.sbatch` and `.ncu.sbatch` place
-the native NVIDIA command at the GPU process. The selected job owns its profiler
+students. Normal jobs run the lab directly; `--profiler nsys|ncu` selects the
+native NVIDIA command at the GPU process. `--profiler all` runs supported
+Systems then Compute diagnostics without a normal run. The selected job owns its profiler
 flags and filters. `--workload small|large` selects problem size; it does not enable
 profiling. The skill accepts `--workload both` to schedule both sizes.
 
-Fresh plans use `execution_contract: native-jobs/v2`. Status and cancellation can
+Fresh plans use `execution_contract: native-jobs/v3`. Status and cancellation can
 inspect earlier campaigns, but execution refuses an older plan: retain its evidence
-and create a new campaign. This version requires managed-runtime selections and
-verified prepared-root bindings. Do not translate old plans or replay saved argv.
+and create a new campaign. This version requires experiment/profiler/device-aware managed-runtime
+selections and verified prepared-root bindings. Optional workflows use
+`--experiment trials|two-node|aiperf|trtllm|sanitizer` where supported; sanitizer
+also requires `--sanitizer` and cannot combine with Nsight. Do not translate old plans or replay saved argv.
 
 Submission prepares private scheduler directories before calling `sbatch` with
 an explicit working directory and log paths. Each fresh job exclusively creates
-`results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`. Requeue is disabled;
+`results/LAB/jobs/JOB_ID/result.json` and isolated
+`stages/STAGE/{results,profiles,logs,artifacts}` directories. The aggregate is a
+reader-facing status and data index; publication selects eligible original
+measurement JSON explicitly and never ingests the aggregate as a measurement. Requeue is disabled;
 retries require a new job ID. Collection admits only those producing job IDs and
 their exact scheduler logs, verifies checksums, and preserves all required originals.
 After successful publication, cleanup removes only those verified job directories
@@ -120,13 +126,13 @@ middle repetition and retains every result. Lab 09 also contains three rounds
 inside each process; those rounds do not replace the independent jobs. Keep
 native diagnostics separate from these unprofiled repetitions.
 
-CUDA Lab 12 includes the guide's separate memcheck dependency before its three
+CUDA Lab 12 includes the recipe's separate memcheck dependency before its three
 fresh unprofiled trials. Verify the exact sanitizer job and zero-error original
 output with the same executable, image and profile. Keep that diagnostic output
 outside acceptance results. Independently recompute the original aggregate
 medians, ratio and decision; match all three child records and their shared
 observed GPU identity. Use the evidence runner's child result indices to capture
-every child's metrics without manufacturing an aggregate result JSON. The
+every child's metrics without manufacturing another measurement record. The
 capstone leaves application integration pending until separately demonstrated.
 
 Inference Labs 11, 15, 20, 33 and 34 use fixed server workloads in the supplied

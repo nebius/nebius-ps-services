@@ -50,6 +50,7 @@ def main():
     parser.add_argument("--tx-depth", type=int, choices=(32, 64, 128, 256), default=128)
     parser.add_argument("--server-device", required=True)
     parser.add_argument("--client-device", required=True)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.iterations < 32 or args.warmup != 0:

@@ -54,6 +54,7 @@ def numerical_step(
     seed: int,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Capture one update from identical weights, data, and random state."""
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, seed)
     model = build_tiny_lm(
         torch,
@@ -68,6 +69,7 @@ def numerical_step(
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     use_fp16_scaler = autocast_dtype == torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=use_fp16_scaler)
+    # Clear the previous step’s gradients before differentiating again.
     optimizer.zero_grad(set_to_none=True)
     with torch.autocast(
         device_type="cuda",
@@ -176,6 +178,7 @@ def train_mode(
 
     for _ in range(warmup):
         one_step()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
     device_samples: list[float] = []
@@ -240,6 +243,7 @@ def main() -> None:
     parser.add_argument("--max-loss-relative-error", type=float, default=0.05)
     parser.add_argument("--max-gradient-relative-l2", type=float, default=0.2)
     parser.add_argument("--max-update-relative-l2", type=float, default=0.2)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     thresholds = (
@@ -368,6 +372,7 @@ def main() -> None:
             "warmed_timing": timed_record,
         }
         torch.cuda.empty_cache()
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="21_mixed_precision_training",

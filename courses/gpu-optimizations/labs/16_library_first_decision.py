@@ -64,12 +64,15 @@ def reference_checks(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     size = 512 if args.workload == "small" else 4096
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn(size, size, device="cuda", dtype=torch.bfloat16)
     weight = torch.randn_like(x)
     bias = torch.randn(size, device="cuda", dtype=torch.bfloat16)
@@ -95,6 +98,7 @@ def main() -> None:
         )
         for name, operation in (("composed", composed), ("library_addmm", library_path))
     }
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="16_library_first_decision",

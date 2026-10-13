@@ -18,7 +18,7 @@ Estimated guided time: **52 hours**, for the conceptual and local practical rout
 
 Begin with the first lesson's **Objective**, then read **How it works** and its workflow diagram. It defines the subject, explains why it matters and how it works, and walks through a small example before introducing detailed engineering requirements. No prior CUDA or model-training expertise is assumed in that introduction. The specialized courses still use Fundamentals and Optimizations as their practical prerequisites.
 
-Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lab explains its purpose and needed concepts locally; Practice gives the commands and comparison to make. Use the syllabus to distinguish a reading preview from full execution.
+Every lesson follows **Objective → How it works → Practice → Mental model**. Start with [shared environment setup](../lab-guide.html#lab-preparation-scripts) once, then follow the lesson route. Each lesson’s Practice section identifies the activity and links to its lab. The lab introduces its purpose, presents its source, and provides Run and Check your results commands. Use the syllabus to distinguish a reading preview from full execution.
 
 First understand fixed-parameter prediction and the token-generation loop in Lab 35. Audit artifacts before loading them, follow generation and fix sampling semantics, then calculate cache capacity and define the workload. Learn basic engine lifecycle before client metrics or live policy experiments. Establish scheduling and an uncompressed attention baseline before quantization, speculation, parallelism and advanced serving.
 
@@ -32,8 +32,9 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 | Correct request mechanics | 1–5 | Control artifact identity, generation, sampling, cache capacity and workload |
 | Engine and scheduling baseline | 6–10 | Start safely, measure clients, and study paging, batching and prefix reuse |
 | Targeted local optimization | 11–13 | Compare attention, quantization and speculation |
+| Distributed placement | 14 | Explain model partitioning and its communication boundaries |
 | Integrated evaluation | 15–16 | Design benchmark campaigns and deliver a causal report |
-| Advanced parallel serving | 14, 17 | Compare partitioned generation and full sixteen-GPU server layouts |
+| Advanced parallel serving | 17 | Compare parallel generation and full sixteen-GPU server layouts |
 
 ## Lesson-by-lesson route
 
@@ -60,13 +61,6 @@ Return to a repeated lab when the later lesson adds a new interpretation or chec
 ## Readiness checkpoints
 
 After Lesson 5, freeze a model, sampling contract, KV estimate and workload matrix. After Lesson 7, distinguish client latency from model-forward timing and run the introductory AIPerf profile before policy A/B campaigns. After Lesson 12, compare scheduling/backend/quantization changes one at a time. Dynamo disaggregation is an optional advanced branch, never a core completion gate.
-
-Every lesson starts with its **Objective**, teaches definitions and mechanisms
-in **How it works**, links its **Practice**, and ends with a **Mental model**. The linked guides integrate
-worked examples in **Concepts and code path** and concise commands in **Practice**, with H100 scope, trade-offs, evidence,
-failure analysis and review in their relevant sections. Before moving on,
-explain the new mechanism and its limitation in your own words; a completed
-command alone is not evidence of understanding.
 
 ## Completion
 

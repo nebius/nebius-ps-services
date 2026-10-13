@@ -22,10 +22,12 @@ from training_common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     rank, world_size, _ = init_nccl(torch)
     try:
@@ -50,11 +52,13 @@ def main() -> None:
             (tokens_per_rank, hidden), device="cuda", dtype=torch.float32
         )
         returned_gradient = torch.empty_like(routed)
+        # Create explicit input values on the selected device.
         expert_weight = torch.tensor(
             float(rank + 1), device="cuda", dtype=torch.float32, requires_grad=True
         )
         local_experts = 2
         expert_width = 256 if args.workload == "small" else 1_024
+        # Create the synthetic tensors used by this experiment.
         grouped_weights = torch.randn(
             (local_experts, hidden, expert_width),
             device="cuda",
@@ -108,6 +112,7 @@ def main() -> None:
         def measure_experts(operation: object) -> list[float]:
             for _ in range(args.warmup):
                 operation()
+            # Wait for queued GPU work to finish at this measurement boundary.
             torch.cuda.synchronize()
             samples = []
             for _ in range(args.iterations):
@@ -136,6 +141,7 @@ def main() -> None:
             forward_finished.record()
             expert_output = received.float() * expert_weight
             loss = expert_output.sum() / received.numel()
+            # Differentiate the loss to populate parameter gradients.
             loss.backward()
             returned_output_local = expert_output.detach()
             backward_started = torch.cuda.Event(enable_timing=True)
@@ -238,6 +244,7 @@ def main() -> None:
 
         global_load = [count * world_size for count in send_counts]
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="17_training_expert_parallel",

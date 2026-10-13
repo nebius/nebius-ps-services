@@ -203,15 +203,20 @@ def lab_guides(course: Path, metadata: dict, lesson_count: int) -> list[dict]:
             zip(names, (part.strip() for part in chunks[2::2]), strict=True)
         )
         if (
-            tuple(names) != LAB_SECTIONS
-            or len(introduction.split()) < 40
-            or any(len(body.split()) < 20 for body in sections.values())
+            tuple(names) not in (LAB_SECTIONS, LAB_SECTIONS[1:])
+            or not introduction
+            or "\n\n" in introduction
+            or any(not body for body in sections.values())
         ):
             raise ValueError(
                 f"lab guide {path.name}: incomplete introduction or ordered sections"
             )
-        if "```bash" not in sections["Practice"]:
+        commands = re.findall(r"^sbatch .+$", sections["Run"], re.M)
+        if len(commands) != 2 or any(not command.startswith(f"sbatch slurm/{source.stem}.sbatch ") for command in commands) or "--profiler" in commands[0] or not commands[1].endswith(" --profiler all"):
             raise ValueError(f"lab guide {path.name}: runnable commands are required")
+        expected_results = f"sacct -j <JOB_ID> --format=JobID,State,ExitCode\ncat results/{source.stem}/jobs/<JOB_ID>/result.json"
+        if expected_results not in sections["Check your results"]:
+            raise ValueError(f"lab guide {path.name}: exact-job result commands are required")
         result.append(
             {
                 "source": source,

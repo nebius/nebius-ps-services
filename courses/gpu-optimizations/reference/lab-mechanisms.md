@@ -71,3 +71,19 @@ Review answer: a locally faster kernel is a candidate, not an accepted change.
 Accept it only when equivalent work is correct and the chosen end-to-end
 boundary improves under the stated constraints. If a result conflicts with the
 model, refine the model using evidence instead of discarding the measurement.
+
+## Read profiler results at their captured scope
+
+Systems timelines establish overlap; one Compute kernel cannot. Compute captures
+for Labs 07, 19 and 20 select a warmup matrix operation with default arguments.
+Lab 15 selects only the first measured grid. Use the owning source's range and
+kernel filters to identify the captured work before interpreting counters.
+
+Lab 14's compute comparison deliberately changes FP32 to BF16 while keeping
+width, scaling and useful operations fixed. Lab 16 compares both BF16 paths
+against an independent FP64 reference with its declared rounding budget. Keep
+these correctness contracts with any performance decision.
+
+For Labs 09, 16 and 19, the run-labs campaign uses three independent jobs per
+variant and workload, reversing order in the middle repetition. Lab 09's rounds
+inside one process are additional observations, not independent trials.

@@ -43,6 +43,7 @@ def main() -> None:
         default=None,
         help="Optional dense BF16 peak for a matmul-only utilization estimate.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.peak_tflops is not None and (
@@ -51,9 +52,11 @@ def main() -> None:
         raise SystemExit("--peak-tflops must be finite and positive")
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 256 if args.workload == "small" else 2_048
     tokens = 512 if args.workload == "small" else 4_096
+    # Create the synthetic tensors used by this experiment.
     inputs = torch.randn((tokens, width), device="cuda", dtype=torch.bfloat16)
     targets = torch.randn_like(inputs)
     base_weight = (
@@ -70,6 +73,7 @@ def main() -> None:
     def step(
         weight: object, bias: object, optimizer: object, *, fused_bias: bool
     ) -> object:
+        # Clear the previous step’s gradients before differentiating again.
         optimizer.zero_grad(set_to_none=True)
         hidden = (
             torch.addmm(bias, inputs, weight) if fused_bias else inputs @ weight + bias
@@ -77,7 +81,9 @@ def main() -> None:
         loss = torch.nn.functional.mse_loss(
             torch.nn.functional.gelu(hidden).float(), targets.float()
         )
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
+        # Update the parameters using the gradients from this step.
         optimizer.step()
         return loss
 
@@ -124,6 +130,7 @@ def main() -> None:
         memory_before = int(torch.cuda.memory_allocated())
         torch.cuda.reset_peak_memory_stats()
         operations[name]()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         incremental_peak[name] = int(torch.cuda.max_memory_allocated()) - memory_before
 
@@ -136,6 +143,7 @@ def main() -> None:
         if timing["candidate"]["median_ms"] < timing["baseline"]["median_ms"]
         else "candidate-median-not-lower-in-this-trial"
     )
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="31_training_capstone",

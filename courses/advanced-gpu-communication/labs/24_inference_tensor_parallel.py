@@ -77,6 +77,7 @@ def run_experiment(
     if world_size != 2:
         raise SystemExit("This bounded mechanics lab requires exactly two ranks.")
     device = f"cuda:{local_rank}"
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 2_048 if args.workload == "small" else 8_192
     batch = (
@@ -100,6 +101,7 @@ def run_experiment(
     def measure(operation: Callable[[], object]) -> list[float]:
         for _ in range(args.warmup):
             operation()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         samples: list[float] = []
         for _ in range(args.iterations):
@@ -107,6 +109,7 @@ def run_experiment(
             started = time.perf_counter()
             operation()
             torch.cuda.synchronize()
+            # Create explicit input values on the selected device.
             elapsed = torch.tensor(
                 (time.perf_counter() - started) * 1_000,
                 device=device,
@@ -135,6 +138,7 @@ def run_experiment(
         )
     if rank == 0:
         logical_output_bytes = reference.numel() * reference.element_size()
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="24_inference_tensor_parallel",
@@ -182,6 +186,7 @@ def main() -> None:
         default=None,
         help="Input rows per forward operation; use 1 to examine small-message latency.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.batch_size is not None and args.batch_size <= 0:

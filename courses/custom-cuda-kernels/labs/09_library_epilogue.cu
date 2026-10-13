@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
     const std::size_t left_elements = static_cast<std::size_t>(rows) * depth;
     const std::size_t right_elements = static_cast<std::size_t>(depth) * columns;
     const std::size_t output_elements = static_cast<std::size_t>(rows) * columns;
+    // Allocate host inputs and reference/output storage.
     std::vector<float> left(left_elements), right(right_elements), bias(columns),
         bias_matrix(output_elements), expected(output_elements), cublas_observed(output_elements);
     for (int row = 0; row < rows; ++row) {
@@ -85,8 +86,10 @@ int main(int argc, char** argv) {
     if (positive_elements == 0 || clamped_elements == 0) {
       throw std::runtime_error("reference data must exercise both ReLU branches");
     }
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_left(left_elements), device_right(right_elements),
         device_output(output_elements), device_bias(columns);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_left.get(), left.data(), left_elements * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(device_right.get(), right.data(), right_elements * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(device_bias.get(), bias.data(), columns * sizeof(float), cudaMemcpyHostToDevice));
@@ -96,6 +99,7 @@ int main(int argc, char** argv) {
     const float alpha = 1.0F;
     const float beta = 0.0F;
     const int threads = 256;
+    // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
     const auto timing = benchmark_cuda([&] {
       // Row-major C=A*B is column-major C^T=B^T*A^T for the cuBLAS call.
       CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
@@ -106,9 +110,12 @@ int main(int argc, char** argv) {
       bias_relu<<<(output_elements + threads - 1) / threads, threads>>>(
           device_output.get(), device_bias.get(), rows, columns);
     });
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(cublas_observed.data(), device_output.get(), output_elements * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, cublas_observed);
     CUBLAS_CHECK(cublasDestroy(handle));
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("09_library_epilogue", timing, output_elements);
     print_timing("cublas_plus_separate_bias_relu", timing);
     std::cout << "rows=" << rows << "\ncolumns=" << columns << "\ndepth=" << depth

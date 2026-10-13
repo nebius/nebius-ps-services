@@ -30,7 +30,7 @@ Keep its stated scope and qualification limits in your comparison.
   much of their mapping to threads, memory movement and asynchronous execution.
   It offers a different abstraction from manually scheduling SIMT threads,
   not a guarantee that arbitrary code becomes fast. This is a next step from
-  the course's optional Tile appendix into portability and control trade-offs.
+  the course's optional Tile lesson into portability and control trade-offs.
   **Investigate**: Which tuning responsibilities move into the compiler, and
   which shape, layout and numerical choices remain yours?
   **Scope**: Recent CUDA 13.3 direction; NVIDIA documents Hopper support.

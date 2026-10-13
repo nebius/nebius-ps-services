@@ -1,51 +1,35 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=0
 #SBATCH --cpus-per-task=1
-#SBATCH --time=00:10:00
+#SBATCH --time=00:11:30
+
 #SBATCH --no-requeue
 #SBATCH --output=results/36_kv_tiering/logs/%j.out
 #SBATCH --error=results/36_kv_tiering/logs/%j.err
 
-set -euo pipefail
-
-# Workload size is independent of the profiler selected by this job file.
-if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  printf 'Usage: sbatch %s [--workload small|large] [lab options]\n' "$0"
-  exit 0
-fi
-workload=${COURSE_WORKLOAD:-small}
-lab_args=()
-while (($#)); do
-  case "$1" in
-    --workload) [[ $# -ge 2 ]] || { printf 'ERROR: --workload needs small or large.\n' >&2; exit 2; }; workload=$2; shift 2 ;;
-    --workload=*) workload=${1#*=}; shift ;;
-    --profile|--profile=*) printf 'ERROR: use --workload small|large.\n' >&2; exit 2 ;;
-    *) lab_args+=("$1"); shift ;;
+# Reserve the largest selectable allocation; every srun below limits its step.
+# Each stage runs in a fresh shell with separate original results and reports.
+course_stage() {
+  set -euo pipefail
+  umask 077
+  local selection=$1 workload=$2
+  shift 2
+  export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
+  case "$selection" in
+    default_none_cpu)
+      # Actual scope: 1 node(s), 1 task(s), 0 GPU(s) per task.
+      source tools/course_env.sh llm-inference.08_kv_cache.ncu --runtime
+      source tools/course_job_cache.sh
+srun --nodes=1 --cpus-per-task=1 --gres=none --ntasks=1 "${COURSE_PYTHON}" labs/36_kv_tiering.py --workload "$workload" "$@"
+      ;;
+    *) printf 'ERROR: unknown stage selection.\n' >&2; return 2 ;;
   esac
-done
-[[ $workload == small || $workload == large ]] || { printf 'ERROR: --workload must be small or large.\n' >&2; exit 2; }
-set -- "${lab_args[@]}"
-export COURSE_WORKLOAD=$workload
-[[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
-  printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
 }
-# Load this launcher's persistent installation inside the allocated job.
-source tools/course_env.sh 36_kv_tiering.sbatch
-umask 077
-for directory in results results/36_kv_tiering results/36_kv_tiering/logs results/36_kv_tiering/jobs; do
-  [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
-  }
-done
-export COURSE_JOB_DIR="$PWD/results/36_kv_tiering/jobs/$SLURM_JOB_ID"
-mkdir -m 700 -- "$COURSE_JOB_DIR"
-mkdir -m 700 -- "$COURSE_JOB_DIR/results" "$COURSE_JOB_DIR/profiles" "$COURSE_JOB_DIR/logs" "$COURSE_JOB_DIR/artifacts"
-export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
-export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
-export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
-export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
-printf 'Job results: %s\n' "$COURSE_JOB_DIR"
-source tools/course_job_cache.sh
 
-srun --ntasks=1 "${COURSE_PYTHON}" labs/36_kv_tiering.py --workload "$workload" "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+  exec python3.12 -B tools/course_job.py --lab 36_kv_tiering --launcher "$0" -- "$@"
+fi

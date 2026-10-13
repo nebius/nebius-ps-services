@@ -56,14 +56,14 @@ def test_course_number_lookup_matches_every_runtime_binding():
 
 
 @pytest.mark.parametrize("path", GUIDES, ids=lambda p: str(p.relative_to(ROOT)))
-def test_every_lab_has_one_preparation_referral(path):
+def test_preparation_is_shared_without_repeated_lab_referrals(path):
     validator = load_validator()
     validator.validate_preparation_referral(path.read_text())
     page = (path.parents[2] / "index.html").read_text()
     anchor = "lab-" + path.stem.replace("_", "-")
     article = re.search(rf'<article class="lab" id="{anchor}".*?</article>', page, re.S)
     assert article, path
-    assert article[0].count('href="../lab-guide.html#lab-preparation-scripts"') == 1
+    assert article[0].count('href="../lab-guide.html#lab-preparation-scripts"') == 0
 
 
 @pytest.mark.parametrize(

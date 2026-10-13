@@ -23,6 +23,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--batches", type=int, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     batches = resolve_int_override(
@@ -32,6 +33,7 @@ def main() -> None:
     )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     feature_width = 4_096
 
@@ -41,6 +43,7 @@ def main() -> None:
 
         def __getitem__(self, index: int) -> object:
             generator = torch.Generator().manual_seed(index)
+            # Create the synthetic tensors used by this experiment.
             sample = torch.randn(feature_width, generator=generator)
             return sample.sin().cos()
 
@@ -66,6 +69,7 @@ def main() -> None:
         for _ in range(args.warmup):
             warmup_batch = next(iterator).to("cuda", non_blocking=True)
             warmup_batch.square().mean()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         host_batch_bytes = None
         all_batches_pinned = True
@@ -130,6 +134,7 @@ def main() -> None:
         raise SystemExit("Pipeline variants produced different checksums.")
     if not serial["all_batches_pinned"] or not worker["all_batches_pinned"]:
         raise SystemExit("DataLoader returned an unpinned timed batch.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="05_input_pipeline",

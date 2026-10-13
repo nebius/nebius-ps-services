@@ -16,7 +16,7 @@ from test_course_review_fixes import COURSES, ROOT
 @pytest.mark.parametrize("course", COURSES)
 def test_readme_gates_live_submission_before_first_job(course):
     document = (ROOT / course / "README.md").read_text()
-    before_submit = document[: document.index("sbatch ")]
+    before_submit = document[: re.search(r"^sbatch ", document, re.M).start()]
     assert "../lab-guide.html#lab-preparation-scripts" in before_submit
     assert "umask 077" not in document
     assert "VERSIONS.md" in before_submit
@@ -74,8 +74,8 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
     completed = subprocess.run(
         [
             "bash",
-            str(ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sanitizer.sbatch"),
-            tool,
+            str(ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sbatch"),
+            "--experiment", "sanitizer", "--sanitizer", tool,
             "--workload",
             "small",
         ],
@@ -92,6 +92,7 @@ def test_sanitizer_launcher_bounds_racecheck_without_filtering_work(
         return
     assert completed.returncode == 0, completed.stderr
     expected = [
+        "--nodes=1", "--cpus-per-task=8",
         "--ntasks=1",
         "--gpus-per-task=1",
         "compute-sanitizer",
@@ -123,7 +124,7 @@ def test_triton_launcher_passes_canonical_output_and_run_id(
     The extracted commands cannot start Slurm or an engine. Artifacts stay in
     pytest's temporary directory; HTTP is replaced inside the child process.
     """
-    source = (ROOT / "llm-inference/slurm/30_engine_profile.trtllm.sbatch").read_text()
+    source = (ROOT / "llm-inference/slurm/30_engine_profile.sbatch").read_text()
     identity = source[
         source.index("if [[ -z ${COURSE_RUN_ID:-} ]]; then") : source.index(
             'mkdir -p "${COURSE_JOB_DIR}/logs"'

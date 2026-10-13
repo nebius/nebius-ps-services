@@ -80,6 +80,7 @@ def tail_reference(torch: object, blocks: int, work: int) -> object:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -96,6 +97,7 @@ def main() -> None:
     work = 256 if args.workload == "small" else 2_048
     probe_output = torch.empty(1, device="cuda", dtype=torch.float32)
     compiled = tail_probe[(1,)](probe_output, work=work, num_warps=num_warps)
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     registers = int(getattr(compiled, "n_regs", 0))
     metadata = getattr(compiled, "metadata", None)
@@ -156,6 +158,7 @@ def main() -> None:
                 "max_absolute_error": float((observed - expected).abs().max()),
             }
         )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="11_scheduler_tail",

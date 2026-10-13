@@ -24,13 +24,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     vector_elements = 16_000_000 if args.workload == "small" else 128_000_000
     matrix_size = 2_048 if args.workload == "small" else 8_192
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn(vector_elements, device="cuda")
     y = torch.randn(vector_elements, device="cuda")
     a = torch.randn((matrix_size, matrix_size), device="cuda", dtype=torch.bfloat16)
@@ -58,6 +61,7 @@ def main() -> None:
     )
     if not finite:
         raise SystemExit("A roofline workload produced non-finite output.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="05_roofline_microbench",

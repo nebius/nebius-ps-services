@@ -37,10 +37,12 @@ def cpu_time_ms(x: object, y: object, iterations: int) -> float:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     sizes = [1_024, 1_000_000]
     if args.workload == "large":
@@ -48,6 +50,7 @@ def main() -> None:
     rows = []
     all_correct = True
     for size in sizes:
+        # Create the synthetic tensors used by this experiment.
         x_cpu = torch.randn(size, dtype=torch.float32)
         y_cpu = torch.randn(size, dtype=torch.float32)
         x_gpu = x_cpu.to("cuda")
@@ -94,6 +97,7 @@ def main() -> None:
         )
     if not all_correct:
         raise SystemExit("CPU and GPU results diverged.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="01_cpu_gpu_crossover",

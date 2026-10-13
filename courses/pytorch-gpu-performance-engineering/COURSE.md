@@ -10,13 +10,14 @@ illustrate calculations, not measured performance. Blocks marked **CUDA example*
 need an NVIDIA GPU and compatible PyTorch environment only if you run them.
 
 **Reading route:** lessons 1–7 cover tensors; 8–11 cover execution and models;
-12–18 connect them to performance. Scan the definition, diagram and commented
+12–16 connect them to performance. Scan the definition, diagram and commented
 example, then read the brief performance connection. Allow about three guided
-hours; there are no labs or exercises. Experienced readers can start with the
-final example if they can already explain shapes, shared storage, gradient
-modes and GPU completion.
+hours; there are no labs or exercises. Experienced readers can start at
+lesson 16 if they can already explain element-wise work, shared storage,
+gradient modes and GPU completion.
 
-**Notation:** bold monospace marks PyTorch APIs such as **`shape`**. Ordinary
+**Notation:** bold monospace marks PyTorch APIs such as **`shape`** and
+**`stride()`**. A stride is a layout property; **`stride()`** reads it. Ordinary
 monospace marks example values and variables, such as `[2, 3]` and `x`.
 Axis meanings such as sample and feature come from the application.
 
@@ -38,6 +39,9 @@ lists the axis sizes, **`dtype`** describes how each value is stored, and
 two-row, three-column tensor.
 
 ![One tensor, three attributes and an element count](reference/diagrams/tensor-description.svg)
+
+**`torch.tensor`** creates a tensor from supplied values; **`numel()`** counts
+its elements.
 
 ```python
 import torch  # Load the PyTorch library.
@@ -83,8 +87,10 @@ normal = torch.randn(2, 3)
 A small random sample need not average to zero. Later examples use fixed
 values when the exact result matters.
 
-**Performance connection:** element count and bytes per element tell you how
-much data a tensor contains. Its device tells you where computation happens.
+**Performance connection:** element count times bytes per element gives the
+tensor's data size. GPU memory capacity is how many bytes fit; memory bandwidth
+is how many bytes can move per second. A tensor can fit in memory yet take
+significant time to read and write.
 
 ### Mental model
 
@@ -117,6 +123,8 @@ Read the indices from left to right: grid, row, column. The highlighted cell
 below contains the value `23`.
 
 ![Choose a grid, a row and a column](reference/diagrams/shape-axes.svg)
+
+**`ndim`** reports the number of axes.
 
 ```python
 import torch  # Load the PyTorch library.
@@ -177,7 +185,9 @@ sensor data, `[2, 3, 4]` could mean two sensors, three readings per sensor and
 four measurements per reading.
 
 **Performance connection:** grouping the same values into a different shape
-changes how later operations work with them. Reshaping keeps the element count.
+keeps the element count, but can change the work done by later operations.
+Selecting a smaller region can reduce that work; the storage and copy rules
+come in lesson 6.
 
 ### Mental model
 
@@ -213,7 +223,9 @@ print(y)  # Show the two rows after adding the offsets.
 ```
 
 **Performance connection:** broadcasting reuses the bias without storing an
-extra bias row. The addition still computes and stores all six output values.
+extra bias row. It saves repeated storage, but the addition still reads inputs,
+performs six additions and stores six outputs. A small bias can therefore be
+part of a much larger calculation.
 
 ### Mental model
 
@@ -251,7 +263,19 @@ output rows and four output columns.
 
 **Performance connection:** matrix multiplication combines many input values
 per output and can reuse them. Element-wise multiplication does less arithmetic
-per value read. These differences help explain the work you later profile.
+per value read. This helps explain two common limits:
+
+| Limit | Simple meaning | Typical example on large tensors |
+| --- | --- | --- |
+| Memory-bound | Reading and writing values limits speed more than arithmetic does | Element-wise multiplication: few calculations per value moved |
+| Compute-bound | Doing the arithmetic limits speed more than moving values does | A large matrix multiplication that reuses inputs for many calculations |
+
+Memory traffic is the bytes read and written. Reducing it can help memory-bound
+work; faster arithmetic can help compute-bound work. These are hypotheses,
+not labels guaranteed by an API.
+Small operations can instead be limited by launch overhead: the time needed
+to submit and start GPU work. The tiny example above teaches arithmetic, not
+which limit a GPU will reach.
 
 ### Mental model
 
@@ -290,8 +314,10 @@ Without a **`dim`** argument, **`mean()`** combines every value into one scalar
 tensor with shape `[]`.
 
 **Performance connection:** a reduction can involve processing a large amount
-of GPU data even when the output contains only one value. It can be an
-expensive operation.
+of GPU data even when the output contains only one value. A large mean often
+faces a memory-bandwidth limit: it must read every input for relatively little
+arithmetic. Combining partial results also takes work, so output size alone
+does not predict cost.
 
 ### Mental model
 
@@ -301,16 +327,18 @@ A reduction combines values. **`keepdim`** keeps the reduced axis in place for l
 
 ### Objective
 
-Explain how a transpose shares storage and when arranging values requires a copy.
+Use strides to explain shared storage, and distinguish a cheap view from a
+layout copy that may help later GPU work.
 
 ### How it works
 
 A view is a tensor that shares stored values with another tensor. A stride
-says how many stored elements to step over when moving one position along an
-axis. For a `[2, 3]` matrix stored row by row, strides `(3, 1)` mean three
-elements to the next row and one to the next column.
+is the number of stored elements to jump when moving one position along an
+axis. **`stride()`** reports these steps; it neither moves nor copies values.
+For a `[2, 3]` matrix stored row by row, strides `(3, 1)` mean three elements
+to the next row and one to the next column. Strides count elements, not bytes.
 
-**`transpose`** swaps two axes. It changes the shape and strides while sharing
+**`transpose()`** swaps two axes. Here it changes the shape and strides while sharing
 the original values. The arrows below connect both tensors to that storage.
 
 ![Two index maps share the same storage](reference/diagrams/views-strides.svg)
@@ -324,47 +352,127 @@ print(x.stride())  # Show storage steps for moving to the next row or column.
 print(y.stride())  # Show the swapped storage steps after transposing.
 ```
 
-Changing a value through `y` also changes the corresponding value in `x`.
+The strides change from `(3, 1)` to `(1, 3)`. Reading a row of `y` now jumps
+three storage positions between values. Changing a value through `y` also
+changes the corresponding value in `x`.
 
 Contiguous means values follow the tensor's logical order in the selected
 memory layout. In the row-by-row layout used here, the transposed `y` is not
-contiguous. **`contiguous`** makes a copy when needed:
+contiguous. **`contiguous()`** copies it into that layout; if a tensor already
+has the requested layout, it returns that tensor without copying:
 
 ```python
 z = y.contiguous()  # Copy the transposed values into row-by-row storage.
 print(z.stride())  # Show the storage steps for the new row-by-row layout.
 ```
 
-**`reshape`** regroups values in their reading order; **`transpose`** swaps
+The copy stores `0, 3, 1, 4, 2, 5` in order. It has the same values and shape
+as `y`, with strides `(2, 1)` and separate storage.
+
+**`reshape()`** regroups values in their reading order; **`transpose()`** swaps
 axes. For example, `x.reshape(3, -1)` gives shape `[3, 2]`: `-1` asks PyTorch
 to calculate the missing size from the six values. A reshape shares storage
 when possible and copies otherwise.
 
-**Performance connection:** creating a view avoids copying values. A copy
-requires extra reads, writes and storage, so add one only when it serves the
-following computation.
+| Concept or API | Simple meaning | Copies data? |
+| --- | --- | --- |
+| View | Another way to access the same stored numbers | No |
+| Stride / **`stride()`** | Steps along each axis / the method that reports them | No |
+| **`transpose()`** | Swap two dimensions, such as rows and columns | No, in this example |
+| Contiguous | Values follow the expected reading order for the chosen layout | A property, not a copying operation |
+| **`contiguous()`** | Return a tensor in the requested contiguous layout | Only if needed |
+| **`reshape()`** | Give values a new shape in their current reading order | Sometimes |
+
+The method **`view()`** can also change shape without copying, but requires
+compatible strides; it raises an error when the requested shape cannot share
+the storage. **`reshape()`** can make a copy in that case.
+
+**Performance connection:** a kernel is a function executed on the GPU. It
+must find and read the stored values.
+
+- Views and **`transpose()`** are cheap to create because they change metadata,
+  without moving tensor values. **`reshape()`** is similarly cheap when it
+  shares storage.
+- Strides determine the addresses used by later operations. Nearby parallel
+  reads are often more efficient than scattered reads, which matters for
+  memory-bound work. A contiguous layout can help, depending on the kernel.
+- **`contiguous()`** may help later operations, but its copy reads and writes
+  the whole tensor, using GPU time, memory bandwidth and extra storage.
+  Some kernels already handle transposed inputs efficiently; compare the
+  copy plus later computation with computing directly on the view.
+
+Creating a view does not remove the arithmetic in later compute-bound work.
 
 ### Mental model
 
-Shape describes the axes; strides map them to storage. Different views can share the same values.
+Shape tells PyTorch how to interpret the numbers. Stride tells it where to find
+them in memory. A view changes the interpretation without moving the numbers.
 
 ## 7. Dtype changes storage and numerical behavior
 
 ### Objective
 
-Compare tensor byte counts and explain why a smaller **`dtype`** can change values.
+Compare floating-point range, precision and storage, and explain when a smaller
+**`dtype`** may help GPU performance.
 
 ### How it works
 
 A **`dtype`** specifies how each tensor element is stored. Floating-point
-formats represent numbers approximately. FP32 uses four bytes per value;
-FP16 (16-bit floating point) and BF16 (bfloat16) each use two.
+formats represent numbers approximately. FP means floating point; the number
+in FP32 or FP16 gives the total bits per value. BF16 means bfloat16, another
+16-bit format.
 
 Range is how large or small a nonzero number the format can represent.
-Precision is how much detail it can retain. BF16 covers a wider range than
-FP16 but keeps less detail. Equal byte counts do not mean equal number formats.
+Precision is how much detail it can retain. Each format below divides its bits
+into three parts:
 
-For a dense tensor, logical bytes equal element count times bytes per element.
+- One sign bit selects positive or negative.
+- Exponent bits set the scale of the number, controlling its range.
+- Fraction bits store detail within that scale. More fraction bits give finer
+  precision at a similar magnitude.
+
+#### Compare the formats
+
+E4M3 means four exponent bits and three stored fraction bits; E5M2 and E2M1
+use the same naming rule. The totals include the sign bit. Maximum finite value
+means the largest positive number before any external scaling, excluding infinity.
+
+| Format | Total bits | Exponent bits | Fraction bits | Maximum finite value |
+| --- | --- | --- | --- | --- |
+| FP64 | 64 | 11 | 52 | ≈ 1.80 × 10³⁰⁸ |
+| FP32 | 32 | 8 | 23 | ≈ 3.40 × 10³⁸ |
+| FP16 | 16 | 5 | 10 | 65,504 |
+| BF16 | 16 | 8 | 7 | ≈ 3.39 × 10³⁸ |
+| FP8 E4M3FN | 8 | 4 | 3 | 448 |
+| FP8 E5M2 | 8 | 5 | 2 | 57,344 |
+| FP4 E2M1 | 4 | 2 | 1 | 6 |
+
+BF16 has nearly FP32's range but much less precision. Compared with FP16, it
+trades three fraction bits for three exponent bits while using the same storage.
+Likewise, E5M2 has a wider range than E4M3FN but less detail.
+
+The exact maximum also depends on the format's encoding rules. E4M3 here is
+the E4M3FN variant used by **`torch.float8_e4m3fn`**; other E4M3 variants can
+have different limits. **`torch.float8_e5m2`** names the E5M2 row. The first
+four rows use **`torch.float64`**, **`torch.float32`**, **`torch.float16`** and
+**`torch.bfloat16`**, respectively.
+
+#### Stored bits and scaling
+
+Eight bits make one byte: FP64 uses eight bytes per value, FP32 four,
+FP16/BF16 two, and FP8 one. Packed FP4 stores two values per byte.
+These counts exclude extra scale data and storage overhead.
+
+Scaling maps a small stored number to a larger or smaller working value:
+`reconstructed value = stored value × scale`. For example, FP4's stored `6`
+with scale `10` represents `60`. Scaling changes the covered range; it does
+not add fraction bits. The scale must also be stored, often shared by a group
+of values.
+
+**`torch.float4_e2m1fn_x2`** stores two FP4 values in one byte. PyTorch's FP8
+and FP4 types have limited operation and device support; useful arithmetic
+needs a supported implementation. The example below uses ordinary FP32/BF16
+tensors, where logical bytes equal element count times bytes per element.
 The bars compare storage for the same six values; they do not show speed.
 
 ![Same shape, different byte counts](reference/diagrams/dtype-bytes.svg)
@@ -384,18 +492,25 @@ converts values into new storage, which can round away detail. For example,
 FP32 can distinguish `1.0001` from `1.0`; BF16 rounds both to `1.0`. Converting
 back to FP32 cannot recover the lost difference.
 
-**Performance connection:** fewer bytes can reduce storage and data movement.
-Check that the changed numerical results are acceptable before measuring speed.
+**Performance connection:** fewer stored bits can reduce memory use and
+traffic, helping memory-bound work. Compute-bound work benefits when the GPU
+and kernel support faster arithmetic for that format. Conversion and scaling
+add work and may need extra storage. Check numerical accuracy and measure the
+whole path; half the bits does not guarantee half the runtime.
 
 ### Mental model
 
-A smaller number format saves bytes but can lose detail.
+Choose a **`dtype`** that preserves the range and precision your calculation
+needs. Fewer bits can reduce GPU memory traffic and speed up supported
+operations; check that the results stay accurate enough and measure the full
+calculation.
 
 ## 8. Device placement selects where work happens
 
 ### Objective
 
-Follow a tensor from CPU to GPU and identify when Python needs a completed result.
+Trace values between CPU and GPU memory, and distinguish a CPU wait from a
+dependency between GPU operations.
 
 ### How it works
 
@@ -404,10 +519,18 @@ computing platform. A tensor on a CUDA **`device`** uses the GPU for supported
 operations. **`to`** with `"cuda"` copies a CPU tensor to the GPU and returns it.
 
 CUDA work is usually asynchronous: Python can continue before the GPU finishes.
-A kernel is a function executed on the GPU. One PyTorch operation may use one
-or several kernels. The arrows show submission and result flow, not duration.
+A stream is an ordered queue of GPU operations. In the same stream,
+multiplication finishes before a following sum uses its result. One PyTorch
+operation may use one or several kernels.
 
-![Submission is separate from completion](reference/diagrams/device-execution.svg)
+**`item()`** returns a one-element tensor's value as a Python number. For a CUDA
+tensor, it waits for the result and copies that single value to CPU memory.
+The original tensor stays on the GPU.
+
+![A scalar comes back; the tensor stays on the GPU](reference/diagrams/device-execution.svg)
+
+The columns show where values are stored. Python variable names and tensor
+metadata are managed on the CPU, even when the tensor's values are on the GPU.
 
 **CUDA example:**
 
@@ -417,29 +540,57 @@ import torch  # Load the PyTorch library.
 cpu_x = torch.tensor([1., 2., 3.])  # Create three values in CPU memory.
 x = cpu_x.to("cuda")  # Copy the values to GPU memory and keep the returned tensor.
 y = x * 2  # Double each value on the GPU.
-total = y.sum()  # Add all values into one tensor on the GPU.
-print(total.item())  # Wait for the GPU result, extract a Python number, and print it.
+total = y.sum()  # Add all values into a scalar tensor on the GPU.
+value = total.item()  # Wait and copy the result into a Python float; total stays on the GPU.
+print(value)  # Print the Python number 12.0, already in CPU memory.
 ```
 
-A stream is an ordered queue of GPU operations. In the same stream, the sum
-follows the multiplication automatically. **`item`** extracts a scalar tensor's
-value as a Python number, waiting for the GPU result when necessary.
+Writing `print(total.item())` combines the last two steps: **`item()`** runs
+before Python prints the returned number. Printing `total` directly also reads
+GPU values for display and can require a wait; it leaves `total` on the GPU.
 
 Keep operands on compatible devices. Reading **`shape`** or **`dtype`** uses
-metadata on the CPU; reading or printing CUDA values can require a wait.
+metadata on the CPU and does not copy tensor values back.
 
-**Performance connection:** repeated **`item`** calls can make the CPU wait
-instead of submitting more work for the GPU.
+#### CPU waits and GPU dependencies
+
+Synchronization makes work wait until a required operation finishes. Where the
+wait happens matters:
+
+- **`torch.cuda.synchronize()`** blocks the calling CPU thread until previously
+  submitted GPU work in all streams on the current CUDA device finishes. A
+  **`device`** argument selects another device.
+- **`wait_stream()`**, as in `stream2.wait_stream(stream1)`, lets the calling CPU
+  thread continue. Future work submitted to `stream2` waits for the work already
+  submitted to `stream1` when the call was made.
+
+These calls order completion; neither copies values to CPU memory. A dependency
+is necessary when one operation needs another's result. Separate streams can
+overlap independent work when hardware resources allow; overlap is not guaranteed.
+
+**Performance connection:** aim to:
+
+1. Let the CPU prepare or submit work while the GPU computes.
+2. Read GPU results on the CPU only when needed, avoiding unnecessary waits.
+3. Keep dependencies required for correctness; avoid ordering independent work
+   unnecessarily.
+4. Supply enough useful work to keep the GPU busy.
+
+Repeated **`item()`** calls can pause submission and leave gaps between GPU
+operations. Even a tiny scalar read can cost time through waiting, rather than
+memory bandwidth or arithmetic being the limit. Measure the full workload.
 
 ### Mental model
 
-Python submits GPU work. Getting its result on the CPU requires completion.
+Tensor values stay on their device until copied. Reading a GPU result on the CPU
+requires a wait; a stream dependency can order GPU work while the CPU continues.
 
 ## 9. A model is a sequence of tensor operations
 
 ### Objective
 
-Follow shapes through a linear layer and an activation.
+Explain how a linear layer calculates all neuron outputs with matrix
+multiplication, then trace those values and shapes through a small network.
 
 ### How it works
 
@@ -452,38 +603,99 @@ A sample is one input example; a batch is a group of samples. A feature is one
 numeric component of an input or output. Here `[2, 3, 4]` means two samples,
 three positions per sample and four features per position.
 
-An **`nn.Linear`** layer with input size 4 and output size 2 turns each group
-of four features into two. Each output
-feature is a weighted sum of the four inputs plus a learned bias. The last
-axis changes from 4 to 2; the others stay the same. Its weights have shape
-`[2, 4]` and its bias has shape `[2]`.
+#### One linear layer: multiply, then add bias
+
+A linear layer has output units called neurons. Each computes a weighted sum
+of its inputs plus a learned bias. In **`nn.Linear`**`(4, 2)`:
+
+- **`in_features=4`** means each input vector has four features.
+- **`out_features=2`** means the layer has two neurons, each producing one feature.
+
+Each neuron uses all four inputs. The weights have shape `[2, 4]`: one row of
+four weights per neuron. The bias has shape `[2]`: one bias per neuron. The
+input's last size changes from 4 to 2; the other sizes stay the same.
+
+For one input vector, call the inputs `x`, weights `W`, biases `b` and layer
+outputs `y`. Draw `x` and `y` as columns, and the whole layer is `y = Wx + b`:
+matrix multiplication followed by bias addition. Each row of `W` belongs to
+one neuron; each column corresponds to one input feature. For example, w₂₃
+is the weight connecting input 3 to neuron 2.
+
+![A linear layer calculates both neuron outputs together](reference/diagrams/linear-matmul.svg)
+
+The first row calculates:
+
+y₁ = w₁₁ × x₁ + w₁₂ × x₂ + w₁₃ × x₃ + w₁₄ × x₄ + b₁
+
+The second row calculates y₂ using its own four weights and bias. Matrix
+multiplication collects these weighted sums into one layer calculation.
+
+For many inputs, put the input vectors in rows of a matrix `X`. PyTorch's
+equivalent expression is `Y = X @ W.T + b`. Here `@` means matrix
+multiplication and `W.T` swaps the weight matrix's rows and columns.
+Our six input vectors form `[6, 4]`; multiplying by the transposed weights
+`[4, 2]` gives `[6, 2]`. Add the same two biases to each row. Keeping the
+original batch and position axes gives `[2, 3, 2]`.
+
+#### Pass each layer's results to the next
 
 ReLU (rectified linear unit) replaces negative values with zero and keeps
-positive values. **`nn.ReLU`** provides it as a module. **`nn.Sequential`**
-passes each module's output to the next, as the arrows show.
+positive values. **`nn.ReLU`** applies it to each neuron output without changing
+the shape. It is a separate operation with no learned weights or biases.
 
-![A linear layer transforms the last dimension](reference/diagrams/module-shapes.svg)
+A neural network (NN) combines layers of these calculations. Its input layer
+represents the supplied features, hidden layers produce intermediate features,
+and the output layer produces the final result. Here the two-neuron layer is
+hidden because its values, after ReLU, feed an output layer:
+**`nn.Linear`**`(2, 1)` produces one output feature. The network is `4 → 2 → 1`.
+Each linear layer has its own weights and biases: the first uses `[2, 4]`
+and `[2]`; the second uses `[1, 2]` and `[1]`. The second layer applies the
+same multiply-and-add rule to the two features it receives after ReLU.
+
+![One network, two views: neurons and tensor shapes](reference/diagrams/module-shapes.svg)
+
+The left view follows one four-feature vector. The right view shows the same
+network applied to all six vectors in `[2, 3, 4]`. Batch size and neuron count
+describe different axes; all six vectors share the same learned weights.
+
+**`nn.Sequential`** passes each module's output to the next in the listed order.
 
 ```python
 import torch  # Load the PyTorch library.
 from torch import nn  # Load the neural-network building blocks.
 
-# Build a four-input, two-output linear layer followed by ReLU.
-model = nn.Sequential(nn.Linear(4, 2), nn.ReLU())
+hidden = nn.Linear(4, 2)  # Give each of two hidden neurons all four input features.
+output = nn.Linear(2, 1)  # Combine the two hidden features into one output feature.
+model = nn.Sequential(hidden, nn.ReLU(), output)  # Apply hidden layer, ReLU, then output layer.
 x = torch.ones(2, 3, 4)  # Create two samples, each with three positions and four features.
-y = model(x)  # Apply the linear layer, then ReLU, at every position.
-print(y.shape)  # Show the output sizes: samples, positions and output features.
+y = model(x)  # Apply the same network independently at each of the six positions.
+print(y.shape)  # Print [2, 3, 1]: two samples, three positions and one output feature.
 ```
 
-The same linear layer processes all six positions. Its input's last size must
-be 4. The output values depend on the initially random weights and biases.
+The first layer requires four input features; the next linear layer requires
+the two features produced by the hidden layer. Output values depend on the
+initially random weights and biases.
 
-**Performance connection:** more input vectors or more features mean more
-matrix work and output storage. Read these sizes to understand a model's cost.
+The final width depends on the task. This example produces one number per
+position. A language model typically produces a score for each possible next
+token, a unit of text such as a word or word piece. A separate selection step
+chooses one token from those scores; one token does not mean one output neuron.
+
+**Performance connection:** when inputs and parameters are on a GPU, the
+matrix calculation is divided into smaller pieces processed in parallel.
+One layer formula does not guarantee one GPU kernel. More input vectors mean
+more arithmetic and output storage; more input features mean more weights
+and arithmetic. Processing vectors together can reuse weights, increasing
+arithmetic per byte read.
+Small layers may be memory- or launch-bound; sufficiently large matrix work
+can be compute-bound. ReLU does little arithmetic per value and is often
+memory-bound on large tensors. The example above runs on the CPU by default.
 
 ### Mental model
 
-Follow the operations in order. A linear layer changes the feature axis; ReLU keeps its shape.
+Each linear layer multiplies its inputs by its own weights and adds its biases.
+Its output features feed the next operation. Linear layers change the last
+axis; ReLU keeps the shape. The task determines the final output size.
 
 ## 10. Training saves information for a backward pass
 
@@ -503,6 +715,11 @@ descent (SGD) subtracts the gradient multiplied by a learning rate, the update's
 scale. The diagram follows one weight from prediction to update.
 
 ![Forward values lead to gradients and an update](reference/diagrams/autograd.svg)
+
+**`requires_grad=True`** enables gradient tracking for the weight.
+**`torch.optim.SGD`** supplies the optimizer; **`zero_grad()`** clears old
+gradients, **`grad`** stores the computed gradient, and **`step()`** updates
+the weight.
 
 ```python
 import torch  # Load the PyTorch library.
@@ -524,55 +741,130 @@ Activations are intermediate values from the forward pass. Autograd saves
 some of them because the backward calculation needs them.
 
 **Performance connection:** training adds backward computation and memory for
-saved activations and gradients.
+saved activations and gradients. Backward rereads saved values and writes
+gradients; the optimizer reads gradients and updates parameters. Each stage
+can have a different limit, and saved tensors also consume memory capacity.
 
 ### Mental model
 
 Forward predicts; loss measures error; backward computes gradients; the optimizer updates parameters.
 
-## 11. Evaluation mode and gradient mode are separate
+## 11. Switching from training to validation and inference
 
 ### Objective
 
-Explain why inference uses both evaluation mode and disabled gradient recording.
+Trace training, validation and inference, and explain which steps need known
+answers, gradient recording and parameter updates.
 
 ### How it works
 
-Inference uses a model to produce outputs without training it. **`eval`**
-selects evaluation behavior. For example, **`nn.Dropout`** randomly zeros some
-values during training and rescales the rest; during evaluation it passes
-values through unchanged. **`eval`** leaves gradient recording enabled.
+Training learns weights and biases from examples. Validation checks the model
+on separate examples, often after each epoch: one pass through all training
+batches. Final testing checks the chosen model on a held-out test dataset.
+In supervised learning, all three datasets contain inputs and known answers,
+called targets. The model receives the inputs; the loss function compares its
+predictions with the targets. Only training uses that loss to update parameters.
 
-**`torch.inference_mode`** disables gradient recording and some related
-tracking. Use it when outputs will not be used in later gradient-tracked
-calculations. The diagram shows these two independent controls.
+Inference uses the trained model to predict outputs for new inputs. Correct
+answers are usually unavailable, so this prediction step needs no loss.
 
-![Two independent controls for inference](reference/diagrams/inference-controls.svg)
+Evaluation mode is the layer setting used for validation, testing and ordinary
+inference. **`model.eval()`** prepares the layers for prediction;
+it does not run a test or choose a dataset.
+
+Dropout is an optional layer that helps reduce overfitting: fitting training
+examples too closely to work well on new examples. **`nn.Dropout`** acts on
+tensor values, with different behavior in the two model settings:
+
+| Model setting | Dropout behavior |
+| --- | --- |
+| **`model.train()`** | Randomly zero some values to help training |
+| **`model.eval()`** | Pass values through unchanged for prediction |
+
+During training, dropout also rescales the retained values to compensate for
+the dropped values. During ordinary inference, keep dropout inactive so the
+model uses the learned features without randomly discarding some of them.
+
+Gradient recording saves operations and values needed for backpropagation.
+A parameter's **`requires_grad=True`** enables tracking for that weight or
+bias; standard learnable layers set this by default. **`loss.backward()`**
+later calculates the gradients that the optimizer uses to update parameters.
+
+The two settings have different jobs: **`model.eval()`** prepares layer behavior
+without changing gradient recording. **`torch.inference_mode()`** skips
+recording inside its block, but does not turn off dropout. Use both for the
+validation and inference examples below.
+
+#### Train, then validate each epoch
+
+Each training batch follows prediction → loss → backpropagation → gradients →
+parameter update. After all training batches, check separate validation batches
+without updating parameters. Arrows in the diagram show this order; start
+training again for the next epoch.
+
+![Train on batches, then validate after each epoch](reference/diagrams/training-validation.svg)
+
+Assume `model`, `optimizer` and `loss_fn` are already prepared.
+`training_batches` and `validation_batches` each provide `(inputs, targets)`
+from their separate datasets; `num_epochs` sets how many training passes to run.
+The example prints each validation batch's loss.
 
 ```python
-import torch  # Load the PyTorch library.
-from torch import nn  # Load the neural-network building blocks.
+import torch  # Load PyTorch for the gradient-recording context.
 
-# Build a linear layer and dropout, then select evaluation behavior.
-model = nn.Sequential(nn.Linear(4, 2), nn.Dropout()).eval()
-x = torch.ones(3, 4)  # Create three inputs with four features each.
-print(model(x).requires_grad)  # Show that evaluation mode still allows gradient recording.
-with torch.inference_mode():  # Disable gradient recording for the indented calculation.
-    output = model(x)  # Run the model without recording gradients.
-print(output.requires_grad)  # Show that this output does not require gradients.
+for epoch in range(num_epochs):  # Repeat training and validation for each epoch.
+    model.train()  # Select training behavior, including active dropout.
+    for inputs, targets in training_batches:  # Read a batch and its known answers.
+        optimizer.zero_grad()  # Clear gradients from the previous batch.
+        predictions = model(inputs)  # Predict and record calculations for backward.
+        loss = loss_fn(predictions, targets)  # Compare predictions with known answers.
+        loss.backward()  # Calculate gradients for the model's parameters.
+        optimizer.step()  # Use gradients to update weights and biases.
+
+    model.eval()  # Prepare the layers for validation: turn off dropout.
+    with torch.inference_mode():  # Skip recording; validation needs no backward pass.
+        for inputs, targets in validation_batches:  # Read separate validation examples.
+            predictions = model(inputs)  # Predict using the current weights.
+            loss = loss_fn(predictions, targets)  # Measure error against known answers.
+            print(loss.item())  # Report this batch's loss without updating weights.
 ```
 
-The output has shape `[3, 2]` in both calls. **`torch.no_grad`** is another
-way to disable gradient recording, with fewer restrictions on using the
-results in later gradient-tracked work.
+Outside the **`inference_mode()`** block, ordinary gradient recording resumes.
+The next epoch's **`model.train()`** restores training layer behavior.
+Final testing uses the same evaluation pattern on test batches after model
+selection; keep those test examples out of training and model selection.
 
-**Performance connection:** disabling gradient recording avoids saving
-information needed only for backward. Evaluation mode separately selects the
-model's prediction behavior.
+#### Predict on new inputs
+
+Use the trained `model` with a batch called `new_inputs`. The arrows now stop
+at predictions: there are no target answers, loss, backward pass or optimizer
+update in this example. Dropout stays inactive and recording stays off.
+
+![Use the trained model to predict new outputs](reference/diagrams/inference-controls.svg)
+
+```python
+import torch  # Load PyTorch for the gradient-recording context.
+
+model.eval()  # Prepare the layers for prediction: turn off dropout.
+with torch.inference_mode():  # Skip recording because no backward pass is needed.
+    predictions = model(new_inputs)  # Predict outputs using the learned weights.
+print(predictions)  # Use the predictions without changing weights or biases.
+```
+
+Use **`inference_mode()`** when these results will not enter later
+gradient-tracked calculations. **`torch.no_grad()`** also skips backward
+recording, with fewer restrictions on using results in later gradient-tracked
+work. Both settings leave existing parameters' **`requires_grad`** flags unchanged.
+
+**Performance connection:** skipping backward recording saves memory and
+tracking work during validation and inference. The forward pass still reads
+weights and performs arithmetic, so memory or compute can still limit it.
 
 ### Mental model
 
-**`eval`** chooses model behavior. The gradient context chooses whether to record the calculation.
+Training predicts, measures error and updates weights. Validation and testing
+measure performance; inference produces predictions. **`eval()`** selects layer
+behavior, while **`inference_mode()`** skips recording for backpropagation.
 
 ## 12. Transfers are part of the input pipeline
 
@@ -609,8 +901,10 @@ Keep results on the GPU while later GPU operations still need them, avoiding
 unnecessary trips back to the CPU.
 
 **Performance connection:** a model must wait for its next input. Preparing
-batches, copying them and computing on them are separate costs; making one
-stage faster does not automatically make the others faster.
+batches uses CPU time; H2D copies use the CPU–GPU link; kernels use GPU memory
+and arithmetic. If delivery is the slow stage, faster model arithmetic can
+leave total latency nearly unchanged. Keeping reused data on the GPU avoids
+paying for the same transfer again.
 
 ### Mental model
 
@@ -620,291 +914,424 @@ Prepare the batch, move it to the right device, then compute.
 
 ### Objective
 
-Distinguish memory occupied by tensors from memory reserved for reuse.
+Explain what PyTorch manages automatically and keep a matmul loop from retaining
+unneeded GPU memory.
 
 ### How it works
 
-PyTorch's caching allocator keeps GPU memory blocks for reuse. Allocated
-memory is occupied by live tensors. Reserved memory includes those allocations
-plus blocks the allocator can reuse later.
+PyTorch normally allocates and reuses GPU memory automatically. You control
+which tensors remain needed and how much work fits at once. Later operations
+or backpropagation may still need a completed calculation's inputs or outputs.
 
-The outer box is the reserved pool; the inner regions show live and reusable
-space. Their sizes are schematic. Other GPU allocations can exist outside
-this pool.
+#### Why keep a memory pool?
 
-![Live allocations occupy part of the reserved pool](reference/diagrams/allocator.svg)
+An allocator supplies storage for tensors. PyTorch's usual CUDA caching
+allocator reuses a suitable unused block or requests more memory from CUDA.
+The pool grows as needed; creating one tensor does not reserve the entire GPU.
 
-**CUDA example:** the counters depend on the device and other live tensors.
+- Allocated memory holds live tensors: weights, inputs, outputs and other
+  values still needed by the program.
+- Reserved memory is the GPU memory held by the allocator. It includes live
+  allocations and unused blocks kept for reuse.
+- Cached capacity means those unused blocks. Spare space can come from a
+  block larger than a request or from a tensor whose storage is no longer needed.
+
+The cache is reusable GPU storage, not an extra hardware cache or saved
+calculation results. For `y = x @ w`, PyTorch supplies storage for `y`, often
+from a cached block. Operations can also need working space managed by PyTorch
+or its libraries.
+
+Keeping blocks avoids repeated CUDA allocation work and possible GPU waits.
+The arrows show storage becoming live or reusable, not data copies. Areas are
+schematic.
+
+![GPU memory moves between live use and cached reuse](reference/diagrams/allocator.svg)
+
+#### When is memory released?
+
+Variables, lists, views and autograd's saved values can keep storage alive.
+Local references normally disappear when a function returns; storage becomes
+reusable when nothing still needs it. `del` removes one reference earlier,
+without removing other references. A loop does not create a new Python scope,
+so its last tensor variables survive the loop.
+
+You do not need to free memory or synchronize after each matmul in ordinary
+single-stream code. PyTorch and CUDA stream ordering make reuse safe. Reusable
+storage usually stays in the reserved pool for the next allocation.
+
+#### An everyday matmul batch pattern
+
+**CUDA example:** keep weights across batches and use a helper to limit GPU
+temporaries' lifetimes. Here the next consumer needs CPU predictions, so
+**`cpu()`** copies them there; keep them on the GPU if the next operation needs
+them there. **`torch.inference_mode()`** skips recording for backpropagation.
+
+**`torch.cuda.memory_allocated()`** reports current tensor bytes;
+**`torch.cuda.memory_reserved()`** reports allocator-held bytes. They describe
+this process and device, not all GPU use.
 
 ```python
-import torch  # Load the PyTorch library.
+import torch  # Load PyTorch.
 
-x = torch.ones(1024, device="cuda")  # Create a GPU tensor containing 1,024 ones.
-print(torch.cuda.memory_allocated())  # Show GPU bytes currently occupied by live tensors.
-# Show GPU bytes held by the allocator, including reusable blocks.
-print(torch.cuda.memory_reserved())
-del x  # Remove this reference to the tensor.
-torch.cuda.empty_cache()  # Return unused cached blocks so other GPU applications can use them.
+w = torch.ones(4, 2, device="cuda")  # Keep one weight matrix for all batches.
+
+def predict_batch(cpu_x):  # Limit temporary tensor references to this function.
+    with torch.inference_mode():  # Predict without recording for backpropagation.
+        x = cpu_x.to("cuda")  # Allocate GPU storage and copy this input batch.
+        y = x @ w  # Let PyTorch provide storage for the [8, 2] result.
+        return y.cpu()  # Copy predictions to CPU before local GPU references disappear.
+
+for _ in range(3):  # Process three batches without keeping their GPU outputs.
+    cpu_x = torch.ones(8, 4)  # Supply eight input vectors from CPU memory.
+    cpu_y = predict_batch(cpu_x)  # Receive CPU predictions; GPU temporaries can be reused.
+    print(cpu_y.shape)  # Inspect this batch's [8, 2] output shape.
+
+print(torch.cuda.memory_allocated())  # Live storage still includes w.
+print(torch.cuda.memory_reserved())  # Cached blocks may remain for the next batch.
 ```
 
-Keeping a tensor in a variable or list keeps its storage needed.
-**`torch.cuda.empty_cache`** can release unused blocks, but it cannot free
-live tensors. These counters describe this process's allocator, not all
-memory used on the GPU.
+Weights stay live; reserved memory may stay high for reuse. Allocator and
+library state affect the counters, so do not expect exact totals from just
+the visible tensors.
 
-Out of memory (OOM) means a requested allocation could not be satisfied.
-Check live inputs, outputs and saved training state before trying to clear
-the cache.
+#### Practical memory habits
 
-**Performance connection:** retaining unnecessary tensors reduces available
-capacity. Reusing cached blocks avoids repeated allocation work, so clearing
-the cache every step can be counterproductive.
+- Keep only needed tensors. Appending GPU outputs to a growing list keeps their
+  storage live. For logging, store a number such as **`loss.item()`**; when saved
+  predictions belong on the CPU, use `y.detach().cpu()`. **`detach()`** alone
+  shares the same storage and does not release GPU memory. Scalar readback and
+  CPU copies can wait for the GPU; use them only when needed.
+- During training, keep gradient recording on. Autograd normally releases saved
+  intermediates after **`backward()`**; parameters, gradients and optimizer state
+  remain. Clear old gradients with **`optimizer.zero_grad(set_to_none=True)`**
+  before the next optimization step's backward work, except when deliberately
+  accumulating gradients. Avoid **`retain_graph=True`** unless another backward
+  pass through that graph is required.
+- Start with a batch size that leaves room for outputs, operation working space
+  and training state. **`torch.cuda.max_memory_allocated()`** reports the peak
+  tensor allocation since program start or reset. Out of memory (OOM) means an allocation
+  could not be satisfied: first check retained tensors and reduce the batch or
+  problem size. Unused blocks can be fragmented, so their total is not necessarily
+  one block large enough for a new tensor.
+- Leave the cache enabled. **`torch.cuda.empty_cache()`** returns releasable unused
+  blocks to CUDA, which can help another application use the GPU. It cannot free
+  live tensors or make an oversized live workload fit. Use it for an occasional
+  memory handoff, not after every matmul. The
+  default allocator already tries reclaiming cached blocks on allocation failure.
+
+**Performance connection:** removing unnecessary live tensors reduces memory
+capacity pressure. Reusing cached blocks avoids allocation overhead. Neither
+changes the bytes a matmul must read and write: memory-bound is a data-access
+speed limit, while OOM is a capacity failure. Other GPU allocations, such as
+CUDA context state, also exist outside this pool.
 
 ### Mental model
 
-Allocated memory holds live tensors. Reserved memory also includes space kept for reuse.
+PyTorch manages memory blocks; your code controls tensor lifetimes. Keep what
+the next step needs, release unneeded references, and let the allocator reuse
+its cached storage.
 
-## 14. Batching expresses repeated work as tensor operations
+## 14. Batching groups samples; vectorization processes the batch
 
 ### Objective
 
-Express independent per-row calculations as one whole-tensor operation.
+Separate forming a batch from computing on it, and compare a sample loop with
+an equivalent whole-batch calculation.
 
 ### How it works
 
-Batching groups inputs to process together. Vectorization expresses repeated
-work with whole-tensor operations instead of a Python loop. The following
-calculation doubles each value and adds one; every row can be processed
-independently.
+A sample is one input example. A batch is a group of samples processed together.
+Batching forms that group; vectorization expresses the repeated calculation
+as operations on a whole tensor instead of a Python loop over samples.
 
-The diagram compares a loop over three rows with one expression for the whole
-matrix. The arrows represent equivalent calculations, not measured durations.
+In `x * 2 + 1`, `x` is already a PyTorch tensor. PyTorch multiplies every element
+by two, then adds one to every element. Python does not automatically split a
+dataset into batches here. The scalar values `2` and `1` apply across the tensor
+through broadcasting, as in lesson 3.
 
-![Independent rows can share one batched expression](reference/diagrams/batching.svg)
+Below, each sample has two features. **`torch.stack()`** copies equally shaped
+sample tensors into one tensor with a new axis. Stacking three `[2]` samples
+creates `[3, 2]`: three samples, two features each. That is the explicit batch
+formation step. If `x` was created directly from three rows with
+**`torch.tensor()`**, those rows were already grouped when `x` was created.
+
+Compare the two routes below. Arrows show data flow, not measured time. Both
+examples run on the CPU and produce the same three rows in the same order.
+
+<!-- comparison:start -->
+
+#### Loop: one sample at a time
+
+Run the calculation separately for each sample. Stack the finished results
+only to display them as one matrix.
+
+![Compute each sample, then collect the results](reference/diagrams/batching-loop.svg)
 
 ```python
-import torch  # Load the PyTorch library.
+import torch  # Load PyTorch.
 
-# Create three independent rows with two values each.
-x = torch.tensor([[1., 2.], [3., 4.], [5., 6.]])
-rows = []  # Start an empty list for the row results.
-for row in x:  # Visit each row separately.
-    rows.append(row * 2 + 1)  # Double each value, add one, and save the row result.
-batched = x * 2 + 1  # Apply the same calculation to the whole matrix.
-print(batched)  # Show all row results together in one matrix.
+a = torch.tensor([1., 2.])  # Create sample 1.
+b = torch.tensor([3., 4.])  # Create sample 2.
+c = torch.tensor([5., 6.])  # Create sample 3.
+
+rows = []  # Collect the separate outputs.
+for row in [a, b, c]:  # Visit one sample at a time.
+    rows.append(row * 2 + 1)  # Compute this sample.
+y = torch.stack(rows)  # Combine finished outputs.
+print(y)  # Display the three output rows.
 ```
 
-Both approaches produce the same values because no row needs another row's
-result. A loop whose next calculation depends on the previous result needs
-different reasoning.
+<!-- comparison:next -->
 
-Throughput is work completed per unit time. Latency is time to finish one
-request. A larger batch may improve throughput while using more memory or
-making requests wait for other inputs to arrive.
+#### Batch: all three samples
 
-**Performance connection:** whole-tensor operations can reduce repeated Python
-submissions and give the GPU more work at once. Check equivalent results,
-then measure throughput and latency for the application.
+Stack the inputs first. Apply the multiplication and addition to the whole
+batch without a Python loop over samples.
+
+![Group the samples, then compute on the batch](reference/diagrams/batching.svg)
+
+```python
+import torch  # Load PyTorch.
+
+a = torch.tensor([1., 2.])  # Create sample 1.
+b = torch.tensor([3., 4.])  # Create sample 2.
+c = torch.tensor([5., 6.])  # Create sample 3.
+
+x = torch.stack([a, b, c])  # Form a [3, 2] batch.
+y = x * 2 + 1  # Compute on all six values.
+print(y)  # Display the three output rows.
+```
+
+<!-- comparison:end -->
+
+Both print `[[3., 5.], [7., 9.], [11., 13.]]` as a tensor. In the batch route,
+**`torch.stack()`** groups the inputs; `x * 2 + 1` computes on that existing
+batch. The loop route groups only its finished outputs. The calculations are
+equivalent because each sample's result is independent of the others.
+A calculation that needs the previous sample's result cannot be replaced by
+this independent-row pattern without changing the algorithm.
+
+In typical training code, **`DataLoader`** is PyTorch's utility for loading
+samples from a dataset. Setting **`batch_size`**, for example
+`DataLoader(dataset, batch_size=32)`, lets it form batches automatically with
+its standard batching behavior. The training loop then visits batches, and
+`model(inputs)` processes the current batch. The last batch can be smaller.
+Batching does not move tensors to a GPU; device placement is a separate step.
+
+**Performance connection:** the loop requests a multiplication and addition
+three times; the vectorized version requests each once for the whole batch.
+On a GPU, this can reduce repeated Python overhead and kernel launches. The
+expression still contains two operations; one line does not guarantee one
+kernel or a speedup. Grouping also has a cost, and the same six input values
+still need processing. Throughput is work completed per unit time; latency is
+time to finish one request. Larger batches can improve throughput while using
+more memory or making requests wait. Check equal results, then measure.
 
 ### Mental model
 
-When inputs are independent, group them and apply the same tensor operation together.
+First group the samples into a batch. Then compute on the batch with tensor
+operations. Forming the batch and calculating its results are separate steps.
 
-## 15. A timer must include completion
+## 15. Measure GPU time with CUDA events
 
 ### Objective
 
-Read a CUDA timing interval and identify the work it includes.
+Explain how CUDA events, synchronization and warm-up help measure GPU work.
 
 ### How it works
 
-Because GPU work is asynchronous, timing a Python call can measure submission
-rather than completed calculation. A CUDA event marks a position in a stream.
-Two timed events measure the interval between their positions once both have
-completed.
+CUDA operations are normally asynchronous: the CPU submits work to the GPU
+and can continue running Python before the GPU finishes. A Python timer around
+`y = x @ x` alone may therefore measure submission time, not completed GPU work.
 
-Warmup runs the operation before measuring to reduce one-time initialization
-effects. The diagram places start and end markers around repeated matrix work,
-then shows the CPU waiting before reading the elapsed time.
+A CUDA stream is an ordered queue of GPU work. A CUDA event is a marker you can
+place in that queue. With timing enabled, two events let you measure the time
+between the GPU reaching the start and end markers.
 
-![Mark the device interval, then wait before reading it](reference/diagrams/timing.svg)
+#### What each function does
 
-**CUDA example:** a timing pattern, with no claimed speedup.
+| Function | What it does | Use here |
+| --- | --- | --- |
+| **`torch.cuda.Event()`** | Creates an event; set **`enable_timing=True`** for timestamps. Creation alone does not place it in a stream. | Prepare start and end markers. |
+| **`event.record()`** | Places the event in the current CUDA stream. It does not wait for the GPU to reach it. | Mark the start or end of the work. |
+| **`torch.cuda.synchronize()`** | Makes the calling CPU thread wait for previously submitted work in all streams on the current CUDA device. An optional device argument selects another device. | Wait for the work and both markers to finish. |
+| **`start.elapsed_time(end)`** | Returns the time between the two completed events in milliseconds. | Read the measured GPU interval. |
+
+Events can also coordinate streams. Here we use one stream and focus on timing.
+
+#### Why warm up first?
+
+GPU warm-up means running the same operation a few times before measuring it.
+The aim is to reduce first-run effects when you want to measure repeated use:
+
+- CUDA and libraries may need initialization; for example, the matrix library
+  may load on its first call.
+- Memory blocks and operation working space may need allocation.
+- Some operations or configurations need kernel selection, compilation or
+  other preparation. Ordinary matmul does not imply compiling a new kernel
+  on every call.
+- GPU clock speeds can change as the device becomes busy.
+
+Some setup already happens when the input tensor is created. Warm up with the
+same shapes, dtypes and operation you will measure. Five runs below illustrate
+the pattern; they do not guarantee stable clocks or timings. Measuring the
+first request is a different goal, so retain startup costs when that is what
+matters.
+
+#### A simple matrix-multiplication timer
+
+**CUDA example:** create the inputs, warm up, then time one matrix product.
+All recorded work below uses the same current stream and device.
 
 ```python
-import torch  # Load the PyTorch library.
+import torch  # Load PyTorch.
 
-a = torch.randn(256, 256, device="cuda")  # Create a random square matrix on the GPU.
-for _ in range(5):  # Repeat the warmup calculation five times.
-    result = a @ a  # Multiply the matrix by itself to warm up the operation.
-start = torch.cuda.Event(enable_timing=True)  # Create a GPU marker that can record the start time.
-end = torch.cuda.Event(enable_timing=True)  # Create a GPU marker that can record the end time.
-start.record()  # Place the start marker in the current GPU stream.
-for _ in range(20):  # Repeat the calculation twenty times inside the timed interval.
-    result = a @ a  # Multiply the matrix by itself.
-end.record()  # Place the end marker after the repeated calculations.
-end.synchronize()  # Wait until the GPU reaches the end marker.
-# Divide elapsed milliseconds by the call count and print the average.
-print(start.elapsed_time(end) / 20)
+x = torch.randn(4096, 4096, device="cuda")  # Create the GPU input matrix.
+start = torch.cuda.Event(enable_timing=True)  # Prepare a timed start marker.
+end = torch.cuda.Event(enable_timing=True)  # Prepare a timed end marker.
+
+for _ in range(5):  # Run five illustrative warm-up calculations.
+    y = x @ x  # Warm up the same matrix multiplication.
+torch.cuda.synchronize()  # Finish warm-up before starting the measurement.
+
+start.record()  # Submit the start marker without waiting for it.
+y = x @ x  # Submit the matrix multiplication.
+end.record()  # Submit the end marker after the multiplication.
+torch.cuda.synchronize()  # Wait until the device's submitted work finishes.
+
+elapsed_ms = start.elapsed_time(end)  # Read the completed GPU interval in milliseconds.
+print(f"GPU time: {elapsed_ms:.2f} ms")  # Display this measurement.
 ```
 
-All work uses the same stream, so warmup finishes before the start marker.
-The interval excludes input creation and printing. It can include GPU idle
-gaps while the CPU submits work; it is not simply a sum of kernel durations.
-Five warmups illustrate the sequence, not a universally sufficient count.
+The first synchronization finishes warm-up. The second makes it safe to read
+the elapsed time. The timer measures the interval between the GPU markers,
+not how long the CPU spends inside **`torch.cuda.synchronize()`**.
 
-For total application latency, use a wall-clock interval that includes
-preparation, transfers and completion. Repeat measurements with the same
-shapes, dtypes and computation, and check correctness.
+The diagram follows the timed part only. Read each lane downward: arrows to
+the GPU mean submission; the return arrow means the CPU's wait can finish.
+The shaded GPU area covers the interval between the two timestamps.
+The lanes show an example ordering, not durations or an exact overlap pattern.
 
-**Performance connection:** faster GPU calculation may have little effect on
-total latency when input preparation or transfers take most of the time.
-Measure the boundary that matches the application's need.
+![CPU submits the work; GPU events mark its timing](reference/diagrams/timing.svg)
+
+**`start.record()`** and **`end.record()`** place markers; they do not make the
+CPU wait for GPU completion. **`torch.cuda.synchronize()`** is the explicit CPU
+wait. For a narrower wait, **`end.synchronize()`** waits until the GPU reaches
+that event, rather than waiting for unrelated work across the device.
+
+#### What does the number include?
+
+Input creation, warm-up and printing are outside the measured interval.
+The interval can include GPU idle gaps while the CPU submits the work; it is
+not necessarily the sum of kernel execution times. Other GPU activity can
+also affect the result.
+
+One measurement is illustrative. For a steadier comparison, repeat measurements
+with the same shapes, dtypes and computation, and check correctness. You can
+also place several identical calls between the markers and divide the elapsed
+time by the call count to obtain an average.
+
+**Performance connection:** GPU time measures one part of an application.
+Total request latency also includes preparation, transfers and other work.
+Use a wall-clock timer with completion included when that full duration is
+your goal. A timer tells you how long; a profile helps explain why.
 
 ### Mental model
 
-State what you time, and wait for that work to finish before reading the timer.
+Warm up, mark the GPU interval, wait for completion, then read milliseconds.
+CPU submission, GPU execution and CPU waiting are different parts of the flow.
 
-## 16. Code suggests a hypothesis; a profile supplies evidence
+## 16. torch.compile can combine GPU operations
 
 ### Objective
 
-Distinguish the work requested by tensor code from the execution shown by a profile.
+Explain how **`torch.compile()`** can combine GPU operations, and compare its
+result with ordinary PyTorch execution.
 
 ### How it works
 
-An operator is a PyTorch calculation, such as addition or mean. The dispatcher
-selects an implementation for the tensor's device and dtype. On CUDA, that
-implementation can use a GPU library or launch kernels. One Python line does
-not tell you how many kernels execute.
+**`torch.compile()`** creates an optimized version of a PyTorch function or
+model. It analyzes tensor operations and generates code for supported parts,
+with the aim of making repeated execution faster. One useful GPU optimization
+is kernel fusion.
 
-The diagram traces these layers for a GPU input. The small worked example
-below uses CPU tensors so its values are easy to inspect.
+#### Two operations, potentially one kernel
 
-![Follow an expression through the execution layers](reference/diagrams/operator-evidence.svg)
+A GPU kernel is a function that runs on the GPU. Kernel fusion combines
+multiple operations into one kernel. Consider these element-wise calculations
+on a CUDA tensor `x`:
 
 ```python
-import torch  # Load the PyTorch library.
-
-def transform(x, bias):  # Define a function that transforms the input rows.
-    shifted = x + bias  # Add the same column offsets to each row.
-    positive = torch.relu(shifted)  # Replace negative values with zero.
-    return positive.mean(dim=-1)  # Average across the last axis and return one mean per row.
-
-# Create two input rows, including a negative value.
-x = torch.tensor([[-2., 0., 2.], [1., 2., 3.]])
-bias = torch.ones(3)  # Create an offset of one for each column.
-print(transform(x, bias))  # Run the function and print the mean for each transformed row.
+a = x * 2  # Multiply every input value by two.
+b = a + 3  # Add three to each multiplied value.
 ```
 
-**`torch.relu`** applies the ReLU rule from lesson 9. Eager execution runs
-operations as Python reaches them. Here addition and ReLU produce intermediate
-tensors before the mean reduces each row.
+Ordinary PyTorch execution is called eager execution: operations run as Python
+reaches them. For these two simple CUDA operations, it normally launches two
+kernels:
 
-A profiler records execution activity to show where time goes:
+1. Multiply: read `x`, multiply by 2, and write the intermediate tensor `a`.
+2. Add: read `a`, add 3, and write the output tensor `b`.
 
-| Question | Evidence to inspect |
-| --- | --- |
-| Is the CPU struggling to submit work? | Gaps between GPU operations. |
-| Are copies expensive? | Time spent moving data. |
-| Which calculation dominates? | Operator and kernel durations. |
+The intermediate tensor lives in GPU global memory: the main GPU memory used
+for tensor storage. With fusion, one kernel can read `x`, do both calculations
+and write `b`. It avoids storing and rereading a full tensor `a` in global
+memory; temporary values stay inside the calculation.
 
-Measure a correct, unprofiled baseline first. Profiling adds overhead, so use
-it to explain behavior, then remeasure normally. The
-[tools course](../gpu-performance-tools/index.html) explains profiler commands.
+The boxes below show memory and computation; arrows show the flow of values.
+The lower path is a possible fused implementation, not a measured result.
 
-**Performance connection:** use the profile to choose what to improve. A copy,
-a wait and a calculation have different causes and costs.
+![Two separate kernels or one fused kernel](reference/diagrams/compilation.svg)
+
+Fusion can save one kernel launch and the extra memory traffic for `a`.
+The multiplication and addition still happen. Simply writing `b = x * 2 + 3`
+on one Python line does not fuse them in ordinary eager execution.
+
+#### A complete example
+
+**CUDA example:** running this needs a compatible NVIDIA GPU, CUDA-enabled
+PyTorch and a working compiler backend—the component that generates executable
+code. Reading the example needs no setup.
+
+**`torch.allclose()`** returns `True` when corresponding output values agree
+within numerical tolerances: small allowed differences in floating-point
+results.
+
+```python
+import torch  # Load PyTorch.
+
+def my_function(x):  # Define the two calculations to optimize together.
+    a = x * 2  # Multiply each input value by two.
+    b = a + 3  # Add three to each multiplied value.
+    return b  # Return the final tensor.
+
+x = torch.randn(1024, 1024, device="cuda")  # Create a matrix on the GPU.
+result1 = my_function(x)  # Calculate the ordinary eager result.
+optimized_function = torch.compile(my_function)  # Create a callable optimized version.
+result2 = optimized_function(x)  # Run it; the first call may compile code.
+print(torch.allclose(result1, result2))  # Check agreement for this input; expect True.
+```
+
+Both versions calculate `x * 2 + 3` and return the same shape as `x`.
+For example, an input value of `4` becomes `11`. The code checks agreement for
+this input; it does not show whether fusion happened or how fast either
+version ran.
+
+#### Compilation takes time too
+
+Create the optimized function once and reuse it. The first call can be slow
+because compilation takes time. Later compatible calls can reuse the compiled
+code; changed input shapes or other conditions can trigger compilation again.
+
+**Performance connection:** fewer launches and less intermediate memory traffic
+can help these simple operations, but fusion and speedup are not guaranteed.
+Use lesson 15's warm-up and GPU timing method to compare repeated calls with
+the same inputs, keeping the correctness check outside the timed region.
+Measure first-call latency separately if startup time matters. To confirm the
+kernel count, use a profiler: a tool that records the operations that ran.
 
 ### Mental model
 
-Code describes requested work. A profile shows how that work actually executes.
-
-## 17. Compilation can reduce launches and intermediate storage
-
-### Objective
-
-Explain possible fusion and separate compilation cost from repeated execution.
-
-### How it works
-
-**`torch.compile`** creates an optimized version of a function. It examines
-tensor operations and their dependencies, then generates code for supported
-parts of the calculation.
-
-Fusion combines operations so they can avoid storing and rereading some
-intermediate values. Lesson 16 adds a bias, applies ReLU and takes a mean.
-The lower box shows a possible combined implementation of that sequence.
-It does not promise that all three operations become one kernel.
-
-![Compilation may avoid intermediate storage](reference/diagrams/compilation.svg)
-
-**Compiler example:** continue with `transform`, `x` and `bias` from lesson 16.
-Running this optional example requires a working compiler backend: the
-component that generates executable code. Inputs remain on the CPU.
-
-```python
-compiled = torch.compile(transform)  # Create a version of the function that PyTorch can compile.
-expected = transform(x, bias)  # Calculate the ordinary, uncompiled result for comparison.
-actual = compiled(x, bias)  # Run the compiled version; this first call may compile code.
-# Check that both results agree within numerical tolerances.
-torch.testing.assert_close(actual, expected)
-```
-
-**`torch.testing.assert_close`** checks values against allowed numerical
-differences, called tolerances. Choose these for the application: changing
-calculation order can slightly change floating-point results.
-
-The first call can include compilation. Later compatible calls can reuse the
-compiled work; new shapes can trigger compilation again. Measure startup and
-repeated execution separately, using the same inputs and settings.
-
-**Performance connection:** fusion can reduce launches and intermediate memory
-traffic. Compilation also costs time, so verify the result and measure whether
-repeated use pays off.
-
-### Mental model
-
-Compilation may change how the work runs. Check the result and include the costs that matter to your application.
-
-## 18. Read a complete step like a performance engineer
-
-### Objective
-
-Trace shapes, device placement, computation and completion through an inference step.
-
-### How it works
-
-This example joins the earlier ideas: a linear layer changes the feature size,
-ReLU keeps the shape, and a mean combines all values into one scalar. The
-arrows trace the tensor shapes and the final move to a Python number.
-
-![Trace shape and device through one inference step](reference/diagrams/read-a-step.svg)
-
-**CUDA example:** model parameters and input values are FP32 on the same GPU.
-
-```python
-import torch  # Load the PyTorch library.
-from torch import nn  # Load the neural-network building blocks.
-
-# Create a four-input, eight-output layer on the GPU in evaluation mode.
-model = nn.Linear(4, 8).to("cuda").eval()
-# Create two samples with three positions and four features on the GPU.
-x = torch.ones(2, 3, 4, device="cuda")
-with torch.inference_mode():  # Disable gradient recording for the following calculations.
-    y = model(x)  # Turn the four input features at each position into eight outputs.
-    z = torch.relu(y)  # Replace negative outputs with zero and keep the shape.
-    score = z.mean()  # Average all output values into one scalar tensor on the GPU.
-print(score.item())  # Wait for the GPU result, extract a Python number, and print it.
-```
-
-This explains the requested work. Kernel choice and the largest cost still
-need execution evidence. GPU Fundamentals explains the hardware; GPU
-Performance Optimization teaches how to test changes.
-
-**Performance connection:** first locate the cost, then choose a change and
-compare correct results under the same measurement conditions.
-
-### Mental model
-
-Read shape, state, work and completion. Then use evidence to decide what to improve.
+**`torch.compile()`** can reorganize how the same calculation runs. Fusion can
+save launches and intermediate memory traffic; check the result and measure
+the benefit after accounting for compilation time.

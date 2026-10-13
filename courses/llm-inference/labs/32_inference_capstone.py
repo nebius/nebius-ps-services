@@ -27,12 +27,15 @@ def main() -> None:
         required=True,
         help="Counterbalanced order selected by the three-trial launcher.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     sequence = 256 if args.workload == "small" else 2_048
+    # Create the synthetic tensors used by this experiment.
     query = torch.randn((1, 8, sequence, 64), device="cuda", dtype=torch.bfloat16)
     key = torch.randn_like(query)
     value = torch.randn_like(query)
@@ -74,6 +77,7 @@ def main() -> None:
         memory_before = int(torch.cuda.memory_allocated())
         torch.cuda.reset_peak_memory_stats()
         operations[name]()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         incremental_peak[name] = int(torch.cuda.max_memory_allocated()) - memory_before
     provisional_observation = (
@@ -81,6 +85,7 @@ def main() -> None:
         if timing["sdpa"]["median_ms"] < timing["materialized"]["median_ms"]
         else "sdpa-median-not-lower-in-this-trial"
     )
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="32_inference_capstone",

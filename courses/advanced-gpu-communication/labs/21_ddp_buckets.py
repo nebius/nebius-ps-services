@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--power-rank", type=int, default=1)
     parser.add_argument("--power-start", type=int, default=2)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     if not math.isfinite(args.bucket_cap_mb) or not 0.01 <= args.bucket_cap_mb <= 1024:
         parser.error("--bucket-cap-mb must be finite and 0.01..1024")
@@ -82,6 +83,7 @@ def verify_update(
 def checked_sgd(torch: Any, model: Any, optimizer: Any, lr: float) -> None:
     parameters = list(model.parameters())
     before = [p.detach().clone() for p in parameters]
+    # Update the parameters using the gradients from this step.
     optimizer.step()
     verify_update(torch, before, parameters, lr)
 
@@ -136,6 +138,7 @@ def main() -> None:
     rank, world_size, local_rank = init_nccl(torch)
     try:
         environment = require_course_gpu(torch)
+        # Keep random inputs repeatable across comparable runs.
         seed_everything(torch, args.seed)
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.set_num_threads(1)
@@ -163,6 +166,7 @@ def main() -> None:
             reference.parameters(), lr=lr, foreach=False
         )
         generator = torch.Generator(device=device).manual_seed(args.seed + 1)
+        # Create the synthetic tensors used by this experiment.
         inputs = torch.randn(16 * world_size, width, generator=generator, device=device)
         targets = torch.tanh(inputs * 0.2)
         local_inputs = inputs.chunk(world_size)[rank]
@@ -175,18 +179,22 @@ def main() -> None:
             bucket_log.clear()
             candidate_before = [p.detach().clone() for p in model.parameters()]
             torch.distributed.barrier()
+            # Wait for queued GPU work to finish at this measurement boundary.
             torch.cuda.synchronize()
             started = time.perf_counter()
             with torch.cuda.nvtx.range(
                 "ddp_warmup_step" if step < args.warmup else "ddp_measured_step"
             ):
+                # Clear the previous step’s gradients before differentiating again.
                 optimizer.zero_grad(set_to_none=True)
                 loss = loss_fn(ddp(local_inputs), local_targets)
+                # Differentiate the loss to populate parameter gradients.
                 loss.backward()
                 # Acceptance timing includes SGD but excludes expensive oracle checks.
                 optimizer.step()
                 torch.cuda.synchronize()
             elapsed = (time.perf_counter() - started) * 1000
+            # Create explicit input values on the selected device.
             max_elapsed = torch.tensor(elapsed, device=device, dtype=torch.float64)
             torch.distributed.all_reduce(max_elapsed, op=torch.distributed.ReduceOp.MAX)
             if step >= args.warmup:
@@ -208,6 +216,7 @@ def main() -> None:
                 parameter_error = relative_l2(torch, parameters, ref_parameters)
                 if args.hook == "allreduce":
                     for p, expected in zip(parameters, ref_parameters, strict=True):
+                        # Compare the computed values with the numerical reference.
                         torch.testing.assert_close(
                             p.grad, expected.grad, rtol=1e-5, atol=1e-6
                         )
@@ -233,6 +242,7 @@ def main() -> None:
         if not all(record["observed_buckets"] for record in records):
             raise ValueError("No observed DDP bucket communication")
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="21_ddp_buckets",

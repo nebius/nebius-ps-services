@@ -22,6 +22,7 @@ from course_evidence import annotated_operation
 def measure(torch: object, function: object, warmup: int, iterations: int) -> float:
     for _ in range(warmup):
         function()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     samples = []
     for _ in range(iterations):
@@ -37,6 +38,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--steps", type=int, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     steps = resolve_int_override(
@@ -46,7 +48,9 @@ def main() -> None:
     )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn(8_000_000, device="cuda")
 
     def synchronized_loop() -> float:
@@ -72,6 +76,7 @@ def main() -> None:
     )
     if not correct:
         raise SystemExit("The two reduction strategies returned different values.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="02_sync_trap",

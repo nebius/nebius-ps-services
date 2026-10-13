@@ -1,60 +1,66 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
+#SBATCH --time=01:01:30
+
 #SBATCH --no-requeue
 #SBATCH --output=results/13_h100_preflight/logs/%j.out
 #SBATCH --error=results/13_h100_preflight/logs/%j.err
 
+# Reserve the largest selectable allocation; every srun below limits its step.
+# Each stage runs in a fresh shell with separate original results and reports.
+course_stage() {
+  set -euo pipefail
+  umask 077
+  local selection=$1 workload=$2
+  shift 2
+  export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
+  case "$selection" in
+    sanitizer_none_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.13_h100_preflight --runtime
+      source tools/course_job_cache.sh
 set -euo pipefail
-
-# Workload size is independent of the profiler selected by this job file.
-if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  printf 'Usage: sbatch %s [--workload small|large] [lab options]\n' "$0"
-  exit 0
-fi
-workload=${COURSE_WORKLOAD:-large}
-lab_args=()
-while (($#)); do
-  case "$1" in
-    --workload) [[ $# -ge 2 ]] || { printf 'ERROR: --workload needs small or large.\n' >&2; exit 2; }; workload=$2; shift 2 ;;
-    --workload=*) workload=${1#*=}; shift ;;
-    --profile|--profile=*) printf 'ERROR: use --workload small|large.\n' >&2; exit 2 ;;
-    *) lab_args+=("$1"); shift ;;
-  esac
-done
-[[ $workload == small || $workload == large ]] || { printf 'ERROR: --workload must be small or large.\n' >&2; exit 2; }
-set -- "${lab_args[@]}"
-export COURSE_WORKLOAD=$workload
-[[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
-  printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
-}
-# Load this launcher's persistent installation inside the allocated job.
-source tools/course_env.sh 13_h100_preflight.sbatch
 umask 077
-for directory in results results/13_h100_preflight results/13_h100_preflight/logs results/13_h100_preflight/jobs; do
-  [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
-  }
-done
-export COURSE_JOB_DIR="$PWD/results/13_h100_preflight/jobs/$SLURM_JOB_ID"
-mkdir -m 700 -- "$COURSE_JOB_DIR"
-mkdir -m 700 -- "$COURSE_JOB_DIR/results" "$COURSE_JOB_DIR/profiles" "$COURSE_JOB_DIR/logs" "$COURSE_JOB_DIR/artifacts"
-export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
-export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
-export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
-export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
-printf 'Job results: %s\n' "$COURSE_JOB_DIR"
-source tools/course_job_cache.sh
-
-
+tool="${COURSE_SANITIZER:?select --sanitizer}"
+executable="${COURSE_BUILD_DIR:?select completed build}/13_h100_preflight"
+case ${tool} in
+  memcheck | racecheck | initcheck | synccheck) ;;
+  *) printf 'ERROR: unsupported sanitizer tool: %s\n' "${tool}" >&2; exit 2 ;;
+esac
+sanitizer_options=(--tool "${tool}" --error-exitcode=3)
+if [[ ${tool} == racecheck ]]; then
+  : "${SLURM_CPUS_PER_TASK:?Racecheck requires the Slurm CPU allocation}"
+  if [[ ! ${SLURM_CPUS_PER_TASK} =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: SLURM_CPUS_PER_TASK must be a positive integer.\n' >&2
+    exit 2
+  fi
+  sanitizer_options+=(--racecheck-num-workers "${SLURM_CPUS_PER_TASK}" --force-synchronization-limit 2)
+fi
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 \
+  compute-sanitizer "${sanitizer_options[@]}" "${executable}" --workload "$workload" "$@"
+      ;;
+    default_none_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.13_h100_preflight --runtime
+      source tools/course_job_cache.sh
 : "${COURSE_BUILD_DIR:?select the completed build directory}"
 executable="$COURSE_BUILD_DIR/13_h100_preflight"
 [[ -x $executable && ! -L $executable ]] || exit 2
 raw="$COURSE_JOB_DIR/logs/13_h100_preflight.txt"
 started=$(date +%s)
-srun --ntasks=1 --gpus-per-task=1 "$executable" --workload "$workload" "$@" >"$raw"
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 "$executable" --workload "$workload" "$@" >"$raw"
 ended=$(date +%s)
 "${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+      ;;
+    *) printf 'ERROR: unknown stage selection.\n' >&2; return 2 ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+  exec python3.12 -B tools/course_job.py --lab 13_h100_preflight --launcher "$0" -- "$@"
+fi

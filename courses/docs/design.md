@@ -81,7 +81,7 @@ All seven standalone validators, HTML/helper parity and 69 focused catalog/text-
 
 <!-- /FEATURE: FEAT-001 -->
 
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=17 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P0 version=19 -->
 ### FEAT-002: Shared authoring and publication contract
 
 #### Requirements Covered
@@ -93,6 +93,8 @@ All seven standalone validators, HTML/helper parity and 69 focused catalog/text-
 The packages contain long-form lessons, runnable labs and self-contained HTML.
 
 #### Design Details
+
+The current alignment pass checks all nine course packages and eleven generated reading pages after the PyTorch route changed to sixteen lessons. Restore the existing shared style, heading, appendix, glossary and exact-TOC contracts through targeted source corrections. Read complete lesson teaching and inspect glossary coverage, current prerequisite/readiness language, practical-guide section references and authoring metadata. Preserve declared text-only, reference-only, lessons-only and labs-only exceptions, all practical implementations and prior edits. Regenerate through the shared builder and independently verify source/HTML parity, canonical order, local destinations, alphabetical glossary keys, passive resources and desktop/390px/320px interaction/reflow. Report diagram readability and GPU/runtime limits separately; do not turn this presentation audit into installation, live execution, Git publication or broad teaching rewrites.
 
 Current catalog alignment preserves the nine registered packages and their explicit profiles. Reconcile prerequisites and topic ownership with REQ-001, REQ-024 and REQ-027; distinguish supplied lab capabilities from optional extensions, and collect taught terms in each course glossary. Validate every course and generated consumer while keeping prior artifact-specific evidence historical.
 
@@ -151,6 +153,10 @@ One coherent authoring/presentation contract applies to every course.
 
 #### Implementation Evidence
 
+Complete-catalog review (2026-10-13): reviewed all 105 lesson/reference chapters and 110 compact guides under the existing profiles. Added the missing Advanced runtime-support TOC entry, corrected three syllabus summary orders and five compact-guide descriptions, added 11 glossary terms and local tensor/operator definitions, clarified two diagram labels, and repaired CUDA capstone/preflight and AIPerf route directions. Lab 09 now illustrates prefill plus one continuation pass with two output tokens; its guide, observability and source/installed campaign recipes agree. Lab algorithms, identities and historical results remain unchanged. Maintainer guidance, changelog and all nine publication reviews reflect the same sources.
+
+Current text/format alignment (2026-10-12): restored the existing all-nine-course contract after the sixteen-lesson PyTorch revision. Added 46 taught-term definitions, consistent glossary sentence casing, accurate course-ending README guidance and the missing Tools operator-profiling diagram. Corrected the supplied two-kernel fusion example, supported normalization widths, optional CUDA Graph/Tile wording, Advanced readiness framing, TTFT proxy terminology and the Lab 05 onward reference. All lesson identities and declared profiles remain intact; practical implementations are unchanged.
+
 Nine-course alignment: reconciled current prerequisite and tools ownership, clarified supplied-versus-extension lab capabilities, added 55 glossary keys while consolidating one combined entry, and preserved the three-part PyTorch overview content. All 105 chapters and 110 guide associations retain their identities. Shared runtime discovery/preparation now honors the lessons-only exclusion; see FEAT-043 for focused repair evidence.
 
 Complete-catalog presentation audit: retained the shared styles, renderer and declared text/reference/labs-only profiles after verifying equivalent typography, navigation and appendix structure. Rebuilt all ten HTML pages and six archives without changing their bytes. Repaired the supporting-guide test fixture to supply the production shared-guide mapping and assert both local destinations; refreshed publication review records.
@@ -176,6 +182,10 @@ validation and lab-guide maintenance for course maintainers. The Fundamentals
 README labels its publication instruction, including in the generated HTML.
 
 #### Verification Evidence
+
+Complete-catalog review (2026-10-13): all nine native validators, full build/freshness and 748 focused tests pass, with three unavailable-Torch skips and one Linux-only skip. A failing-first regression exercises the existing pure generation scheduler for 21 guide/recipe commands. After the AIPerf repair, 113 focused tests pass with three Torch skips. Final read-only review has no remaining concrete finding. Thirty-three isolated Playwright 1.62.1/headless Chrome 155.0.8059.40 cases cover all eleven pages at desktop/390px/320px; the final Inference prose has a separate three-case rerun and every fact record matches the current artifact hash. Computed typography agrees across all courses, source/installed recipes match, all six archives retain their hashes and all 3,249 tracked lab/launcher/environment/dashboard/result/archive files are unchanged. See docs/course-format-validation.md for exact artifact identities, baseline generic-checker diagnostics, earlier harness failures and remaining dense-diagram/mobile and live-target limitations. Broader feature delivery stays implemented; no installation, live execution or publication is claimed.
+
+Current text/format alignment (2026-10-12): 480 focused tests, all nine native validators, HTML/archive freshness, shared build, scoped Markdown/whitespace checks and final read-only code/security review pass. All 33 isolated headless Chrome 155.0.8059.39 cases pass across eleven pages at desktop/390px/320px, verifying exact navigation, shared reading typography, glossary/appendix order, fragment targets, keyboard interaction, local scrollers and reflow. All 3,308 protected implementation/launcher/environment/result/archive files retain task-start bytes. See docs/course-format-validation.md for exact artifact hashes, earlier harness failures, generic-checker profile/markup diagnostics and remaining dense-diagram and live/GPU qualification limits. This restores presentation consistency without promoting broader runtime acceptance.
 
 Nine-course alignment: 2,503 offline tests pass, followed by 193 focused checks after the final overview regroup. All nine native validators, HTML/ZIP freshness, helper parity, scoped lint/syntax, independent code/security review and 33 catalog-wide browser cases plus three final-guide and three final-PyTorch cases pass. All 3,387 protected lab/launcher/diagram/result/archive paths retain task-start bytes. Generic checker profile/shared-markup diagnostics, dense legacy diagrams at 320px and unrefreshed live qualification remain explicit in docs/course-format-validation.md. Broader feature status is not promoted by this local evidence.
 
@@ -1451,13 +1461,7 @@ the display title. The source filename owns the stable number. Extend each
 reference/course.json lab record to path, optional and explicit lessons.
 Reject missing/extra guides, invalid IDs, duplicate metadata and invalid lessons.
 
-After each title place an unabridged purpose paragraph. Use the same seven
-sections: Before you start; Concepts and code path; Practice;
-Check your results; Investigate the behavior; If something goes wrong;
-Takeaways and next step. Markdown commands are authored for the actual
-experiment, not chosen by filename heuristics. Explain shared helpers and
-state/data flow where relevant. Keep complete source in a separate disclosure.
-Use an easy-to-read single-column guide, not a four-cell generic card.
+The current lab presentation follows FEAT-044: title and concise purpose, full source disclosure, optional collapsed diagram, two native submission commands and an exact-job results box. Source-block comments explain mechanisms. The former seven-section design is superseded; historical evidence below describes that earlier format.
 
 The renderer uses each guide's title in the lab heading, TOC and lesson practice
 links. Generate explicit practice-lab links from metadata; repair contradictory
@@ -1497,8 +1501,7 @@ access restrictions remain in force.
 
 - TDD-001: Every source has one title/guide and valid explicit lesson mappings;
   both directions of page navigation use that title and stable number.
-- TDD-002: All seven sections and substantive introduction are preserved in
-  generated HTML; generic cards and heuristic titles/commands are absent.
+- TDD-002: The compact FEAT-044 order, concise introduction and exact authored commands are preserved in generated HTML.
 - TDD-003: Invalid/missing/duplicate guides, mismatched titles/numbers and
   lesson associations fail before publication.
 - TDD-004: Synthetic operator metrics contain no unsupported token-latency
@@ -2959,7 +2962,7 @@ remain separate; no speedup, publication or target-runtime claim is made.
 
 <!-- /FEATURE: FEAT-021 -->
 
-<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=16 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-013 status=ready delivery=implemented priority=P1 version=17 -->
 ### FEAT-022: Branch-published Nebius learning website
 
 #### Requirements Covered
@@ -2971,6 +2974,8 @@ remain separate; no speedup, publication or target-runtime claim is made.
 Eight self-contained course pages, the README-derived shared guide, the catalog and repository welcome page exist. The repository is Apache-2.0 licensed and has no course-specific license. This revision changes local reading navigation without altering Pages settings.
 
 #### Design Details
+
+Reading-preservation revision: Generate anchor attributes through one shared helper in course_builder for Markdown links, cross-page practice links, official references, catalog/menu navigation and the Lab setup guide. Non-fragment navigation uses target="_blank" and rel="noopener noreferrer"; fragment-only anchors and explicit downloads retain native behavior. Keep destinations escaped and the existing source allowlists intact. Add build preflight checks for missing or unsafe link attributes, synchronize the affected standalone setup-link assertions, and rebuild all eleven HTML pages. Reject a global base target because it changes same-page navigation; reject JavaScript interception and postprocessing embedded source/SVG bytes. Tests enumerate rendered anchors across every profile and cover escaping, links with fragments, download behavior and negative policy controls. Isolated Playwright checks click the setup guide, cross-course/catalog and reference links, confirm the original URL/scroll and null opener, and exercise fragment navigation and keyboard activation at desktop, 390px and 320px widths. Scope is local rendering and validation; no lab execution, dependencies, Git publication or deployment. This amendment is implemented and locally verified; see docs/catalog-navigation-validation.md for source, browser, preservation and limitation evidence. The broader publication delivery boundary is unchanged.
 
 Catalog badge consistency revision: Use the shared .course-number rule in tools/catalog.css for every catalog card: mint background #edf6f0 and teal text #206757. Remove the remaining Fundamentals and Training overrides; retain the already corrected Inference badge and all card metadata, layout and links. Regenerate index.html through the canonical builder. Verify all nine badges in an isolated browser at desktop and phone widths, run focused catalog tests and generated-output freshness, and preserve other HTML/ZIP bytes. Per-course badge palettes are rejected because the catalog requires one consistent badge style. This amendment is implemented and locally verified; earlier website evidence below retains its original scope.
 
@@ -3069,6 +3074,8 @@ The authoring wrapper is complete when executable, documented and independently 
 
 #### Implementation Evidence
 
+Reading-preservation revision: Added shared escaped link attributes across all page renderers and build preflight enforcement. Synchronized standalone validator expectations, updated navigation regressions and docs, and regenerated eleven HTML pages. All 584 outgoing links open safe new tabs; 671 fragments and six ZIP downloads retain native behavior. Teaching, profiles, embedded code/styles/assets and archive contents remain unchanged.
+
 Catalog badge consistency: Removed the remaining course-specific color overrides from tools/catalog.css. All nine cards inherit one mint/teal rule; regenerated the catalog with the canonical builder and updated publication evidence and the Unreleased note. Requirements and design record the shared presentation constraint.
 
 Per-file publication reporting revision: implemented size-prefixed built/current lines in the Python builder, silent preflight and a separate final aligned summary. The wrapper passes --no-summary only during build and ends on the successful check summary. Updated CLI help, maintainer guidance, requirements and changelog; preserved reusable publication report fields, exact-byte enforcement, learner README and generated content.
@@ -3108,6 +3115,8 @@ Earlier feature-delivery evidence follows for provenance.
 Implemented the catalog renderer and embedded stylesheet, root welcome page and .nojekyll, course switchers, complete embedded Apache license and attribution, canonical metadata slugs, scoped navigation validation, publication regression tests and authoring documentation.
 
 #### Verification Evidence
+
+Reading-preservation revision: 604 focused tests and two setup-destination negative controls, all nine native validators, generated freshness, helper parity, scoped lint and whitespace checks pass. Independent code/security review found no material defect. Thirty-three isolated headless Chrome cases verify actual pointer/keyboard navigation, original URL/scroll retention, null opener, downloads, fragments and responsive reflow. Whole-document baseline comparison and six archive hashes prove preservation. Generic checker diagnostics remain unchanged. Exact artifact hashes, test-tool version, traces/screenshots and local-only scope are recorded in docs/catalog-navigation-validation.md; no external publication or live GPU qualification is claimed.
 
 Catalog badge consistency: 88 focused catalog tests and full generated HTML/ZIP freshness pass. Isolated Chrome 154.0.8037.93 confirms every badge uses background #edf6f0 and text #206757 at 1440, 390 and 320 pixels, with unchanged numbering, no overflow and no script errors. Independent before/after comparison confirms the sole generated change is the removed CSS override in index.html; nine other HTML pages and six result ZIPs are byte-identical. Scoped alignment covers source/output parity, Markdown lint, whitespace and report-only code/security review. This is local presentation proof, not deployed-site validation.
 
@@ -5392,9 +5401,9 @@ At implementation intake, the 110 lab recipes dispatched through submit_lab and 
 
 #### Design Details
 
-Use explicit lab.sbatch, lab.nsys.sbatch and supported lab.ncu.sbatch files with visible native commands, preserving resource topology and required experiment coordinators. Native sbatch --parsable replaces the submission helper in run-labs under its existing write-ahead intent and reconciliation lifecycle. Rename the workload CLI and environment without aliases; retain serialized profile fields. Fresh job directories are private and exclusive; disable requeue and reject restart attempts. Use a 900-second diagnostic watchdog with 15-second termination grace, isolated reports, exact native report validation and acknowledged server control. CUDA conversion consumes completed raw output, executable identity and timestamps without launching the workload.
+Use one explicit lab.sbatch with the FEAT-044 experiment/profiler selectors and visible native commands, preserving resource topology and required experiment coordinators. The earlier separate-file design is superseded. Native sbatch --parsable replaces the submission helper in run-labs under its existing write-ahead intent and reconciliation lifecycle. Rename the workload CLI and environment without aliases; retain serialized profile fields. Fresh job directories are private and exclusive; disable requeue and reject restart attempts. Use a 900-second diagnostic watchdog with 15-second termination grace, isolated reports, exact native report validation and acknowledged server control. CUDA conversion consumes completed raw output, executable identity and timestamps without launching the workload.
 
-Per-job output is `results/LAB/jobs/JOB_ID/{results,profiles,logs,artifacts}`; scheduler logs are prepared before submission. Exact dispatch identity controls collection; history is excluded. A setup organization action verifies copy-only attribution and checksums without modifying originals. Published evidence remains byte-identical.
+Per-job output follows FEAT-044: `results/LAB/jobs/JOB_ID/result.json` plus isolated stage directories; scheduler logs are prepared before submission. Exact dispatch identity controls collection; history is excluded. A setup organization action verifies copy-only attribution and checksums without modifying originals. Published evidence remains byte-identical.
 
 Add gpu-performance-tools with profile reference-only, five reading lessons, contextual passive diagrams and no labs/exercises. Move duplicated performance-tools primers, link to one flag reference per tool, and show exporter/Pushgateway to VMAgent to VictoriaMetrics plus Grafana datasource queries. Keep Soperator text-only. Lab 08 distinguishes profiler modes and post-warmup NVTX selection. Source-owned run-labs and its installed copy change together. This design supersedes FEAT-039's retention of generic execution/submission wrappers and FEAT-036's embedded per-course primer placement; their historical verification records remain provenance.
 
@@ -5612,7 +5621,7 @@ The unchanged pre-repair cached-image reproducer failed the weak-chroot guard. T
 
 <!-- /FEATURE: FEAT-042 -->
 
-<!-- FEATURE: FEAT-043 reqs=REQ-027 status=ready delivery=verified priority=P1 version=6 -->
+<!-- FEATURE: FEAT-043 reqs=REQ-027 status=ready delivery=verified priority=P1 version=17 -->
 ### FEAT-043: Concise visual PyTorch reading course
 
 #### Requirements Covered
@@ -5625,19 +5634,35 @@ The existing Tools reference already renders heading-based lessons and passive S
 
 #### Design Details
 
-Revise pytorch-gpu-performance-engineering to eighteen lessons and an estimated three guided hours. Keep existing topics 1-13; rename lesson 2 to Dimensions are indexed axes with sizes; add batching/vectorization as 14, retain timing as 15 and operator evidence as 16, move compilation/fusion to a focused lesson 17, and finish with integrated inference reading as 18. Preserve essential concepts and correctness constraints. Each lesson retains Objective, How it works and Mental model, at least one original contextual SVG and a short commented example. End each How it works with a substantive Performance connection. Use additional small figures for distinct relationships, especially random sampling, axis meanings and indexing. Keep diagrams near their explanatory prose.
+The current course has sixteen lessons and an estimated three guided hours. Preserve lessons 1-15, remove the previous profiling lesson 16, compilation continuation 17 and integrated inference lesson 18, and finish with standalone lesson 16, torch.compile can combine GPU operations. Define compile, eager execution, kernels and fusion directly. Use multiply-by-two followed by add-three to show two ordinary CUDA kernels and an intermediate tensor versus one possible fused kernel with no full intermediate global-memory tensor. Reuse the compilation diagram asset with new semantics; remove the two orphan figures. Give one self-contained commented CUDA function example with allclose, supported-environment limits and first-call/repeated-call guidance. Explain that a single Python expression does not fuse eager work and that correctness checks do not prove fusion or speedup. Keep Objective, How it works, Mental model and one Performance connection per lesson. Update the entry/readiness route, glossary, references, mission, syllabus, metadata, authoring docs, count regression and generated page; preserve the lessons-only profile and defer profiler detail to the Tools course.
 
 Reserve bold monospace for exact PyTorch API names in explanatory prose, tables, captions and diagrams. Preserve inherited bold font weight inside inline code in the shared stylesheet, and verify the computed browser weight. Captions may use plain-language descriptions instead of repeating API names. Example variables/literals use ordinary code, and general concepts/application meanings stay plain. Headings and callout labels may remain bold. State the legend once at entry. Keep code blocks executable and distinguish example choices in comments. Introduce dimensions as indexed axes, separate their sizes from meanings, show two concrete 3-by-4 grids and element coordinates, and defer physical storage mapping to the strides lesson. Annotate tensor shape, dtype and device explicitly, with element count separate. Explain rand/randn size arguments and distributions without fixed sample outputs.
 
-The indexing clarity revision defines concepts with affirmative explanations. Lesson 2 uses one two-grid example throughout: define index/indices, label zero-based grid/row/column choices, and explain each selection, slice and reshape beside its result. Diagram titles, descriptions and visible labels use the same vocabulary. Remove subtype and nested-list counterdefinitions. Move the linear-layer axis contract and concrete sample/position/feature mapping into lesson 9, and the inferred reshape size into lesson 6 beside view/copy and axis-reordering teaching. Update the glossary, authoring guidance and generated page; preserve eighteen lessons, both lesson-2 figures and the lessons-only profile.
+The indexing clarity revision defines concepts with affirmative explanations. Lesson 2 uses one two-grid example throughout: define index/indices, label zero-based grid/row/column choices, and explain each selection, slice and reshape beside its result. Diagram titles, descriptions and visible labels use the same vocabulary. Remove subtype and nested-list counterdefinitions. Move the linear-layer axis contract and concrete sample/position/feature mapping into lesson 9, and the inferred reshape size into lesson 6 beside view/copy and axis-reordering teaching. Update the glossary, authoring guidance and generated page; preserve the sixteen-lesson route, both lesson-2 figures and the lessons-only profile.
 
-Batching uses equivalent independent computations and explains submission, memory and latency tradeoffs before the timing procedure. Compilation reuses earlier computation as an explicit continuation and distinguishes possible fusion, first-call cost and repeated-call correctness/timing. Use small deterministic CPU examples where possible; mark CUDA and compiler examples without requiring execution. The final inference step recalls earlier concepts without adding exercises. Profiler commands, hardware internals and measured optimization experiments remain owned by subsequent courses.
+Batching uses equivalent independent computations and explains submission, memory and latency tradeoffs before the timing procedure. The standalone final compilation example distinguishes possible fusion, first-call cost and repeated-call correctness/timing. Use small deterministic CPU examples where possible; mark CUDA and compiler examples without requiring execution. The final compilation example recalls element-wise work and lesson-15 measurement without adding exercises. Profiler commands, hardware internals and measured optimization experiments remain owned by subsequent courses.
 
 Add an explicit lessons-only profile with ordered identities and declared visual manifest. Reuse the existing text renderer, shared stylesheet and safe SVG embedding; keep existing fixed-profile validators intact. The new profile rejects lab/runtime fields and artifacts, skips archive generation, enforces source/syllabus/metadata order and requires one contextual diagram per lesson. Registry-driven rendering updates every menu. Store the learning contract, appendices and public references beside the canonical teaching. Shared runtime discovery and log-directory preparation exclude lessons-only metadata alongside the existing text-only and reference-only profiles. Preserve strict lab-inventory validation for practical and unknown profiles. Synchronize the six standalone helper copies; test all reading profiles without runtime metadata and assert no result directories are created.
 
-The scan-focused revision reviews all eighteen lessons, keeps the existing diagrams and learning route, and narrows each example to its owning concept. Keep broadcasting to one matrix-plus-bias addition. Remove the expand/repeat, softmax, mixed-precision setup, loader collation and compiler-internals detours. Use a short built-in model composition instead of class boilerplate; keep training and timing long enough to show their full causal sequence. Explain retained APIs in context, shorten performance connections, and align objectives, glossary, references and affected diagram labels. Do not replace removed details with optional blocks that recreate the same reading burden.
+The scan-focused guidance applies to all retained lessons, keeps the existing diagrams and learning route, and narrows each example to its owning concept. Keep broadcasting to one matrix-plus-bias addition. Remove the expand/repeat, softmax, mixed-precision setup, loader collation and compiler-internals detours. Use a short built-in model composition instead of class boilerplate; keep training and timing long enough to show their full causal sequence. Explain retained APIs in context, shorten performance connections, and align objectives, glossary, references and affected diagram labels. Do not replace removed details with optional blocks that recreate the same reading burden.
 
 The plain-English comment revision annotates each executable line in all twenty-three examples with its action. Explain dimension reduction and retained axes in words rather than output dumps. Keep short definitions before examples, consolidate repeated walkthrough prose, and retain unique storage, numerical, dependency and performance constraints. Align the glossary and authoring README, regenerate the existing page, and verify unchanged executable statements through AST comparison. This is an editorial revision, not a change to example behavior or course profile.
+
+The GPU-cost clarity guidance applies to all retained lessons and API emphasis in prose, tables and figures. Define memory capacity/bandwidth and then memory-bound versus compute-bound work with a small comparison, retaining launch overhead and input/wait limits as separate causes. Replace vague cost statements with short operation-specific mechanisms and conditional implications. Lesson 6 distinguishes layout properties from methods, compares copy behavior in a six-row table, shows actual stride values and explains copy cost versus later access efficiency. Use bold monospace for stride() and other exact APIs; preserve ordinary executable code and general concepts. Keep the retained contextual diagrams, first-use definitions and commented examples; replace final-lesson assets only as specified above. Update glossary, references and authoring guidance, rebuild the same HTML and verify source parity plus responsive table/API rendering. No measured speedup is inferred from these examples.
+
+The lesson-7 numeric-format refinement introduces sign, exponent and stored fraction bits with short definitions, then a seven-row comparison of total width and maximum finite values. Preserve the FP32/BF16 byte-count diagram and unchanged commented CPU example. Clarify that E4M3 means the E4M3FN encoding here, FP4 E2M1 has an unscaled maximum of 6, and packed value bits exclude scale metadata. Give one small scaling illustration, map the formats to bold PyTorch dtype names, and state limited FP8/FP4 operation/device support without adding execution requirements. Connect fewer bytes to memory traffic and supported lower-precision arithmetic to compute limits; account for conversion/scaling cost and numerical accuracy. Align the glossary, source references and maintainer docs, rebuild the same page, and verify the comparison's values, code identity and responsive rendering.
+
+The lesson-8 device/readback refinement replaces the submission diagram with compact CPU/GPU memory columns. Trace cpu_x to x via to(), then y and total on the GPU, and copy the scalar value back through item() to a Python number before print; explicitly retain total on the GPU. Split extraction and printing in the single commented example. Define streams and synchronization before a short comparison of the calling-thread wait in torch.cuda.synchronize() with the future-work dependency in stream2.wait_stream(stream1). Preserve required dependencies, qualify overlap by hardware and workload, and end with four concise GPU-performance aims. Align glossary, manifest, syllabus, README, references and generated HTML without adding stream setup or required CUDA execution.
+
+The lesson-9 network/shape refinement pairs a compact top-to-bottom 4-to-2-to-1 neuron drawing on the left with the existing batch-shape explanation on the right. Extend the worked model to Linear(4,2), ReLU, Linear(2,1) so the two-neuron stage is a true hidden layer feeding a distinct output layer. Label the first constructor argument as input features and the second as output neurons, define hidden/output layers, and preserve the six-vector input [2,3,4], hidden [2,3,2], first-layer weight [2,4] and bias [2] explanations. Add final output [2,3,1]; define connections as learned weights and explain omitted biases and ReLU in the neuron view. Keep code, glossary, manifest and authoring docs aligned, use existing passive SVG/build paths, and verify the CPU example with independent numerical and shape assertions. Add a compact symbolic 2-by-4 weight-matrix diagram tied to the existing four-input/two-neuron hidden layer. Define W, x, b and y before the formula; connect one neuron's weighted sum to the complete layer, then stack six input vectors as rows for X @ W.T + b. Preserve the existing network diagram and executable example. Explain per-layer parameter ownership, ReLU between linear layers, GPU parallel execution without a single-kernel guarantee, and the distinction between one numeric output and vocabulary scores used to select a token. Update glossary, references, manifest and authoring descriptions; verify matrix equivalence on the existing CPU runtime and inspect both diagrams at desktop/mobile sizes.
+
+The lesson-11 activity revision separates training followed by validation each epoch from prediction on new inputs. Replace the abstract two-controls figure with two narrow passive workflow diagrams and pair each with concise commented code. Define targets, epoch, gradient recording, requires_grad and dropout before use; explain that eval() selects layer behavior while inference_mode() skips backward recording in both validation and inference. Keep final testing separate from validation and describe known targets versus new inputs. Use an explicitly stated prepared-model/batches context to avoid setup detours. Update the lesson title across source, syllabus and metadata, the visual manifest, glossary, references, README and generated HTML. Verify exact code with synthetic CPU fixtures and inspect both figures at desktop and phone widths. The dropout clarity follow-up adds a two-row train()/eval() comparison, explicitly calls evaluation mode the prediction behavior used in validation, testing and inference, and changes the eval() comments to explain preparation for prediction. Preserve executable statements, diagram semantics and the recording restrictions; verify AST identity, rendered table behavior and source freshness.
+
+The lesson-13 memory revision defines the default CUDA caching allocator before live/allocated, reserved and reusable blocks. Explain lazy growth, why allocating a block can leave spare capacity, reuse of released storage, and the distinction from hardware caches or cached answers. Update the existing pool diagram with allocation/reuse arrows, keeping non-tensor GPU usage and schematic areas explicit. Replace the cache-clearing demonstration with one compact inference matmul loop whose helper scope releases GPU inputs/outputs after a CPU consumer receives predictions, while weights persist. Teach ordinary automatic allocation, retained references/views/autograd, optional early del, bounded batches, scalar metrics, detach storage sharing, training-state lifetime and peak-memory/OOM diagnosis. Keep empty_cache as an occasional handoff tool for unused memory, not routine matmul cleanup. Cite current official docs and allocator/workspace source; verify syntax, the CPU-adapted computation/lifetime contract and desktop/mobile rendering without claiming CUDA execution on the local host. Preserve the other seventeen lessons and shared publications.
+
+The lesson-14 batching revision separates batch formation from tensor computation. Use three two-feature sample tensors, explicit torch.stack grouping and matching loop versus vectorized calculations with identical outputs. Pair two passive diagrams with their corresponding commented code in a responsive two-panel comparison, with ordinary reading order on phones. Teach that x * 2 + 1 invokes element-wise PyTorch operations on an existing tensor; it neither batches a dataset nor moves work to a GPU, and one Python expression does not imply one kernel. Briefly connect configured DataLoader batch_size to real training batches without a loader setup detour. Add a bounded comparison container to the shared Markdown renderer using explicit start/next/end markers, rejecting malformed or nested containers and retaining escaped prose, figure callbacks and fenced code. Shared scoped CSS supplies two wide-screen columns and mobile stacking; regenerate every page embedding that CSS while preserving unrelated canonical teaching. Verify exact CPU examples, source preservation, parser failures, all publication freshness and responsive keyboard/diagram/code behavior; make no GPU performance claim.
+
+The lesson-15 timing revision uses a direct GPU-timing title and begins with asynchronous CPU submission and ordered CUDA streams. Explain event creation versus recording a timestamp, device-wide synchronization and elapsed milliseconds in a compact table. Define representative warm-up and conditional first-run initialization/allocation/preparation/clock effects, then provide one clear CUDA matrix multiplication example with warm-up completed before the timed interval and synchronization before reading it. Replace the existing diagram with CPU and GPU lanes showing submission, ordered start/product/end execution, CPU waiting and elapsed-time readback. Keep timing boundaries and wider application latency distinct; retain correctness, repeated measurement, optional event-specific waiting and the lack of a guaranteed sufficient warm-up count. Align title metadata, syllabus, glossary, references, authoring descriptions and generated HTML; preserve the other seventeen lessons and lessons-only scope. Validate syntax and control-flow boundaries separately from unavailable actual CUDA timing, and inspect desktop/mobile diagram and table behavior.
 
 #### Selected Option
 
@@ -5653,7 +5678,7 @@ New course sources/assets, reading-profile builder and validator paths, catalog/
 
 #### Test-First Success Criteria
 
-- TDD-001: Metadata, syllabus and eighteen lesson identities agree; no Practice/lab/runtime artifacts appear and every lesson embeds a meaningful diagram and commented example.
+- TDD-001: Metadata, syllabus and sixteen lesson identities agree; no Practice/lab/runtime artifacts appear and every lesson embeds a meaningful diagram and commented example.
 - TDD-002: All ten reader resources have exact consistent order and numbering across the catalog, learning path, guide and nine course menus.
 - TDD-003: Generated prose/SVG parity, safe passive assets, mobile reflow, diagram text fit, keyboard navigation and local code scrollers pass focused checks.
 
@@ -5679,6 +5704,28 @@ The complete no-lab course and all entry/navigation surfaces align; focused stat
 
 #### Implementation Evidence
 
+Final-lesson simplification (2026-10-12): replaced previous lessons 16-18 with standalone lesson 16, torch.compile can combine GPU operations. Added direct eager/kernel/fusion teaching, multiply/add memory-flow comparison and complete commented CUDA example with allclose. Explained first-call compilation, reuse, possible recompilation and non-guaranteed fusion/speedup. Preserved lessons 1-15, removed two orphan diagrams and aligned all current course descriptions, metadata, glossary, references, count test and generated page. The sixteen-lesson reading profile retains 21 contextual diagrams and no labs or runtime artifacts.
+
+Lesson-15 timing revision (2026-10-12): retitled the lesson to Measure GPU time with CUDA events. Added asynchronous CPU/GPU and stream definitions, a four-row function table, explicit warm-up explanation and one commented CUDA matmul timing example. Replaced the diagram with CPU/GPU lanes and a marked timestamp interval. Preserved device-wide versus event-specific waits, timing exclusions/idle gaps, repeated measurements, correctness and total-latency guidance. Aligned metadata, glossary, references, manifest and authoring descriptions without changing other lessons.
+
+Lesson-14 batch revision (2026-10-12): separated batch formation from vectorized tensor computation using explicit torch.stack input grouping, paired loop/batch diagrams and two commented examples with equal results. Added a brief DataLoader connection and clarified device and performance boundaries. Introduced a bounded two-panel Markdown comparison container, preserving figure registration, escaped prose and fenced code while rejecting malformed and nested markers. Responsive shared CSS provides desktop columns and mobile reading order. Aligned title/metadata, glossary, resources, authoring docs and generated consumers; unrelated page bodies and other lessons are preserved.
+
+Lesson-13 memory revision (2026-10-12): explained automatic CUDA allocation and cached-block reuse, tensor/storage lifetimes, operation workspace and practical matmul memory ownership. Replaced the cleanup demonstration with a scoped batch helper that retains weights and returns CPU predictions to a CPU consumer. Added concise training, logging, peak/OOM, detach, del and empty_cache guidance. Aligned the original pool diagram, glossary, official references, manifest, authoring descriptions and generated page while preserving the other seventeen lessons.
+
+Lesson-9 matrix refinement (2026-10-11): added a symbolic two-by-four matrix diagram and concise explanation linking neuron weighted sums, y = Wx + b, row-batch X @ W.T + b and the existing 4-to-2-to-1 network. Clarified per-layer parameters, separate ReLU behavior, GPU parallel work and scores followed by token selection. Aligned glossary, references, manifest, mission, syllabus, README and generated page; preserved executable examples and existing figures.
+
+Dropout clarity follow-up (2026-10-11): added the two-row train()/eval() comparison, described evaluation mode as preparation for prediction, and clarified the validation/inference comments. Kept gradient recording separate from layer behavior. README and generated HTML align; all executable Python and diagrams are preserved.
+
+Lesson-11 activity revision (2026-10-11): separated training with per-epoch validation and prediction on new inputs into two original passive workflow diagrams and exact commented examples. Defined targets, dropout, recording and the independent layer/gradient settings; clarified final held-out testing. Aligned the lesson title across source, syllabus and metadata, plus glossary, manifest, README, references and generated HTML. Retained eighteen lessons and the lessons-only profile; the revision adds one diagram and one code block.
+
+Lesson-9 network/shape refinement (2026-10-09): paired a four-input, two-hidden-neuron, one-output neural network on the left with its tensor-shape flow on the right. Added the matching final Linear(2,1) layer to the commented example and explained input features, neuron counts, hidden versus output placement, parameter shapes and weight reuse at all six positions. Glossary, manifest, syllabus, README, changelog and generated HTML align. The other seventeen lessons, twenty-figure inventory and lessons-only profile are preserved.
+
+Lesson-8 device/readback refinement (2026-10-09): replaced the diagram with two CPU/GPU memory columns and explicit copy directions, showing the scalar value returned for printing while total remains on the GPU. Split item() and print() in the single commented example; explained metadata residence, same-stream ordering, CPU blocking versus future-work stream dependencies, and four concise performance aims. Glossary, visual manifest, references, syllabus, README, changelog and generated page align. Other lessons and the lessons-only profile are unchanged.
+
+Lesson-7 numeric-format refinement (2026-10-09): integrated a seven-row FP64-through-FP4 comparison with sign/exponent/fraction definitions, total bits, maximum finite values, explicit E4M3FN naming, packed FP4 and scale overhead. A small scaling example and bold PyTorch dtype mapping connect the table to API support and conditional GPU-performance implications. Preserved the byte-count diagram, all 23 code examples and other lessons. Glossary, syllabus, README, official references, changelog and generated HTML align.
+
+GPU-cost clarity revision (2026-10-09): reviewed all eighteen lessons and replaced vague cost statements with concise causal explanations. Added memory capacity/bandwidth and memory-bound/compute-bound definitions, launch/transfer/wait distinctions and the six-row lesson-6 layout/copy comparison. Explicit stride() teaching and bold figure labels distinguish the method from the layout property. Glossary, official references, mission, syllabus, README, changelog and generated HTML align. All twenty diagrams and all 23 executable examples are preserved.
+
 Plain-English snippet revision (2026-10-08): all 23 examples explain every code line with an action comment, replacing output-only annotations. Removed genuinely duplicated walkthrough prose and the repeated final-step table while preserving definitions, twenty diagrams and distinct correctness/performance constraints. Aligned dim, mean(), keepdim=True, broadcasting and reduction-cost definitions in the lesson and glossary. README, changelog and generated page reflect the revision; executable statements are unchanged.
 
 Scan-focused revision (2026-10-07): reviewed and shortened all eighteen lessons, retaining twenty diagrams and the lessons-only route. Each example focuses on its owning concept; broadcasting has one matrix-plus-bias addition, models use built-in composition, and transfers start from a prepared batch. Removed unnecessary API, mixed-precision, loader and compiler detours; simplified five diagram labels/examples. Glossary, references, mission, syllabus, README, changelog and generated HTML agree. Source length is about 36% lower and code lines fall from 224 to 146; these counts do not establish learner outcomes.
@@ -5694,6 +5741,28 @@ Catalog-wide follow-up: shared catalog discovery and course_labs now skip lesson
 Implemented the complete sixteen-lesson, sixteen-diagram course with nineteen commented examples and a 1.75-hour reading estimate. Canonical sources, metadata and syllabus generate the self-contained HTML. Strict lessons-only metadata/parser/renderer/validator support preserves the existing reading profiles and excludes labs/runtime archives. The shared registry, README, guide, all menus, practical entry references and root changelog align with the ten-resource route. Six standalone validators are synchronized through their owner; practical runtimes and numbered labs are unchanged.
 
 #### Verification Evidence
+
+Final-lesson simplification (2026-10-12): 239 focused tests, all three native reading validators, selected build/freshness, Markdown lint, Ruff and whitespace pass. All 24 snippets parse; first 15 lesson sections and shared pages remain byte-identical. Seven CPU assertions validate the exact arithmetic function and tolerance comparisons using existing PyTorch 2.14.1. Independent code/security review reports no actionable finding. Three isolated desktop/390px/320px Chrome checks pass current lesson navigation, removed anchors, keyboard/scrollers, reflow and diagram geometry; final captures were visually reviewed. Generic checker findings match baseline. PUBLICATION-REVIEW binds the final artifact and separates an initial browser launch failure from passing checks. CUDA is unavailable: no compiled/CUDA execution, measured fusion, GPU speedup, installation or external publication is claimed.
+
+Lesson-15 timing revision (2026-10-12): 148 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace pass. All twenty-five Python snippets parse; seventeen other lessons, twenty-four ASTs and shared pages are unchanged. Six static structure checks confirm event timing flags and the warm-up/record/matmul/wait/read boundaries. Official PyTorch and NVIDIA documentation plus independent nested code/security review support the semantics. Three isolated desktop/390px/320px Chrome cases pass navigation, keyboard controls, table/code scrolling, reflow and diagram geometry; final timeline/table/full-lesson captures were visually reviewed. Generic diagnostics match the baseline. PUBLICATION-REVIEW binds the final artifact. Existing PyTorch 2.14.1 reports CUDA unavailable; the example, GPU timing, synchronization and clock behavior remain unexecuted. Authoring is verified, with no measured duration, installation or external publication claimed.
+
+Lesson-14 batch revision (2026-10-12): 273 focused/shared-renderer tests, all nine native course validators, full build/freshness, Ruff, Markdown lint and whitespace pass. Twelve new parser regressions failed before implementation and pass afterward. Both exact CPU examples pass twelve assertions with existing PyTorch 2.14.1, including numeric equality, shape/order/input preservation, stacked storage and DataLoader partial batches. All twenty-five snippets parse; seventeen other lessons and twenty-three ASTs are unchanged. Ten dependent page bodies are unchanged outside embedded styles. Three isolated desktop/390px/320px Chrome cases pass responsive panel placement, keyboard/scrollers, reflow and figure geometry; desktop/mobile comparison and full lesson captures were visually reviewed. Independent nested code/security review found no actionable findings. Initial glossary ordering was repaired before browser checks. Generic diagnostics match the baseline. PUBLICATION-REVIEW binds the artifact and evidence; no GPU performance, installation or external publication is claimed.
+
+Lesson-13 memory revision (2026-10-12): 136 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace pass. All 24 snippets parse; 23 other Python ASTs, 17 other lessons and shared pages are preserved. Nine checks on an explicitly adapted CPU example verify batch values, copied storage, local lifetimes, persistent weights and disabled recording using existing PyTorch 2.14.1. Three isolated Chrome cases pass desktop/390px/320px navigation, keyboard, scrolling, reflow and diagram geometry; figures and the complete lesson were visually reviewed. Official PyTorch documentation/versioned source and independent semantic/security review support the explanation. Initial glossary ordering blocked generation; stale browser evidence was excluded, then fresh checks passed after repair. Generic diagnostics match the baseline. PUBLICATION-REVIEW binds the final artifact and evidence. Authoring is verified; CUDA is unavailable, so the CUDA example, counters, cache reuse, asynchronous lifetime and GPU performance remain unexecuted. No installation or external publication.
+
+Lesson-9 matrix refinement (2026-10-11): 136 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace pass. All 24 Python ASTs, 17 other lessons and shared pages are unchanged. The exact example plus 13 CPU assertions on existing PyTorch 2.14.1 verify scalar/matrix equivalence, shapes, parameter ownership, ReLU and feature-count rejection. Three isolated headless Chrome cases pass desktop/390px/320px navigation, keyboard, code scrolling, reflow and figure geometry; integrated desktop and mobile figures were visually reviewed. Independent review resolved one input-feature/storage wording issue. Initial reference-domain rejection was repaired with verified PyTorch references; the generic checker retains its baseline diagnostics. PUBLICATION-REVIEW binds artifact identity and evidence; GPU performance and external publication remain unclaimed.
+
+Dropout clarity follow-up (2026-10-11): 136 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace pass. All 24 Python ASTs, 17 other lessons and shared catalog/guide bytes match the follow-up snapshot. Three isolated headless Chrome checks pass desktop/390px/320px table content, keyboard scrolling, navigation, reflow and existing diagram geometry; desktop/mobile table captures were visually inspected. Generic diagnostics match baseline. PUBLICATION-REVIEW binds final artifact identity and evidence. CPU execution was not repeated because executable statements are unchanged; no GPU performance or publication claim is made.
+
+Lesson-11 activity revision (2026-10-11): 136 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace pass. All 24 snippets parse; 17 other lessons and the shared catalog/guide remain byte-identical to the task-start snapshot. Existing CPU PyTorch 2.14.1 executes both exact examples and independently verifies parameter updates, validation/inference preservation, dropout and gradient-recording behavior. Three isolated headless Chrome 155.0.8059.39 cases pass desktop/390px/320px navigation, keyboard, local scrolling, reflow and diagram geometry checks; desktop/mobile figures and the complete desktop lesson were visually inspected. Independent read-only review found no actionable issue. Generic checker diagnostics match baseline. PUBLICATION-REVIEW binds artifact identity, final evidence and the earlier screenshot-harness timeout. No CUDA/compiler qualification, speedup or external publication is claimed.
+
+Lesson-9 network/shape refinement (2026-10-09): 77 existing focused tests, all three native reading validators, selected build/freshness, scoped Markdown lint and whitespace pass. All 23 snippets parse; 22 remain byte-identical, and all other lessons and shared catalog/guide bytes are unchanged. The exact lesson-9 example passes 12 CPU checks on existing PyTorch 2.14.1 covering shapes, parameters, ReLU, numeric outputs, shared weights and incompatible input rejection. Official PyTorch documentation and independent read-only review confirm the teaching semantics. Three isolated headless Chrome checks at 1440, 390 and 320 pixels pass navigation, keyboard controls, local code scrolling, reflow, API emphasis, SVG bounds/font sizes and label-collision checks; desktop/mobile captures were visually reviewed. Generic checker findings match baseline. PUBLICATION-REVIEW binds the tested artifact identity and evidence group. No CUDA/compiler execution, GPU performance measurement or external publication is claimed.
+
+Lesson-8 device/readback refinement (2026-10-09): 77 existing focused tests, all three native reading validators, source/build freshness, scoped Markdown lint and whitespace pass. All 23 snippets parse; 22 remain byte-identical, and the sole executable change separates scalar extraction from printing. All other lessons and shared guide/catalog are byte-identical. Official PyTorch references confirm the synchronization distinctions; independent read-only review found no actionable issue. Three final isolated headless Chrome checks at 1440, 390 and 320 pixels pass navigation, keyboard controls, lesson-8 code scrolling, reflow, API emphasis, SVG bounds/font sizes and changed-diagram label collisions. Desktop/mobile captures were visually reviewed after widening the transfer-label gap. Generic checker findings match baseline; PUBLICATION-REVIEW binds artifact identity and distinguishes the earlier spacing revision. No CUDA/compiler execution, overlap measurement or publication is claimed.
+
+Lesson-7 numeric-format refinement (2026-10-09): 77 focused tests, all three native reading validators, build/freshness, Markdown lint and whitespace pass. All snippets are byte-identical and parse; the lesson-7 CPU example passes five checks on existing PyTorch 2.14.1. Verified all seven bit sums, six maxima/widths against torch.finfo and FP4 maximum against the primary OCP E2M1 encoding. Three final isolated headless Chrome checks at 1440, 390 and 320 pixels pass navigation, code/table keyboard scrolling, API emphasis, reflow and SVG bounds, with representative visual inspection. Independent review found no actionable issue. Generic checker findings match baseline, and shared catalog/guide bytes are unchanged. Earlier reference-domain and numeric-harness issues are separated from passing final evidence in PUBLICATION-REVIEW. GPU, FP8/FP4 arithmetic and compiler execution remain unverified; no performance or publication claim is made.
+
+GPU-cost clarity revision (2026-10-09): 77 focused tests, all three native reading validators, selected build/freshness, Markdown lint and whitespace checks pass. All 23 snippets have unchanged executable ASTs; all 17 CPU blocks pass 37 independent checks with existing PyTorch 2.14.1. Three final headless Chrome 155.0.8059.39 checks at 1440, 390 and 320 pixels pass navigation, keyboard code/table scrolling, reflow, computed API emphasis and SVG text bounds; representative captures were visually inspected. Independent review caught a missing first-use kernel definition, corrected and re-reviewed with no remaining concrete finding. Generic checker results match baseline profile/shell diagnostics; shared guide/catalog bytes are unchanged. PUBLICATION-REVIEW binds the final artifact and records earlier stale-build/input-path setup failures separately. Five CUDA examples and the compiler continuation remain unexecuted; no GPU performance or external publication claim is made.
 
 Plain-English snippet revision (2026-10-08): 77 existing focused tests, three native reading validators, build/freshness, repository-configured Markdown lint and whitespace checks pass. All 23 snippets parse with AST identity to the prior source; all 17 CPU blocks pass 37 independent checks on PyTorch 2.14.1. Three final isolated headless Chrome 155.0.8059.39 tests at 1440, 390 and 320 pixels pass navigation, keyboard, scrolling, reflow and SVG geometry checks; representative changed lesson captures were visually reviewed. Independent review found one ambiguous numel comment, corrected before final rebuild. Generic checker diagnostics are unchanged; guide/catalog bytes are unchanged. PUBLICATION-REVIEW binds the artifact and evidence. Five CUDA examples and the compiler continuation remain unexecuted; no runtime qualification or external publication is claimed.
 
@@ -5715,5 +5784,270 @@ Thirty-three isolated headless Chrome 154.0.8037.98 checks pass across all eleve
 
 <!-- /FEATURE: FEAT-043 -->
 
+<!-- FEATURE: FEAT-044 reqs=REQ-028 status=ready delivery=verified priority=P1 version=5 -->
+### FEAT-044: Compact source-first labs and consolidated batch stages
+
+#### Requirements Covered
+
+- REQ-028: Complete compact lab, execution, preparation and evidence contract.
+
+#### Context Evidence
+
+At migration start, the six practical packages contained 110 lab sources and 288 native launchers. Existing native bodies already own profiler flags, report checks, watchdogs, worker placement and server lifecycle. The former runtime bindings and campaign preparation identified variants by filename; renderer and validators enforced seven sections. Reading-only packages have explicit profiles. Preserve pre-existing worktree edits and original evidence.
+
+#### Design Details
+
+Keep one canonical per-lab batch file with a visible case for each supported execution variant, and retain auxiliary jobs. A shared selection model resolves workload, experiment, profiler and device against declared per-lab capability/runtime metadata. Parse launcher flags before -- and preserve the remaining program argv. Reject unsupported/conflicting selections before execution. For all, prepare an ordered Systems/Compute stage plan with unsupported stages marked skipped.
+
+A shared job helper creates private exclusive job output and initializes a versioned reader document before activation. Each stage starts a new Bash process, activates its selected runtime, creates isolated results/profiles/logs/artifacts, runs the native body and records actual outputs atomically. Existing bounded process cleanup and report checks stay visible in native bodies. Stop on any failed stage and retain later stages as unstarted. Keep original measurements separate from the reader aggregate; consumers filter exact original schema and eligibility. Explicit adapters handle CUDA text, sanitizer status, local diagnostics and trial aggregates.
+
+Batch directives reserve the maximum selectable resources and longest valid sequence budget. Step flags constrain actual participation without rewriting allocation metadata. Validate scheduler time against selected execution plus teardown and 60-second finalization. Runtime/preparation selection unions exactly the chosen stages; optional experiments remain opt-in.
+
+Authored guides contain concise purpose, submissions and results interpretation. The renderer reads complete actual source before any commands, inserts existing diagrams in accessible collapsed disclosures, then shows two short native submissions and exact-job results. Shared Lab Guide explains submission directory, JOB_ID, completion and troubleshooting; GPU Performance Tools owns profiler guidance. Retain course downloads and lesson links. Add brief semantic source comments without changing algorithms.
+
+#### Selected Option
+
+Retain Python, Bash, Slurm and the static renderer; consolidate lifecycle plumbing while leaving native commands and specialized coordinators readable per lab.
+
+#### Alternatives Considered
+
+Separate profiler files duplicate setup; generic execution wrappers obscure native commands; executing normal plus diagnostics for all repeats work and contaminates evidence interpretation. Silent device overrides and compatibility filenames are rejected.
+
+#### Implementation Boundaries
+
+Six practical courses and their direct shared tools, tests, docs, generated pages and source/project-installed run-labs consumers. Preserve reading profiles, existing unrelated edits, historical measurements and archives. No live installation, infrastructure, publication or Git action.
+
+#### Test-First Success Criteria
+
+- TDD-001: Selection matrix covers 110 normal paths, supported diagnostics and experiments, all ordering/skips and explicit failure.
+- TDD-002: Native argv, topology, budgets, runtime union, worker placement, timeout, report validation and cleanup survive consolidation.
+- TDD-003: Atomic reader JSON preserves actual evidence and honest partial status without duplicate measurement ingestion.
+- TDD-004: All guides render the exact requested order, source bytes, two submissions, results commands and twelve collapsed diagrams; reading-only profiles remain unchanged.
+
+#### Validation Plan
+
+Focused native-job, runtime/preparation, evidence and renderer tests; all course validators; source/helper/skill parity; full build/freshness; Python AST and CUDA preservation; Playwright desktop, 390px and 320px checks. Review code and security through align.
+
+#### Test Plan
+
+Inject unsupported selections, argument collisions, missing runtimes/tools/reports, process failures, timeouts, interrupts and server cleanup failures. Exercise smaller steps in maximum allocations and reject insufficient time. Verify original schema filtering and historical hashes.
+
+#### Evaluation Plan
+
+Learners can read the experiment, choose normal or diagnostics and locate one exact-job document. Native fixture and static checks do not qualify real GPUs, Slurm or profilers.
+
+#### Rollout And Rollback
+
+Implement a complete Fundamentals slice, cover exceptional execution families, then migrate all remaining labs and consumers before deleting retired launchers. Preserve originals and unrelated edits; revert only task-owned changes if necessary.
+
+#### Done Definition
+
+All requested surfaces and local checks are aligned; original evidence is unchanged, and any unavailable live qualification is explicitly reported.
+
+#### Implementation Evidence
+
+Full-branch PR review repair: track verified living process-group members, including Linux-adopted workers, after the detached leader exits. Surviving workers fail the stage and prevent the next profiler stage; recycled member identities cannot authorize signalling. Restore the qualified GPU-memory comparison direction in Advanced Lab 27.
+
+Implemented all 110 compact guides and canonical launchers, twelve retained diagrams, source comments, selection/runtime metadata, atomic reader JSON with native adapters, fresh stage processes, explicit step resources and execution budgets. Linux child adoption retains detached server ownership across early shell exit; forced cleanup fails the stage. Preparation, campaign recipes, original-measurement filtering and copied helpers use the same selectors. Historical evidence remains separate.
+
+The alignment follow-up resolves actual fabric scope from validated allocation node counts for the nine existing one-/two-node labs while preserving fixed-step scope and truthful allocation metadata. Oversized JSON produces an explicit data error and failed stage with its original file retained. Host-copy evidence validation consumes the canonical sbatch/nsys recipe and rejects contradictory selections.
+
+#### Verification Evidence
+
+Full-branch PR review repair: both ownership regressions fail before the repair and pass afterward; 83 isolated Linux native-job/capture/lifecycle tests pass, including detached leader exit before and after observation. Independent real-subprocess review confirms termination. All nine native validators, build/freshness, helper parity and 33 fresh responsive browser cases pass. See the full-branch PR review entry in docs/course-format-validation.md for current artifacts and retained limitations.
+
+Full suite: 2,519 passed and one macOS skip; 71 isolated Linux native-job/capture/lifecycle tests pass, including the skipped child-adoption case. Final targeted preparation/evidence checks: 109 passed. All nine course validators, complete build/freshness, shared-helper and 27-file skill-payload parity, scoped Ruff/Markdown/Bash/ShellCheck and whitespace checks pass. Read-only small/large campaign planning resolves 220 units. Playwright Test in headless Chrome 155.0.8059.39 passes 33 desktop/390px/320px page cases plus three final Custom CUDA refresh cases; source bytes, compact order, disclosures, command/results paths and reflow are verified. Source preservation covers 97 Python ASTs with only the declared distributed-initialization/import repair, 13 CUDA token streams, twelve lab figures and 2,872 historical evidence/archive hashes. Code/security review defects are repaired and covered. See [the verification record](course-format-validation.md#compact-labs-and-consolidated-native-jobs--2026-10-12) for artifact identities and retained generic-checker limitations. Local evidence does not qualify live GPU/Slurm execution or publication.
+
+Fresh alignment verification: 2,528 tests passed with one Linux-only skip on macOS; 79 isolated Linux fixture tests passed, including child adoption. Regression controls reproduced all three findings before repair. Independent review exercised all eighteen affected fabric variants at one and two nodes and all four host-copy recipe combinations. All nine validators, full build/freshness, helper and 27-file source/installed parity, scoped lint, shell checks and 220-unit dry-run pass. Three fresh Playwright cases cover the changed Lab Guide at 1440, 390 and 320 pixels. Other rendered pages, all lab programs and 2,872 historical evidence/archive files remain unchanged from the prior verification. See the alignment follow-up in the verification record for the current Lab Guide identity. Live GPU/Slurm/Nsight qualification remains unverified.
+
+<!-- /FEATURE: FEAT-044 -->
+
+<!-- FEATURE: FEAT-045 reqs=REQ-029 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-045: Course guide organization and editorial cleanup
+
+#### Requirements Covered
+
+- REQ-029: Concise and organized course guides.
+
+#### Context Evidence
+
+The practical renderer embeds complete READMEs. Five repeat an obsolete lesson/guide template; Advanced Labs embeds extensive implementation detail before its route. The labs-only renderer duplicates guide ordering and omits guide submenu entries. Three reading profiles do not render supporting guides.
+
+#### Design Details
+
+Condense course READMEs into orientation, prerequisites, first activity, learning route and completion. Preserve distinct evidence limits in existing lab interpretation, version and readiness documents; remove repeated authoring/layout commentary and stale distributed-gate references. Keep worked examples, executable source and declared profiles. Define one shared practical-guide order and display-label mapping for both practical renderers. Keep existing source-derived anchors and glossary placement; no aliases. Rebuild through the existing deterministic builder.
+
+#### Selected Option
+
+Edit canonical Markdown and reuse the existing supporting-guide renderer with shared ordering and titles.
+
+#### Alternatives Considered
+
+Hiding complete READMEs would discard useful learner context; a second abbreviated HTML copy would drift from source.
+
+#### Implementation Boundaries
+
+Course orientation and supporting Markdown, shared guide presentation, affected tests/docs and generated pages. Preserve pre-existing dirty work, lessons, lab code and original results.
+
+#### Test-First Success Criteria
+
+- TDD-001: Existing native profile, publication and source-integrity checks remain green; guide body order and sidebar destinations agree across both practical renderers.
+
+#### Validation Plan
+
+Run focused tests, all native validators, complete build/freshness and isolated desktop/390px/320px browser review. Apply align for changed-scope code, lint and security review.
+
+#### Test Plan
+
+Check all six practical guide orders and labels, exact source parity, local links and three reading-profile exceptions.
+
+#### Evaluation Plan
+
+Compare retained prerequisites, learning routes, qualification and completion limits against the task-start snapshot; remove only duplicated or obsolete detail.
+
+#### Rollout And Rollback
+
+Generate locally through the atomic builder. Any rollback is limited to task-owned edits; no external publication.
+
+#### Done Definition
+
+All nine guides are reviewed, affected publications are current and evidence limitations are explicit.
+
+#### Implementation Evidence
+
+Simplified all nine READMEs and five syllabus template paragraphs; reorganized the six practical guide sections with common titles, ordering and navigation. Retained useful interpretation in four lab-mechanisms guides, corrected five readiness runbooks and the tooling introduction, and preserved shared-guide runtime anchors. Advanced Labs now has matching submenu entries and an onward link. Updated renderer consumers, focused regressions, README, changelog and publication reviews.
+
+#### Verification Evidence
+
+All nine native validators, complete build/freshness, 353 focused tests and six final exact-order checks pass; three Torch-dependent checks were skipped in the existing test environment. Configured Markdown lint, Ruff and whitespace pass. Twenty-one isolated headless Chrome cases cover all seven changed pages at 1440, 390 and 320 pixels, with keyboard links, responsive layout, local scrolling, passive resources and visual review. Independent review's retained CUDA scope error was corrected and re-reviewed. The 1,546 protected source/lesson/diagram/version/metadata/result files retain their bytes; reading-only pages and catalog are unchanged. Generic checker diagnostics match the exact task-start artifact and remain distinct from native profile acceptance. See [the guide review](course-format-validation.md#course-guide-cleanup--2026-10-13) for identities, initial harness failures and evidence boundaries. No installation, live lab execution or external publication occurred.
+
+<!-- /FEATURE: FEAT-045 -->
+
+<!-- FEATURE: FEAT-046 reqs=REQ-002 status=ready delivery=verified priority=P1 version=5 -->
+### FEAT-046: Visible comments in embedded code
+
+#### Requirements Covered
+
+- REQ-002: Consistent accessible comment styling across every course profile.
+
+#### Context Evidence
+
+Before implementation, Markdown fences discarded language labels and escaped
+code as plain text. Lab and Advanced Labs helper listings used separate plain-text
+emitters. The shared light stylesheet lacked a comment selector; source parity
+was already enforced.
+
+#### Design Details
+
+Use one standard-library comment renderer returning escaped HTML fragments.
+Identify Python comments with tokenize and use language-aware scanners for Bash,
+CUDA/C++ and PromQL. Keep original source slices rather than reconstructing
+source from tokens. Preserve Markdown fence language labels for dispatch and
+infer complete-source language from its extension. Wrap only comment ranges in
+code-comment spans. Preserve strings, docstrings, plain-text blocks, source
+attributes, source disclosures and keyboard-scrollable pre elements. Unknown
+explicit languages and lexical failures stop rendering with source context.
+Define saturated burnt orange #b34700 once in the shared course CSS; retain
+existing code typography and at least 4.5:1 contrast against code backgrounds.
+The darker orange preserves contrast on the light code surface.
+
+#### Selected Option
+
+Build-time comment spans and shared embedded CSS, with no added dependencies.
+
+#### Alternatives Considered
+
+CSS alone cannot distinguish comments in plain text. Client-side highlighters
+add runtime assets; a third-party lexer changes the standard-library build
+contract. Per-course edits would duplicate styling and rendering policy.
+
+#### Implementation Boundaries
+
+Shared builder, CSS, directly affected tests, generated HTML and documentation.
+No lab execution changes, new infrastructure, external publication or Git action.
+
+#### Test-First Success Criteria
+
+- TDD-001: The GPU Fundamentals Lab01 experiment-controls comment is colored.
+- TDD-002: Parsed text from every code block is unchanged, including source listings.
+- TDD-003: Quoted markers and preprocessor directives are not mistaken for comments.
+- TDD-004: The comment color meets 4.5:1 contrast and all profiles share the style.
+
+#### Validation Plan
+
+Run focused renderer/presentation/source-integrity tests, build and freshness,
+all native course validators, scoped lint and independent read-only review.
+
+#### Test Plan
+
+Cover full-line and trailing comments, multiline C++ comments, quoted markers,
+shell expansions, HTML escaping, whitespace, unknown languages and lexical errors.
+Update markup-sensitive tests to compare parsed source without weakening parity.
+
+#### Evaluation Plan
+
+Use isolated Playwright checks across nine courses and the Lab Guide at desktop,
+390px and 320px widths. Check computed color/contrast, disclosures, text selection,
+source identity, scrolling and offline rendering; review representative images.
+
+#### Rollout And Rollback
+
+Regenerate through the existing builder, which validates before replacement.
+Revert only this feature's source/style changes and rebuild for rollback.
+
+#### Done Definition
+
+All supported embedded comments have the shared readable color with exact source
+text preserved; source, generated pages, tests and documentation agree.
+
+#### Implementation Evidence
+
+Implemented the shared escaped-fragment renderer and language dispatch in all
+three emitters, one shared comment color, semantic source-text test helpers,
+regression fixtures and maintainer/reader documentation. Regenerated the eleven
+HTML pages through the canonical builder. No lab executable or result archive
+content changed. Markdown errors include canonical source paths, lesson or guide
+sections and fragment-relative line numbers; source identity remains separate
+from diagnostic context so source-scoped link rules are preserved.
+
+#### Verification Evidence
+
+536 focused renderer, source-integrity, presentation, reading-profile, catalog,
+link and practice-integration tests pass, including 59 comment-rendering cases.
+Four failing-first regressions verify file and section diagnostics in practical
+lessons, reading lessons with and without diagrams, and authored lab guides.
+Two further failing-first cases cover next-steps guide fragments. Additional
+regressions cover comparison panels and unterminated fences. All six practical and
+three reading validators, HTML/archive freshness, scoped Ruff, Markdown lint and
+whitespace checks pass. Independent read-only review found and confirmed fixes
+for Python Unicode line-separator offsets and Bash case/substitution boundaries;
+final bounded review found no remaining blocking issue. All eleven HTML outputs
+remain byte-identical after the diagnostic-only alignment fix, retaining the
+visual evidence below.
+
+All 452 code blocks match the task-start text exactly. Thirty isolated offline
+Playwright cases cover all nine course pages and the Lab Guide at 1440px, 390px
+and 320px. All comment spans use the requested color with sufficient contrast;
+381 browser source-hash checks cover 127 complete listings at all three widths.
+Native selection matches the prior pages, disclosures and keyboard horizontal
+scrolling work, and no external requests occur. Desktop/mobile Lab01 screenshots
+were visually inspected, including the requested experiment-controls comment.
+This is local source/build/browser proof; no external publication was performed.
+
+Burnt-orange revision implementation: changed the single shared CSS value to
+`#b34700`, updated the existing color assertion and documentation, and rebuilt
+all reader pages. Earlier evidence above covers the prior color.
+
+Burnt-orange verification: 72 focused tests, all nine native validators and
+build/freshness pass. All 452 embedded code blocks retain exact text and markup
+semantics. Thirty isolated headless Chrome checks verify the computed color,
+5.112:1 code-background contrast, keyboard controls, local scrolling, reflow and
+offline behavior at 1440, 390 and 320 pixels. Desktop/phone captures were visually
+reviewed. Scoped lint and diff review pass with no changed-scope security finding.
+Initial artifact-capture harness timeouts and unavailable passing traces are
+recorded separately in the [shared publication review](lab-guide/PUBLICATION-REVIEW.md#shared-burnt-orange-comments--2026-10-13).
+No learner code, lab runtime or result archive changed; no external publication occurred.
+
+<!-- /FEATURE: FEAT-046 -->
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 874" role="img" aria-labelledby="pt-training-validation-title pt-training-validation-desc" style="max-width: 390px; margin-inline: auto">
+  <title id="pt-training-validation-title">Train on batches, then validate after each epoch</title>
+  <desc id="pt-training-validation-desc">For every epoch, select training behavior and record forward calculations. Each training batch produces predictions and a loss against known targets; backward computes gradients and the optimizer updates weights and biases. After all training batches, select evaluation behavior and inference mode. Predict on separate validation inputs, compare with known targets and report loss without updating parameters. Repeat training for the next epoch.</desc>
+  <defs><marker id="pt-training-validation-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1 L7 4 L1 7" fill="none" stroke="#206757" stroke-width="1.8" /></marker></defs>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" text-anchor="middle">
+    <text x="170" y="27" font-size="22" fill="#24343d">Repeat for each epoch</text>
+    <rect x="16" y="47" width="308" height="116" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="77" font-size="22" fill="#245880" font-family="ui-monospace, monospace" font-weight="700">model.train()</text>
+    <text x="170" y="108" font-size="20" fill="#24343d">Dropout active</text>
+    <text x="170" y="140" font-size="20" fill="#24343d">Record for backward</text>
+    <path d="M170 165 V186" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-training-validation-arrow)" />
+    <rect x="16" y="190" width="308" height="66" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="218" font-size="20" fill="#24343d">Training batch → model</text>
+    <text x="170" y="244" font-size="20" fill="#24343d">Predictions</text>
+    <path d="M170 258 V279" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-training-validation-arrow)" />
+    <rect x="16" y="283" width="308" height="65" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="311" font-size="20" fill="#24343d">Compare with known targets</text>
+    <text x="170" y="337" font-size="20" fill="#24343d">Loss</text>
+    <path d="M170 350 V371" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-training-validation-arrow)" />
+    <rect x="16" y="375" width="308" height="90" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
+    <text x="170" y="403" font-size="20" fill="#24343d">Backward → gradients</text>
+    <text x="170" y="429" font-size="20" fill="#24343d">Optimizer updates</text>
+    <text x="170" y="455" font-size="20" fill="#24343d">weights + biases</text>
+    <text x="170" y="496" font-size="19" fill="#24343d">Repeat for all training batches</text>
+    <path d="M170 508 V528" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-training-validation-arrow)" />
+    <rect x="16" y="532" width="308" height="119" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="170" y="561" font-size="22" fill="#206757" font-family="ui-monospace, monospace" font-weight="700">model.eval()</text>
+    <text x="170" y="590" font-size="20" fill="#206757" font-family="ui-monospace, monospace" font-weight="700">torch.inference_mode()</text>
+    <text x="170" y="617" font-size="20" fill="#24343d">Dropout inactive</text>
+    <text x="170" y="641" font-size="20" fill="#24343d">No backward recording</text>
+    <path d="M170 653 V674" stroke="#206757" stroke-width="2" fill="none" marker-end="url(#pt-training-validation-arrow)" />
+    <rect x="16" y="678" width="308" height="130" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
+    <text x="170" y="705" font-size="20" fill="#24343d">For each validation batch:</text>
+    <text x="170" y="733" font-size="20" fill="#24343d">Inputs → model → predictions</text>
+    <text x="170" y="761" font-size="20" fill="#24343d">Compare with known targets</text>
+    <text x="170" y="790" font-size="20" fill="#24343d">Report loss; keep weights</text>
+    <text x="170" y="846" font-size="19" fill="#24343d">Next epoch: start training again</text>
+  </g>
+</svg>

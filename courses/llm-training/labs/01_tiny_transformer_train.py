@@ -28,10 +28,12 @@ def main() -> None:
         action="store_true",
         help="Zero existing gradient buffers instead of releasing them; keep all work fixed.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     hidden, layers, heads, sequence, batch = (
@@ -48,6 +50,7 @@ def main() -> None:
     ).to("cuda")
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     forward = annotated_operation(model, "forward")
+    # Differentiate the loss to populate parameter gradients.
     backward = annotated_operation(lambda loss: loss.backward(), "backward")
     update = annotated_operation(optimizer.step, "optimizer")
     clear_gradients = annotated_operation(optimizer.zero_grad, "zero_grad")
@@ -85,6 +88,7 @@ def main() -> None:
 
     for _ in range(args.warmup):
         train_step()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     tracked_parameter = trainable_parameters[0]
     parameter_before = tracked_parameter.detach().float().cpu().clone()
@@ -134,6 +138,7 @@ def main() -> None:
                 },
                 stream,
             )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="01_tiny_transformer_train",

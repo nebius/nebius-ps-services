@@ -90,6 +90,8 @@ Engineers need clear explanations, diagrams, runnable examples, interpretation g
 
 - AC-018: All nine Course overviews use three short, course-specific paragraphs: purpose and outcomes; audience and prerequisites; practical scope and the next step. Retain brief hardware and safety boundaries, including Soperator's cluster-free reading and Advanced Labs' sixteen-GPU fabric requirement. Shared setup, submission, logs, workload profiles and access procedures belong in the shared Lab Guide. Preserve unique interpretation, qualification and completion guidance in the embedded course guide or owning lab before removing overview repetitions. Do not imply ordinary one-GPU labs require a separate cluster when qualified advanced hardware can be reused.
 
+- AC-019: All nine course pages and the shared Lab Guide render code comments in saturated burnt orange (#b34700), with at least 4.5:1 contrast against code backgrounds. Cover Markdown examples, full lab listings and helper listings for Python, Bash, CUDA/C++ and PromQL. Preserve exact code text, whitespace, escaping, source identity and offline reading. Strings, Python docstrings and explicit plain-text blocks retain ordinary code styling. Unsupported declared languages and lexical failures report source context before generated outputs are replaced.
+
 #### Negative Criteria
 
 - NC-001: Course artifacts contain no secrets, private paths, private endpoints, customer data, private-source attribution, or unsupported performance claims.
@@ -548,7 +550,7 @@ trade-offs and reusable inference state, integrated with their owning courses.
 - AC-002: Optimizations teaches NVTX timeline interpretation, bounded H2D copy/compute overlap, and D2H output workers, pinned-buffer reuse, completion events, backpressure and final drain through runnable experiments.
 - AC-003: Training provides real DDP bucket sizing and FP16/BF16/PowerSGD hook experiments, an uncompressed global-batch reference, observed bucket sizes, numerical error and short training trajectories. Convergence and target speed remain separate gates.
 - AC-004: Inference teaches KV retention, expiry, eviction, restore versus recompute and GDS boundaries with a deterministic CPU policy lab. Modeled costs never become measured engine latency or storage throughput.
-- AC-005: Each addition has a complete seven-section guide, contextual diagram, lesson and syllabus integration, private result output, supported commands, and complete generated HTML/source parity. Shared publication and standalone validators also conform to the course skill's bounded HTML/source contract.
+- AC-005: Each addition has a complete compact guide under REQ-028, contextual diagram, lesson and syllabus integration, private result output, supported commands, and complete generated HTML/source parity. Shared publication and standalone validators also conform to the course skill's bounded HTML/source contract.
 
 #### Negative Criteria
 
@@ -592,6 +594,8 @@ Learners need an attractive central course catalog, direct navigation between th
 - AC-009: Rename the six combined downloads to `<slug>-lab-results.zip` with identical contents and no aliases. Remove obsolete filename retirement logic; preserve canonical result and dashboard files. Verify all nine course contents and styles.
 - AC-010: Normal build and read-only check preflight the complete repository-root publication inventory plus planned outputs before replacement, with exact caps of 104857600 bytes per file and 1000000000 bytes total. Report sizes, limits and headroom in decimal MB (1 MB = 1,000,000 bytes), with two decimal places and thousands separators; overflow diagnostics show excess amounts with six decimal places so one-byte violations remain visible. Keep exact integer-byte comparisons, fail on incomplete inventory or overflow, and never silently drop content. File, site and archive-limit failures use the same stream-specific red terminal diagnostics in build and check. Archive export enforces the same per-file cap under its existing transaction.
 - AC-011: Every successful built/current HTML or ZIP line displays its exact serialized byte length in an aligned decimal-MB column before the path. After successful processing, print an aligned publication summary with listed-output and other-file subtotals, estimated site size, site limit, remaining capacity and per-file limit; omit largest-file reporting. The shell wrapper prints this summary exactly once at the end after verification, replacing its trailing success sentence. The Python builder supports --no-summary to suppress only that summary; preflight enforcement and failure diagnostics remain active. Selected-course subtotals cover only that run's planned outputs. Totals use exact bytes before independent display rounding, which may differ by 0.01 MB. Failed builds/checks emit no success summary.
+
+- AC-012: In generated courses, the shared Lab Guide and catalog, links to other pages (including setup guides, other courses and HTTPS references) open a new tab with target="_blank" and rel="noopener noreferrer", preserving the current reading page. Fragment-only navigation stays in the current tab. Explicit ZIP downloads retain native download behavior. Apply one shared rendering policy without scripts or changing destination allowlists, embedded sources or course profiles. Verify every generated anchor and actual pointer/keyboard navigation in an isolated browser.
 
 #### Negative Criteria
 
@@ -771,9 +775,7 @@ and prepare the shared environment once before starting practical work.
 - AC-001: All lab guides retain a concise purpose immediately after the title.
   Remove Theory preparation labels and reading lists; retain useful definitions
   and scope qualifications in the opening or local concept explanation.
-- AC-002: Practice contains short task instructions and supported commands,
-  without lesson/README detours or repeated environment setup. Preserve worked
-  calculations, interpretation, checks and extensions in their relevant sections.
+- AC-002: Each lab follows the compact flow in REQ-028, with source-first explanations, short native submissions and exact-job results. Shared setup and profiling guidance have one owner.
 - AC-003: The shared courses README owns environment setup for all six practical
   courses, linked from their pages without a numbered setup lab. It covers two Soperator worker nodes with one GPU each, the
   nebius-cxcli create/render/deploy sequence, external Kubernetes credentials,
@@ -1099,7 +1101,7 @@ Learners prepare the environment once and then connect, run, profile and inspect
 - AC-009: Learners submit jobs with native sbatch and inspect the exact job's logs and printed result paths. The no-argument regular-lab-setup.py command and selected specialized preparation commands create and validate private result, log and profile directories before submissions; standalone copies discover their course root automatically. Reject symlinked, foreign-owned or non-private existing directories without changing them. Remove repeated directory-preparation blocks and learner-facing umask commands from lab instructions. Preserve working directory, job identity, workload arguments and per-lab output/error paths. Use native sbatch dispatch for automation and retain inspection utilities; REQ-024 replaces generic execution wrappers.
 - AC-010: Each lab's Before you start contains one shared Lab Guide link and no assigned-dashboard link; retain distinct prerequisites and dashboard interpretation. Concisely introduce every supplied Python or CUDA lab program by its actual purpose, actions, correctness checks and output immediately before its canonical Practice command. Explain the retained monitoring discovery, publication, capture and qualification helpers where used. Move detailed campaign instructions to the existing run-labs documentation.
 - AC-011: Explain that driver capability, framework CUDA build and compiler toolkit versions need compatibility, not equality. Never recommend generic CUDA/driver upgrades in the Soperator learner flow. Make supported Ubuntu Python and Apptainer installation conditional administrator preparation; actual worker/container checks remain necessary. Keep fresh-terminal variables explicit, credential reuse accurate, full-project Grafana deployment effects visible and obsolete lab-kit instructions absent.
-- AC-012: Every executable lab guide has exactly one baseline sbatch invocation in Practice, with capture explicitly disabled. CPU-only labs use a CPU launcher without GPU requests. Preserve distinct comparisons and required builds outside that launch block. Lesson Practice remains links and teaching context.
+- AC-012: Every executable lab guide has one normal submission and one optional profiling submission to its canonical launcher under REQ-028. CPU steps request no GPUs even when the allocation reserves an optional GPU path. Lesson Practice remains links and teaching context.
 - AC-013: Teach unprofiled execution, Systems investigation, selected Compute analysis where applicable, and unprofiled verification. Learner diagnostics use visible native srun, nsys, ncu and report-inspection commands. Coordinated multi-node services retain native sbatch allocation with explicit profiler argv passed to each worker. Distributed and server recipes reach actual ranks/servers with private distinct reports, bounded execution and cleanup. Keep diagnostic labeling, capture applicability and maintainer automation; do not hide learner profiling inside Python wrappers.
 - AC-014: The internal directory-preparation function is standard-library-only and idempotent, performs no infrastructure or dependency installation itself, and is available in synchronized course trees. Monitoring discovery remains the separate explicit regular-lab-setup.py monitoring action with its existing authority checks.
 
@@ -1183,7 +1185,7 @@ Students can read the Slurm and NVIDIA commands they run, select workload size e
 
 - AC-001: All 110 labs use explicit per-lab native batch jobs for normal execution and supported profiler modes. Student and campaign paths share these jobs; remove generic Python execution/submission wrappers after migrating all consumers. Preserve distributed rank, server lifecycle, CUDA postprocessing, watchdog, cleanup and diagnostic evidence guarantees.
 - AC-002: Workload CLI is --workload small|large, with unchanged lab defaults; run-labs accepts small|large|both and defaults to both. COURSE_WORKLOAD is the workload environment variable. No old flag/environment aliases. Preserve existing serialized evidence schemas and actual profiling terminology.
-- AC-003: New output belongs to results/<lab>/jobs/<job-id> with results, profiles, logs and artifacts children; scheduler logs remain results/<lab>/logs/<job-id>.out/.err. Create private scheduler directories before submission, reject unsafe paths/restarts/collisions, disable requeue, and collect only exact dispatched jobs.
+- AC-003: New output belongs to results/<lab>/jobs/<job-id> with result.json and isolated stage directories under the REQ-028 contract; scheduler logs remain results/<lab>/logs/<job-id>.out/.err. Create private scheduler directories before submission, reject unsafe paths/restarts/collisions, disable requeue, and collect only exact dispatched jobs.
 - AC-004: Preserve all original results, reports, screenshots, receipts, archives and published paths byte-for-byte. Historical organization makes verified copies only, with attribution/checksum manifests and collision detection. Uncertain attribution stays unresolved; history never supplies fresh evidence.
 - AC-005: Place GPU Performance Tools before GPU Fundamentals as preparation for lab-bearing courses: five concise reference lessons covering evidence selection/Slurm, Systems/NVTX, Compute, PyTorch profiler, and Grafana/VictoriaMetrics. No labs or exercises. Move existing primers and contextual diagrams, explain every demonstrated flag centrally, and retain lab-specific commands locally. Grafana queries its datasource; exporters/publishers and VMAgent collect/forward metrics.
 - AC-006: Align canonical skills/run-labs source, references, recipes, tests and installed payload. Preserve scheduling, dependency, durable dispatch/reconciliation, owned cancellation, recovery, result identity/cardinality and evidence integrity. Reject incompatible saved executable plans without rewriting historical evidence.
@@ -1227,7 +1229,7 @@ After source synchronization and SSH, a learner runs python3.12 "$HOME/courses/t
 - AC-009: Remove course_setup.py with no compatibility alias. Update imports, help, errors, tests, sync inventories, all six standalone copies, README, lab teaching and generated HTML/archives. After verified synchronization retire only digest-identified old distributed entrypoints; preserve modified files, symlinks, runtime state and evidence.
 - AC-010: Complete the five full commands sequentially, then repeat the unchanged sequence, for two successful runs per script on the authorized non-production target. Independently verify receipts, package versions, generations, activation and historical preservation. Report first/repeat wall times, failed/repair time, skips, existing-cache disclosure and total validation time; runtime smokes are separate from preparation timing.
 - AC-011: The README-derived Lab Guide has a dedicated Lab Preparation Scripts topic explaining each script's learner purpose, lab scope, automated installations, prerequisites, selection commands, shared model reuse and installation-versus-qualification boundary. Its sidebar exposes all top-level topics and authored subsections in body order, including each preparation group. Review the entire guide for native/default versus optional-container consistency and retain visible Slurm/profiler commands.
-- AC-012: Across all eight courses and 110 lab guides, dependency preparation has one shared Lab Guide referral per course entry or lab prerequisite section, without duplicated installation commands or competing manual setup procedures. The guide maps each available course/lab number to its preparation group and explains optional selections. Preserve lab-specific hardware/data prerequisites, runtime checks, native execution and intentional build experiments. Current learner teaching and runbooks must not direct users to retired setup entrypoints.
+- AC-012: Across all eight courses and 110 lab guides, dependency preparation has one shared Lab Guide referral per course entry, without duplicated installation commands or competing manual setup procedures. The guide maps each available course/lab number to its preparation group and explains optional selections. Preserve lab-specific hardware/data prerequisites, runtime checks, native execution and intentional build experiments. Current learner teaching and runbooks must not direct users to retired setup entrypoints.
 - AC-013: The source-owned run-labs skill resolves every selected recipe launcher, including optional variants, to its preparation group. Campaign copies reuse an explicitly bound prepared installation without copying or rewriting runtime receipts. Independently validate selected managed runtimes before dispatch, report exact owning preparation commands when missing, preserve isolated job evidence and never install dependencies during a campaign. Refresh and verify the project-local skill through the documented npx installer.
 
 #### Negative Criteria
@@ -1291,7 +1293,7 @@ Students who can read basic Python need to recognize tensor work, memory movemen
 #### Acceptance Criteria
 
 - AC-001: Provide a standalone course titled PyTorch for GPU Performance Engineering directly before GPU Fundamentals in all catalog, guide and course navigation surfaces. Renumber reader resources consistently while preserving existing lab identities and technical prerequisites.
-- AC-002: Provide an estimated three-hour, eighteen-lesson reading route with definition-first explanations, contextual small diagrams and commented worked examples. Every lesson has an observable objective and a substantive Performance connection. Teach tensor attributes, shapes, indexing, broadcasting, arithmetic, reductions, matrix multiplication, layout, dtype, device, modules, autograd, inference, transfers, memory and correct timing before an integrated code-reading example.
+- AC-002: Provide an estimated three-hour, sixteen-lesson reading route with definition-first explanations, contextual small diagrams and commented worked examples. Every lesson has an observable objective and a substantive Performance connection. Teach tensor attributes, shapes, indexing, broadcasting, arithmetic, reductions, matrix multiplication, layout, dtype, device, modules, autograd, inference, transfers, memory and correct timing before a final, standalone torch.compile and kernel-fusion example.
 - AC-003: Use a lessons-only profile with Objective, How it works and Mental model. No labs, Practice sections, exercises, setup scripts, execution dependencies or result archives. Reading requires only basic Python, not a running GPU or cluster. Shared lab discovery and preparation skip this reading profile and create no job or result directories for it.
 - AC-004: Use original passive inline SVGs with consistent shared fonts, readable labels and deliberate shapes; preserve visible explanations and inspect desktop, 390px and 320px layouts. Keep complete canonical Markdown, source metadata, syllabus, glossary and generated self-contained HTML in parity.
 - AC-005: Support technical claims with current official PyTorch references. Treat supplied topic material as reference data; simplify useful lab ideas into examples without copying operational instructions or manufacturing measurements.
@@ -1301,6 +1303,22 @@ Students who can read basic Python need to recognize tensor work, memory movemen
 - AC-009: Define concepts affirmatively through what they are and how they work. Define index and its plural indices before notation, and map each coordinate to a grid, row or column with zero-based positions. Keep lesson 2 indexing, slicing and reshaping examples short and grounded in the same grids. Teach the linear layer's feature-axis contract in lesson 9; teach inferred reshape sizes and axis reordering in lesson 6. Preserve technical constraints with clear conditions and consequences.
 - AC-010: Make every lesson easy to scan with a direct definition, a useful diagram and short examples that each teach one relationship. Define APIs before using them; omit advanced detours that do not serve the lesson objective. Broadcasting uses one matrix-plus-bias example without expand/repeat or an extra row-offset case. Keep performance connections brief and concrete; preserve necessary numerical, storage and completion constraints.
 - AC-011: Every executable line in the PyTorch examples has a concise plain-English comment explaining its action, including setup and control flow. Output literals alone are not explanations. Remove surrounding prose only when it duplicates the comments; preserve definitions, diagram interpretation and correctness constraints. Define dim, mean(), keepdim=True and broadcasting directly, and explain that a reduction can process substantial GPU data even for a one-value output.
+- AC-012: Connect each lesson's performance explanation to its actual mechanism while keeping the course concise. Define memory-bound and compute-bound work before use, distinguish memory capacity from bandwidth and launch/transfer/wait costs, and qualify bottleneck claims by workload and measurement. Lesson 6 compares views, stride(), transpose(), contiguity, contiguous() and reshape() by meaning and copy behavior, including when a copy may help later GPU work. Explain stride() explicitly with bold API notation while keeping general stride terminology distinct from the method. Preserve the commented examples and lessons-only profile.
+- AC-013: Lesson 7 concisely compares FP64, FP32, FP16, BF16, FP8 E4M3FN, FP8 E5M2 and unscaled FP4 E2M1 by total bits, exponent bits, stored fraction bits and maximum finite value. Define sign, exponent, fraction, range and precision before the table. Explain encoding-specific FP8 limits, FP4 packing and scale overhead, limited PyTorch operation/device support and conditional memory/compute benefits. Retain the simple FP32/BF16 example, byte-count diagram and lessons-only scope.
+
+- AC-014: Lesson 8 traces the concrete CPU-to-GPU input copy, GPU multiply/reduction and scalar readback in a two-column CPU/GPU memory diagram. Explicitly distinguish a Python number returned by item() from the scalar tensor that remains on the GPU. Explain same-stream ordering, necessary cross-stream dependencies, calling-thread waits with torch.cuda.synchronize() and nonblocking submission with wait_stream(), including its already-submitted-work boundary. Connect this to useful CPU/GPU overlap, avoiding unnecessary synchronization and dependencies, and supplying enough GPU work; preserve correctness and make no concurrency or speedup guarantee.
+
+- AC-015: Lesson 9 pairs a neural-network drawing on the left with tensor-shape flow on the right. Explicitly map nn.Linear(4, 2) to four input features and two output neurons, distinguish a hidden layer from a final output layer, and show matching input/hidden/output layers in a concise worked model. Preserve the batch and position axes, explain shared weights and ReLU shape preservation, and keep the diagram, comments and output shape consistent and readable on phones. Explain each linear layer as matrix multiplication plus bias, connect the column-vector formula y = Wx + b to PyTorch row-batch notation X @ W.T + b, and show that distinct layers own distinct parameters. Distinguish ReLU from a linear layer, parallel GPU matrix work from one literal hardware operation, and a numeric output from selecting a language-model token.
+
+- AC-016: Lesson 11 separates training with validation after each epoch from inference on new inputs, with one contextual diagram and commented code example for each activity. Define known targets, loss, gradients, gradient recording, requires_grad, dropout and the independent eval()/inference_mode() settings. Explain validation versus final held-out testing and the availability of correct answers; preserve concise teaching and the lessons-only profile. Include a compact train()/eval() dropout comparison and explain that eval() prepares layers for prediction during ordinary inference.
+
+- AC-017: Lesson 13 explains automatic CUDA allocation, why the reserved pool contains reusable cached blocks, and that this storage can serve later tensors and operation working space without caching mathematical answers. Distinguish tensor/storage lifetime from completed Python lines, including references, views and autograd. Show a concise ordinary matmul batch pattern and practical ownership, inference/training, metric retention, peak-memory and OOM guidance. Explain del and empty_cache boundaries without prescribing per-operation cache clearing or synchronization. Preserve the lessons-only profile and separate CUDA evidence from CPU/static validation.
+
+- AC-018: Lesson 14 distinguishes grouping samples into a batch from vectorized computation on that batch. Explain that Python does not create batches from x * 2 + 1 and show explicit grouping with torch.stack, with a brief connection to DataLoader batch_size. Compare a sample loop and whole-batch calculation using two separate contextual diagrams and matching commented examples side by side on wide screens, stacked on phones, with equal numeric results. Preserve independent-row assumptions, throughput/latency/memory tradeoffs and qualified launch-cost claims. The canonical renderer must preserve both panels, reject malformed comparison containers and retain safe figure/code handling.
+
+- AC-019: Revise and retitle lesson 15 as a concise introduction to measuring GPU time with CUDA events. Define asynchronous CPU submission and CUDA stream order before a function/meaning/use table for event creation, record, device synchronization and elapsed_time. Include a CPU/GPU timeline and one commented matrix-multiplication timing example with warm-up. Explain why warm-up reduces initialization, allocation, preparation and clock-ramp effects without a universal iteration count or steady-state guarantee. Distinguish event timestamps, CPU waiting, device-wide versus event-specific waits, and the measured GPU interval from total application latency; preserve repeated-measurement and correctness guidance without claimed timing results.
+
+- AC-020: Remove the former lessons 16, 17 and 18 and finish with one standalone lesson 16 on torch.compile and kernel fusion. Define eager execution and GPU kernels, trace x * 2 then + 3 through separate versus potentially fused execution, and explain launch and intermediate-memory savings without guaranteed fusion or speedup. Include a small commented CUDA function example comparing eager and compiled results with allclose, distinguish one Python line from fusion, and explain first-call compilation versus repeated execution. Preserve lessons 1-15; align the sixteen-lesson route, final title, diagrams, glossary, metadata, navigation, authoring docs and validation.
 
 #### Negative Criteria
 
@@ -1319,6 +1337,74 @@ Run focused reading-profile and catalog regressions, all native course validator
 Read the route as a Python-literate beginner: example comments and diagram labels must expose shapes, values, memory implications and what remains a performance hypothesis. The duration is an estimate, not a learner-outcome measurement.
 
 <!-- /REQUIREMENT: REQ-027 -->
+
+<!-- REQUIREMENT: REQ-028 status=satisfied priority=P1 type=feature -->
+### REQ-028: Compact labs and one selection-aware native launcher
+
+#### User Story
+
+Learners read the actual experiment source, submit a short native command and inspect one exact job without repeating setup or profiling instructions in every lab.
+
+#### Acceptance Criteria
+
+- AC-001: All 110 practical labs (97 Python and 13 CUDA programs) render title and one concise purpose paragraph, complete actual source disclosure, optional collapsed teaching diagram, two short normal/profiling submission commands and a Check your results box with exact-job sacct and result.json commands plus one interpretation sentence. Preserve all twelve lab diagrams, lab anchors, lesson Practice links, course-level downloads and reading-only profiles. Remove the former seven-section lab contract and repeated ZIP pointers.
+- AC-002: Each lab has one canonical .sbatch; retain three auxiliary build/readiness jobs. --profiler none (also omitted) runs only the normal experiment; nsys or ncu runs only that supported diagnostic; all runs supported Systems then Compute, never a normal experiment. Record unsupported all stages as skipped with reasons, including an entirely skipped job. Explicit unsupported requests fail. Execution, permissions, timeout, report or cleanup failures stop subsequent stages.
+- AC-003: Preserve embedded PyTorch collection during normal teaching runs and disable it for external captures. Preserve supported optional CUDA, two-node and local Compute companion scopes, declare actual scope and never override explicit device/topology choices. --experiment default|trials|two-node|aiperf|trtllm|sanitizer is accepted only where implemented; sanitizer requires --sanitizer memcheck|racecheck|initcheck|synccheck and excludes Nsight. Retain supported diagnostic combinations only. A -- boundary preserves overlapping program options.
+- AC-004: Each launcher reserves its largest required selectable allocation; each step explicitly constrains nodes, tasks, CPUs and GPUs. Keep allocation metadata truthful and separate from step participation. Submit from the course directory with #SBATCH output/error defaults and no redundant --chdir. Walltime covers the longest selectable sequence, existing execution limits, bounded teardown and an independent 60-second JSON allowance; reject insufficient scheduler limits without shortening watchdogs.
+- AC-005: Runtime activation and preparation resolve lab, experiment, profiler and device together. Preparation unions selected-stage runtimes without installing unrelated optional experiments. Shared helpers own parsing, directories, lifecycle and JSON; native srun, profiler flags and specialized launches remain visible in the lab file.
+- AC-006: A separately versioned reader result.json records job identity, requested selection, actual scope, stage status, actual results, correctness and native report paths. Initialize before runtime activation and atomically update before/after stages. Distinguish completed, failed, skipped and unstarted; abrupt termination can leave incomplete status and sacct remains authoritative. Preserve original JSON/raw output/reports/trial aggregates in isolated stage directories, with explicit CUDA, sanitizer, local diagnostic and trial adapters.
+- AC-007: Stages run in fresh processes; servers stop and are reaped before another capture. Preserve distributed worker placement/report cardinality. The reader JSON is never an authoritative measurement or duplicate publication input; acceptance/publication explicitly select eligible original measurements, excluding diagnostic timings.
+- AC-008: Add short meaningful source-block comments for inputs, operations, timing/synchronization, correctness and output. Preserve Python executable AST and CUDA behavior except required interface/topology repairs. Centralize tools in GPU Performance Tools and preparation/troubleshooting in the Lab Guide. Align capabilities, campaigns, validators, runtime/preparation and canonical/project-installed run-labs payloads with no compatibility wrappers. Preserve historical evidence and archives.
+
+#### Negative Criteria
+
+- NC-001: No infrastructure, live GPU/Slurm qualification, publication, dependency installation, Git workflow or new stack is implied. No unrelated worktree changes may be discarded.
+
+#### Validation Method
+
+Inspect all authored guides and source, selection matrices, actual native argv and evidence paths; check desktop/mobile disclosures and preservation hashes.
+
+#### Test Method
+
+Run native scheduler/profiler doubles for all normal paths and supported selections, order/skips/failures/signals/cleanup, argument boundaries, resources, budgets and runtime unions. Verify JSON adapters and measurement eligibility, source AST/behavior, renderer order, exact source, all validators, helper parity, full build/freshness and Playwright desktop/mobile checks.
+
+#### Evaluation Method
+
+Local checks establish implementation behavior only; report unavailable live GPU/Slurm qualification separately.
+
+<!-- /REQUIREMENT: REQ-028 -->
+
+<!-- REQUIREMENT: REQ-029 status=satisfied priority=P1 type=quality -->
+### REQ-029: Concise and organized course guides
+
+#### User Story
+
+Learners need useful course-specific orientation and supporting references without obsolete format descriptions, repeated setup instructions or accumulated implementation notes.
+
+#### Acceptance Criteria
+
+- AC-001: Review all nine course packages. The six practical Course guides use consistent ordering and matching navigation labels; reading-only profiles retain their existing scope.
+- AC-002: Getting-started content keeps prerequisites, practical scope, the first activity and completion criteria. Shared setup and profiler instructions link to their canonical guides. Remove obsolete lesson-template prose and layout commentary.
+- AC-003: Retain distinct interpretation, worked examples, hardware qualification and privacy limits in their owning guide or lab. Correct obsolete distributed-lab references without changing executable work or historical evidence.
+- AC-004: Rebuild affected publications and verify source parity, guide destinations, profile boundaries and desktop/mobile navigation.
+
+#### Negative Criteria
+
+- NC-001: No new labs, runtime changes, installations, live qualification or publication are implied by the editorial cleanup.
+
+#### Validation Method
+
+Review retained content and generated guides against the task-start sources.
+
+#### Test Method
+
+Run native validators, focused presentation/link tests, build freshness and isolated browser checks.
+
+#### Evaluation Method
+
+A learner can find the starting activity, readiness checks and evidence guidance without reading authoring instructions.
+
+<!-- /REQUIREMENT: REQ-029 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

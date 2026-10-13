@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import statistics
 import time
 
@@ -27,6 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--global-batch", type=int, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     global_batch = resolve_int_override(
@@ -36,9 +36,10 @@ def main() -> None:
     )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     _, detected_world, _ = configure_slurm_distributed_env()
-    distributed = detected_world > 1 or int(os.environ.get("SLURM_NTASKS", "1")) > 1
+    distributed = detected_world > 1
     if distributed:
         rank, world_size, local_rank = init_nccl(torch)
     else:
@@ -58,6 +59,7 @@ def main() -> None:
             model, device_ids=[local_rank]
         )
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    # Create the synthetic tensors used by this experiment.
     global_inputs = torch.randn(
         (global_batch, width), device=f"cuda:{local_rank}", dtype=torch.bfloat16
     )
@@ -65,14 +67,18 @@ def main() -> None:
     inputs = global_inputs[first : first + local_batch]
 
     def step() -> float:
+        # Clear the previous step’s gradients before differentiating again.
         optimizer.zero_grad(set_to_none=True)
         loss = model(inputs).float().square().mean()
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
+        # Update the parameters using the gradients from this step.
         optimizer.step()
         return float(loss.detach())
 
     for _ in range(args.warmup):
         step()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     samples = []
     last_loss = 0.0
@@ -82,6 +88,7 @@ def main() -> None:
         start = time.perf_counter()
         last_loss = step()
         torch.cuda.synchronize()
+        # Create explicit input values on the selected device.
         elapsed = torch.tensor(
             (time.perf_counter() - start) * 1_000,
             device=f"cuda:{local_rank}",
@@ -97,6 +104,7 @@ def main() -> None:
         raise SystemExit("At least one rank produced a non-finite loss.")
     if rank == 0:
         median_ms = statistics.median(samples)
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="12_distributed_scaling",

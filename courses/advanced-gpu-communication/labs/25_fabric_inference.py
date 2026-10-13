@@ -18,6 +18,7 @@ def main():
     parser.add_argument(
         "--placement", choices=("replicated", "tensor"), default="replicated"
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch, rank, world, _local, env = initialize(args.seed)
@@ -27,6 +28,7 @@ def main():
         )
         # Educational recurrent projection, not a complete language model or service.
         prompts = torch.randn(requests, width, device="cuda") * 0.01
+        # Create the synthetic tensors used by this experiment.
         weight = torch.randn(width, width, device="cuda") / width**0.5
         reference = prompts.clone()
         for _ in range(tokens):
@@ -66,6 +68,7 @@ def main():
             bool(torch.allclose(output, expected, rtol=3e-3, atol=3e-5)),
             "Sharded decoding differs from full-weight reference",
         )
+        # Create explicit input values on the selected device.
         peak = torch.tensor(
             torch.cuda.max_memory_allocated(), device="cuda", dtype=torch.int64
         )

@@ -46,15 +46,8 @@ ALLOWED_HOSTS = {
     "docs.dynamo.nvidia.com",
     "grafana.com",
 }
-LAB_SECTIONS = (
-    "Before you start",
-    "Concepts and code path",
-    "Practice",
-    "Check your results",
-    "Investigate the behavior",
-    "If something goes wrong",
-    "Takeaways and next step",
-)
+LAB_SECTIONS = ("Diagram", "Run", "Check your results")
+
 REQUIRED_FILES = {
     "reference/observability.json",
     "MISSION.md",
@@ -577,6 +570,8 @@ class Parser(html.parser.HTMLParser):
                 self.errors.append("lab guide is not marked complete")
         elif tag == "article" and self.lab_depth:
             self.lab_depth += 1
+        if tag == "details" and "lab-diagram" in classes:
+            self.last_lab_section = "diagram"
         if tag == "h4" and self.lab_depth:
             self.lab_heading = []
         if tag == "details" and "lab-source" in classes:
@@ -840,14 +835,14 @@ def validate_next_steps(document: str) -> None:
         fail("next-steps narrative differs from its own canonical source")
     bibliography = dict(
         re.findall(
-            r'<li id="(reference-\d+)"><a href="([^"]+)">',
+            r'<li id="(reference-\d+)"><a[^>]* href="([^"]+)">',
             document[references:],
         )
     )
     expected_links = re.findall(r"\[[^]]+\]\((https://[^)]+)\)", markdown)
     actual_links = [
         html.unescape(bibliography.get(target.removeprefix("#"), ""))
-        for target in re.findall(r'<a href="([^"]+)">', article[1])
+        for target in re.findall(r'<a[^>]* href="([^"]+)">', article[1])
     ]
     if actual_links != expected_links:
         fail("next-steps references differ from their canonical destinations")
@@ -855,11 +850,8 @@ def validate_next_steps(document: str) -> None:
 
 def validate_preparation_referral(guide: str) -> None:
     """Each lab refers once to shared preparation, without a second installer path."""
-    prerequisites = re.search(r"^## Before you start\n(.*?)(?=^## |\Z)", guide, re.M | re.S)
-    setup_link = "[Lab Guide](../../../lab-guide.html#lab-preparation-scripts)"
-    guide_links = re.findall(r"\[[^\]]+\]\([^)]*lab-guide\.html[^)]*\)", guide)
-    if not prerequisites or prerequisites[1].count(setup_link) != 1 or len(guide_links) != 1:
-        fail("each lab must contain one shared Lab Guide link in Before you start")
+    if re.search(r"\[[^\]]+\]\([^)]*lab-guide\.html[^)]*\)", guide):
+        fail("shared preparation belongs at the course entry, not repeated per lab")
     if re.search(r"(?:[\w-]+-lab-setup\.py|course_setup\.py|install-vendor-candidates\.sh|vendor-environment\.sh)", guide):
         fail("dependency preparation commands belong only to the shared Lab Guide")
     for command in re.findall(r"```(?:bash|sh)\n(.*?)```", guide, re.S):
@@ -907,7 +899,7 @@ def validate_lab_guides(
                 f"- [{label}](../advanced-gpu-communication/reference/labs/{stem}.md)"
             )
             html_links.append(
-                f'<li><a href="../advanced-gpu-communication/index.html#lab-{slug(stem)}">{html.escape(label)}</a></li>'
+                f'<li><a target="_blank" rel="noopener noreferrer" href="../advanced-gpu-communication/index.html#lab-{slug(stem)}">{html.escape(label)}</a></li>'
             )
         context, separator, listing = fields.get("Practice", "").partition("\n\n- [")
         entries = ("- [" + listing).splitlines() if separator else []
@@ -958,9 +950,10 @@ def validate_lab_guides(
             fail(f"lab {source.name} has a mismatched guide title")
         pieces = re.split(r"^## (.+)\n", narrative, flags=re.MULTILINE)
         if (
-            tuple(pieces[1::2]) != LAB_SECTIONS
-            or len(pieces[0].split()) < 40
-            or any(len(body.split()) < 20 for body in pieces[2::2])
+            tuple(pieces[1::2]) not in (LAB_SECTIONS, LAB_SECTIONS[1:])
+            or not pieces[0].strip()
+            or "\n\n" in pieces[0].strip()
+            or any(not body.strip() for body in pieces[2::2])
         ):
             fail(f"lab {source.name} has incomplete authored sections")
         anchor = "lab-" + re.sub(r"[^a-z0-9]+", "-", source.stem.lower()).strip("-")
@@ -970,12 +963,14 @@ def validate_lab_guides(
         if not match or f"<h3>{html.escape(title[2:])}</h3>" not in match[0]:
             fail(f"lab {source.name} title or article is missing")
         article = match[0]
-        if tuple(re.findall(r"<h4>(.*?)</h4>", article)) != LAB_SECTIONS:
+        if tuple(re.findall(r"<h4>(.*?)</h4>", article)) != ("Check your results",):
             fail(f"lab {source.name} rendered sections differ from its guide")
         visible = VisibleText()
-        visible.feed(article.split('<details class="lab-source"', 1)[0])
+        visible.feed(re.sub(r'<details class="lab-source".*?</details>', "", article, flags=re.S))
         rendered_text = " ".join("".join(visible.parts).split())
         for paragraph in prose_paragraphs(markdown):
+            if paragraph.strip() in {"## Run", "## Diagram"}:
+                continue
             plain = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", paragraph)
             plain = re.sub(r"(?m)^#{1,6} |^```[^\n]*\n?|^```$", "", plain)
             plain = plain.replace("**", "").replace("`", "")
@@ -988,19 +983,25 @@ def validate_lab_guides(
             ):
                 fail(f"lab {source.name} has inconsistent lesson links")
         sections = dict(zip(pieces[1::2], pieces[2::2], strict=True))
-        commands = re.findall(r"```bash\n(.*?)\n```", sections["Practice"], re.DOTALL)
-        if len(commands) != 1 or not commands[0].startswith("sbatch ") or len(commands[0].replace("\\\n", " ").strip().splitlines()) != 1:
-            fail(f"lab {source.name} requires exactly one baseline sbatch")
-        batch = re.search(r"slurm/([0-9]{2}_[a-z0-9_]+(?:\.[a-z0-9_]+)*\.sbatch)", commands[0])
-        if not batch or not (ROOT / "slurm" / batch[1]).is_file():
-            fail(f"lab {source.name} requires an existing explicit baseline job")
-        job_source = (ROOT / "slurm" / batch[1]).read_text()
-        if "export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0" not in job_source:
-            fail(f"lab {source.name} baseline job must disable external capture")
-        if re.search(r"for directory|umask|mkdir", sections["Practice"]):
-            fail(f"lab {source.name} repeats one-time preparation")
-        if f"labs/{source.name}" not in sections["Practice"].split("```", 1)[0]:
-            fail(f"lab {source.name} requires a concise source explanation")
+        commands = re.findall(r"```bash\n(.*?)\n```", sections["Run"], re.DOTALL)
+        expected = f"sbatch slurm/{source.stem}.sbatch "
+        if len(commands) != 1 or len(submissions := re.findall(r"^sbatch .+$", commands[0], re.M)) != 2 or any(not cmd.startswith(expected) for cmd in submissions) or "--profiler" in submissions[0] or not submissions[1].endswith(" --profiler all"):
+            fail(f"lab {source.name} requires normal and optional profiling commands")
+        batch = ROOT / "slurm" / f"{source.stem}.sbatch"
+        if not batch.is_file() or "course_stage" not in batch.read_text():
+            fail(f"lab {source.name} requires its canonical native launcher")
+        result_commands = f"sacct -j <JOB_ID> --format=JobID,State,ExitCode\ncat results/{source.stem}/jobs/<JOB_ID>/result.json"
+        if result_commands not in sections["Check your results"]:
+            fail(f"lab {source.name} needs exact-job accounting and JSON commands")
+        if re.search(r"for directory|umask|mkdir|\.zip", markdown):
+            fail(f"lab {source.name} repeats shared preparation or downloads")
+        source_position = article.index('<details class="lab-source"')
+        run_position = article.index('class="lab-submission"')
+        result_position = article.index('class="lab-results"')
+        if not source_position < run_position < result_position:
+            fail(f"lab {source.name} has incorrect source/submission/result order")
+        if 'class="lab-diagram"' in article and not source_position < article.index('class="lab-diagram"') < run_position:
+            fail(f"lab {source.name} diagram must follow its source")
         for command in commands:
             result = subprocess.run(
                 ["bash", "-n"],
@@ -1019,9 +1020,6 @@ def validate_lab_evidence(
     """Reject missing applicability, wrong dashboards and stale capture instructions."""
     import hashlib
 
-    # Line continuation and indentation do not change the recipe's command.
-    commands = " ".join(guide.replace("\\\n", " ").split())
-
     systems = recipe.get("systems", {})
     if (
         set(systems) != {"applicable", "target", "reason", "view"}
@@ -1039,19 +1037,13 @@ def validate_lab_evidence(
         or (systems["target"] != "none") != systems["applicable"]
     ):
         fail("Systems command disagrees with applicability")
-    if command and (
-        not isinstance(recipe.get("learner_systems_command"), str)
-        or " ".join(recipe["learner_systems_command"].replace("\\\n", " ").split()) not in commands
-        or (
-            ".nsys.sbatch" not in command
-        )
-    ):
-        fail("guide must include the exact worker/server Systems command")
+    if command and (not isinstance(recipe.get("learner_systems_command"), str) or "--profiler nsys" not in command):
+        fail("Systems must select the canonical native launcher")
     compute = recipe.get("learner_compute_command")
     if bool(compute) != bool(recipe.get("compute_command")):
         fail("learner Compute recipe disagrees with applicability")
-    if compute and (".ncu.sbatch" not in compute or " ".join(compute.replace("\\\n", " ").split()) not in commands):
-        fail("guide must include the exact native Compute command")
+    if compute and "--profiler ncu" not in compute:
+        fail("Compute must select the canonical native launcher")
     if command:
         job = ROOT / recipe["jobs"]["nsys"]
         if not job.is_file() or "nsys profile" not in job.read_text():
@@ -1060,8 +1052,6 @@ def validate_lab_evidence(
         job = ROOT / recipe["jobs"]["ncu"]
         if not job.is_file() or "ncu " not in job.read_text():
             fail("Compute job must expose native profiler argv")
-    if systems["reason"] not in guide or systems["view"] not in guide:
-        fail("guide must explain Systems applicability and inspection")
     if "compute_companion" in recipe:
         companion = recipe["compute_companion"]
         if (
@@ -1087,7 +1077,7 @@ def validate_lab_evidence(
             not isinstance(compute_command, str)
             or not compute_command
             or not isinstance(recipe.get("learner_compute_command"), str)
-            or " ".join(recipe["learner_compute_command"].replace("\\\n", " ").split()) not in commands
+            or "--profiler ncu" not in recipe["learner_compute_command"]
         ):
             fail("guide must include the exact local Compute companion command")
     lab = recipe["lab"]
@@ -1204,7 +1194,7 @@ def validate_observability_assets(document: str, metadata: dict) -> None:
     if (
         " ".join("".join(visible.parts).split()) != expected_intro
         or '<h3>Download results</h3>' not in introduction[1]
-        or '<a href="../lab-guide.html">Lab setup guide</a>' not in introduction[1]
+        or not re.search(r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>', introduction[1])
     ):
         fail("course download introduction must separate results and setup labels from their links")
 
@@ -1213,7 +1203,9 @@ def validate_shared_setup_link(document: str, metadata: dict) -> None:
     if "setup_guide" in metadata or 'class="setup-guide"' in document:
         fail("numbered setup guides are not part of the publication contract")
     introduction = re.search(r'<div id="course-downloads">(.*?)</div>', document, re.DOTALL)
-    if not introduction or '<a href="../lab-guide.html">Lab setup guide</a>' not in introduction[1]:
+    if not introduction or not re.search(
+        r'<a\b[^>]*\shref="\.\./lab-guide\.html"[^>]*>Lab setup guide</a>', introduction[1]
+    ):
         fail("course must link to the shared setup guide in its download introduction")
     if 'class="shared-setup"' in document:
         fail("repeated setup instructions must not follow the download introduction")
@@ -1658,7 +1650,7 @@ def main() -> None:
     ):
         fail("at least six accessible diagrams with title and description are required")
     for text in parser.labs:
-        for cue in LAB_SECTIONS:
+        for cue in ("Complete source", "Check your results"):
             if cue not in text:
                 fail(f"lab guide missing {cue}")
     sources = sorted(

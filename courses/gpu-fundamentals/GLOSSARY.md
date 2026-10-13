@@ -1,84 +1,94 @@
 # Glossary
 
-- **Arithmetic intensity** — floating-point operations divided by bytes transferred at a specified memory level. State whether bytes are estimated from the algorithm or measured by a profiler.
+- **Arithmetic intensity** — Floating-point operations divided by bytes transferred at a specified memory level. State whether bytes are estimated from the algorithm or measured by a profiler.
 - **BF16** — Bfloat16, a 16-bit floating-point format with a wide exponent range and fewer significand bits than FP32.
-- **Block** — a group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
-- **Coalescing** — combining warp memory requests into efficient transactions.
-- **Compute capability 9.0** — the H100 hardware feature level and resource limits used by these courses; distinct from the CUDA Toolkit version.
-- **CPU / host** — the general-purpose processor and its execution environment, responsible for program control and for submitting GPU work.
-- **CPU timer** — a host-side clock used to measure elapsed time; GPU completion must be established before stopping it when timing a complete GPU request.
-- **CTA** — cooperative thread array, CUDA's architectural term for a thread block.
-- **CUDA Core** — a general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
-- **CUDA event** — a marker recorded in a CUDA stream to track completion or establish dependencies; timing-enabled events also record timestamps for elapsed-time measurement.
-- **CUDA stream** — an ordered sequence of device operations; callers must respect dependencies across streams and buffer lifetimes until completion.
+- **Block** — A group of CUDA threads scheduled together on one streaming multiprocessor; a block does not split across SMs.
+- **Coalescing** — Combining warp memory requests into efficient transactions.
+- **Collective** — A coordinated communication operation, such as all-reduce, involving every rank in a specified group.
+- **Compute capability 9.0** — The H100 hardware feature level and resource limits used by these courses; distinct from the CUDA Toolkit version.
+- **Contiguous layout** — A tensor layout whose values follow its declared contiguous memory order, without gaps or rearranged strides.
+- **CPU / host** — The general-purpose processor and its execution environment, responsible for program control and for submitting GPU work.
+- **CPU timer** — A host-side clock used to measure elapsed time; GPU completion must be established before stopping it when timing a complete GPU request.
+- **CTA** — Cooperative thread array, CUDA's architectural term for a thread block.
+- **CUDA Core** — A general arithmetic execution resource used by CUDA workloads; it is not a synonym for a thread.
+- **CUDA event** — A marker recorded in a CUDA stream to track completion or establish dependencies; timing-enabled events also record timestamps for elapsed-time measurement.
+- **CUDA stream** — An ordered sequence of device operations; callers must respect dependencies across streams and buffer lifetimes until completion.
+- **D2H** — Device-to-host transfer; copying data from GPU memory to CPU-accessible memory.
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
-- **Divergence** — a warp executing different control-flow paths for different active lanes, usually serializing the paths.
-- **DMA** — direct memory access; transfer hardware moves data without CPU instructions copying each byte.
+- **Divergence** — A warp executing different control-flow paths for different active lanes, usually serializing the paths.
+- **DMA** — Direct memory access; transfer hardware moves data without CPU instructions copying each byte.
 - **Dot product** — The sum of products of matching entries in two sequences; matrix multiplication combines one row and one column this way.
-- **ECC** — error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
+- **ECC** — Error-correcting code; distinguishes corrected memory errors from errors that could not be corrected.
 - **ECN / CNP / PFC** — Explicit congestion notification / congestion notification packet / priority flow control; respectively, congestion marking, sender notification and selected-priority pausing mechanisms used in coordinated network designs.
-- **Eligible warp** — a resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
-- **Fabric** — the connected links and switches carrying traffic among endpoints.
-- **FMA** — fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
+- **Eligible warp** — A resident warp whose next instruction is ready to issue; residency alone does not make a warp eligible.
+- **Fabric** — The connected links and switches carrying traffic among endpoints.
+- **FLOP / FLOP/s** — Floating-point operation / floating-point operations per second; a work count and a rate, respectively.
+- **FMA** — Fused multiply-add, a × b + c with one final rounding; conventionally counted as two FLOPs.
 - **FP16** — 16-bit floating point with a smaller exponent range than BF16; numerical range and rounding affect which workloads can use it safely.
 - **FP32** — 32-bit floating point, commonly used for parameters, accumulations and numerical references; storage dtype alone does not identify the arithmetic path.
 - **FP64** — 64-bit floating point, offering greater precision and range at a different storage and hardware-throughput cost.
 - **FP8** — Eight-bit floating-point formats whose range and precision depend on the selected format and scaling recipe.
-- **GEMM** — general matrix multiplication, often expressed as C = alpha × A × B + beta × C.
+- **GEMM** — General matrix multiplication, often expressed as C = alpha × A × B + beta × C.
 - **Global memory** — CUDA device-wide address space for data accessible to threads across blocks, normally backed by HBM and serviced through caches.
-- **GPC** — graphics processing cluster, also called GPU processing cluster in the Hopper architecture description; a top-level hardware group containing TPCs, with enabled counts varying by H100 product.
-- **GPU / device** — a parallel processor that executes supported kernels; it accelerates suitable workloads, not arbitrary CPU instructions automatically.
-- **GPU-resident tensor** — a tensor whose data is stored in GPU memory, independently of whether a kernel is currently using it.
-- **GPUDirect RDMA** — supported direct access between a network adapter and GPU memory, avoiding a host payload-staging buffer.
-- **Grid** — all thread blocks launched for one kernel invocation.
-- **HBM** — high-bandwidth memory, the device memory that stores tensors, temporary buffers and other device allocations.
-- **HCA** — host channel adapter, an RDMA endpoint adapter term; its device name is distinct from an IP-interface name.
-- **ILP** — instruction-level parallelism; independent instructions within one thread that can make progress without waiting on one another’s results.
-- **InfiniBand** — a switched network architecture supporting RDMA with compatible adapters, links and a subnet manager.
-- **Issued warp** — an eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
-- **JIT** — just-in-time compilation, such as translating compatible PTX when loading GPU code.
-- **Kernel** — a function launched for parallel execution on the GPU.
-- **L1 / L2 cache** — hardware-managed storage that can serve repeated accesses with less traffic to lower memory levels; L1 is local to an SM and L2 is shared across SMs.
+- **GPC** — Graphics processing cluster, also called GPU processing cluster in the Hopper architecture description; a top-level hardware group containing TPCs, with enabled counts varying by H100 product.
+- **GPU / device** — A parallel processor that executes supported kernels; it accelerates suitable workloads, not arbitrary CPU instructions automatically.
+- **GPU-resident tensor** — A tensor whose data is stored in GPU memory, independently of whether a kernel is currently using it.
+- **GPUDirect RDMA** — Supported direct access between a network adapter and GPU memory, avoiding a host payload-staging buffer.
+- **Grid** — All thread blocks launched for one kernel invocation.
+- **H2D** — Host-to-device transfer; copying data from CPU-accessible memory to GPU memory.
+- **HBM** — High-bandwidth memory, the device memory that stores tensors, temporary buffers and other device allocations.
+- **HCA** — Host channel adapter, an RDMA endpoint adapter term; its device name is distinct from an IP-interface name.
+- **ILP** — Instruction-level parallelism; independent instructions within one thread that can make progress without waiting on one another’s results.
+- **InfiniBand** — A switched network architecture supporting RDMA with compatible adapters, links and a subnet manager.
+- **Issued warp** — An eligible warp selected by a scheduler to issue an instruction in the current scheduling opportunity.
+- **JIT** — Just-in-time compilation, such as translating compatible PTX when loading GPU code.
+- **Kernel** — A function launched for parallel execution on the GPU.
+- **L1 / L2 cache** — Hardware-managed storage that can serve repeated accesses with less traffic to lower memory levels; L1 is local to an SM and L2 is shared across SMs.
 - **Lane** — A thread position within a warp, numbered 0–31; positions without a thread in a partial warp are unused.
-- **Latency hiding** — issuing eligible work from another resident warp while a warp waits for a dependency.
+- **Latency hiding** — Issuing eligible work from another resident warp while a warp waits for a dependency.
 - **Layout** — The mapping from logical tensor indices to storage addresses.
-- **Local memory** — thread-private CUDA address space normally backed by device memory; register spills can create local-memory traffic.
+- **Local memory** — Thread-private CUDA address space normally backed by device memory; register spills can create local-memory traffic.
 - **MIG** — Multi-Instance GPU, hardware partitioning that exposes isolated GPU instances.
 - **MPS** — Multi-Process Service, NVIDIA software that coordinates work from multiple CUDA processes.
 - **NCCL** — NVIDIA Collective Communications Library, software implementing GPU collectives and point-to-point communication using available topology-aware paths.
-- **NIC** — network interface controller connecting a host to a network.
-- **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
-- **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
-- **NUMA** — non-uniform memory access; host-memory cost depends on CPU/socket locality.
-- **NVLink** — a high-bandwidth interconnect between supported GPU endpoints; not a generic server-network configuration switch.
-- **NVSwitch** — switching hardware connecting endpoints within a supported NVLink fabric; different from an InfiniBand switch.
+- **NIC** — Network interface controller connecting a host to a network.
+- **Nsight Compute** — A kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems** — A system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **NUMA** — Non-uniform memory access; host-memory cost depends on CPU/socket locality.
+- **NVLink** — A high-bandwidth interconnect between supported GPU endpoints; not a generic server-network configuration switch.
+- **NVSwitch** — Switching hardware connecting endpoints within a supported NVLink fabric; different from an InfiniBand switch.
 - **NVTX** — NVIDIA Tools Extension Library; annotation API for named markers and ranges. Nsight Systems displays these labels; Nsight Compute can use ranges to select GPU work. Annotations neither synchronize nor measure GPU execution by themselves.
-- **Occupancy** — active (resident) warps per SM relative to its maximum supported active warps. Theoretical occupancy is a resource limit; achieved occupancy is measured during execution.
-- **Pinned memory** — page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
+- **Occupancy** — Active (resident) warps per SM relative to its maximum supported active warps. Theoretical occupancy is a resource limit; achieved occupancy is measured during execution.
+- **Pinned memory** — Page-locked host memory that enables efficient DMA and is required for truly asynchronous host-to-device copies in common CUDA paths.
 - **PTX** — Parallel Thread Execution, NVIDIA’s virtual instruction-set representation that a compatible driver can translate.
-- **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
-- **Queue pair (QP)** — associated send and receive work queues used by an RDMA adapter.
-- **RDMA** — remote direct memory access using supported network hardware and registered memory; not assumed by this course.
+- **PyTorch Profiler** — The framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Queue pair (QP)** — Associated send and receive work queues used by an RDMA adapter.
+- **Rank** — The identity of one participating process within a distributed process group.
+- **RDMA** — Remote direct memory access using supported network hardware and registered memory; not assumed by this course.
 - **Register** — Fast storage holding values used by a thread during kernel execution.
-- **Registration** — establishing the memory region, permissions and mapping that an adapter may use for data transfer.
+- **Registration** — Establishing the memory region, permissions and mapping that an adapter may use for data transfer.
+- **Relative L2 error** — The Euclidean norm of an output error divided by the reference norm, with a declared convention for a zero reference; distinct from an L2 hardware cache.
 - **Resident thread** — A thread assigned to an SM that keeps its register values and tracks its progress through the kernel. It remains resident while its warp waits for data or its next turn to execute.
 - **RoCE** — RDMA over Converged Ethernet; RoCEv2 carries its transport over UDP/IP on a qualified Ethernet fabric.
-- **Roofline model** — a model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
+- **Roofline model** — A model that relates attainable work rate to arithmetic intensity, a bandwidth ceiling, and a compute ceiling.
 - **Row remapping / page retirement** — GPU memory reliability mechanisms and associated status; supported fields depend on hardware and driver. Record the status through read-only checks; do not attempt repairs in a lab.
 - **SASS** — The machine instructions executed by a specific NVIDIA GPU architecture.
-- **Shared memory** — explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
-- **SIMT** — single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
-- **SM** — streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
-- **SMSP** — streaming multiprocessor subpartition; one of four H100 SM scheduling and execution subdivisions, with a warp scheduler, dispatch resources, register-file partition and associated execution resources.
-- **Subnet manager** — the operator-owned InfiniBand service responsible for discovering and configuring subnet paths.
+- **Shared memory** — Explicitly managed, block-scoped on-chip storage; on H100 its capacity shares a physical resource with L1, so it is not an extra serial cache level.
+- **SIMT** — Single-instruction, multiple-thread execution in which a warp issues an instruction for active lanes.
+- **SM** — Streaming multiprocessor, the GPU unit that schedules warps and contains registers, shared memory, and execution resources.
+- **SMSP** — Streaming multiprocessor subpartition; one of four H100 SM scheduling and execution subdivisions, with a warp scheduler, dispatch resources, register-file partition and associated execution resources.
+- **Stride** — The step in stored elements associated with increasing an index by one along a tensor axis.
+- **Subnet manager** — The operator-owned InfiniBand service responsible for discovering and configuring subnet paths.
 - **Synchronization** — A dependency or wait that ensures required work has completed before dependent work proceeds.
-- **Tail wave** — a final partially filled scheduling wave that leaves resources idle.
-- **Tensor** — an array of numbers with a shape, data type and device placement.
-- **Tensor Core** — specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
+- **Tail wave** — A final partially filled scheduling wave that leaves resources idle.
+- **Tensor** — An array of numbers with a shape, data type and device placement.
+- **Tensor Core** — Specialized matrix-multiply-accumulate hardware used only when an eligible operation, dtype, shape, and software kernel select it.
+- **Tensor view** — A tensor interpretation that shares underlying storage with another tensor instead of copying its values.
 - **TF32** — TensorFloat-32, a Tensor Core compute mode for selected FP32 matrix operations, not a tensor storage dtype.
-- **Thread-block cluster** — a group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.
+- **Thread-block cluster** — A group of thread blocks guaranteed to be co-scheduled on one GPC, supporting cluster synchronization and distributed shared memory on Hopper.
 - **Tile** — A rectangular piece of a matrix processed as a unit of work; its elements need not map one-to-one to threads.
-- **TPC** — texture processing cluster; an H100 hardware group containing two SMs within a GPC.
-- **Triton program** — one instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
+- **TPC** — Texture processing cluster; an H100 hardware group containing two SMs within a GPC.
+- **Triton program** — One instance of a Python-authored Triton kernel launched over a grid; it typically processes a tile of logical tensor elements and uses a mask for any out-of-range tail.
+- **Warm-up** — Representative untimed work before measurement to reduce initialization and other first-run effects.
 - **Warp** — 32 CUDA threads scheduled as an execution group on current NVIDIA GPUs covered by this course.
-- **Xid** — an NVIDIA driver error classification that guides investigation; the code alone is not a diagnosis.
+- **Xid** — An NVIDIA driver error classification that guides investigation; the code alone is not a diagnosis.

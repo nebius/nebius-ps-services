@@ -31,11 +31,13 @@ def main() -> None:
         action="store_true",
         help="Zero existing gradient buffers instead of releasing them; keep all work fixed.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     try:
         from peft import LoraConfig, get_peft_model
@@ -90,6 +92,7 @@ def main() -> None:
         lr=2e-4,
     )
     forward = annotated_operation(model, "forward")
+    # Differentiate the loss to populate parameter gradients.
     backward = annotated_operation(lambda loss: loss.backward(), "backward")
     update = annotated_operation(optimizer.step, "optimizer")
     clear_gradients = annotated_operation(optimizer.zero_grad, "zero_grad")
@@ -140,6 +143,7 @@ def main() -> None:
 
     for _ in range(args.warmup):
         train_step()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
@@ -161,6 +165,7 @@ def main() -> None:
     if not math.isfinite(adapter_max_delta) or adapter_max_delta <= 0:
         raise SystemExit("LoRA adapter parameters did not update.")
     held_out_after = held_out_evidence()
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="05_lora_sft",

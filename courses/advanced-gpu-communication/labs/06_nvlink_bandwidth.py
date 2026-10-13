@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--engine", choices=("ce", "sm"), default="ce")
     parser.set_defaults(warmup=0)
     add_worker_prefix(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_worker_prefix(args, ucx=False)
     validate_common_args(args)

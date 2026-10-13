@@ -54,16 +54,8 @@ def test_lab_practice_contains_commands_without_parallel_example_sections(
     for path in (root / "reference/labs").glob("*.md"):
         text = path.read_text()
         sections = re.findall(r"^## (.+)$", text, re.MULTILINE)
-        assert sections == [
-            "Before you start",
-            "Concepts and code path",
-            "Practice",
-            "Check your results",
-            "Investigate the behavior",
-            "If something goes wrong",
-            "Takeaways and next step",
-        ]
-        practice = text.split("\n## Practice\n", 1)[1].split("\n## ", 1)[0]
+        assert sections in (["Run", "Check your results"], ["Diagram", "Run", "Check your results"])
+        practice = text.split("\n## Run\n", 1)[1].split("\n## ", 1)[0]
         assert "```bash\n" in practice
         assert not re.search(r"^#{2,6} Worked example\b", text, re.MULTILINE)
 
@@ -160,7 +152,7 @@ def test_old_guide_execution_heading_is_rejected(tmp_path):
 
     metadata, path = fixture_course(tmp_path)
     path.write_text(
-        path.read_text().replace("## Practice\n", "## Run the experiment\n")
+        path.read_text().replace("## Run\n", "## Run the experiment\n")
     )
     with pytest.raises(ValueError, match="ordered sections"):
         cb_metadata.lab_guides(tmp_path, metadata, 1)
@@ -238,7 +230,7 @@ def test_validator_checks_actual_figure_home_and_preceding_section(
             re.DOTALL,
         )[0]
         changed = article.replace(
-            "<h4>Concepts and code path</h4>", "<h4>Check your results</h4>"
+            '<details class="lab-diagram"', '<details class="misplaced-diagram"'
         )
         document = document.replace(article, changed)
     elif fault == "missing":
@@ -267,7 +259,7 @@ def test_lab_section_links_resolve_to_unique_html_fragments(tmp_path):
     )
     # Exercise optional section linking without requiring a learner reading detour.
     path = tmp_path / "guide.md"
-    path.write_text("[Related practice](09_nccl_transport_sweep.md#practice)\n")
+    path.write_text("[Related practice](09_nccl_transport_sweep.md#run)\n")
     guide = {**guide, "guide_path": path}
     links = cb_content.lab_guide_links(
         guide,
@@ -278,8 +270,8 @@ def test_lab_section_links_resolve_to_unique_html_fragments(tmp_path):
         },
     )
     assert (
-        links["09_nccl_transport_sweep.md#practice"]
-        == "#lab-09-nccl-transport-sweep-practice"
+        links["09_nccl_transport_sweep.md#run"]
+        == "#lab-09-nccl-transport-sweep-run"
     )
 
 
@@ -319,7 +311,7 @@ def test_lab_tables_preserve_cells_and_non_table_pipes(
     )
     path.write_text(
         path.read_text().replace(
-            "## Investigate the behavior\n\n", "## Investigate the behavior\n\n" + practice
+            "## Check your results\n\n", "## Check your results\n\n" + practice
         )
     )
     guide = cb_metadata.lab_guides(tmp_path, metadata, 1)[0]

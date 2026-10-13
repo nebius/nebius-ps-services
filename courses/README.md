@@ -27,9 +27,21 @@ Practice identifies what the supplied experiment measures and labels conceptual
 comparisons or source extensions separately; each course glossary collects its
 taught terms and abbreviations.
 
+In the HTML editions, links to other courses, the Lab Guide and reference sites
+open in a new tab so you keep your place. Section links stay on the current page;
+results ZIP links download the file.
+
+Code comments appear in saturated burnt orange throughout the HTML editions, including
+complete lab sources. Selecting and copying code preserves the original text.
+
 Every course ends with one Where to Go Next, one A–Z Glossary, and then
 Official references when sources are used. Lessons and performance-tool guides share these course-wide
 sections; optional lesson References follow Mental model and come last.
+
+Practical Course guides collect getting started, environment, readiness checks,
+lab interpretation, a benchmark worksheet and safe-sharing guidance in the same
+order. Setup and submission procedures live in this shared Lab Guide; detailed
+commands stay with each lab. Reading-only courses keep their existing appendices.
 
 [Browse the courses catalog](index.html)
 
@@ -383,9 +395,11 @@ python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --lab 01_vector_add
 `--plan` is read-only: it shows selected dependencies without installation or
 platform checks. Regular preparation also supports `--plan`. A plan therefore
 does not prove storage, permissions or hardware readiness. `--all` selects the
-group's default labs and their native diagnostic variants; it excludes optional
-container exercises. Each lab's **Before you start** section links here once;
-use its course and lab number in the lookup above to select preparation.
+group's normal default experiments; it excludes optional experiments. Select a
+lab with the same `--experiment`, `--profiler` and `--device` choices you intend
+to run. For `--profiler all`, preparation unions the supported diagnostic
+runtimes without installing unrelated optional experiments. Use the course and
+lab number in the lookup above to choose the preparation group.
 
 ### Repeat or repair preparation
 
@@ -425,7 +439,7 @@ are excluded from every `--all` invocation:
 # CUDA container build-and-test teaching exercise
 python3.12 "$HOME/courses/tools/cuda-lab-setup.py" --launcher build_and_test.sbatch
 # TensorRT-LLM inference variant
-python3.12 "$HOME/courses/tools/serving-lab-setup.py" --launcher 30_engine_profile.trtllm.sbatch
+python3.12 "$HOME/courses/tools/serving-lab-setup.py" --launcher 30_engine_profile.sbatch --experiment trtllm
 # Dynamo container preflight
 python3.12 "$HOME/courses/tools/communication-lab-setup.py" --launcher dynamo_disaggregated_preflight.sbatch
 ```
@@ -502,37 +516,60 @@ export COURSE='gpu-fundamentals'
 cd "$HOME/courses/$COURSE"
 ```
 
-Each lab gives one native `sbatch` baseline command after a short explanation of
-its program. Preparation has already created its log directories. If a lab needs a specialized
-runtime, run its preparation command before submitting.
-`--chdir` fixes the working directory; `%j` becomes the job number in separate
-stdout/stderr filenames. The launcher allocates the workload with `srun` and uses
-the selected runtime. The baseline explicitly disables external capture, including
-any profiling settings left in the login environment.
+Each lab shows its complete source, an optional teaching diagram, and two short
+submission commands. Submit from the course directory selected above. Slurm
+inherits that directory; the launcher's `#SBATCH` directives supply output/error
+paths and reserve its largest supported allocation. Each `srun` step uses only
+its declared resources, so a small execution can leave some allocated GPUs idle.
+Preparation creates the private parent directories before submission.
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
-  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/01_cpu_gpu_crossover.sbatch --workload small
+# Normal experiment
+sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small
+# Supported diagnostics, Systems then Compute
+sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small --profiler all
 ```
 
-Submission means accepted, not completed. Record the printed job number, check
-that exact job, then read its own log and the JSON path printed there. Never select
-the newest file from an earlier run.
+`<JOB_ID>` in each lab means the number returned by its corresponding submission.
+Wait for that job to finish before reading results. Submission alone is not
+completion; `sacct` is authoritative for scheduler state.
 
 ```bash
-export LAB_JOB_ID='<job number printed by sbatch>'
-sacct -j "$LAB_JOB_ID" --format=JobID,State,ExitCode
-cat "results/01_cpu_gpu_crossover/logs/$LAB_JOB_ID.out"
-cat "results/01_cpu_gpu_crossover/logs/$LAB_JOB_ID.err"
-export RESULT_JSON='<exact result path printed in that job log>'
-cat "$RESULT_JSON"
+sacct -j <JOB_ID> --format=JobID,State,ExitCode
+cat results/01_cpu_gpu_crossover/jobs/<JOB_ID>/result.json
 ```
 
-Continue only after `COMPLETED` with exit code `0:0`. Check `lab_id`,
-`experiment.slurm_job_id`, `correctness`, profile and instrumentation fields.
-Reading JSON does not validate it. Multi-result launchers print several originals
-and aggregates; retain all records required by that lab.
+The JSON records the requested selection, actual scope, stage outcomes,
+correctness, measured data and native-report paths. Stages can be completed,
+failed, skipped or unstarted. An interrupted job can leave an incomplete record.
+Invalid JSON or JSON larger than the reader's 8 MiB limit fails the stage and
+preserves the original file. Fabric stages that use every allocated node report
+their actual node/task counts; fixed-size stages retain their own scope.
+Inspect `results/LAB/logs/JOB_ID.out` and `.err`, then the affected stage's logs
+when a run fails. Retry with a fresh job ID after fixing the reported cause.
+
+Original measurement JSON, raw output and reports remain under
+`results/LAB/jobs/JOB_ID/stages/STAGE/`. The combined `result.json` is a reading
+summary. For publication, select eligible original unprofiled measurements;
+profiling timings and the combined document are not benchmark evidence.
+The [GPU Performance Tools reference](gpu-performance-tools/index.html) explains
+profiler selection, report inspection and diagnostic scope.
+
+Optional workflows use `--experiment`: `trials` for the three capstones,
+`two-node` for distributed scaling, `aiperf` for streaming-client benchmarking,
+`trtllm` for the engine-profile container, and `sanitizer` for CUDA checks.
+Only the owning labs accept these values. Sanitizer also requires
+`--sanitizer memcheck|racecheck|initcheck|synccheck` and cannot combine with Nsight.
+Learning/inference basics retain `--device cpu|cuda`. Put overlapping program
+options after `--`; explicit device or topology choices must match the capture.
+
+Some fabric experiments require qualified NIC names or a same-workload reference
+checkpoint. Supply the named variables used by their commands (`SERVER_HCA`,
+`CLIENT_HCA`, `TRAINING_REFERENCE` or `CONTEXT_REFERENCE`) from the prepared
+experiment. Reference checkpoints come from the same lab's `--reference-only`
+run, with its printed `final-weights.pt` path; they are not arbitrary model
+weights. Missing inputs fail clearly. Preparation and troubleshooting belong
+here; the source listing describes each experiment's checks.
 
 ### Keep existing results
 
@@ -672,35 +709,13 @@ lab; native qualification does not qualify a container.
 Open **Environment readiness** and both workers' reports using the browsing steps.
 Require matching canary kernels, NVTX, Compute counters and publication generation.
 
-For each experiment, first run the baseline without external profiling and check
-correctness. Then submit the lab's diagnostic job. Its source exposes the native
-`srun ... nsys profile ...` command on the allocated worker. Inspect that exact
-job's logs and reports in the prepared lab directory. Coordinated
-NIXL/Dynamo diagnostics keep their native `sbatch` allocation and pass visible `nsys profile`
-arguments to each GPU worker; their lifecycle driver preserves readiness and cleanup.
-
-Systems reveals CPU/GPU work, transfers and gaps. Inspect the exact report with
-`nsys stats <report.nsys-rep>` and the Systems timeline. If a particular kernel
-limits the workload, select it from that trace and use the lab's native
-`srun ... ncu ...` command. Inspect its counters with `ncu --import <report.ncu-rep>
---page details` and Compute. Each lab specifies its relevant NVTX range and kernel
-selection; CPU models and unsupported distributed/server replays explain why
-Compute is omitted.
-
-The command-local `COURSE_CAPTURE=1` enables the supplied NVTX annotations and marks
-result JSON as diagnostic. `COURSE_PROFILE_TOOL` records the selected tool; neither
-variable launches a profiler in these native commands. Report names incorporate
-the job, step and worker/rank identity. Distributed capture runs inside each rank;
-serving capture runs around the GPU server with explicit start/stop controls.
-The complete native commands and lifecycle sources accompany those labs.
-
-After changing one factor, repeat the baseline command without external profiling.
-Use these clean runs for performance comparisons: Compute replay and profiler
-collection can alter timings. A nonempty report is only a first check; verify it
-contains this experiment's kernels, copies or NVTX ranges before interpreting it.
-[NVIDIA's triage workflow](https://docs.nvidia.com/nsight-compute/ComputeTriage/)
-and [profiling overhead guidance](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#overhead)
-explain the Systems-to-Compute investigation and measurement limits.
+For profiler selection, native flags, NVTX regions and report interpretation,
+use [GPU Performance Tools](gpu-performance-tools/index.html). A missing tool,
+permission denial, timeout or missing/empty native report fails the stage and
+stops later stages. Preserve the failed job's evidence, repair its runtime or
+permissions through the owning preparation/administration path, then submit a
+fresh job. Never treat a nonempty report alone as proof that it captured the
+experiment's measured work.
 
 ### Check specialized runtimes in the labs
 

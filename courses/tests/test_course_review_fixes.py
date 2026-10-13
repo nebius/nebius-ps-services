@@ -164,8 +164,8 @@ def test_serving_launchers_belong_only_to_inference() -> None:
         "20_prefix_cache_client.sbatch",
         "33_speculative_engine_client.sbatch",
         "15_streaming_client.sbatch",
-        "30_engine_profile.trtllm.sbatch",
-        "15_streaming_client.aiperf.sbatch",
+        "30_engine_profile.sbatch",
+        "15_streaming_client.sbatch",
         "dynamo_disaggregated_preflight.sbatch",
     }
     actual = {path.name for path in (ROOT / "llm-inference/slurm").glob("*.sbatch")}
@@ -181,9 +181,9 @@ def test_slurm_launchers_are_private_fail_closed(course: str) -> None:
         text = launcher.read_text()
         assert "set -euo pipefail" in text
         assert "umask 077" in text
-        cpu = launcher.name in {"32_learning_basics.sbatch", "35_inference_basics.sbatch", "36_kv_tiering.sbatch"}
+        cpu = launcher.name == "36_kv_tiering.sbatch"
         if cpu:
-            assert "#SBATCH --gpus" not in text
+            assert "#SBATCH --gpus-per-node=0" in text
         else:
             assert re.search(r"#SBATCH --gpus-per-(?:node|task)=[1-8]", text)
         syntax = subprocess.run(
@@ -287,7 +287,7 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert '"ascending"' in overlap and '"descending"' in overlap
 
     aiperf = (
-        ROOT / "llm-inference/slurm/15_streaming_client.aiperf.sbatch"
+        ROOT / "llm-inference/slurm/15_streaming_client.sbatch"
     ).read_text()
     assert (
         '"${COURSE_VLLM:?run serving-lab-setup.py}" serve' in aiperf
@@ -329,10 +329,10 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
     assert "global_expert_token_load" in inference_ep
     assert "expert_load_max_to_mean" in inference_ep
     training_capstone = (
-        ROOT / "llm-training/slurm/31_training_capstone.trials.sbatch"
+        ROOT / "llm-training/slurm/31_training_capstone.sbatch"
     ).read_text()
     inference_capstone = (
-        ROOT / "llm-inference/slurm/32_inference_capstone.trials.sbatch"
+        ROOT / "llm-inference/slurm/32_inference_capstone.sbatch"
     ).read_text()
     for capstone in (training_capstone, inference_capstone):
         assert "for trial in 1 2 3" in capstone
@@ -343,7 +343,7 @@ def test_deep_training_and_serving_evidence_is_runnable() -> None:
         leaf_create = capstone.index('mkdir -m 700 -- "${campaign_dir}"')
         assert parent_create < leaf_create
         assert 'chmod 700 -- "${COURSE_RESULTS_DIR}"' in capstone
-    triton = (ROOT / "llm-inference/slurm/30_engine_profile.trtllm.sbatch").read_text()
+    triton = (ROOT / "llm-inference/slurm/30_engine_profile.sbatch").read_text()
     assert "TRITON_REPOSITORY_PROFILE" in triton
     assert "llmapi" in triton and "inflight_batcher" in triton
     assert "config.pbtxt" in triton
@@ -359,12 +359,12 @@ def test_aiperf_execution_is_inference_owned() -> None:
         "custom-cuda-kernels",
     ):
         for path in publication_files(ROOT / course, {".py", ".sh", ".sbatch"}):
-            if path.name != "validate_course.py":
+            if "tools" not in path.parts:
                 assert "aiperf" not in path.read_text(errors="ignore").lower(), path
 
 
 def test_custom_sanitizer_launcher_allowlists_tools() -> None:
-    sanitizer = (ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sanitizer.sbatch").read_text()
+    sanitizer = (ROOT / "custom-cuda-kernels/slurm/03_tiled_transpose.sbatch").read_text()
     assert "memcheck | racecheck | initcheck | synccheck" in sanitizer
     assert '--tool "${tool}"' in sanitizer
 
@@ -378,14 +378,14 @@ def test_engine_profiles_restore_native_or_explicit_container_runtime() -> None:
         "20_prefix_cache_client",
         "33_speculative_engine_client",
         "15_streaming_client",
-        "15_streaming_client.aiperf",
+        "15_streaming_client",
     ):
         text = (folder / (name + ".sbatch")).read_text()
         assert "course_env.sh" in text
         assert "COURSE_VLLM" in text
         assert "COURSE_CONTAINER_RUNNER" not in text
         assert "IMAGE_DIGEST" not in text
-    for name in ("30_engine_profile.trtllm", "dynamo_disaggregated_preflight"):
+    for name in ("30_engine_profile", "dynamo_disaggregated_preflight"):
         text = (folder / (name + ".sbatch")).read_text()
         assert "@sha256:" in text
         assert "COURSE_CONTAINER_RUNNER" in text
@@ -402,7 +402,7 @@ def test_hugging_face_revisions_fail_closed() -> None:
         with pytest.raises(SystemExit, match="immutable 40-character"):
             common.require_hf_commit_revision("main")
     for launcher in (
-        "15_streaming_client.aiperf.sbatch",
+        "15_streaming_client.sbatch",
         "11_serving_client.sbatch",
         "34_policy_equivalence_client.sbatch",
         "20_prefix_cache_client.sbatch",

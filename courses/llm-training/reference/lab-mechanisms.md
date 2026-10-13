@@ -70,3 +70,15 @@ Review answer: the numerator follows the graph actually executed, while the
 denominator includes completion of the stated operations. General transformer MFU
 analysis must account for architecture, active parameters, token counts and
 the chosen recomputation convention; this small capstone does not establish it.
+
+## Interpret diagnostics and capstone evidence
+
+Compute captures select one named operation, often a matrix kernel; Lab 06
+selects objective reduction. A baseline or BF16 diagnostic does not characterize
+every backward pass, precision mode or update. Use Systems for the full schedule
+and retain separate numerical checks and unprofiled timings.
+
+Labs 27 and 31 check finite gradients and reconstruct the expected plain-SGD
+update from each initial state. The capstone rejects missing or diagnostic timing
+provenance, requires `experiment.instrumented` to be exactly `false`, and checks
+matching hardware/software across independent trials.

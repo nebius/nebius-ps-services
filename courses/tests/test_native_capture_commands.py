@@ -75,20 +75,23 @@ def test_explicit_worker_prefix_rejects_conflicting_modes(
 
 
 @pytest.mark.parametrize(
-    "lab,ranks,reports",
+    "lab,ranks,reports,nodes",
     [
-        ("02_collective_readiness", 1, 2),
-        ("01_fabric_topology", 8, 16),
-        ("14_distributed_profiling", 8, 16),
-        ("01_fabric_topology", 8, 1),
+        ("02_collective_readiness", 1, 2, 2),
+        ("01_fabric_topology", 8, 16, 2),
+        ("14_distributed_profiling", 8, 16, 2),
+        ("01_fabric_topology", 8, 1, 2),
+        ("01_fabric_topology", 8, 8, 1),
+        ("14_distributed_profiling", 8, 8, 1),
     ],
 )
 def test_native_torchrun_places_profiler_at_each_rank_and_requires_all_reports(
-    tmp_path, monkeypatch, lab, ranks, reports
+    tmp_path, monkeypatch, lab, ranks, reports, nodes
 ):
     prepare_job(tmp_path, "advanced-gpu-communication", lab)
     env = {**os.environ, **local_commands(tmp_path)}
-    executable(tmp_path / "bin/scontrol", 'print("node-a\\nnode-b")\n')
+    hosts = "node-a" if nodes == 1 else "node-a\nnode-b"
+    executable(tmp_path / "bin/scontrol", f'import sys; print("JobId=123 TimeLimit=2-00:00:00" if "job" in sys.argv else {hosts!r})\n')
     executable(
         tmp_path / "bin/torchrun",
         """import json,os,sys
@@ -99,15 +102,16 @@ for i in range(int(os.environ['REPORTS'])): (Path(os.environ['COURSE_PROFILES_DI
     )
     env.update(
         SLURM_JOB_NODELIST="node-[a-b]",
-        SLURM_NODEID="1",
-        SLURM_JOB_NUM_NODES="2",
+        SLURM_NODEID=str(nodes - 1),
+        SLURM_JOB_NUM_NODES=str(nodes),
         COURSE_RUN_ID="a" * 12,
         REPORTS=str(reports),
     )
     result = subprocess.run(
         [
             "bash",
-            str(ROOT / "advanced-gpu-communication/slurm" / f"{lab}.nsys.sbatch"),
+            str(ROOT / "advanced-gpu-communication/slurm" / f"{lab}.sbatch"),
+            "--profiler", "nsys",
             "--workload",
             "large",
             "--seed",
@@ -119,9 +123,13 @@ for i in range(int(os.environ['REPORTS'])): (Path(os.environ['COURSE_PROFILES_DI
         text=True,
         timeout=15,
     )
-    assert result.returncode == (0 if reports == ranks * 2 else 2), result.stderr
+    assert result.returncode == (0 if reports == ranks * nodes else 2), result.stderr
+    document = json.loads((tmp_path / "results" / lab / "jobs/123/result.json").read_text())
+    assert document["stages"][0]["scope"]["nodes"] == nodes
+    assert document["stages"][0]["scope"]["tasks"] == nodes
+    assert document["allocation"]["SLURM_JOB_NUM_NODES"] == str(nodes)
     argv = json.loads((tmp_path / "ranks.json").read_text())
-    assert f"--nproc-per-node={ranks}" in argv and "--node-rank=1" in argv
+    assert f"--nproc-per-node={ranks}" in argv and f"--node-rank={nodes - 1}" in argv
     assert argv[argv.index("--no-python") + 1 :][:5] == [
         "env",
         "-u",
@@ -213,7 +221,7 @@ raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
         FAILURE=failure,
     )
     result = subprocess.run(
-        ["bash", str(ROOT / "llm-inference/slurm" / f"{lab}.nsys.sbatch")],
+        ["bash", str(ROOT / "llm-inference/slurm" / f"{lab}.sbatch"), "--profiler", "nsys"],
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -237,7 +245,7 @@ raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
 
 def test_native_nccl_ranks_select_their_only_visible_gpu():
     command = (
-        ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.nsys.sbatch"
+        ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch"
     ).read_text()
     assert "--worker-prefix env -u DEBUGINFOD_URLS timeout" in command
     from test_course_review_fixes import load_lab

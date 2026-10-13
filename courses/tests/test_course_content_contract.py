@@ -107,23 +107,13 @@ def test_every_lesson_is_long_form_and_structured(course: str) -> None:
     ]
     for number, lesson in enumerate(lessons, 1):
         assigned = [guide for guide in guides if number in guide["lessons"]]
-        practice = "\n".join(
-            guide["sections"]["Practice"] for guide in assigned
-        )
-        explanation = "\n".join(
-            guide["sections"]["Concepts and code path"] for guide in assigned
-        )
-        assert word_count(practice) >= 35, lesson["title"]
-        assert word_count(explanation) >= 35, lesson["title"]
-        assert "```bash" in practice, lesson["title"]
-        assert any(
-            word_count(guide["sections"]["Before you start"]) >= 18
-            for guide in assigned
-        )
-        assert any(
-            word_count(guide["sections"]["Investigate the behavior"]) >= 20
-            for guide in assigned
-        )
+        for guide in assigned:
+            assert guide["introduction"].strip()
+            assert len(guide["introduction"].split()) <= 100
+            assert "```bash" in guide["sections"]["Run"]
+            assert guide["sections"]["Run"].count("\nsbatch ") == 2
+            assert "sacct -j <JOB_ID> --format=JobID,State,ExitCode" in guide["sections"]["Check your results"]
+
 
 
 @pytest.mark.parametrize("course", COURSES)

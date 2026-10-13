@@ -51,6 +51,7 @@ def main():
     )
     parser.add_argument("--server-device", required=True)
     parser.add_argument("--client-device", required=True)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.iterations < 100 or args.warmup != 0:

@@ -357,6 +357,7 @@ def main():
     parser.add_argument("--itl-slo-ms", type=float, default=50)
     parser.add_argument("--capture", choices=("none", "systems"), default="none")
     add_worker_prefix(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_worker_prefix(args, server=True)
     if (

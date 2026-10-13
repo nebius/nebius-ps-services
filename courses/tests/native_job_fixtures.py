@@ -1,6 +1,7 @@
 """Local scheduler/profiler doubles for the actual Linux batch jobs."""
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +18,12 @@ def prepare_job(root, course, lab):
     shutil.copyfile(
         ROOT / "tools/course_job_cache.sh", root / "tools/course_job_cache.sh"
     )
+    for name in ("course_job.py", "course_execution.py"):
+        shutil.copyfile(ROOT / "tools" / name, root / "tools" / name)
+    (root / "reference").mkdir(exist_ok=True)
+    capabilities = json.loads((ROOT / course / "reference/execution.json").read_text())
+    capabilities["course"] = root.name
+    (root / "reference/execution.json").write_text(json.dumps(capabilities))
     (root / "tools/course_env.sh").write_text(
         ": # isolated runtime selection fixture\n"
     )
@@ -43,6 +50,10 @@ def local_commands(root):
     binaries = root / "bin"
     binaries.mkdir(exist_ok=True)
     executable(
+        binaries / "scontrol",
+        "print('JobId=123 TimeLimit=2-00:00:00')\n",
+    )
+    executable(
         binaries / "setsid",
         "import os, sys; os.setsid(); os.execvpe(sys.argv[1], sys.argv[1:], os.environ)\n",
     )
@@ -55,6 +66,7 @@ def local_commands(root):
 from pathlib import Path
 args=sys.argv[1:]
 Path('srun.json').write_text(json.dumps(args))
+with Path('srun-history.jsonl').open('a') as output: output.write(json.dumps(args)+'\\n')
 while args and args[0].startswith('--'): args.pop(0)
 os.execvpe(args[0],args,os.environ)
 """,
@@ -64,6 +76,8 @@ os.execvpe(args[0],args,os.environ)
         """import json,os,sys
 from pathlib import Path
 Path('application.json').write_text(json.dumps({'argv':sys.argv[1:], 'capture':os.environ.get('COURSE_CAPTURE'), 'tool':os.environ.get('COURSE_PROFILE_TOOL'), 'workload':os.environ.get('COURSE_WORKLOAD'), 'results':os.environ.get('COURSE_RESULTS_DIR')}))
+with Path('application-history.jsonl').open('a') as output: output.write(json.dumps({'argv':sys.argv[1:], 'tool':os.environ.get('COURSE_PROFILE_TOOL')})+'\\n')
+Path(os.environ['COURSE_RESULTS_DIR'],'measurement.json').write_text(json.dumps({'schema':'gpu-course-result/v1','measurements':{'observed_value':17},'correctness':{'passed':True}}))
 raise SystemExit(int(os.environ.get('WORKLOAD_STATUS','0')))
 """,
     )
@@ -98,9 +112,10 @@ raise SystemExit(status or int(os.environ.get('PROFILER_STATUS','0')))
 def run_job(root, course, lab, mode="", arguments=(), environment=None):
     prepare_job(root, course, lab)
     env = {**os.environ, **local_commands(root), **(environment or {})}
-    job = ROOT / course / "slurm" / (lab + ("." + mode if mode else "") + ".sbatch")
+    job = ROOT / course / "slurm" / (lab + ".sbatch")
+    selection = ["--profiler", mode] if mode in {"nsys", "ncu", "all"} else ["--device", "cuda"] if mode == "cuda" else ["--experiment", mode.replace("two_node", "two-node")] if mode else []
     return subprocess.run(
-        ["bash", str(job), *arguments],
+        ["bash", str(job), *selection, *arguments],
         cwd=root,
         env=env,
         capture_output=True,
@@ -114,7 +129,7 @@ def worker_prefix(lab="32_dynamo_disaggregation"):
     import shlex
 
     source = (
-        ROOT / "advanced-gpu-communication/slurm" / (lab + ".nsys.sbatch")
+        ROOT / "advanced-gpu-communication/slurm" / (lab + ".sbatch")
     ).read_text()
     tail = source.split("--worker-prefix ", 1)[1].split("\n\n", 1)[0]
     return shlex.split(tail.replace("\\\n", " "))

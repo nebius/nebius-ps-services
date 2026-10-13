@@ -1,12 +1,12 @@
 # H100 CUDA C++ smoke test
 
-**Hardware scope:** run local checks on the base cluster. Every `two_node`, `nccl_tests`, `fabric` or multi-node serving command below requires the separate two-eight-H100 cluster; never use the TCP base pair as fabric optimization evidence.
+**Hardware scope:** every executable lab uses one full, non-MIG GPU. Qualify
+the required path on H100; evidence from the supported H200 substitute applies
+only to that observed hardware. Lab 10's optional SM90a thread-block clusters
+operate inside one GPU and require their own qualification.
 
-This is a target-qualification checklist, not the lesson execution order.
-Follow the [syllabus](../SYLLABUS.md) for the learning route and complete each
-exercise's relevant safety/setup gate before running it. Distributed and optional
-checks qualify those paths; they are not prerequisites for earlier single-GPU
-lessons that do not use them.
+Use the [course](../index.html) for lesson order. This checklist qualifies the
+local runtime and experiments; optional branches do not gate earlier lessons.
 
 Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
 
@@ -15,7 +15,7 @@ Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the c
    compiles without submitting GPU jobs or running CTest.
 3. Submit Lab 13 and confirm one full non-MIG H100 at compute capability 9.0.
 4. Run Labs 01–09 and 11–12 through the one-node launcher.
-5. Run the matching `slurm/LAB.sanitizer.sbatch memcheck` job for every required binary;
+5. Run the matching `slurm/LAB.sbatch --experiment sanitizer --sanitizer memcheck` job for every required binary;
    submit the same launcher with `racecheck`, `initcheck`, or `synccheck` where
    the lab uses the relevant behavior.
 6. Use Nsight Systems to locate the path, then Nsight Compute on one selected
@@ -33,47 +33,23 @@ exercise below needs the optional selection in the Lab Guide and runs CTest in a
 ```bash
 python3 tools/validate_course.py
 bash slurm/build_and_test.sbatch --help
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
-  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/build_and_test.sbatch
+sbatch slurm/build_and_test.sbatch
 ```
 
 Independently of the optional container exercise, run the device and correctness labs with their prepared runtime:
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/13_h100_preflight/logs/%j.out" \
-  --error="$PWD/results/13_h100_preflight/logs/%j.err" slurm/13_h100_preflight.sbatch
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/01_vector_add/logs/%j.out" \
-  --error="$PWD/results/01_vector_add/logs/%j.err" slurm/01_vector_add.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/02_fused_elementwise/logs/%j.out" \
-  --error="$PWD/results/02_fused_elementwise/logs/%j.err" slurm/02_fused_elementwise.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/04_reduction/logs/%j.out" \
-  --error="$PWD/results/04_reduction/logs/%j.err" slurm/04_reduction.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/05_tiled_stencil/logs/%j.out" \
-  --error="$PWD/results/05_tiled_stencil/logs/%j.err" slurm/05_tiled_stencil.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/06_divergence_tail/logs/%j.out" \
-  --error="$PWD/results/06_divergence_tail/logs/%j.err" slurm/06_divergence_tail.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/07_resource_sweep/logs/%j.out" \
-  --error="$PWD/results/07_resource_sweep/logs/%j.err" slurm/07_resource_sweep.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/09_library_epilogue/logs/%j.out" \
-  --error="$PWD/results/09_library_epilogue/logs/%j.err" slurm/09_library_epilogue.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/11_residual_rmsnorm/logs/%j.out" \
-  --error="$PWD/results/11_residual_rmsnorm/logs/%j.err" slurm/11_residual_rmsnorm.sbatch --workload small
+sbatch slurm/13_h100_preflight.sbatch
+sbatch slurm/01_vector_add.sbatch --workload small
+sbatch slurm/02_fused_elementwise.sbatch --workload small
+sbatch slurm/03_tiled_transpose.sbatch --workload small
+sbatch slurm/04_reduction.sbatch --workload small
+sbatch slurm/05_tiled_stencil.sbatch --workload small
+sbatch slurm/06_divergence_tail.sbatch --workload small
+sbatch slurm/07_resource_sweep.sbatch --workload small
+sbatch slurm/08_async_pipeline.sbatch --workload small
+sbatch slurm/09_library_epilogue.sbatch --workload small
+sbatch slurm/11_residual_rmsnorm.sbatch --workload small
 ```
 
 Every kernel must agree with its reference for the declared shapes and
@@ -94,30 +70,14 @@ Choose a new private output prefix for each profiler run. The following uses
 one example kernel; repeat the applicable sanitizer for every required binary.
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sanitizer.sbatch memcheck --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.sanitizer.sbatch racecheck --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch synccheck --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch memcheck --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_async_pipeline/logs/%j.out" \
-  --error="$PWD/results/08_async_pipeline/logs/%j.err" slurm/08_async_pipeline.sanitizer.sbatch racecheck --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.nsys.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_tiled_transpose/logs/%j.out" \
-  --error="$PWD/results/03_tiled_transpose/logs/%j.err" slurm/03_tiled_transpose.ncu.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/12_capstone/logs/%j.out" \
-  --error="$PWD/results/12_capstone/logs/%j.err" slurm/12_capstone.trials.sbatch --workload small
+sbatch slurm/03_tiled_transpose.sbatch --experiment sanitizer --sanitizer memcheck --workload small
+sbatch slurm/03_tiled_transpose.sbatch --experiment sanitizer --sanitizer racecheck --workload small
+sbatch slurm/08_async_pipeline.sbatch --experiment sanitizer --sanitizer synccheck --workload small
+sbatch slurm/08_async_pipeline.sbatch --experiment sanitizer --sanitizer memcheck --workload small
+sbatch slurm/08_async_pipeline.sbatch --experiment sanitizer --sanitizer racecheck --workload small
+sbatch slurm/03_tiled_transpose.sbatch --profiler nsys --workload small
+sbatch slurm/03_tiled_transpose.sbatch --profiler ncu --workload small
+sbatch slurm/12_capstone.sbatch --experiment trials --workload small
 ```
 
 Require zero relevant sanitizer errors. A missing profiler or counter

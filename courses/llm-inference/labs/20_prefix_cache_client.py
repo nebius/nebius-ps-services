@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--requests-per-cohort", type=int, default=8)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--variant", choices=("disabled", "enabled"), required=True)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     begin_experiment(args)
     require_hf_commit_revision(args.revision)
@@ -127,6 +128,7 @@ def main() -> None:
             "prompt_token_cohorts_comparable": True,
         },
     }
+    # Write this run’s evidence without overwriting an earlier result.
     write_json_exclusive(args.output, payload)
     print(f"Completed prefix-cache client experiment: {args.output}")
 

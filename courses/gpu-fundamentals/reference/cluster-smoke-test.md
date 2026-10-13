@@ -1,52 +1,36 @@
 # Cluster smoke-test runbook
 
-**Hardware scope:** run local checks on the base cluster. Distributed checks have moved to the dedicated advanced course and its two-eight-H100 cluster. Never use the TCP base pair as fabric optimization evidence.
+**Hardware scope:** local GPU checks use one full, non-MIG H100. A qualified advanced cluster can supply one-GPU allocations. Distributed work follows the advanced course's separate fabric qualification.
 
 Run from the `gpu-fundamentals` course root with the prepared runtime described in [VERSIONS.md](../VERSIONS.md); launchers restore it automatically. Keep each Slurm output file and JSON result private; never overwrite an earlier run. Share only a sanitized summary that follows [evidence-security.md](evidence-security.md).
 
 Complete the [Lab Guide](../../lab-guide.html#lab-preparation-scripts) for the course and lab number before submitting. Keep runtime evidence in those private result directories.
 
 This runbook is a complete platform-qualification checklist, not the teaching
-order. Learners follow the [syllabus](../SYLLABUS.md): Lab 10 checks the local
-environment before the first single-GPU experiment, and the two-node gate
-below is required before the final collective lesson. A full qualification
-campaign may run these gates together after the concepts have been studied.
+order. Follow the [course](../index.html) for the learning route. Run Lab 10 before
+the first local experiment; later gates check the additional mechanisms you use.
 
-## Gate 1: prove the two-node allocation
+## Check the local runtime
 
-Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
+```bash
+sbatch slurm/10_compatibility_stack.sbatch --workload small
+```
 
-Accept only two distinct hostnames, world size 2, local rank 0 on each node, one visible H100 per rank, no MIG device, successful NCCL initialization, and a correct all-reduce.
+Confirm successful completion and the recorded device/runtime before continuing.
 
-## Gate 2: isolate one-GPU fundamentals
+## Isolate one-GPU fundamentals
 
 Submit in this order:
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/01_cpu_gpu_crossover/logs/%j.out" \
-  --error="$PWD/results/01_cpu_gpu_crossover/logs/%j.err" slurm/01_cpu_gpu_crossover.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/02_tensor_core_precision/logs/%j.out" \
-  --error="$PWD/results/02_tensor_core_precision/logs/%j.err" slurm/02_tensor_core_precision.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/03_transfer_and_pinning/logs/%j.out" \
-  --error="$PWD/results/03_transfer_and_pinning/logs/%j.err" slurm/03_transfer_and_pinning.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/04_layout_and_coalescing/logs/%j.out" \
-  --error="$PWD/results/04_layout_and_coalescing/logs/%j.err" slurm/04_layout_and_coalescing.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/05_roofline_microbench/logs/%j.out" \
-  --error="$PWD/results/05_roofline_microbench/logs/%j.err" slurm/05_roofline_microbench.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/07_async_streams/logs/%j.out" \
-  --error="$PWD/results/07_async_streams/logs/%j.err" slurm/07_async_streams.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/08_operator_to_kernels/logs/%j.out" \
-  --error="$PWD/results/08_operator_to_kernels/logs/%j.err" slurm/08_operator_to_kernels.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/09_triton_launch_geometry/logs/%j.out" \
-  --error="$PWD/results/09_triton_launch_geometry/logs/%j.err" slurm/09_triton_launch_geometry.sbatch --workload small
+sbatch slurm/01_cpu_gpu_crossover.sbatch --workload small
+sbatch slurm/02_tensor_core_precision.sbatch --workload small
+sbatch slurm/03_transfer_and_pinning.sbatch --workload small
+sbatch slurm/04_layout_and_coalescing.sbatch --workload small
+sbatch slurm/05_roofline_microbench.sbatch --workload small
+sbatch slurm/07_async_streams.sbatch --workload small
+sbatch slurm/08_operator_to_kernels.sbatch --workload small
+sbatch slurm/09_triton_launch_geometry.sbatch --workload small
 ```
 
 For each job, write the prediction first, require the lab's correctness result,
@@ -56,32 +40,15 @@ based on logical input/output bytes, repack-copy cost, and computed reuse break-
 the packed operation is not faster is valid evidence and must report that no
 finite break-even exists.
 
-## Gate 3: exercise both nodes
-
-Run distributed qualification and experiments from the [advanced lab course](../../advanced-gpu-communication/index.html), which owns their launchers, guides and dashboards.
-
-Accept only an exact reduction and a JSON result that records rank count,
-message size, software versions, and timing/bandwidth evidence. Portable JSON
-uses a random course run ID, not a scheduler job ID. Preserve the Slurm output
-privately with the JSON result when you need hostname, rank-placement, or
-site-topology evidence; do not publish those infrastructure identifiers.
-
-## Gate 4: broaden only after smoke passes
+## Broaden only after smoke passes
 
 Repeat selected labs with their supported `small` or `large` profiles. Change one factor at a time. A changed dtype, shape, rank count, power state, process placement, or software version starts a new comparison series.
 
-## Gate 5: compatibility, scheduling, and read-only health
+## Compatibility, scheduling, and read-only health
 
 ```bash
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/10_compatibility_stack/logs/%j.out" \
-  --error="$PWD/results/10_compatibility_stack/logs/%j.err" slurm/10_compatibility_stack.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/11_scheduler_tail/logs/%j.out" \
-  --error="$PWD/results/11_scheduler_tail/logs/%j.err" slurm/11_scheduler_tail.sbatch --workload small
-sbatch --chdir="$PWD" \
-  --output="$PWD/results/12_read_only_health/logs/%j.out" \
-  --error="$PWD/results/12_read_only_health/logs/%j.err" slurm/12_read_only_health.sbatch --workload small
+sbatch slurm/11_scheduler_tail.sbatch --workload small
+sbatch slurm/12_read_only_health.sbatch --workload small
 ```
 
 Record the wheel/runtime/driver/toolkit roles separately. The lane-work model
@@ -91,3 +58,11 @@ with the result. Read-only health evidence must not
 change clocks, sharing modes, or error state. Missing operational fields mean
 unavailable evidence. Review health changes alongside timing rather than
 attributing a slow run to one isolated counter.
+
+## Distributed practice
+
+Use [Advanced Labs](../../advanced-gpu-communication/index.html) for placement,
+transport, collective and application checks on its qualified two-worker,
+sixteen-H100 fabric. Follow its lab-specific acceptance criteria; two one-GPU
+TCP workers do not establish fabric performance. These checks are not gates
+for the local experiments above.

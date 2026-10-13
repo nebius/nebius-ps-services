@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
-import html
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from html_code import code_blocks
 
 from test_course_review_fixes import publication_files
 
@@ -95,8 +96,7 @@ def test_html_embeds_every_numbered_lab_exactly(course: str) -> None:
     for source in sources:
         relative = source.relative_to(root).as_posix()
         assert f'data-source="{relative}"' in document
-        escaped = html.escape(source.read_text())
-        assert escaped in document
+        assert source.read_text() in code_blocks(document)
 
 
 @pytest.mark.parametrize("course", COURSES)

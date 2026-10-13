@@ -26,10 +26,12 @@ def main() -> None:
         action="store_true",
         help="Skip the internal CUDA profiler during a separate Nsight capture.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     model = build_tiny_lm(
         torch, vocab_size=512, hidden_size=256, layers=2, heads=4, max_sequence=128
@@ -40,13 +42,17 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
     def training_step() -> object:
+        # Clear the previous step’s gradients before differentiating again.
         optimizer.zero_grad(set_to_none=True)
         logits = model(inputs)
         loss = torch.nn.functional.cross_entropy(
             logits.reshape(-1, 512), labels.reshape(-1)
         )
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
+        # Update the parameters using the gradients from this step.
         optimizer.step()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         return loss
 
@@ -79,6 +85,7 @@ def main() -> None:
         }
         for event in events[:10]
     ]
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="30_training_profiler",

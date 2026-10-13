@@ -1,78 +1,90 @@
 # Glossary
 
-- **Activation checkpointing** — discarding selected forward activations and recomputing them during backward to trade compute for memory.
+- **Activation checkpointing** — Discarding selected forward activations and recomputing them during backward to trade compute for memory.
+- **AdamW** — An adaptive optimizer that tracks moving averages of gradients and squared gradients while applying weight decay separately from the gradient-based update.
+- **Attention mask** — A rule selecting which token positions may attend to which others, such as blocking future tokens or separating packed examples.
+- **Autocast** — PyTorch's operation-specific choice of computation dtype inside a mixed-precision region; it does not uniformly convert every operation to the same dtype.
 - **Autograd** — Automatic differentiation that records operations and computes gradients during the backward pass.
-- **Backward pass** — propagating loss derivatives through recorded operations to compute gradients for trainable parameters.
+- **Backward pass** — Propagating loss derivatives through recorded operations to compute gradients for trainable parameters.
 - **BF16** — Bfloat16, a 16-bit floating-point format with a wide exponent range and fewer significand bits than FP32.
 - **Checkpoint** — Saved training state used to restore and continue a computation.
 - **Collation** — Combining individual examples into the batch structure consumed by the model.
-- **Communication hook** — a registered DDP operation that transforms and communicates ready gradient buckets, returning their eventual result.
-- **Context parallelism** — sharding long sequence context or attention work across ranks to reduce activation pressure, with communication of key/value or partial-attention state.
-- **Cross-entropy** — for a known target token, minus the natural logarithm of its predicted probability; aggregate over valid labels only.
-- **CUDA Graph** — a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
+- **Communication hook** — A registered DDP operation that transforms and communicates ready gradient buckets, returning their eventual result.
+- **Context parallelism** — Sharding long sequence context or attention work across ranks to reduce activation pressure, with communication of key/value or partial-attention state.
+- **Cross-entropy** — For a known target token, minus the natural logarithm of its predicted probability; aggregate over valid labels only.
+- **CUDA Graph** — A graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
 - **DDP** — DistributedDataParallel; one model replica per rank with gradient synchronization, commonly by all-reduce.
 - **DP** — Data parallelism: replicas process different examples while synchronizing gradients to preserve the same global optimizer update.
-- **Effective batch** — all examples or tokens contributing to one optimizer update.
+- **Effective batch** — All examples or tokens contributing to one optimizer update.
+- **Embedding** — A learned vector representation retrieved for a token ID before the model processes the sequence.
 - **EOS** — End-of-sequence token; a signal that may terminate generation, distinct from reaching a length limit.
-- **EP** — expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
-- **Error feedback** — state that carries a previous compression residual into later gradient communication.
+- **EP** — Expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
+- **Epoch** — One complete pass through the training dataset under the declared sampling policy.
+- **Error feedback** — State that carries a previous compression residual into later gradient communication.
 - **Exposed communication** — Communication that remains on the critical path after useful overlap.
-- **Forward pass** — computing model outputs from inputs using the current parameters.
+- **FLOP / FLOP/s** — Floating-point operation / floating-point operations per second; a work count and a rate, respectively.
+- **Forward pass** — Computing model outputs from inputs using the current parameters.
 - **FP16** — 16-bit floating point; its limited exponent range can require gradient scaling during training.
 - **FP32** — 32-bit floating point; used here for reference calculations and selected parameter, gradient or optimizer state.
 - **FP8** — Eight-bit floating-point formats used with suitable scaling and supported arithmetic paths.
 - **FSDP2** — PyTorch fully sharded data parallel APIs based on per-parameter sharding, used to distribute parameter, gradient, and optimizer-state storage.
-- **Fusion** — combining operations so intermediate traffic or launch overhead is reduced.
+- **Fusion** — Combining operations so intermediate traffic or launch overhead is reduced.
 - **GELU** — Gaussian error linear unit; a smooth nonlinear activation used in transformer feed-forward layers.
-- **Generalization** — performance on relevant data not used to fit the evaluated model; lower training loss alone does not establish it.
+- **Generalization** — Performance on relevant data not used to fit the evaluated model; lower training loss alone does not establish it.
 - **GQA** — Grouped-query attention; multiple query heads share a smaller set of key/value heads, changing the attention architecture and K/V storage.
-- **Gradient** — the derivative of loss with respect to a parameter, indicating its local sensitivity.
-- **Gradient accumulation** — summing gradients from multiple microbatches before one optimizer step to increase effective batch size without storing all activations together.
-- **Gradient scaling** — multiplying an FP16 loss before backward, then unscaling gradients before inspection or update, to reduce underflow risk while skipping unsafe updates.
+- **Gradient** — The derivative of loss with respect to a parameter, indicating its local sensitivity.
+- **Gradient accumulation** — Summing gradients from multiple microbatches before one optimizer step to increase effective batch size without storing all activations together.
+- **Gradient clipping** — Limiting gradient magnitude, for example by a maximum global norm, before the optimizer update.
+- **Gradient scaling** — Multiplying an FP16 loss before backward, then unscaling gradients before inspection or update, to reduce underflow risk while skipping unsafe updates.
 - **Grouped GEMM** — Grouped general matrix multiplication; executing several matrix products through one grouped implementation, for example to process local experts with fewer separate launches.
-- **GRPO** — group relative policy optimization; a reinforcement-learning objective using relative rewards within sampled groups. The course's small objective lab is instructional, not a full production recipe.
-- **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
-- **HFU** — hardware FLOP utilization; executed hardware FLOP/s divided by a declared aggregate peak. It can include recomputation or other work that does not increase useful model progress.
-- **Host-to-device transfer** — copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
+- **GRPO** — Group relative policy optimization; a reinforcement-learning objective using relative rewards within sampled groups. The course's small objective lab is instructional, not a full production recipe.
+- **HBM** — High-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **HFU** — Hardware FLOP utilization; executed hardware FLOP/s divided by a declared aggregate peak. It can include recomputation or other work that does not increase useful model progress.
+- **Host-to-device transfer** — Copying input bytes from CPU-accessible memory into GPU memory; distinct from submitting the command that starts a kernel.
 - **KL divergence** — Kullback–Leibler divergence, a directional measure of the difference between probability distributions; a sampled estimator is not exact full-policy divergence.
-- **Learning rate** — the step-size factor in an optimizer's update, not a guaranteed rate of useful learning.
-- **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
-- **Logit** — an unnormalized model score for a vocabulary candidate.
-- **LoRA** — low-rank adaptation, which freezes base weights and trains small low-rank update matrices.
-- **Loss mask** — labels set to an ignore value so padding or selected prompt positions do not contribute to training loss.
-- **MFU** — model FLOP utilization; estimated useful model FLOP/s divided by a declared aggregate peak, with the model-FLOP formula and precision denominator disclosed.
-- **MLP** — multilayer perceptron; learned linear layers with nonlinear activations that transform each token position’s representation.
-- **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **Learning rate** — The step-size factor in an optimizer's update, not a guaranteed rate of useful learning.
+- **Length bucketing** — Grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
+- **LLM** — Large language model; a model trained to process and generate language tokens.
+- **Logit** — An unnormalized model score for a vocabulary candidate.
+- **LoRA** — Low-rank adaptation, which freezes base weights and trains small low-rank update matrices.
+- **Loss mask** — Labels set to an ignore value so padding or selected prompt positions do not contribute to training loss.
+- **MFU** — Model FLOP utilization; estimated useful model FLOP/s divided by a declared aggregate peak, with the model-FLOP formula and precision denominator disclosed.
+- **Microbatch** — A smaller group of examples processed in one forward/backward pass; several microbatches can accumulate gradients for one optimizer update.
+- **MLP** — Multilayer perceptron; learned linear layers with nonlinear activations that transform each token position’s representation.
+- **MoE** — Mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
 - **MSE** — Mean squared error; the average squared difference between predictions and targets.
-- **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
-- **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **Nsight Compute** — A kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems** — A system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
 - **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
-- **Old policy** — frozen behavior policy used to sample the rollout whose probability ratios enter the update.
-- **Optimizer** — an update rule, such as SGD or Adam, that uses gradients and possibly stored state to change parameters.
-- **Parameter / weight** — a learned numeric value that affects a model's output; activations are intermediate values computed from inputs and parameters.
+- **Old policy** — Frozen behavior policy used to sample the rollout whose probability ratios enter the update.
+- **Optimizer** — An update rule, such as SGD or Adam, that uses gradients and possibly stored state to change parameters.
+- **Padding** — Extra positions that make variable-length examples fit a common tensor shape; padded positions must be handled correctly by attention and loss masks.
+- **Parameter / weight** — A learned numeric value that affects a model's output; activations are intermediate values computed from inputs and parameters.
 - **PEFT** — Parameter-efficient fine-tuning; adapting a subset of parameters or added small parameter sets instead of updating every base weight.
-- **Pinned buffer** — page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.
+- **Pinned buffer** — Page-locked host memory used for asynchronous host/device transfers; pinning and allocation have costs.
 - **Policy ratio** — exp(new log probability minus old log probability) for a sampled action/token.
 - **PowerSGD** — Low-rank gradient compression for stochastic gradient descent (SGD), with configurable startup, rank, error feedback and warm start.
-- **PP** — pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
+- **PP** — Pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
 - **Prefetch** — Preparing future batches before the consumer requests them.
-- **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **PyTorch Profiler** — The framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
 - **Queue depth** — The number of prepared batches waiting for consumption.
-- **Reference policy** — separate anchor used by a recipe's divergence penalty; not necessarily the old policy.
+- **Reference policy** — Separate anchor used by a recipe's divergence penalty; not necessarily the old policy.
 - **RNG** — Random-number generator; its state helps reproduce stochastic operations when saving and restoring training.
-- **RoPE** — rotary positional embeddings; rotations of query/key components that encode position in attention.
-- **Sequence packing** — placing multiple examples into less padded storage while preserving boundaries.
-- **SFT** — supervised fine-tuning on prompt/target or instruction/response examples.
+- **RoPE** — Rotary positional embeddings; rotations of query/key components that encode position in attention.
+- **Sequence packing** — Placing multiple examples into less padded storage while preserving boundaries.
+- **SFT** — Supervised fine-tuning on prompt/target or instruction/response examples.
 - **SGD** — Stochastic gradient descent; an optimizer family that updates parameters using gradients estimated from sampled data.
 - **SHARP** — Scalable Hierarchical Aggregation and Reduction Protocol; NVIDIA networking technology that can offload supported reduction work into a qualified fabric.
-- **Softmax** — transformation of scores into nonnegative probabilities summing to one.
+- **Softmax** — Transformation of scores into nonnegative probabilities summing to one.
 - **Starvation** — A wait caused by the next required input batch not being ready.
-- **Strong scaling** — adding ranks while total useful work remains fixed.
+- **Strong scaling** — Adding ranks while total useful work remains fixed.
 - **TF32** — TensorFloat-32; a reduced-mantissa compute mode for selected FP32 matrix operations on supported NVIDIA hardware, not a tensor storage dtype.
-- **Throughput** — completed requests or tokens per second for a declared workload and boundary.
-- **Token-weighted loss** — loss aggregated by the number of valid labels rather than by equally averaging batches with different valid-token counts.
-- **TP (tensor parallelism)** — splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
-- **Training** — adjusting model parameters using data and an objective, then checking whether the resulting model generalizes to examples not used for those updates.
+- **Throughput** — Completed requests or tokens per second for a declared workload and boundary.
+- **Token** — A model’s unit of text representation, mapped to an integer by its tokenizer; it need not be a whole word.
+- **Token-weighted loss** — Loss aggregated by the number of valid labels rather than by equally averaging batches with different valid-token counts.
+- **Tokenization** — Converting text into token IDs using the selected vocabulary and tokenization rules.
+- **TP (tensor parallelism)** — Splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
+- **Training** — Adjusting model parameters using data and an objective, then checking whether the resulting model generalizes to examples not used for those updates.
 - **Transformer Engine** — NVIDIA library for optimized transformer layers and low-precision recipes.
 - **ZeRO** — Zero Redundancy Optimizer; techniques that partition optimizer states, gradients and, at later stages, parameters across data-parallel ranks.

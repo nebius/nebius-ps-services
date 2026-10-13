@@ -65,6 +65,7 @@ def describe_mig_mode(value: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -75,6 +76,7 @@ def main() -> None:
         "mps": "not inferable from a non-intervening per-process query",
         "time_slicing": "scheduler policy evidence required",
     }
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="12_read_only_health",

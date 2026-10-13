@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     payload_mib = resolve_int_override(
@@ -42,6 +43,7 @@ def main() -> None:
     for _ in range(args.warmup):
         tensor.fill_(rank + 1)
         torch.distributed.all_reduce(tensor)
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     samples = []
     for _ in range(args.iterations):
@@ -56,6 +58,7 @@ def main() -> None:
         raise SystemExit("All-reduce result was not the sum of both ranks.")
     if rank == 0:
         median_ms = statistics.median(samples)
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="08_distributed_collectives",

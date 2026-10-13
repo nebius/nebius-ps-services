@@ -19,11 +19,11 @@ def test_ddp_profiler_launch_preserves_rank_arguments_and_failure(tmp_path, exit
     lab = "21_ddp_buckets"
     prepare_job(tmp_path, "advanced-gpu-communication", lab)
     env = {**os.environ, **local_commands(tmp_path)}
-    executable(tmp_path / "bin/scontrol", "print('node-a\\nnode-b')\n")
+    executable(tmp_path / "bin/scontrol", "import sys; print('JobId=123 TimeLimit=2-00:00:00' if 'job' in sys.argv else 'node-a\\nnode-b')\n")
     executable(tmp_path / "bin/torchrun", "import json,os,sys\nfrom pathlib import Path\nPath('rank.json').write_text(json.dumps(sys.argv[1:]))\nfor i in range(2): (Path(os.environ['COURSE_PROFILES_DIR'])/f'rank-{i}.nsys-rep').write_text('report')\nraise SystemExit(int(os.environ['FAKE_NSYS_EXIT']))\n")
     env.update(SLURM_JOB_NODELIST="node-[a-b]", SLURM_NODEID="1", FAKE_NSYS_EXIT=str(exit_code))
     literal = "literal spaces;$(no-execution)"
-    run = subprocess.run(["bash", str(ROOT / "advanced-gpu-communication/slurm/21_ddp_buckets.nsys.sbatch"), "--hook", "allreduce", "--note", literal], cwd=tmp_path, env=env, capture_output=True, text=True)
+    run = subprocess.run(["bash", str(ROOT / "advanced-gpu-communication/slurm/21_ddp_buckets.sbatch"), "--profiler", "nsys", "--hook", "allreduce", "--note", literal], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert run.returncode == exit_code, run.stderr
     argv = json.loads((tmp_path / "rank.json").read_text())
     assert "--node-rank=1" in argv and "--master-addr=node-a" in argv

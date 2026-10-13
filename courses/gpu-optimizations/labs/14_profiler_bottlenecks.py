@@ -44,6 +44,7 @@ def compile_and_warm(
     compiled = torch.compile(function, fullgraph=True)
     started = time.perf_counter()
     compiled()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     return compiled, (time.perf_counter() - started) * 1_000
 
@@ -53,6 +54,7 @@ def build_sync_case(
 ) -> tuple[Callable[[], Any], Callable[[], Any], dict[str, Any]]:
     elements = 2_000_000 if args.workload == "small" else 16_000_000
     steps = 8 if args.workload == "small" else 40
+    # Create the synthetic tensors used by this experiment.
     values = torch.randn(elements, device="cuda", dtype=torch.float32)
 
     def synchronized() -> float:
@@ -179,10 +181,12 @@ def scalar_value(torch: Any, value: Any) -> float:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     builders = {
         "sync": build_sync_case,
@@ -256,6 +260,7 @@ def main() -> None:
             minimum_bytes / median_seconds / 1e9, 4
         )
 
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="14_profiler_bottlenecks",

@@ -1,172 +1,42 @@
 # Advanced Labs: Multi-GPUs Multi-Nodes communication optimization
 
-[Open the complete course](index.html) · [Lab route](SYLLABUS.md) · [Lab Guide](../lab-guide.html#lab-preparation-scripts) · [Environment candidates](VERSIONS.md)
+[Read the course](index.html) · **34 labs** · Estimated guided time: **64 hours**,
+excluding provisioning and queue time.
 
-This course contains **34 executable labs**. Follow the lab
-route from placement and fabric qualification through collective mechanics,
-distributed training, inference and serving goodput. Each guide contains its
-definitions, commands, correctness checks, dashboard and investigation. Read
-[GPU Performance Tools](../gpu-performance-tools/index.html) before the first
-experiment to prepare for the native jobs and profiler evidence.
+Follow communication from fabric paths and collectives to distributed training,
+inference and serving. Read GPU Fundamentals and GPU Performance Optimization
+first; choose the training or inference specialization for your investigation.
+Use [GPU Performance Tools](../gpu-performance-tools/index.html) for profiling
+and [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html)
+for a tensor-reading refresher.
 
-Use two eight-H100 Soperator workers with NVLink/NVSwitch and InfiniBand. The two one-GPU TCP workers used for the earlier local labs are insufficient for fabric qualification. Sixteen GPUs are allocated; two-rank mechanics deliberately use fewer participating GPUs. Every guide identifies the relevant evidence and a one-variable comparison.
+## Before the first lab
 
-Readiness Labs 03 and 04 publish the recorded world size and distinct host
-count as comparison invariants. Both selected runs must preserve the two-rank,
-two-host placement and pass the NCCL correctness checks.
+Use two eight-H100 workers with local NVLink/NVSwitch and active InfiniBand.
+The two one-GPU TCP workers used for local labs do not qualify this fabric.
+Sixteen GPUs are allocated; some mechanics use only two participating ranks.
 
-NIXL and Dynamo's job-owned etcd coordinator binds the first worker's resolved
-IPv4 address and advertises its hostname. Verify worker name resolution before starting the distributed jobs.
-
-Dynamo's installer builds NIXL 1.3.2 and NIXL-EP together against the prepared
-runtime's CUDA-aware UCX, selected by `DYNAMO_UCX_PREFIX`. The native package
-checks preserve runtime versions and reject the bundled UCX dependency pattern
-that can introduce a second library stack. This build remains separate from
-standalone NIXLBench; both-worker readiness and full serving checks are required.
-
-The serving launcher prepends the selected Dynamo interpreter's directory to
-its child processes' `PATH`, preserving the inherited compiler and tool paths.
-This lets FlashInfer find the prepared runtime's Ninja executable during kernel
-compilation without requiring the submission shell to activate that venv.
-After both workers become healthy, the launcher waits up to 600 seconds for
-the frontend's asynchronous model discovery to list exactly `course-model`.
-An empty list remains pending; an unexpected model or failed owned process
-fails immediately. The private job log records the successful discovery check.
-
-Dynamo workers enable vLLM batch invariance and the RMSNorm custom operation,
-select FlashAttention 2, and disable
-the nondeterministic fused all-reduce/RMSNorm compilation pass in every serving
-lab. The pinned Hopper FlashAttention 3 path can violate batch invariance.
-Explicit RMSNorm selection preserves its batch-invariant CUDA implementation
-when compilation would otherwise select the native implementation.
-Compilation and CUDA graphs remain enabled. Keep these settings fixed across concurrency and
-routing comparisons; these settings can affect throughput. Labs 32 and 33
-require matching outputs. Lab 34 instead compares identical transmitted requests
-and fixed, server-verified generated-token work; answer text may vary. Missing
-usage, failed requests and artifacts from its earlier contract are rejected.
-
-Dynamo server captures start CUDA collection through both workers' profiler
-endpoints after model readiness, then stop collection before engine shutdown.
-Both controls must acknowledge success, with a 90-second start timeout and a
-600-second stop timeout to allow collection-end report finalization. Large
-captures can take more than three minutes to serialize; a stop timeout still
-fails the capture and does not trigger a retry. The lab then waits up to
-180 seconds for both reports while the engines remain alive, then interrupts its owned Slurm steps
-with signal forwarding and a bounded finalization wait for each primary server.
-Capture includes GPU worker descendants. Missing or empty reports fail the job;
-inspect actual request-phase GPU activity and profiler warnings in both reports.
-File creation alone does not establish trace completeness.
-Nsight disables the extra per-process `cudaProfilerStop` flush to reduce
-multi-GPU context synchronization; collection-end flushing remains enabled.
-
-Grafana GPU selectors use the worker hostname and its local GPU index. Match
-those labels to the allocation record; UUIDs remain useful for physical-device
-identity but are not dashboard selectors. Short small runs can fall between
-telemetry samples, so a low utilization sample does not establish idle kernels.
-For distributed traces, check every rank through exported statistics and inspect
-representative reports from both workers. Open large reports in small groups.
-
-Dynamo Labs 32 and 33 retain each measured request's Unix nanosecond start/end
-timestamps in private `requests.json`, plus the measured cohort bounds in
-`measurement-window.json`. Warmups precede that window. Latency still uses a
-monotonic clock; correlate server traces only after checking worker clock
-alignment, and keep instrumented timings separate from clean comparisons.
-
-Lab 34 selects AIPerf's tokenizer by the pinned repository ID and revision,
-using the complete Lab 32 cache snapshot in offline mode. Keep the snapshot's
-metadata as well as its model files; runtime wrappers must pass the client's
-`HF_HUB_CACHE`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` settings through.
-
-For NIXL, retain both the recorded launcher identity and the qualified native
-executable's build identity; the supplied launcher is a library-path wrapper.
-
-Bridge's distributed launcher invokes `torch.distributed.run` through
-`COURSE_BRIDGE_PYTHON`. This also supports the prepared base's inherited PyTorch
-installation, which need not create a `torchrun` executable in the Bridge venv.
-Both training labs explicitly select its sequential `single` dataloader and
-keep the seeded synthetic dataset fixed across communication variants.
-The attention backend supplies causal masking. Dataset mask generation is
-disabled as well as mask transfer, avoiding an unused quadratic mask in each
-prefetched sample at the longer sequence length.
-
-The specialized bandwidth labs use prepared native fabric tools, including the
-CUDA data-validation plugin for perftest. Their launchers restore the saved tool
-and library paths automatically. Lab 01 only checks topology and rank placement;
-it does not install or benchmark those tools.
-
-DDP and FSDP memory dashboards convert the artifact’s MiB values to bytes; Grafana selects the displayed byte unit.
-
-Submit with native `sbatch` after the Lab Guide preparation has created private per-lab log directories. Follow the Lab Guide for shared Nsight tools and private Grafana, then prepare publishing when you need monitored comparisons. JSON artifacts remain authoritative; selected comparison metrics are a replaceable cache. `small` and `large` are workload-size profiles.
-
-Keep custom output directories under `results/`, as in Lab 24's batch-one
-example. Inspect the exact JSON paths printed by each completed job.
-
-Lab 14's separate PyTorch trace shows framework operations, input shapes and
-CUDA activity. Its preallocated tensors may produce no allocation events;
-the trace is not a measurement of total GPU memory use.
-
-Lab 10 selects its NCCL Tests variant as the positional argument after
-`slurm/10_nccl_tests_report.sbatch`, for example `default` or `socket`.
-Its runner sets `NCCL_TESTS_DEVICE=0` only for the benchmark child, matching
-Slurm's one-GPU-per-task visibility. Inherited device overrides are rejected;
-the MPI local rank does not identify a device inside that restricted view.
-The step also uses `--gres-flags=allow-task-sharing` so tasks can exchange
-GPU memory with peers inside the same allocation while retaining their
-one-device CUDA binding. This does not grant access to another job's GPUs.
-Profiled runs retain separate stdout/stderr files per rank beside the private
-log, then combine them after `srun` exits. This prevents concurrent profiler
-progress messages from corrupting the strict benchmark-table parser.
-
-Install the complete `requirements.txt` in Python 3.12 or newer. NumPy is required
-by PyTorch object collectives used to gather distributed evidence.
-Distributed helpers bind NCCL to each rank's local GPU before the first barrier.
-This matters when two-rank mechanics leave all eight GPUs visible on each worker:
-global rank is not the local device index.
-
-The new NVIDIA environments are isolated qualification candidates. Source validation does not prove sixteen-GPU runtime compatibility, network transport selection or performance. See [Publication review](PUBLICATION-REVIEW.md) for evidence lanes.
-
-```bash
-python3 tools/validate_course.py
-```
-
-The self-contained HTML embeds the full lab guides, source listings and dashboard downloads. Synchronize the repository sources using the Lab Guide. It contains no separate conceptual lessons. Estimated guided time is 64 hours, excluding provisioning, queues and independent investigations.
-
-Nsight Systems capture commands and report views are assigned per lab in `reference/observability.json` and repeated in each lab guide. Shared setup imports each course dashboard directory once; CPU-only and protocol-only results omit unrelated GPU telemetry. Explicit profiling exceptions explain which evidence to use instead. Keep captures separate from the unprofiled result pair. Labs 30–33 show separate diagnostic commands for both comparison settings; run them sequentially and retain both sets of reports.
-
-[Lab 19](reference/labs/19_gradient_overlap.md) checks gradients relative to
-each BF16 reference bucket's magnitude and reaches rank-wide correctness
-consensus before timing. Its unnumbered Compute companion isolates one local
-backward kernel on one H100 without collectives. Use its fixed NCU launcher
-for diagnostic counters and Systems for the distributed schedule. The course
-still has 34 numbered labs; native Compute qualification remains pending.
-
-For a tensor-reading refresher, use [PyTorch for GPU Performance Engineering](../pytorch-gpu-performance-engineering/index.html), a concise visual course with commented examples and no labs.
+Complete the [Lab Guide](../lab-guide.html#lab-preparation-scripts), check
+[Versions and environment](VERSIONS.md), then follow the
+[readiness checks](reference/cluster-smoke-test.md) on the qualified cluster.
+Begin with Lab 01's topology and rank-placement check.
 
 ## Runtime preparation
 
-The Lab Guide's course/lab-number lookup selects the regular or specialized
-communication runtime for each experiment. Preparation groups do not change the
-two-node, eight-GPU-per-node hardware qualification requirements. The large
-model belongs only to the Dynamo labs; unrelated experiments do not need it.
+The Lab Guide's course/lab lookup selects regular or specialized communication
+runtimes. The larger model is needed only by Dynamo labs. Preparation records
+candidate software; it does not prove GPU, fabric or serving compatibility.
 
-Setup checks NIXLBench's compiled CUDA/etcd features without running it. Its
-`COURSE_ETCD` and `DYNAMO_UCX_PREFIX` runtime selectors are generated privately.
-Bridge receives an isolated pinned PyTorch/vision/Triton/CUTLASS base before its
-locked source dependencies are installed. These are prepared candidates;
-installation does not establish GPU, fabric or full upstream qualification.
+NIXL and Dynamo start a private job-owned etcd process on the first worker.
+Both worker names must resolve to reachable IPv4 addresses. The prepared
+runtime supplies `COURSE_ETCD` and `DYNAMO_UCX_PREFIX`; use its recorded runtime
+rather than mixing libraries from another environment. Qualify each vendor
+lab with its small workload before performance comparisons.
 
-Follow [Lab 01](reference/labs/01_fabric_topology.md) for placement/fabric checks
-and [Lab 10](reference/labs/10_nccl_tests_report.md) for the benchmark's actual
-MPI/Slurm integration. Setup uses configured worker capacity, so unsupported runtime subsets are
-skipped on clusters without two eight-GPU Hopper workers.
+## Learning route
 
-NIXL and Dynamo start a private, job-owned etcd process on the first allocated
-worker during the lab. Worker hostnames must resolve to reachable IPv4 addresses.
-Readiness failures stop the experiment before benchmark traffic.
-
-## Learning order
-
-Complete shared environment setup once. Keep these identities in filenames, dashboards and evidence. Mechanics labs intentionally reserve the fabric while using only the ranks their model requires.
+Follow the groups below. Keep each lab's identity when selecting commands,
+dashboards and results.
 
 ### Qualify placement and fabric
 
@@ -220,39 +90,27 @@ Complete shared environment setup once. Keep these identities in filenames, dash
 - [Lab 33: Test KV-cache-aware request routing](reference/labs/33_dynamo_routing.md)
 - [Lab 34: Tune serving goodput under latency objectives](reference/labs/34_serving_goodput.md)
 
-### Final investigation
+## Completion
 
-Choose a training or inference workload family. Write a hypothesis before the candidate run, retain one changed control, and repeat both variants in reversed order. Explain why a bandwidth result can disagree with a latency result. Use a later trace to distinguish a communication tail from a delayed producer, then decide whether to keep the change. Include correctness, variation and a limitation; a negative result can pass.
-
-Build a reproducible causal report: retain matching baseline and candidate
-artifacts, numerical or delivery validity, the selected dashboard generation,
-topology and software identity, relevant rank or server traces, and the reasoning
-behind the decision. A faster synthetic test or a configuration flag alone does
-not establish production improvement. Fresh jobs and reversed comparison order
-help expose warm-cache and temporal effects.
+Choose a training or inference workload. State a hypothesis, change one control,
+repeat clean baseline/candidate runs in reversed order, and explain the result
+with correctness, variation and a limitation. A negative result can pass.
+Retain the matching artifacts, topology/software identity, selected dashboard
+and relevant rank or server traces privately.
 
 For training, explain useful tokens per second and the collective tail. For
-inference, explain first-token latency, streamed delivery and the requests that
-meet latency objectives. Apply the owning lab's acceptance contract:
-[Labs 32](reference/labs/32_dynamo_disaggregation.md) and
-[33](reference/labs/33_dynamo_routing.md) require equivalent outputs;
-[Lab 34](reference/labs/34_serving_goodput.md) instead fixes transmitted requests
-and server-verified generated-token work, allowing different answer text and
-valid zero-goodput outcomes. These contracts are not interchangeable.
+inference, explain first-token latency, streamed delivery and requests meeting
+latency objectives. Labs 32–33 require equivalent outputs; Lab 34 fixes
+transmitted requests and server-verified generated-token work, allowing different
+answer text and valid zero-goodput results. These contracts are not interchangeable.
 
-The **64 hours** of guided work exclude provisioning and queue time. Independent
-experiments and production convergence studies require additional time.
+Use [Where to Go Next](NEXT-STEPS.md) for optional reading.
 
-### Interpreting measurements
+## Reference guides
 
-Name the units, population and timing boundary before comparing values. GB/s
-uses decimal billions of bytes; GiB uses powers of 1024. A p99 is the 99th
-percentile of a stated population: requests, samples and token intervals describe
-different populations and cannot be substituted for one another.
-
-Use Systems timelines to explain phase overlap and rank skew, PyTorch profiling
-for framework attribution, and Compute for an isolated local kernel. Grafana
-shows selected measured outcomes alongside device telemetry for the job window.
-Short network operations need measured distributions; sampled GPU utilization
-alone cannot explain them. Keep vendor runtime candidates and live qualification
-limits attached to their recorded hardware in [Versions and environment](VERSIONS.md).
+- [Versions and environment](VERSIONS.md): candidate runtimes and qualification limits.
+- [Readiness checks](reference/cluster-smoke-test.md): placement, transport and vendor gates.
+- [Lab mechanisms and evidence](reference/lab-mechanisms.md): measurement boundaries and interpretation.
+- [Benchmark worksheet](reference/benchmark-record.md): record controlled comparisons.
+- [Evidence and privacy](reference/evidence-security.md): safe collection and sharing.
+- [Glossary](GLOSSARY.md): terms used throughout the labs.

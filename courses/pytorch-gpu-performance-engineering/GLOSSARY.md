@@ -2,78 +2,130 @@
 
 - **Activation** — An intermediate value produced during a model forward pass; some activations must be saved for backward.
 - **Allocated memory** — CUDA memory currently occupied by live tensors in the observed process and device.
+- **Allocator** — Supplies memory blocks for tensors; PyTorch's CUDA caching allocator keeps unused blocks for reuse.
 - **Asynchronous execution** — Submission can return to the CPU before the requested device work completes.
 - **Autograd** — Automatic differentiation: recording relevant computation and using it to calculate gradients.
 - **Axis** — One indexed dimension of a tensor. Its axis number, size and application meaning are separate; negative axis numbers count from the end.
 - **Backward pass** — The computation that derives gradients from a loss through the recorded operations.
 - **Batch** — A group of samples processed together.
+- **Batch size** — The number of samples in one batch.
+- **Batching** — Grouping samples so tensor operations can process them together.
 - **BF16** — The 16-bit bfloat16 floating-point format; it has fewer significant bits and a wider exponent range than FP16.
 - **Bias** — An offset added to a value. In a linear layer, it is a learned parameter; examples can also use fixed offsets.
 - **Broadcasting** — Allows compatible tensors with different shapes to participate in element-wise operations without explicitly copying repeated values.
+- **Cached capacity** — Unused allocator-held GPU memory available for suitable future allocations; not cached calculation results.
 - **Caching allocator** — A memory manager that retains unused blocks for reuse by later tensor allocations.
 - **Compiler backend** — The component that generates executable code from tensor operations.
+- **Compute-bound** — Limited mainly by the time needed for arithmetic rather than moving data; depends on the operation, workload and GPU.
 - **Contiguous** — Values follow the tensor's logical order in the selected memory layout; this course uses row-by-row storage.
+- **`contiguous()`** — Returns a tensor in the requested contiguous layout; copies values only when needed.
 - **CPU** — Central processing unit; it runs the Python application and submits accelerator work.
 - **CUDA** — NVIDIA’s platform for GPU computing, including interfaces for device execution, memory and synchronization.
-- **CUDA event** — A marker recorded in a CUDA stream; timed event pairs measure a completed device interval.
+- **CUDA event** — A marker placed in a CUDA stream with **`record()`**; with timing enabled, two completed events measure a GPU interval.
+- **`DataLoader`** — PyTorch utility that loads dataset samples and can group them into batches using **`batch_size`**.
+- **`detach()`** — Returns a tensor without its autograd connection, sharing the original storage; it does not move or free GPU data.
 - **Device** — The location of a tensor’s values, such as CPU or a particular CUDA GPU.
 - **`dim`** — Specifies which dimension to reduce in a reduction operation.
 - **Dimension** — An axis with a size. The application assigns its meaning, such as time or space; **`shape`** records its size.
-- **Dispatcher** — The PyTorch mechanism that selects an operator implementation from tensor properties and execution context.
 - **Distribution** — A rule describing how likely different sampled values or intervals are.
 - **Dropout** — A training operation that sets randomly selected activations to zero and rescales survivors; **`nn.Dropout`** passes values through during evaluation.
 - **Dtype** — The numeric representation of tensor elements, such as float32, int64 or bool.
-- **Eager execution** — Dispatching operations as Python reaches them.
+- **Eager execution** — Running PyTorch operations as Python reaches them.
+- **`elapsed_time()`** — Reports milliseconds between two completed CUDA timing events.
 - **Element-wise operation** — A computation applied independently to corresponding tensor entries after broadcasting.
-- **Evaluation mode** — Module behavior selected by **`eval`**; distinct from disabling gradient recording.
+- **`empty_cache()`** — Returns releasable unused cached CUDA blocks to the system; cannot free live tensors.
+- **Epoch** — One pass through all training batches; validation can follow each epoch.
+- **Evaluation mode** — Layer behavior selected by **`model.eval()`**, such as inactive dropout; used for validation, testing and inference without changing gradient recording.
+- **Exponent bits** — Bits that set a floating-point number's scale and help determine its range; exact limits also depend on encoding rules.
 - **Feature** — One numeric input or representation component; its axis meaning comes from the application.
 - **Floating point** — A number format that stores an approximation of real-number values.
 - **Forward pass** — Model computation that transforms inputs into outputs and, for training, a loss.
 - **FP16** — 16-bit floating point, with a smaller exponent range than BF16.
 - **FP32** — 32-bit floating point; each element occupies four bytes.
-- **Fusion** — Combining computation to reduce separate operations, launches or intermediate storage where the implementation permits it.
+- **FP4 E2M1** — A four-bit floating-point format with one sign, two exponent and one fraction bit; its maximum finite magnitude is 6 before scaling.
+- **FP64** — 64-bit floating point; each value uses eight bytes, with 11 exponent and 52 stored fraction bits.
+- **FP8** — Eight-bit floating point. E4M3FN has four exponent and three fraction bits, with maximum finite magnitude 448; E5M2 has five and two, with maximum 57,344.
+- **Fraction bits** — Stored bits that provide detail within a floating-point number's scale; more bits give finer precision at a similar magnitude.
+- **Fragmentation** — Unused memory split across blocks that may not satisfy a larger single allocation.
+- **Fusion** — Combining operations; GPU kernel fusion performs multiple operations in one kernel and can avoid intermediate tensor reads and writes.
+- **Global memory** — The main GPU memory used for tensor storage, shared across GPU kernels.
 - **GPU** — Graphics processing unit; an accelerator that executes parallel device work.
 - **Gradient** — A derivative describing how a small input or parameter change affects a result such as the loss.
+- **Gradient recording** — Saving relevant operations and values during the forward calculation so backpropagation can later compute gradients.
 - **H2D** — Host-to-device transfer: copying values from CPU memory to GPU memory.
+- **Hidden layer** — A layer that produces intermediate features for later layers; its outputs are internal to the network.
 - **Index** — An integer choosing an entry along an axis, with counting starting at zero. Its plural is indices. In `x[1, 2, 3]`, the three indices choose a grid, a row and a column in the course example.
 - **Inference** — Using a model to produce outputs without updating it through training.
+- **`inference_mode()`** — A PyTorch context that skips backward recording and related tracking; does not select evaluation layer behavior.
+- **Input layer** — The features supplied to a neural network, drawn as input nodes; these nodes do not perform a learned calculation.
 - **Input pipeline** — The stages that load, prepare, batch and deliver data for model computation.
+- **`item()`** — Returns a one-element tensor's value as a Python number. For a CUDA tensor, waits and copies the value to CPU memory; the original tensor stays on the GPU.
 - **`keepdim=True`** — Keeps the reduced dimension with size 1 instead of removing it.
 - **Kernel** — A function executed on the GPU; a framework operation need not map to exactly one kernel.
 - **Latency** — Elapsed time for a defined unit of work, such as one complete request.
+- **Launch overhead** — Time needed to submit and start GPU work; this can dominate small operations.
 - **Learning rate** — The scale used by an optimizer when changing parameters.
+- **Linear layer** — A layer that multiplies input features by learned weights and adds learned biases; PyTorch applies it along the last axis.
 - **Loss** — A scalar measure of prediction error or another training objective.
 - **Matrix** — A tensor with two axes, commonly interpreted as rows and columns.
 - **Matrix multiplication** — Combining rows and columns through sums of products; written as `@` in the examples.
 - **`mean()`** — Calculates averages, reducing multiple values into fewer values.
+- **Memory bandwidth** — The rate at which bytes move to or from memory; distinct from how many bytes fit.
+- **Memory capacity** — The amount of data memory can hold; insufficient capacity can cause an allocation failure.
+- **Memory traffic** — The bytes read and written by a calculation, including intermediate values and copies.
+- **Memory-bound** — Limited mainly by accessing data rather than doing arithmetic; here, usually GPU memory bandwidth. It does not mean out of memory.
 - **Metadata** — Information describing tensor values and their interpretation, including **`shape`**, **`dtype`**, **`device`** and strides.
 - **Module** — A PyTorch **`nn.Module`** that groups computation and model state.
+- **Neuron** — An output unit in a layer. In a linear layer, it computes a weighted sum of all input features plus a bias; an activation such as ReLU can follow.
+- **NN** — Neural network; a model made from layers of learned calculations and activations.
 - **Normal distribution** — A bell-shaped sampling distribution. The standard normal used by **`torch.randn`** has mean zero and standard deviation one; sampled values can be negative or greater than one.
 - **OOM** — Out of memory; a requested allocation could not be satisfied.
 - **Operator** — A framework computation such as addition, mean or matrix multiplication.
 - **Optimizer** — An algorithm that updates parameters using gradients and possibly additional state.
+- **Output layer** — The layer that produces a network's final result; its width determines the number of output features per input vector.
+- **Overfitting** — Fitting training examples too closely to perform well on new examples.
 - **Parameter** — A model tensor that can be learned, such as a weight or bias.
 - **Precision** — How much numerical detail a format can retain.
 - **Profiler** — A tool that records execution activity for diagnosis; recording can change execution cost.
 - **PyTorch** — A library for tensor computation, automatic differentiation and model building on CPUs and accelerators.
 - **Range** — How large or small a nonzero number a format can represent.
+- **`record()`** — Places a CUDA event in a stream without waiting for the GPU to reach it.
 - **Reduction** — Combines multiple values into fewer values. It can involve processing a large amount of GPU data even when the output contains only one value, so it can be expensive.
 - **ReLU** — Rectified linear unit; the element-wise rule `max(0, value)`.
+- **`requires_grad`** — A tensor flag that requests gradient tracking in ordinary grad mode. Model parameters normally have it enabled; inputs need it only when their gradients are required.
 - **Reserved memory** — Memory managed by the CUDA allocator, including live tensor allocations and reusable cached blocks.
+- **`reshape()`** — Gives values a new shape in their current reading order; shares storage when possible and copies otherwise.
+- **Sample** — One input example; in lesson 14 each sample has two features.
 - **Scalar** — A zero-dimensional tensor or single numeric value; a scalar tensor still has a **`dtype`** and **`device`**.
+- **Scaling** — Representing a working value as a stored value multiplied by a scale; scale data add storage and do not add fraction bits.
 - **SGD** — Stochastic gradient descent; an optimizer that updates parameters in the direction opposite the gradient.
 - **Shape** — The ordered sizes of a tensor’s dimensions.
+- **Sign bit** — The bit selecting the positive or negative sign of a stored number.
 - **Slice** — A selection of a range along an axis that keeps that axis. `0:1` selects the first entry; `:` selects every entry.
 - **Standard deviation** — A measure of spread around a distribution’s mean; the standard normal distribution has standard deviation one.
 - **Storage** — The underlying memory containing values; several views can share it.
 - **Stream** — An ordered queue of device operations; separate streams need appropriate dependencies.
-- **Stride** — The step in stored elements associated with increasing an index by one on an axis.
+- **Stride** — The step in stored elements, not bytes, associated with increasing an index by one on an axis; **`stride()`** reports these steps without copying values.
 - **Synchronization** — Waiting or establishing dependencies so required work completes before its result is used.
+- **Target** — The known answer paired with an input; used to calculate prediction error during supervised training, validation and testing.
 - **Tensor** — Values arranged along zero or more dimensions, together with metadata that describes their interpretation.
+- **Tensor lifetime** — How long tensor storage remains needed by references, views, autograd or ongoing operations.
+- **Testing** — Measuring the chosen model on held-out examples kept out of training and model selection.
 - **Throughput** — Useful work completed per unit time within a stated measurement boundary.
+- **Token** — A unit of text, such as a word or word piece. A language model can score possible next tokens before one is selected.
+- **Tolerance** — An allowed numerical difference when comparing results.
+- **`torch.allclose()`** — Checks whether corresponding tensor values agree within numerical tolerances.
+- **`torch.compile()`** — Creates an optimized version of a function or model; supported operations can be compiled and fused for repeated execution.
+- **`torch.cuda.synchronize()`** — Blocks the calling CPU thread until previously submitted work in all streams on the current or specified CUDA device completes; does not copy tensor values.
+- **`torch.no_grad()`** — A context manager that disables gradient recording for its calculations. It does not change layer behavior or call **`model.eval()`**.
+- **`torch.stack()`** — Copies equally shaped tensors into one tensor with a new axis; can group sample tensors into a batch.
 - **Training** — Updating model parameters to improve a defined objective.
+- **`transpose()`** — Swaps two axes; in the course examples, the result shares storage with swapped shape and strides.
 - **Uniform distribution** — A sampling rule assigning equal probability to equal-width intervals in its range. **`torch.rand`** uses zero inclusive to one exclusive.
+- **Validation** — Checking performance on separate examples during model development, without optimizer updates.
 - **Vector** — A tensor with one axis, such as a four-element tensor with **`shape`** `[4]`.
 - **Vectorization** — Expressing repeated work through operations on whole tensors instead of a Python loop over individual entries or rows.
 - **View** — A tensor that interprets existing shared storage without copying its values.
-- **Warmup** — Executing representative work before measurement to reduce one-time initialization effects.
+- **`view()`** — Gives a tensor a new shape without copying; raises an error if the requested shape is incompatible with its strides.
+- **`wait_stream()`** — Makes future work in one stream wait for work already submitted to another at the time of the call; returns without making the calling CPU thread wait for that work.
+- **Warm-up** — Running representative work before measurement to reduce first-run setup effects; a fixed run count does not guarantee stable clocks or timings.

@@ -22,12 +22,15 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     size = 2_048 if args.workload == "small" else 8_192
+    # Create the synthetic tensors used by this experiment.
     a = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
     b = torch.randn((size, size), device="cuda", dtype=torch.bfloat16)
 
@@ -36,6 +39,7 @@ def main() -> None:
 
     for _ in range(args.warmup):
         operation()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     unsynchronized = []
     for _ in range(args.iterations):
@@ -52,6 +56,7 @@ def main() -> None:
     event_samples = cuda_times_ms(
         torch, operation, warmup=args.warmup, iterations=args.iterations
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="01_timing_basics",

@@ -115,7 +115,7 @@ Successful host compilation does not prove device code was generated for SM90, l
 
 **Practice**
 
-Complete Lab 13 to build the SM90 program and verify the allocated target before attempting the vector kernel.
+After preparation builds the SM90 program, use Lab 13 to verify the allocated target before attempting the vector kernel.
 
 - [Lab 13: Build and identify the H100 CUDA execution target](reference/labs/13_h100_preflight.md)
 
@@ -193,7 +193,7 @@ A kernel with a race can pass thousands of runs and fail under another schedule 
 
 **Practice**
 
-Revisit Lab 01 with its sanitizer and profiling launchers; establish correctness and memory safety before interpreting kernel counters.
+Revisit Lab 01 with the lab launcher’s sanitizer and profiler selections; establish correctness and memory safety before interpreting kernel counters.
 
 - [Lab 01: Launch and validate a bounds-safe vector kernel](reference/labs/01_vector_add.md)
 
@@ -205,7 +205,7 @@ Correctness tests compare outputs with expected results; sanitizers detect inval
 
 **Objective**
 
-Compare separate scale, bias, and ReLU kernels with one fused kernel.
+Compare a scale/bias kernel followed by a ReLU kernel with one fused kernel.
 
 **How it works**
 
@@ -215,7 +215,7 @@ Fusion is an implementation change, not permission to change the formula or nume
 
 The vector kernel established two input reads, one addition, and one output write. Fusion combines a producer-consumer chain so intermediate values remain in registers instead of returning to high-bandwidth memory (HBM).
 
-Follow one element through `y = relu(scale*x + bias)`. Separate kernels write the scaled value into one intermediate, read it to add bias, write another intermediate, then read that value to apply ReLU. Each kernel also needs a launch. The arithmetic is small relative to the repeated storage and submission work.
+Follow one element through the supplied Lab 02 expression, `y = relu(scale*x + bias)`. The first kernel combines scale and bias, then writes one intermediate array. The second kernel reads that array, applies ReLU and writes the final output. This baseline uses two launches and one intermediate; the fused path uses one launch and keeps that intermediate value in a register.
 
 A fused kernel loads the required inputs, carries the intermediate value in registers, performs the same stages and writes the final output once. The saving is the removed launches and intermediate reads/writes. It is valid only if broadcasting, aliasing, not a number (NaN)/Inf, signed-zero, precision and activation behavior still satisfy the operation's contract and no external consumer requires the removed intermediate.
 
@@ -523,7 +523,7 @@ The supplied lab uses FP32 and a fixed width of 256. Extending it to arbitrary o
 
 Trusted CPU, CUDA or library results check zero, random and extreme inputs within the supported scope. Wider and reduced-precision extensions need their own tolerances. A read/write ledger explains potential savings, while register/shared-memory use and an independently timed baseline establish whether retaining or recomputing residual values costs less than materializing them.
 
-Separate residual and normalization kernels materialize an intermediate and reread it. A fused kernel can remove traffic, but normalization needs a numerically stable row reduction and support for arbitrary hidden sizes.
+Separate residual and normalization kernels materialize an intermediate and reread it. A fused kernel can remove traffic, but normalization needs a numerically stable row reduction and correct handling of every supported row width.
 
 Precision-specialized paths may change vector width, accumulation, and math instructions; `--use_fast_math` changes numerical semantics globally and is never a free speed switch.
 
@@ -567,7 +567,7 @@ Suppose a kernel accounts for 40% of a 10-millisecond application step. Making t
 
 **Practice**
 
-Complete Lab 12’s three independent kernel acceptance trials with counterbalanced order and numerical checks. Keep end-to-end acceptance pending until you implement and time the separate application integration described in the guide.
+Complete Lab 12’s three fresh-process kernel acceptance trials with `--experiment trials`, as described in its guide. The launcher alternates baseline-first, candidate-first and baseline-first order and checks numerical correctness. Application integration is a separate learner exercise: call the accepted operation from an application and compare the complete baseline and candidate paths before claiming end-to-end improvement.
 
 - [Lab 12: Assemble a kernel acceptance report](reference/labs/12_capstone.md)
 
@@ -621,7 +621,7 @@ Decide whether CUDA Tile C++ is useful for a future kernel without making it a p
 
 Tile-level programming expresses work over blocks of values rather than describing every individual thread's index manipulation. A tile might hold a small matrix region that is loaded, transformed, reduced and stored through collective operations. CUDA Tile C++ provides a C++ interface to NVIDIA's tile-oriented programming model. It is an expression and compiler interface, not an additional physical memory tier, GPU generation or replacement for the CUDA runtime.
 
-In explicit thread/block CUDA, the programmer describes much of the mapping and coordination directly. A tile abstraction delegates more of that mapping to the compiler while retaining requirements about data dependencies, boundaries and numerical behavior. This optional appendix asks whether that abstraction makes a selected kernel easier to maintain on a qualified toolchain. It does not assume the required H100 course build supports it or that a shorter source automatically produces a faster kernel.
+In explicit thread/block CUDA, the programmer describes much of the mapping and coordination directly. A tile abstraction delegates more of that mapping to the compiler while retaining requirements about data dependencies, boundaries and numerical behavior. This optional lesson asks whether that abstraction makes a selected kernel easier to maintain on a qualified toolchain. It does not assume the required H100 course build supports it or that a shorter source automatically produces a faster kernel.
 
 The core course uses stable CUDA C++ concepts and explicit thread/block code. Tile-level programming is an optional expression model that still compiles to kernels governed by the same memory, synchronization, and evidence rules.
 

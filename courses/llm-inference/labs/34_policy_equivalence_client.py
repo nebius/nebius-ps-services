@@ -23,6 +23,7 @@ def main() -> None:
     )
     parser.add_argument("--variant", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     begin_experiment(args)
     require_hf_commit_revision(args.revision)
@@ -62,6 +63,7 @@ def main() -> None:
         if not choices or not choices[0].get("text"):
             raise SystemExit("A greedy equivalence request returned no text.")
         digests.append(hashlib.sha256(choices[0]["text"].encode()).hexdigest())
+    # Write this run’s evidence without overwriting an earlier result.
     write_json_exclusive(
         args.output,
         {

@@ -196,7 +196,7 @@ def write_json_exclusive(target: Path, payload: dict[str, Any]) -> Path:
 
 def configure_slurm_distributed_env() -> tuple[int, int, int]:
     rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", "0")))
-    world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", "1")))
+    world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_STEP_NUM_TASKS", os.environ.get("SLURM_NTASKS", "1"))))
     local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("SLURM_LOCALID", "0")))
     os.environ.setdefault("RANK", str(rank))
     os.environ.setdefault("WORLD_SIZE", str(world_size))

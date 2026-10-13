@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     size = resolve_int_override(
@@ -37,7 +38,9 @@ def main() -> None:
     )
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
+    # Create the synthetic tensors used by this experiment.
     a32 = torch.randn((size, size), device="cuda", dtype=torch.float32)
     b32 = torch.randn((size, size), device="cuda", dtype=torch.float32)
     torch.set_float32_matmul_precision("highest")
@@ -84,6 +87,7 @@ def main() -> None:
         raise SystemExit(
             "A precision mode produced a non-finite or unexpectedly inaccurate result."
         )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="02_tensor_core_precision",

@@ -101,6 +101,7 @@ def main():
     parser.set_defaults(warmup=50, iterations=500)
     parser.add_argument("--progress-thread", choices=("off", "on"), default="off")
     add_worker_prefix(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_worker_prefix(args)
     validate_common_args(args)

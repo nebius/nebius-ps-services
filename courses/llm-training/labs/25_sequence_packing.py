@@ -33,6 +33,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--capacity", type=int, default=256)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.capacity < 32:
@@ -77,6 +78,7 @@ def main() -> None:
         backward_boundary_checks
     )
     valid_within_example_attention = all(within_example_controls)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="25_sequence_packing",

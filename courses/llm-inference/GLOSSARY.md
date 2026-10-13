@@ -2,81 +2,87 @@
 
 - **AIPerf** — NVIDIA's current client workflow for measuring generative-AI endpoint latency and throughput under a declared request distribution.
 - **API** — Application programming interface; the request and response contract exposed by a service or software component.
-- **Autoregressive generation** — selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
+- **Autoregressive generation** — Selecting a next token conditioned on preceding tokens, appending it and repeating until a stopping condition is met.
 - **AWQ** — Activation-aware Weight Quantization; uses calibration activation statistics to choose weight scaling that protects important channels.
-- **Cache restoration** — making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.
+- **Cache restoration** — Making compatible retained KV state available again before attention uses it; this has transfer and reconstruction costs.
 - **Calibration** — Using representative data to choose quantization ranges or scales.
-- **Closed-loop load** — each client waits for completion before sending again, which can hide overload behind client pacing.
-- **Continuous batching** — admitting and retiring requests between model iterations instead of waiting for a fixed batch to finish together; TensorRT-LLM also calls this in-flight batching or iteration-level batching.
+- **Chunked prefill** — Processing a long prompt in smaller token segments so a scheduler can interleave that work with other requests.
+- **Closed-loop load** — Each client waits for completion before sending again, which can hide overload behind client pacing.
+- **Continuous batching** — Admitting and retiring requests between model iterations instead of waiting for a fixed batch to finish together; TensorRT-LLM also calls this in-flight batching or iteration-level batching.
 - **Copy-on-write** — Creating a private copy before modifying state that is shared with another owner.
-- **CUDA Graph** — a graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
+- **CUDA Graph** — A graph of operations and dependencies that can be instantiated and launched repeatedly. CUDA supports explicit construction and stream capture; these labs use PyTorch capture with its storage and operation constraints.
 - **DCGM** — NVIDIA Data Center GPU Manager; provides GPU health and telemetry facilities.
-- **Decode** — autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
+- **Decode** — Autoregressive processing after prefill, usually producing one new token per sequence per iteration; also called the generation phase in TensorRT-LLM.
 - **Dequantization** — Reconstructing approximate numerical values from quantized codes and their scale metadata.
-- **Disaggregated serving** — separate prefill and decode worker pools connected by request and KV-state handoff.
+- **Detokenization** — Converting generated token IDs back into text using the tokenizer’s decoding rules.
+- **Disaggregated serving** — Separate prefill and decode worker pools connected by request and KV-state handoff.
 - **DMA** — Direct memory access; transfer hardware moves bytes without CPU instructions copying each byte.
 - **DP** — Data parallel serving: independent model replicas process different requests; a request does not require gradient synchronization across replicas.
 - **DRAM** — Dynamic random-access memory; in the host-offload examples, CPU-side memory that trades GPU capacity relief for transfer and reconstruction costs.
-- **E2E latency** — end-to-end latency from the declared request or workload start to completion at the declared observation boundary.
-- **EOS** — end-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
-- **EP** — expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
+- **E2E latency** — End-to-end latency from the declared request or workload start to completion at the declared observation boundary.
+- **EOS** — End-of-sequence token; one possible stopping signal, distinct from an output-length limit or service cancellation.
+- **EP** — Expert parallelism; distributing the experts in a mixture-of-experts model across ranks and routing tokens to their owners.
 - **Execution engine** — The component that performs model computation and manages execution resources.
 - **FP8** — Eight-bit floating-point formats requiring a supported format, scaling recipe and execution path; the name alone does not establish accuracy or speed.
 - **Fragmentation** — Storage wasted by an allocation layout, including unused slots in a partially filled block.
 - **Free list** — A collection of reusable cache blocks available for allocation.
 - **GDS** — GPUDirect Storage; supported direct DMA paths between storage and GPU memory, with CPU-coordinated control work.
-- **Goodput** — completed work that meets declared service objectives.
-- **GPTQ** — a post-training weight-quantization method that uses calibration-derived sensitivity information to compensate rounding error by adjusting weights not yet quantized.
-- **GQA/MQA** — grouped-query attention / multi-query attention; layouts with fewer key/value heads than query heads.
-- **Greedy decoding** — choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
-- **HBM** — high-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
+- **Goodput** — Completed work that meets declared service objectives.
+- **GPTQ** — A post-training weight-quantization method that uses calibration-derived sensitivity information to compensate rounding error by adjusting weights not yet quantized.
+- **GQA/MQA** — Grouped-query attention / multi-query attention; layouts with fewer key/value heads than query heads.
+- **Greedy decoding** — Choosing the highest-scoring allowed token at each step, rather than randomly sampling from the distribution.
+- **HBM** — High-bandwidth memory attached to the GPU and used for model state, activations, workspaces, and caches.
 - **HTTP** — Hypertext Transfer Protocol; carries service requests and responses, with protocol completion distinct from the first generated content.
-- **ICL** — inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
+- **ICL** — Inter-chunk latency; gaps between streaming content chunks, which can contain multiple tokens.
 - **Idle TTL** — Idle time-to-live; an expiry interval renewed on access in the supplied cache model, with capacity eviction able to remove an entry sooner.
-- **Inference** — using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
+- **Inference** — Using a model's learned parameters to compute outputs for inputs, normally without updating those parameters.
 - **INT8** — Eight-bit integer representation used by supported quantization schemes together with scale and, where applicable, zero-point metadata.
-- **ISL/OSL** — input and output sequence lengths used to describe request work.
-- **ITL** — inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
+- **ISL/OSL** — Input and output sequence lengths used to describe request work.
+- **ITL** — Inter-token latency; AIPerf reports a per-request average, with the formula and timestamp convention explained in Lesson 7. Individual token gaps are a different distribution.
 - **JSON** — JavaScript Object Notation; the structured text format used for request bodies and result artifacts.
-- **KV cache** — cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
-- **KV-aware routing** — worker selection that combines reusable-prefix state with projected active load.
-- **Length bucketing** — grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
-- **Logit** — an unnormalized model score; softmax converts logits to probabilities.
-- **LoRA** — low-rank adaptation; a task-specific weight update represented by two small matrix factors and added to a fixed base transformation.
+- **KV cache** — Cached attention keys and values from earlier positions, avoiding repeated projection work while consuming memory that grows with active sequence state.
+- **KV-aware routing** — Worker selection that combines reusable-prefix state with projected active load.
+- **Length bucketing** — Grouping examples or requests with similar token lengths to reduce padding while balancing extra batches and launches.
+- **LLM** — Large language model; a model trained to process and generate language tokens.
+- **Logit** — An unnormalized model score; softmax converts logits to probabilities.
+- **LoRA** — Low-rank adaptation; a task-specific weight update represented by two small matrix factors and added to a fixed base transformation.
 - **LRU eviction** — Least recently used eviction; discarding or demoting the eligible cache entry with the oldest access under capacity pressure.
 - **MHA** — Multi-head attention; each query head has corresponding key/value heads, unlike the sharing used in GQA or MQA.
-- **Model artifact bundle** — the pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
-- **MoE** — mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
+- **Model artifact bundle** — The pinned config, tokenizer, generation defaults, weight shards/indexes, model card/license metadata, and optional adapters or quantization data required to reproduce loading and serving.
+- **MoE** — Mixture of experts; a model layer that routes tokens to a subset of specialized expert networks.
 - **MTP** — Multi-token prediction; a model capability that predicts multiple future positions and may supply proposals for target-verified speculative generation.
-- **Nsight Compute** — a kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
-- **Nsight Systems** — a system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
+- **Nsight Compute** — A kernel profiler used for selected-kernel metrics, including roofline, traffic, instruction, scheduler, stall, and occupancy evidence.
+- **Nsight Systems** — A system profiler used to inspect the temporal relationship among CPU work, CUDA APIs, kernels, copies, synchronization, NVTX ranges, and communication.
 - **NVTX** — NVIDIA Tools Extension Library, an annotation API for named markers and ranges; it does not synchronize or time GPU work by itself.
-- **Open-loop load** — arrivals generated independently of response completion, exposing queue growth beyond service capacity.
-- **Paged KV cache** — managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
-- **PP** — pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
-- **Preemption** — temporarily suspending a running request to free resources; resumption may require restoring or recomputing KV state. Rejecting a new request is a separate admission decision.
-- **Prefill** — processing prompt tokens to form KV state and the logits for the first output token; also called the context phase in TensorRT-LLM.
-- **Prefix caching** — reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
-- **PyTorch Profiler** — the framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
+- **Open-loop load** — Arrivals generated independently of response completion, exposing queue growth beyond service capacity.
+- **Paged KV cache** — Managing KV storage in blocks/pages to reduce fragmentation and support dynamic request scheduling.
+- **PP** — Pipeline parallelism; placing different layer ranges on different ranks and scheduling microbatches through the stages.
+- **Preemption** — Temporarily suspending a running request to free resources; resumption may require restoring or recomputing KV state. Rejecting a new request is a separate admission decision.
+- **Prefill** — Processing prompt tokens to form KV state and the logits for the first output token; also called the context phase in TensorRT-LLM.
+- **Prefix caching** — Reusing KV state for an exactly matching reusable prefix under the serving engine's cache rules.
+- **PyTorch Profiler** — The framework profiler that attributes CPU and CUDA activity, calls, shapes, memory, and stacks to PyTorch operators.
 - **Quantization** — Representing values using a smaller set of numerical levels, with metadata that maps stored codes to approximate original values.
-- **Radix tree** — a compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
+- **Radix tree** — A compressed prefix tree whose edges can represent token sequences, allowing an engine to find reusable shared-prefix state.
 - **RDMA** — Remote direct memory access; supported network hardware transfers data between registered memory regions.
 - **Readiness** — The ability of a service to accept the intended requests, beyond merely having a running process.
 - **Reference count** — A count of owners that still require a shared block or object.
 - **Remote model code** — Python supplied by a model repository and executed when an operator explicitly enables a trust option; it requires an exact-revision review and is disabled in these labs.
-- **Response completion** — the final protocol event, which can occur after the last generated content token.
-- **SDPA** — scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
-- **Service correctness** — correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
-- **SLO** — service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
-- **Speculative decoding** — proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
+- **Response completion** — The final protocol event, which can occur after the last generated content token.
+- **RNG** — Random number generator; supplies the random draws used by sampling, with state that matters for reproducibility.
+- **SDPA** — Scaled dot-product attention, the query/key/value attention operation. PyTorch's SDPA API selects among supported implementations for the actual inputs and configuration.
+- **Service correctness** — Correct tokenization, sampling, stopping, streaming, errors, and protocol behavior around a valid model computation.
+- **SLO** — Service-level objective; a declared target such as a latency percentile, throughput, error rate, or goodput threshold.
+- **Softmax** — A function that converts scores into nonnegative probabilities summing to one by normalizing their exponentials.
+- **Speculative decoding** — Proposing several tokens with a cheaper source and verifying them with the target model, accepting only a target-valid prefix under the declared sampling contract.
 - **SSE** — Server-Sent Events; an HTTP event-stream format that can carry generated content in chunks, which need not correspond one-to-one to tokens.
-- **Temperature** — positive divisor applied to logits before softmax; lower values sharpen the distribution.
-- **Throughput** — completed requests or tokens per second for a declared workload and boundary.
-- **Token** — a model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
-- **Top-k** — sampling filter retaining the k highest-scoring candidates, followed by renormalization.
-- **Top-p** — sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
-- **TP (tensor parallelism)** — splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
-- **TPOT** — time per output token; an average generation interval per subsequent token. Tool conventions vary, so compare its formula and endpoints with ITL rather than assuming the names imply different aggregations.
-- **TTFT** — time to first token, measured from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
-- **Warm-up** — untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
+- **Temperature** — Positive divisor applied to logits before softmax; lower values sharpen the distribution.
+- **Throughput** — Completed requests or tokens per second for a declared workload and boundary.
+- **Token** — A model's unit of text representation, mapped to an integer by its tokenizer; a token need not be a whole word.
+- **Tokenization** — Converting input text into token IDs using the selected vocabulary and tokenization rules.
+- **Top-k** — Sampling filter retaining the k highest-scoring candidates, followed by renormalization.
+- **Top-p** — Sampling filter retaining the smallest ranked prefix reaching a declared cumulative probability threshold.
+- **TP (tensor parallelism)** — Splitting selected tensor operations within model layers across ranks, requiring communication during inference or training.
+- **TPOT** — Time per output token; an average generation interval per subsequent token. Tool conventions vary, so compare its formula and endpoints with ITL rather than assuming the names imply different aggregations.
+- **TTFT** — Time to first token, measured from the declared request boundary to the first observed output token. First-nonempty-content timing is a proxy unless its correspondence to token arrival is established. TTFT is distinct from steady-state inter-token latency and end-to-end latency.
+- **Warm-up** — Untimed execution used to exclude initialization, compilation, allocation, and cache setup according to a declared policy.
 - **Zero point** — A stored offset that maps real zero into a quantized representation.

@@ -63,6 +63,7 @@ def train_samples(
         loss = torch.nn.functional.cross_entropy(
             logits.reshape(-1, logits.shape[-1]), targets.reshape(-1)
         )
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
         return loss.detach()
 
@@ -71,6 +72,7 @@ def train_samples(
     for _ in range(warmup):
         model.zero_grad(set_to_none=True)
         loss = step()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
 
     timings = []
@@ -137,10 +139,12 @@ def require_checkpoint_equivalence(
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     sequence = 256 if args.workload == "small" else 1_024
     hidden = 512 if args.workload == "small" else 1_024
@@ -201,6 +205,7 @@ def main() -> None:
     full_checks = require_checkpoint_equivalence(
         torch, eager_loss, eager_grads, full_loss, full_grads
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="14_activation_checkpointing",

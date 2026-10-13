@@ -19,6 +19,7 @@ from common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -28,11 +29,13 @@ def main() -> None:
     torch.distributed.all_gather_object(nodes, socket.gethostname())
     if len(set(nodes)) != 2:
         raise SystemExit("The full lab suite requires two distinct nodes.")
+    # Create explicit input values on the selected device.
     probe = torch.tensor([rank + 1.0], device="cuda")
     torch.distributed.all_reduce(probe)
     if float(probe.item()) != 3.0:
         raise SystemExit("NCCL all-reduce validation failed.")
     if rank == 0:
+        # Save the actual measurements together with their correctness checks.
         target = write_result(
             args,
             lab_id="05_transport_readiness",

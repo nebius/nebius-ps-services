@@ -1,23 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 580" role="img" aria-labelledby="pt-compilation-title pt-compilation-desc" style="max-width: 360px; margin-inline: auto">
-  <title id="pt-compilation-title">Compilation may avoid intermediate storage</title>
-  <desc id="pt-compilation-desc">Eager addition and ReLU produce intermediate tensors before reduction. An optimized region may avoid some intermediate storage. Fusion and kernel count depend on the implementation; the result is still required. Inputs and outputs are FP32 on CPU in the example.</desc>
-  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
-    <text x="160" y="28" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">dtype</tspan><tspan>: FP32 · </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">device</tspan><tspan>: CPU</tspan></text>
-    <text x="160" y="64" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Eager: named intermediates</tspan></text>
-    <rect x="16" y="82" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
-    <text x="160" y="112" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>add → shifted: [2, 3]</tspan></text>
-    <path d="M160 138 V160 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
-    <rect x="16" y="170" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
-    <text x="160" y="200" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan>ReLU → positive: [2, 3]</tspan></text>
-    <path d="M160 226 V248 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none" />
-    <rect x="16" y="258" width="288" height="52" rx="12" fill="#eef5fc" stroke="#245880" stroke-width="2" />
-    <text x="160" y="288" font-size="20" font-weight="400" fill="#245880" text-anchor="middle"><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan><tspan> → result: [2]</tspan></text>
-    <text x="160" y="354" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Possible optimized region</tspan></text>
-    <rect x="16" y="374" width="288" height="112" rx="12" fill="#eef8f2" stroke="#206757" stroke-width="2" />
-    <text x="160" y="404" font-size="20" font-weight="400" fill="#206757" text-anchor="middle"><tspan>add → ReLU → </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">mean</tspan></text>
-    <text x="160" y="434" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>May avoid intermediates</tspan></text>
-    <text x="160" y="464" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Result still has </tspan><tspan font-family="ui-monospace, monospace" font-weight="700">shape</tspan><tspan> [2]</tspan></text>
-    <text x="160" y="526" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Possible grouping, not fixed</tspan></text>
-    <text x="160" y="562" font-size="20" font-weight="400" fill="#24343d" text-anchor="middle"><tspan>Compile cost precedes reuse</tspan></text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 880" role="img" aria-labelledby="pt-compilation-title pt-compilation-desc" style="max-width: 400px; margin-inline: auto">
+  <title id="pt-compilation-title">Two separate kernels or one fused kernel</title>
+  <desc id="pt-compilation-desc">For multiply by two then add three, eager CUDA execution normally uses two kernels with tensor a written to and read from global memory between them. A possible fused kernel reads x, performs both calculations and writes b without storing the full intermediate tensor a. Arrows show value flow, not time or measured performance.</desc>
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="22" fill="#24343d" text-anchor="middle">
+    <text x="180" y="28" font-weight="700">Eager: two kernels</text>
+    <rect x="20" y="48" width="320" height="56" rx="10" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+    <text x="180" y="82">x in GPU global memory</text>
+    <path d="M180 108 V132 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="140" width="320" height="56" rx="10" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+    <text x="180" y="174">Kernel 1: multiply by 2</text>
+    <path d="M180 200 V224 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="232" width="320" height="76" rx="10" fill="#fff5e4" stroke="#795b28" stroke-width="2"/>
+    <text x="180" y="262">a in GPU global memory</text>
+    <text x="180" y="292">Written, then read</text>
+    <path d="M180 312 V336 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="344" width="320" height="56" rx="10" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+    <text x="180" y="378">Kernel 2: add 3</text>
+    <path d="M180 404 V428 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="436" width="320" height="56" rx="10" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+    <text x="180" y="470">b in GPU global memory</text>
+    <text x="180" y="540" font-weight="700">Possible fusion: one kernel</text>
+    <rect x="20" y="560" width="320" height="56" rx="10" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+    <text x="180" y="594">x in GPU global memory</text>
+    <path d="M180 620 V644 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="652" width="320" height="88" rx="10" fill="#eef8f2" stroke="#206757" stroke-width="2"/>
+    <text x="180" y="686">Multiply by 2, then add 3</text>
+    <text x="180" y="718">No full tensor a stored</text>
+    <path d="M180 744 V768 m-6 -8 l6 8 l6 -8" stroke="#206757" stroke-width="2" fill="none"/>
+    <rect x="20" y="776" width="320" height="56" rx="10" fill="#eef5fc" stroke="#245880" stroke-width="2"/>
+    <text x="180" y="810">b in GPU global memory</text>
+    <text x="180" y="868">Same calculations and shape</text>
   </g>
 </svg>

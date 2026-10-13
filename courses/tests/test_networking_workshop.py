@@ -43,13 +43,18 @@ def test_networking_profiles_are_one_factor_and_fail_on_conflicts():
 def test_nccl_launcher_help_and_allocation_guard():
     script = ROOT / "advanced-gpu-communication/slurm/10_nccl_tests_report.sbatch"
     help_run = subprocess.run(
-        ["bash", str(script), "--help"], capture_output=True, text=True, check=False
+        ["bash", str(script), "--help"],
+        cwd=script.parent.parent,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert help_run.returncode == 0
-    assert "MPI" in help_run.stdout
+    assert "--profiler" in help_run.stdout
     env = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_")}
     run = subprocess.run(
         ["bash", str(script), "default"],
+        cwd=script.parent.parent,
         env=env,
         capture_output=True,
         text=True,

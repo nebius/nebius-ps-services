@@ -132,6 +132,7 @@ def simulate(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -155,6 +156,7 @@ def main() -> None:
     }
     if not all(checks.values()):
         raise SystemExit("Scheduling comparison lost work or request completion")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="28_continuous_batching",

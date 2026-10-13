@@ -48,14 +48,17 @@ def main() -> None:
         default=4,
         help="Batch rows of synthetic operator work, not concurrent service requests.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be positive")
     torch = load_torch()
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
     hidden = 256 if args.workload == "small" else 1_024
+    # Create the synthetic tensors used by this experiment.
     weight = torch.randn((hidden, hidden), device="cuda", dtype=torch.bfloat16)
 
     def incremental_peak(operation: object) -> int:
@@ -63,6 +66,7 @@ def main() -> None:
         baseline = int(torch.cuda.memory_allocated())
         torch.cuda.reset_peak_memory_stats()
         operation()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         return int(torch.cuda.max_memory_allocated()) - baseline
 
@@ -148,6 +152,7 @@ def main() -> None:
                 "finite": finite,
             }
         )
+    # Save the actual measurements together with their correctness checks.
     target_path = write_result(
         args,
         lab_id="25_workload_metrics",

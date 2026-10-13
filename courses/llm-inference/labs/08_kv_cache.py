@@ -22,10 +22,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.set_defaults(warmup=1, iterations=3)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
 
     with torch.inference_mode():
@@ -35,6 +37,7 @@ def main() -> None:
         qkv = torch.nn.Linear(
             hidden, 3 * hidden, bias=False, device="cuda", dtype=torch.bfloat16
         )
+        # Create the synthetic tensors used by this experiment.
         values = torch.randn(
             (batch, prompt + generated, hidden), device="cuda", dtype=torch.bfloat16
         )
@@ -110,6 +113,7 @@ def main() -> None:
             )
         )
     cache_bytes = 2 * batch * heads * (prompt + generated) * head_dim * 2
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="08_kv_cache",

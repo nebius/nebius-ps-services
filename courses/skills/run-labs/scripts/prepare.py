@@ -71,15 +71,15 @@ for row in q['units']:
  proofs=[]
  for selection in row['preparation']:
   try:
-   activation=subprocess.run([sys.executable,'-B','-E','-s',str(target/'tools/course_runtime.py'),'shell','--course-root',str(target),'--launcher',selection['launcher']],capture_output=True,text=True,timeout=30)
+   activation=subprocess.run([sys.executable,'-B','-E','-s',str(target/'tools/course_runtime.py'),'shell','--course-root',str(target),'--runtime',selection['runtime']],capture_output=True,text=True,timeout=30)
    if activation.returncode:
     raise ValueError(activation.stderr.strip() or 'Native runtime activation failed')
-   bound,record=runtime.load(target,selection['launcher'],launcher=True)
+   bound,record=runtime.load(target,selection['runtime'],runtime_id=True)
    if record['id']!=selection['runtime']:
     raise ValueError('Prepared runtime differs from the frozen selection')
   except (ValueError,FileNotFoundError) as exc:
    print(json.dumps({'error':str(exc)}));sys.exit(1)
-  proofs.append({'launcher':selection['launcher'],'runtime':record['id'],'fingerprint':record['fingerprint']})
+  proofs.append({'launcher':selection['launcher'],'stage':selection['stage'],'runtime':record['id'],'fingerprint':record['fingerprint']})
  result.append({'key':row['key'],'profile':row['profile'],'remote_root':str(target),'prepared_root':str(prepared),'runtimes':proofs})
 print(json.dumps({'source_sha256':q['source_sha256'],'units':result}))
 """
@@ -95,11 +95,11 @@ def validate_proof(plan, proof):
         raise ValueError("Prepared runtime proof does not cover every campaign unit")
     for row in rows:
         unit = expected[row["key"], row["profile"]]
-        required = {(r["launcher"], r["runtime"]) for r in unit["preparation"]}
+        required = {(r["launcher"], r["stage"], r["runtime"]) for r in unit["preparation"]}
         observed = row.get("runtimes", [])
         if (
             len(observed) != len(required)
-            or {(r["launcher"], r["runtime"]) for r in observed} != required
+            or {(r["launcher"], r["stage"], r["runtime"]) for r in observed} != required
             or any(not isinstance(r.get("fingerprint"), str) or not re.fullmatch(r"[a-f0-9]{64}", r["fingerprint"]) for r in observed)
             or not Path(row.get("prepared_root", "")).is_absolute()
             or Path(row["remote_root"]).name != unit["course"]

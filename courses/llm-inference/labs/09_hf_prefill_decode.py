@@ -58,6 +58,7 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--new-tokens", type=int, default=None)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
@@ -163,6 +164,7 @@ def main() -> None:
     with torch.inference_mode():
         for _ in range(args.warmup):
             run_request(record_timings=False)
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         generated_token_counts = []
         for _ in range(args.iterations):
@@ -172,6 +174,7 @@ def main() -> None:
     )
     if not generated_requested_token_count:
         raise SystemExit("Generated token count diverged from --new-tokens.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="09_hf_prefill_decode",

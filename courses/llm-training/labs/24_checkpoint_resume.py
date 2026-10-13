@@ -34,12 +34,15 @@ def make_rng_language_batch(
 def step(
     torch: object, model: object, optimizer: object, inputs: object, labels: object
 ) -> float:
+    # Clear the previous step’s gradients before differentiating again.
     optimizer.zero_grad(set_to_none=True)
     logits = model(inputs)
     loss = torch.nn.functional.cross_entropy(
         logits.reshape(-1, logits.shape[-1]), labels.reshape(-1)
     )
+    # Differentiate the loss to populate parameter gradients.
     loss.backward()
+    # Update the parameters using the gradients from this step.
     optimizer.step()
     return float(loss.detach())
 
@@ -55,10 +58,12 @@ def move_optimizer_state(torch: object, optimizer: object, device: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     torch.use_deterministic_algorithms(True)
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -130,6 +135,7 @@ def main() -> None:
         raise SystemExit(
             "Checkpoint resume did not reproduce the next loss and parameter update."
         )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="24_checkpoint_resume",

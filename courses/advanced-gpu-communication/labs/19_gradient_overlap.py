@@ -38,11 +38,13 @@ def main() -> None:
         default=None,
         help="Two or more BF16 gradient bucket sizes in MiB.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     bucket_mib = bucket_sizes(args.workload, args.bucket_mib)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     rank, world_size, local_rank = init_nccl(torch)
     try:
@@ -75,6 +77,7 @@ def main() -> None:
                     parameter.register_post_accumulate_grad_hook(make_hook(index))
                 )
             loss = bucket_loss(parameters, seeds)
+            # Differentiate the loss to populate parameter gradients.
             loss.backward()
             if overlap:
                 for work in pending:
@@ -95,7 +98,9 @@ def main() -> None:
                 parameter.grad.div_(world_size)
             for handle in handles:
                 handle.remove()
+            # Wait for queued GPU work to finish at this measurement boundary.
             torch.cuda.synchronize()
+            # Create explicit input values on the selected device.
             elapsed = torch.tensor(
                 (time.perf_counter() - step_started) * 1_000,
                 device=device,
@@ -165,6 +170,7 @@ def main() -> None:
                 "gradient_validation": checks,
             }
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="19_gradient_overlap",

@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
     parser.add_argument("--microbatch", type=int, choices=(1, 2, 4, 8), default=1)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch, rank, world, local, env = initialize(args.seed)
@@ -35,6 +36,7 @@ def main():
         local_batch, accumulation = batch_geometry(global_batch, world, args.microbatch)
         # Identical global examples and model on every rank establish a full-batch reference.
         x = torch.randn(global_batch, width, device="cuda")
+        # Create the synthetic tensors used by this experiment.
         target = torch.randn(global_batch, width, device="cuda")
         model = torch.nn.Sequential(
             torch.nn.Linear(width, width),
@@ -47,6 +49,7 @@ def main():
         reference_model = copy.deepcopy(model)
         before = tuple(p.detach().clone() for p in model.parameters())
         reference_loss = torch.nn.functional.mse_loss(reference_model(x), target)
+        # Differentiate the loss to populate parameter gradients.
         reference_loss.backward()
         torch.optim.SGD(
             reference_model.parameters(), lr=0.01, foreach=False, fused=False
@@ -66,6 +69,7 @@ def main():
         def operation():
             # Controlled replay includes the same reset cost in both variants.
             model.load_state_dict(initial)
+            # Clear the previous step’s gradients before differentiating again.
             optimizer.zero_grad(set_to_none=True)
             loss_sum.zero_()
             for index in range(accumulation):
@@ -84,6 +88,7 @@ def main():
                     with evidence_phase("backward"):
                         loss.backward()
             with evidence_phase("optimizer"):
+                # Update the parameters using the gradients from this step.
                 optimizer.step()
 
         torch.cuda.reset_peak_memory_stats()
@@ -102,6 +107,7 @@ def main():
         loss = loss_sum.clone()
         torch.distributed.all_reduce(loss)
         loss /= world
+        # Create explicit input values on the selected device.
         peak = torch.tensor(
             torch.cuda.max_memory_allocated(), device="cuda", dtype=torch.int64
         )

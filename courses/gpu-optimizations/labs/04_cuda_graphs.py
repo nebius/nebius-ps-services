@@ -20,13 +20,16 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 2_048 if args.workload == "small" else 8_192
     batch = 32 if args.workload == "small" else 128
+    # Create the synthetic tensors used by this experiment.
     static_input = torch.randn((batch, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
 
@@ -58,6 +61,7 @@ def main() -> None:
     correct = bool(torch.allclose(reference, captured_output, rtol=1e-2, atol=1e-2))
     if not correct:
         raise SystemExit("CUDA Graph replay did not match eager execution.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="04_cuda_graphs",

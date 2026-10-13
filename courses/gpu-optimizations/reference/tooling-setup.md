@@ -1,6 +1,6 @@
 # Diagnostic tooling reference
 
-shared environment setup owns the shared installation and readiness checks for Systems, Compute, and private Grafana. Use the same qualified versions throughout the courses. Soperator supplies the existing DCGM collectors, VMAgent, and local VictoriaMetrics database; do not deploy another collector or database for these exercises.
+The [Lab Guide](../../lab-guide.html#lab-preparation-scripts) owns installation and readiness checks for Systems, Compute and private Grafana. Use the same qualified versions throughout the courses. Soperator supplies the existing DCGM collectors, VMAgent, and local VictoriaMetrics database; do not deploy another collector or database for these exercises.
 
 PyTorch Profiler remains useful for operator dispatch in the advanced labs. Use the explicit external-only branch when collecting a separate Nsight trace, so two CUDA profilers do not compete for the same process. Profiling, sanitizers, and telemetry answer different questions; confirm an optimization with repeated unprofiled runs and the lab's correctness contract.
 

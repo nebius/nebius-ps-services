@@ -1,5 +1,7 @@
 """Guard prerequisite-first progression and its learner-facing route."""
 
+import json
+
 from course_builder import markdown as cb_markdown, metadata as cb_metadata
 import html
 import re
@@ -165,45 +167,28 @@ def test_foundations_teaches_basic_timing_before_first_benchmark():
     entry = lesson("gpu-fundamentals", EXPECTED_ORDER["gpu-fundamentals"][0])
     explanation = entry["How it works"].lower()
     assert "cpu timer" in explanation and "cuda events" in explanation
-    concepts = lab_section("gpu-fundamentals", 1, "Concepts and code path").lower()
-    assert "warm-up" in concepts and "cuda events" in concepts
-    practice = lab_section("gpu-fundamentals", 1, "Practice")
-    assert "--workload small" in practice and "--workload large" not in practice
-    assert "--workload large" in lab_section("gpu-fundamentals", 1, "Investigate the behavior")
-    assert "README" not in practice and "Lesson" not in practice
-    assert "repack timing" in lab_section("gpu-fundamentals", 4, "Investigate the behavior")
+    run = lab_section("gpu-fundamentals", 1, "Run")
+    assert run.count("\nsbatch ") == 2 and "--workload small" in run
+    assert "--profiler all" in run
 
 
 def test_training_previews_do_not_require_advanced_execution():
-    practice = lab_section("llm-training", 32, "Practice")
-    assert "slurm/32_learning_basics.sbatch" in practice and "--device cpu" in practice
-    assert "optional CUDA alternative" in lab_section("llm-training", 32, "Investigate the behavior")
+    run = lab_section("llm-training", 32, "Run")
+    assert "slurm/32_learning_basics.sbatch" in run and "--device cpu" in run
     batching = lesson("llm-training", EXPECTED_ORDER["llm-training"][1])
     assert "logits" in batching["How it works"]
-    assert "does not execute transformer training" in lab_section(
-        "llm-training", 25, "Concepts and code path"
-    )
     local = lesson("llm-training", "Training execution optimization")
     assert "Communication overlap shortens" not in local["How it works"]
 
 
 def test_inference_starts_with_basic_engine_then_advanced_work():
-    prerequisites = lab_section("llm-inference", 30, "Before you start")
-    assert "prepared qualified engines" in prerequisites
-    assert "loopback server and client in one Slurm allocation" in prerequisites
-    practice = lab_section("llm-inference", 30, "Practice")
-    for launcher in ("30_engine_profile", "30_engine_profile.trtllm"):
-        assert f"slurm/{launcher}.sbatch" in lab_section("llm-inference", 30, "Investigate the behavior")
-    assert practice.count("\nsbatch ") == 1
-    concepts = lab_section("llm-inference", 30, "Concepts and code path")
-    assert "Both launchers own startup, bounded readiness and cleanup" in concepts
-    assert "paper exercise" in concepts
+    run = lab_section("llm-inference", 30, "Run")
+    assert "slurm/30_engine_profile.sbatch" in run and run.count("\nsbatch ") == 2
+    capabilities = json.loads((ROOT / "llm-inference/reference/execution.json").read_text())["labs"]
+    assert "trtllm" in {row["experiment"] for row in capabilities["30_engine_profile"]["variants"]}
+    assert "aiperf" in {row["experiment"] for row in capabilities["15_streaming_client"]["variants"]}
     metrics = lesson("llm-inference", EXPECTED_ORDER["llm-inference"][6])
-    # Both metrics belong here; the explanation should distinguish them.
     assert all(term in metrics["How it works"] for term in ("ITL", "TPOT"))
-    practice = lab_section("llm-inference", 15, "Practice")
-    assert "slurm/15_streaming_client.sbatch" in practice
-    assert "slurm/15_streaming_client.aiperf.sbatch" in lab_section("llm-inference", 15, "Investigate the behavior")
 
 
 def test_cuda_safety_practice_uses_completed_vector_lab():
@@ -219,7 +204,7 @@ def test_cuda_safety_practice_uses_completed_vector_lab():
     capstone = next(row for row in data["labs"] if row["path"] == "labs/12_capstone.cu")
     assert safety in vector["lessons"]
     assert safety not in capstone["lessons"]
-    text = lab_section("custom-cuda-kernels", 1, "Practice")
+    text = lab_section("custom-cuda-kernels", 1, "Run")
     assert "01_vector_add" in text
 
 
@@ -243,7 +228,7 @@ def test_two_node_preflight_is_assigned_only_after_local_foundations(
     )
     assert preflight["lessons"] == [distributed_lesson]
     if course == "gpu-optimizations":
-        assert "two_node" not in lab_section("gpu-optimizations", 1, "Practice")
+        assert "two_node" not in lab_section("gpu-optimizations", 1, "Run")
     assert "setup_guide" not in metadata
 
 

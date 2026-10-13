@@ -3,6 +3,7 @@
 from __future__ import annotations
 import html
 from .config import CATALOG_ENTRIES, GUIDE_TITLE, LICENSE_PATH, catalog_destination
+from .links import link_attributes
 
 
 def license_footer() -> str:
@@ -30,10 +31,10 @@ def course_switcher(course_name: str, metadata: dict[str, dict]) -> str:
             kind = "guide" if name == "lab-guide" else "course"
             item = f'<span aria-current="page" data-{kind}="{name}">{title}<span class="current-label">Current {kind}</span></span>'
         else:
-            item = f'<a href="{prefix}{catalog_destination(name)}">{title}</a>'
+            item = f'<a {link_attributes(prefix + catalog_destination(name))}>{title}</a>'
         items.append(f"<li>{item}</li>")
     return f"""<div class="catalog-navigation">
-<a class="catalog-home" href="{prefix}index.html">← Course catalog</a>
+<a class="catalog-home" {link_attributes(prefix + "index.html")}>← Course catalog</a>
 <details class="course-switcher"><summary>Courses and guide</summary>
 <ul>{"".join(items)}</ul></details></div>"""
 

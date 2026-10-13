@@ -2,11 +2,12 @@
 
 import ast
 import copy
-import html
 import json
 import re
 
 import pytest
+
+from html_code import code_blocks
 
 from course_builder import config, metadata, pages, visuals
 from validate_text_course import validate, validate_document
@@ -26,7 +27,7 @@ def test_complete_reading_route_and_exact_source_publication():
         COURSE / "COURSE.md", "lessons-only"
     )
     assert title == "PyTorch for GPU Performance Engineering"
-    assert len(lessons) == 18
+    assert len(lessons) == 16
     assert data["estimated_guided_hours"] == 3
     assert data["lessons"] == [
         {"id": number, "title": item["title"]} for number, item in enumerate(lessons, 1)
@@ -56,7 +57,7 @@ def test_complete_reading_route_and_exact_source_publication():
         for snippet in snippets:
             ast.parse(snippet)
             assert "#" in snippet
-            assert html.escape(snippet) in section
+            assert snippet in code_blocks(section)
         # Render each complete field, retaining every paragraph, table and example.
         for field in ("Objective", "Mental model"):
             assert pages.block(lesson[field]) in section
@@ -173,7 +174,7 @@ def test_multiple_contextual_figures_keep_individual_homes_and_notation():
         # Glossary entry headings are separate from explanatory strong text.
         assert f"<strong>{meaning}</strong>" not in document
     assert (
-        'Keep <a href="../gpu-performance-tools/index.html">GPU Performance Tools</a> nearby'
+        'Keep <a target="_blank" rel="noopener noreferrer" href="../gpu-performance-tools/index.html">GPU Performance Tools</a> nearby'
         not in document
     )
 

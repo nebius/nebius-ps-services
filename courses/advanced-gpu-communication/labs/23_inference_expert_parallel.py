@@ -21,6 +21,7 @@ from inference_common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -64,6 +65,7 @@ def main() -> None:
 
         for _ in range(args.warmup):
             route()
+        # Wait for queued GPU work to finish at this measurement boundary.
         torch.cuda.synchronize()
         samples: list[float] = []
         for _ in range(args.iterations):
@@ -80,6 +82,7 @@ def main() -> None:
             expected[cursor : cursor + count].mul_(destination + 1)
             cursor += count
         correct = bool(torch.equal(returned, expected))
+        # Create explicit input values on the selected device.
         correct_tensor = torch.tensor(int(correct), device="cuda")
         torch.distributed.all_reduce(correct_tensor, op=torch.distributed.ReduceOp.MIN)
         global_expert_token_load = [count * world_size for count in send_counts]
@@ -88,6 +91,7 @@ def main() -> None:
                 raise SystemExit(
                     "Expert routing did not return the expected rank-specific outputs."
                 )
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="23_inference_expert_parallel",

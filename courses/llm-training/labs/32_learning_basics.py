@@ -16,6 +16,7 @@ from course_evidence import annotated_operation
 
 
 def run_experiment(torch: Any, device: str) -> dict[str, Any]:
+    # Create explicit input values on the selected device.
     inputs = torch.tensor([1.0, 2.0], device=device)
     targets = 2 * inputs
     weight = torch.nn.Parameter(torch.tensor(0.0, device=device))
@@ -23,18 +24,22 @@ def run_experiment(torch: Any, device: str) -> dict[str, Any]:
     loss_before = float(((weight * inputs - targets) ** 2).mean().detach())
     first_gradient = None
     for step in range(30):
+        # Clear the previous step’s gradients before differentiating again.
         optimizer.zero_grad(set_to_none=True)
         predictions = weight * inputs
         loss = ((predictions - targets) ** 2).mean()
+        # Differentiate the loss to populate parameter gradients.
         loss.backward()
         if step == 0:
             first_gradient = float(weight.grad)
+        # Update the parameters using the gradients from this step.
         optimizer.step()
     optimizer.zero_grad(set_to_none=True)
     trained = weight.detach().clone()
     with torch.inference_mode():
         loss_after = float(((weight * inputs - targets) ** 2).mean())
         held_out = weight * torch.tensor(3.0, device=device)
+    # Compare the computed values with the numerical reference.
     torch.testing.assert_close(
         weight, torch.tensor(2.0, device=device), rtol=1e-5, atol=1e-6
     )
@@ -61,6 +66,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, include_measurement=False)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
@@ -71,6 +77,7 @@ def main() -> None:
     )
     operation = annotated_operation(run_experiment, "lab_workload")
     measurements = operation(torch, args.device)
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="32_learning_basics",

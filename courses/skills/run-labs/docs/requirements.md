@@ -249,5 +249,38 @@ Run portable/Codex/Claude structural and target tests plus disposable npx parity
 
 <!-- /REQUIREMENT: REQ-008 -->
 
+<!-- REQUIREMENT: REQ-009 status=satisfied priority=P1 type=feature -->
+### REQ-009: Consume consolidated course launchers and stage results
+
+#### User Story
+
+A campaign operator uses the same canonical lab launcher as a learner while retaining exact-job evidence and clean measurement publication.
+
+#### Acceptance Criteria
+
+- AC-001: Freeze canonical launcher argv with supported experiment, profiler, device and sanitizer selectors; preserve all 110 recipes and their original comparison scopes.
+- AC-002: Preparation resolves each selected stage runtime, includes applicable optional experiments only, and verifies stage/runtime proof coverage without installing dependencies.
+- AC-003: Use native-jobs/v3 for new execution plans and reject earlier execution without rewriting historical inspection or cancellation evidence.
+- AC-004: Collect the exact dispatched job tree including result.json and isolated stages, but publish only eligible authoritative original measurements; instrumented diagnostics and the reader aggregate are not clean benchmark records.
+- AC-005: Keep source and project-installed payloads aligned, with no retired-launcher wrappers or legacy execution path.
+
+#### Negative Criteria
+
+- NC-001: This source alignment does not execute a live campaign, install lab dependencies, publish results, or change Git state.
+
+#### Validation Method
+
+Check all recipe selections, source/installed parity, original-schema filtering and preparation proof wiring.
+
+#### Test Method
+
+Use read-only all-course dry-runs and isolated campaign/runtime fixtures, including sanitizer and explicit CPU controls.
+
+#### Evaluation Method
+
+Retain source-owned evaluation cases; local evidence does not qualify a live cluster.
+
+<!-- /REQUIREMENT: REQ-009 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

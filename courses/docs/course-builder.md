@@ -18,6 +18,8 @@ courses/
 │       ├── config.py               # course registry and presentation constants
 │       ├── metadata.py             # canonical parsing and inventory
 │       ├── markdown.py             # supported Markdown and explicit link policy
+│       ├── code.py                 # lossless build-time comment coloring
+│       ├── links.py                # shared new-tab navigation attributes
 │       ├── visuals.py              # diagrams and shared passive SVG validation
 │       ├── content.py              # reusable lesson, lab and guide markup
 │       ├── downloads.py            # ordinary external download links
@@ -40,7 +42,7 @@ source listings, so saving one HTML file preserves offline reading. Downloading
 ZIPs requires the companion files or the website. Soperator remains text-only
 and has no lab downloads. GPU Performance Tools is a reference-only course with
 contextual diagrams and no exercises or result archives. PyTorch for GPU Performance
-Engineering uses a lessons-only profile with eighteen diagram-equipped lessons,
+Engineering uses a lessons-only profile with sixteen diagram-equipped lessons,
 commented examples and no Practice sections, labs, runtime files or archives.
 Its metadata declares the ordered lesson identities and 3 guided hours;
 the native reading validator checks that profile without weakening the other
@@ -59,6 +61,27 @@ PyTorch for GPU Performance Engineering, GPU Fundamentals, GPU Performance
 Optimization, LLM Training, LLM Inference, Custom CUDA Kernels and Advanced Labs.
 The shared registry owns display numbers; existing lesson and lab numbers remain
 unchanged. Reading packages never enter the six-course runtime/preparation registry.
+
+### Code comments
+
+All course pages and the Lab Guide use saturated burnt orange (`#b34700`) for code comments.
+The shared stylesheet gives this color at least 4.5:1 contrast against the code
+background. Styling is embedded and works offline without JavaScript or packages.
+
+Markdown fences declare `python`, `bash`, `cpp`, `cuda` or `promql`; complete
+source listings use `.py`, `.cu` or `.cpp` extensions. Python uses standard-library
+tokenization; the other languages use scanners that distinguish comments from
+quoted text. Comment spans wrap slices of the original source, preserving
+indentation, line breaks, source attributes and copied text. Python docstrings,
+inline code, unlabelled fences and explicit `text` fences keep ordinary styling.
+Shell here-document bodies are literal data, not shell comments.
+
+An unsupported declared language or lexical failure stops the build before
+outputs are replaced. Errors identify the source path and the line within a
+Markdown fragment, with lesson or lab-guide sections named when applicable.
+When adding another language, extend the shared renderer and its regression tests;
+do not edit generated HTML or add a browser highlighter. Tests compare parsed code
+text rather than raw HTML markup.
 
 ## Diagram placement
 
@@ -87,7 +110,15 @@ Each practical course has a **Download results** subsection under **Practical la
 - **Download all lab results:** followed on a new line by the link
   **Grafana dashboards, Small and Large results**.
 - **Setup the lab environment:** followed on a new line by **Lab setup guide**,
-  which opens the shared `../lab-guide.html` page.
+  which opens the shared `../lab-guide.html` page in a new tab.
+
+All links to other pages use `target="_blank"` and `rel="noopener noreferrer"`,
+including references, cross-course practice links, catalog cards and menus.
+Fragment-only links stay in the current tab; explicit results ZIP downloads
+keep native download behavior. The shared anchor helper escapes destinations
+without expanding the existing allowlists. Build preflight rejects missing or
+unsafe new-tab attributes and new-tab targets on fragments or downloads.
+This uses ordinary HTML; it adds no scripts or automatic network requests.
 
 These two links replace the repeated setup/run/online-guide paragraph and
 introductory dashboard reminder. Lab-specific dashboard pointers remain beside
@@ -201,3 +232,9 @@ content deletion. Archive export also enforces the per-file limit.
 Recheck both as evidence grows. Local size and browser validation do not establish
 successful deployment; verify the actual Pages build and deployed revision after
 merge.
+
+Practical lab rendering follows the compact contract: purpose, complete source
+disclosure, optional collapsed diagrams, two submissions and an exact-job result
+box. Source is read from the executable file; authored guides never duplicate
+it. Reading-only profiles do not acquire lab markup. Native launchers and
+`reference/execution.json` share the selection contract described in the Lab Guide.

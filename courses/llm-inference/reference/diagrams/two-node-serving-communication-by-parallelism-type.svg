@@ -51,5 +51,5 @@
 <text x="560" y="315">forward activation send</text>
 <text x="560" y="439">dispatch + combine all-to-all</text>
 </g>
-<text x="560" y="555" text-anchor="middle">With one H100 per node, every drawn cross-rank edge uses the inter-node fabric.</text>
+<text x="560" y="555" text-anchor="middle">With one participating GPU rank per node, every drawn cross-rank edge uses the inter-node fabric.</text>
 </svg>

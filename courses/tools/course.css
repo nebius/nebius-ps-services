@@ -2,6 +2,7 @@
   color-scheme: light;
   --ink: #24343d;
   --muted: #52626b;
+  --code-comment: #b34700;
   --paper: #f7f9f7;
   --card: #ffffff;
   --line: #dbe5e1;
@@ -72,6 +73,7 @@ code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; backgroun
 strong code { font-weight: inherit; }
 pre { margin: 1rem 0; padding: 1rem; background: #f4f7f9; border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-width: 100%; }
 pre code { padding: 0; background: none; overflow-wrap: normal; }
+pre code .code-comment { color: var(--code-comment); }
 .table-scroll { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { padding: .75rem .85rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 14em; overflow-wrap: normal; }
@@ -94,6 +96,9 @@ tbody tr:last-child td { border-bottom: 0; }
 figure { margin: 1.5rem 0 2rem; padding: .75rem; border: 1px solid var(--line); border-radius: 10px; background: white; min-width: 0; width: 100%; }
 .guide-image { max-width: 640px; margin-inline: auto; }
 .guide-image img { display: block; width: 100%; height: auto; }
+.comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 1.5rem; margin: 1.5rem 0; }
+.comparison-panel { min-width: 0; }
+.comparison-panel > :first-child { margin-top: 0; }
 svg { display: block; width: 100%; max-width: 100%; height: auto; font: 18px Arial, Helvetica, sans-serif; color: var(--ink); fill: var(--ink); }
 svg .diagram-label { font-size: 15px; }
 svg .diagram-small { font-size: 13px; }
@@ -140,3 +145,9 @@ footer { border-top: 1px solid var(--line); padding: 1rem .4rem; color: var(--mu
   main > section { border: 0; padding: 0; box-shadow: none; }
   pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+
+/* Keep the short result instructions visible beneath the source disclosures. */
+.lab-results { margin-top: 1.2rem; padding: 1rem; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.lab-results h4 { margin-top: 0; }
+.lab-diagram { margin: 1rem 0; border: 1px solid var(--line); border-radius: 8px; padding: .65rem 1rem; }
+.lab-diagram > summary { cursor: pointer; color: var(--blue); }

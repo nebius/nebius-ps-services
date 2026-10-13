@@ -73,15 +73,9 @@ def test_native_job_preserves_workload_argv_and_private_outputs(
     assert (app["tool"], app["capture"]) == (mode or "none", "1" if mode else "0")
     assert app["workload"] == workload
     job = tmp_path / "results" / LAB / "jobs/123"
-    assert Path(app["results"]) == job / "results"
-    assert sorted(p.name for p in job.iterdir()) == [
-        "artifacts",
-        "cache",
-        "logs",
-        "profiles",
-        "results",
-    ]
-    assert all(p.stat().st_mode & 0o777 == 0o700 for p in [job, *job.iterdir()])
+    assert Path(app["results"]) == job / "stages" / (mode or "normal") / "results"
+    assert sorted(p.name for p in job.iterdir()) == ["result.json", "stages"]
+    assert all(p.stat().st_mode & 0o777 == (0o700 if p.is_dir() else 0o600) for p in job.rglob("*"))
     if mode:
         flags = json.loads((tmp_path / "profiler.json").read_text())
         assert "python-spy" in " ".join(flags)
@@ -184,7 +178,7 @@ def test_all_published_job_references_are_native_and_belong_to_the_lab():
                     old not in source
                     for old in ("profile_lab.py", "submit_lab.py", "server_capture.py")
                 )
-                assert f"results/{lab}/jobs/$SLURM_JOB_ID" in source
+                assert f"tools/course_job.py --lab {lab} --launcher" in source
                 assert (
                     f"labs/{lab}.py" in source
                     or path.parents[1].name == "custom-cuda-kernels"

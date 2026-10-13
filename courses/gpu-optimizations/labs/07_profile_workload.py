@@ -25,12 +25,15 @@ def main() -> None:
         action="store_true",
         help="Run NVTX regions without nesting the PyTorch profiler.",
     )
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     width = 2_048 if args.workload == "small" else 8_192
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn((64, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
 
@@ -43,6 +46,7 @@ def main() -> None:
 
     for _ in range(args.warmup):
         workload()
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     profiler = None
     loss = None
@@ -86,6 +90,7 @@ def main() -> None:
         if profiler is None
         else profiler.key_averages().table(sort_by="self_cuda_time_total", row_limit=8)
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="07_profile_workload",

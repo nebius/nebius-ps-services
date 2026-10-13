@@ -1,11 +1,12 @@
 """The shared tools reference teaches passive, local, contextual diagrams."""
 
 import ast
-import html
 import json
 import re
 
 import pytest
+
+from html_code import code_blocks
 from course_builder import metadata, pages, visuals
 from test_course_content_contract import ROOT
 
@@ -74,7 +75,7 @@ def test_nvtx_snippet_is_valid_python_and_published_verbatim():
     document = (COURSE / "index.html").read_text()
     for code in snippets:
         ast.parse(code)
-        assert html.escape(code) in document
+        assert code in code_blocks(document)
 
 
 def test_profiler_flags_and_monitoring_flow_are_explained_once():

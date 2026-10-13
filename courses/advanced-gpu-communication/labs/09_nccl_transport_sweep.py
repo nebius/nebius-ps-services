@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--variant", choices=tuple(PROFILES), default="default")
     parser.add_argument("--min-bytes", type=int, default=8)
     parser.add_argument("--max-bytes", type=int, default=64 * 2**20)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     if not 1 <= args.warmup <= 100 or not 3 <= args.iterations <= 1000:
@@ -73,6 +74,7 @@ def main() -> None:
             correct = True
             for iteration in range(args.warmup + args.iterations):
                 values.fill_(rank + 1)
+                # Wait for queued GPU work to finish at this measurement boundary.
                 torch.cuda.synchronize()
                 torch.distributed.barrier()
                 torch.cuda.synchronize()
@@ -87,6 +89,7 @@ def main() -> None:
                     samples.append(float(start.elapsed_time(stop)))
                     wall_samples.append(wall_ms)
                 correct = correct and bool(torch.all(values == expected).item())
+            # Create explicit input values on the selected device.
             sample_tensor = torch.tensor(
                 samples, dtype=torch.float64, device=values.device
             )
@@ -107,6 +110,7 @@ def main() -> None:
                 )
             )
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="09_nccl_transport_sweep",

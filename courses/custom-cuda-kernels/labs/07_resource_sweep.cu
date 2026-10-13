@@ -30,6 +30,7 @@ void report_case(const float* input, float* output, std::size_t count, int threa
       &active_blocks, resource_kernel<state_count>, threads, 0));
   cudaFuncAttributes attributes{};
   CUDA_CHECK(cudaFuncGetAttributes(&attributes, resource_kernel<state_count>));
+  // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
   const auto timing = benchmark_cuda([&] {
     resource_kernel<state_count><<<blocks, threads>>>(input, output, count);
   });
@@ -41,9 +42,12 @@ void report_case(const float* input, float* output, std::size_t count, int threa
     }
     expected += value;
   }
+  // Allocate host inputs and reference/output storage.
   std::vector<float> observed(2);
+  // Copy completed device output back for validation outside kernel timing.
   CUDA_CHECK(cudaMemcpy(&observed[0], output, sizeof(float), cudaMemcpyDeviceToHost));
   CUDA_CHECK(cudaMemcpy(&observed[1], output + count - 1, sizeof(float), cudaMemcpyDeviceToHost));
+  // Check the GPU output against the host reference before accepting timing.
   check_close({expected, expected}, observed);
   std::cout << "case threads=" << threads
             << " state_values=" << state_count
@@ -62,7 +66,9 @@ int main(int argc, char** argv) {
     const std::size_t count = problem_size(argc, argv, 4096, 1U << 24);
     const auto properties = require_course_gpu();
     std::vector<float> input(count, 0.01F);
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     std::cout << "schema=gpu-course-result/v1\nlab_id=07_resource_sweep\n";
     for (const int threads : {64, 128, 256, 512}) {

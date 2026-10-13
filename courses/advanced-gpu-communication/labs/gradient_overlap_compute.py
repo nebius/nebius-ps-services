@@ -20,9 +20,8 @@ def require_single_process() -> None:
     for name, expected in (
         ("WORLD_SIZE", 1),
         ("LOCAL_WORLD_SIZE", 1),
-        ("SLURM_NTASKS", 1),
-        ("SLURM_JOB_NUM_NODES", 1),
-        ("SLURM_NNODES", 1),
+        ("SLURM_STEP_NUM_TASKS", 1),
+        ("SLURM_STEP_NUM_NODES", 1),
         ("RANK", 0),
         ("LOCAL_RANK", 0),
         ("SLURM_PROCID", 0),

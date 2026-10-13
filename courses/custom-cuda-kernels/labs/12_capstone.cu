@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
   try {
     bool small = false, profile_seen = false;
     std::string variant_order;
+    // Read workload and kernel controls before allocating buffers.
     for (int index = 1; index < argc; ++index) {
       const std::string argument(argv[index]);
       if (argument == "--workload") small = parse_small_profile(argc, argv, index, profile_seen);
@@ -31,15 +32,19 @@ int main(int argc, char** argv) {
     }
     require_course_gpu();
     const std::size_t count = small ? 4099 : 1U << 25;
+    // Allocate host inputs and reference/output storage.
     std::vector<float> input(count), expected(count), baseline_observed(count), candidate_observed(count);
     for (std::size_t index = 0; index < count; ++index) { input[index] = static_cast<float>(static_cast<int>(index % 101) - 50) / 50.0F; expected[index] = std::tanh(input[index] * 1.25F + 0.5F); }
+    // Allocate device buffers; their owners release them when this scope ends.
     DeviceBuffer<float> device_input(count), temporary(count), baseline_output(count), candidate_output(count);
+    // Copy initialized inputs to the GPU before measuring kernels.
     CUDA_CHECK(cudaMemcpy(device_input.get(), input.data(), count * sizeof(float), cudaMemcpyHostToDevice));
     constexpr int threads = 256;
     const int blocks = static_cast<int>((count + threads - 1) / threads);
     TimingSummary baseline_timing{};
     TimingSummary candidate_timing{};
     const auto measure_baseline = [&] {
+      // Warm up, then time GPU work with the shared synchronized CUDA-event helper.
       baseline_timing = benchmark_cuda([&] {
         baseline_first<<<blocks, threads>>>(device_input.get(), temporary.get(), count);
         baseline_second<<<blocks, threads>>>(temporary.get(), baseline_output.get(), count);
@@ -57,10 +62,13 @@ int main(int argc, char** argv) {
       measure_candidate();
       measure_baseline();
     }
+    // Copy completed device output back for validation outside kernel timing.
     CUDA_CHECK(cudaMemcpy(baseline_observed.data(), baseline_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(candidate_observed.data(), candidate_output.get(), count * sizeof(float), cudaMemcpyDeviceToHost));
+    // Check the GPU output against the host reference before accepting timing.
     check_close(expected, baseline_observed);
     check_close(expected, candidate_observed);
+    // Emit the measured summary for the job’s CUDA result adapter.
     print_result("12_capstone", candidate_timing, count);
     print_timing("baseline", baseline_timing);
     print_timing("candidate", candidate_timing);

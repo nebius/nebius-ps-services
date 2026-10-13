@@ -6,6 +6,84 @@ project folder.
 
 ## [Unreleased]
 
+- Retain ownership of detached lab workers after their process-group leader
+  exits, so cleanup fails the stage before another profiler starts. Restore
+  Advanced Lab 27's qualified GPU-memory comparison instructions.
+
+- Review all nine courses and align TOCs, numbered syllabus routes, glossary
+  coverage, diagram labels and compact-guide directions. Correct the prefill
+  example to include continuation, expose the CUDA capstone trial selection,
+  and provide the existing AIPerf submission route; preserve course profiles
+  and refresh source/browser review evidence.
+
+- Color embedded code comments saturated burnt orange across all nine courses and the Lab
+  Guide, preserving exact source text and offline reading through the shared
+  standard-library renderer and stylesheet. Invalid snippets identify their source
+  file and lesson or guide section in build errors.
+
+- Simplify course READMEs and supporting guides across all nine packages. Remove
+  obsolete lesson-format and implementation commentary, correct stale distributed
+  readiness references, and align practical guide titles, ordering and navigation.
+
+- Open links to other course pages, the Lab Guide and reference sites in new
+  tabs, preserving the current reading page. Keep section navigation and results
+  downloads unchanged; enforce the shared behavior in the builder and checks.
+
+- Fix consolidated lab evidence checks to accept canonical Systems submissions,
+  report actual allocation-dependent fabric scope, and fail visibly on oversized
+  JSON while preserving original results.
+
+- Simplify all 110 practical labs to source-first guides with optional diagrams,
+  two native submissions and exact-job results. Consolidate each lab's launchers
+  behind experiment/profiler selectors, isolated stages and a reader-facing JSON
+  summary; align preparation, campaign selection and measurement eligibility.
+
+- Align all nine course glossaries, terminology and course-ending guidance.
+  Correct supplied-versus-optional lab claims, fusion traffic and Advanced Labs
+  navigation; add the missing operator-profiling diagram and refresh whole-catalog
+  source, navigation and responsive-browser verification.
+
+- Replace PyTorch lessons 16–18 with one simple final lesson on torch.compile
+  and kernel fusion. Add a standalone commented example and memory-flow diagram;
+  align the 16-lesson route, navigation and validation.
+
+- Rewrite PyTorch lesson 15 as Measure GPU time with CUDA events, with a
+  function table, CPU/GPU timeline, commented matmul timer and clear warm-up
+  explanation. Distinguish submission, timestamps, waits and measured scope.
+
+- Clarify PyTorch lesson 14 with explicit batch formation and paired loop/batch
+  diagrams and code. Add responsive Markdown comparison panels, with strict
+  source validation and regenerated shared-style publications.
+
+- Clarify PyTorch lesson 13 with automatic CUDA allocation, reusable cached
+  blocks and tensor-lifetime guidance. Add a practical matmul batch example
+  and concise training, logging, OOM and cache-management habits.
+
+- Clarify PyTorch lesson 11 with separate training/validation and inference
+  diagrams and commented examples. Explain known targets, dropout and gradient
+  recording, and distinguish evaluation activity from eval() layer behavior.
+  Add a train/eval dropout comparison and prediction-oriented comments.
+
+- Pair lesson 9's neural-network and tensor-shape views in the PyTorch course.
+  Explain four input features, two hidden neurons and one output with matching
+  code, shared-weight teaching and an explicit hidden-versus-output distinction.
+  Add a matching matrix-multiplication diagram, per-layer weight/bias explanation,
+  PyTorch batch notation and the distinction between output values and tokens.
+
+- Refine PyTorch lesson 8 with a CPU/GPU memory diagram and explicit scalar
+  readback before printing. Explain CPU waits versus GPU stream dependencies
+  and connect them to concurrency, correct ordering and GPU idle time.
+
+- Extend PyTorch lesson 7 with a concise FP64-to-FP4 comparison of exponent,
+  fraction and total bits plus maximum finite values. Clarify FP8 encodings,
+  FP4 packing/scaling, PyTorch support and conditional GPU performance benefits.
+
+- Clarify GPU performance costs across all eighteen PyTorch reading lessons:
+  memory bandwidth versus capacity, memory-bound versus compute-bound work,
+  and launch, transfer and waiting costs. Add lesson 6's layout/copy comparison
+  and explicit bold `stride()` API teaching; retain concise commented examples,
+  diagrams and the lessons-only profile.
+
 - Extend PR readiness, merge settlement, post-merge verification and release
   execution waits to 10,800 seconds each. Persist verification deadlines with
   release checkpoints; only explicit resume renews budgets. Keep API timeouts,

@@ -1,0 +1,1074 @@
+{
+  "schema": "course-execution/v1",
+  "course": "llm-inference",
+  "labs": {
+    "08_kv_cache": {
+      "source": "labs/08_kv_cache.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "09_hf_prefill_decode": {
+      "source": "labs/09_hf_prefill_decode.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "10_vllm_offline": {
+      "source": "labs/10_vllm_offline.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "11_serving_client": {
+      "source": "labs/11_serving_client.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 90
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "15_streaming_client": {
+      "source": "labs/15_streaming_client.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "aiperf_none_cuda",
+          "experiment": "aiperf",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.15_streaming_client.aiperf",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 2700,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 90
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "16_model_artifact_audit": {
+      "source": "labs/16_model_artifact_audit.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.artifact-audit",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "17_sampling_semantics": {
+      "source": "labs/17_sampling_semantics.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "18_padding_bucketing": {
+      "source": "labs/18_padding_bucketing.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "20_prefix_cache_client": {
+      "source": "labs/20_prefix_cache_client.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 2400,
+          "teardown_seconds": 90
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 2400,
+          "teardown_seconds": 90
+        }
+      ]
+    },
+    "23_speculative_decoding": {
+      "source": "labs/23_speculative_decoding.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "24_sdpa_attention": {
+      "source": "labs/24_sdpa_attention.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "25_workload_metrics": {
+      "source": "labs/25_workload_metrics.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "26_kv_capacity": {
+      "source": "labs/26_kv_capacity.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "27_paged_kv": {
+      "source": "labs/27_paged_kv.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "28_continuous_batching": {
+      "source": "labs/28_continuous_batching.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "29_quantization": {
+      "source": "labs/29_quantization.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "30_engine_profile": {
+      "source": "labs/30_engine_profile.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "trtllm_none_cuda",
+          "experiment": "trtllm",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.30_engine_profile.trtllm",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.10_vllm_offline.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "32_inference_capstone": {
+      "source": "labs/32_inference_capstone.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_ncu_cuda",
+          "experiment": "default",
+          "profiler": "ncu",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 8,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 1800,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "trials_none_cuda",
+          "experiment": "trials",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "33_speculative_engine_client": {
+      "source": "labs/33_speculative_engine_client.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.33_speculative_engine_client.nsys",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 7200,
+          "teardown_seconds": 90
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.33_speculative_engine_client.nsys",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 7200,
+          "teardown_seconds": 90
+        }
+      ]
+    },
+    "34_policy_equivalence_client": {
+      "source": "labs/34_policy_equivalence_client.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.15_streaming_client.aiperf",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 90
+        },
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.15_streaming_client.aiperf",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 90
+        }
+      ]
+    },
+    "35_inference_basics": {
+      "source": "labs/35_inference_basics.py",
+      "device_option": true,
+      "variants": [
+        {
+          "key": "default_none_cuda",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cuda",
+          "default_device": false,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_nsys_cuda",
+          "experiment": "default",
+          "profiler": "nsys",
+          "device": "cuda",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 1,
+            "description": "1 node(s), 1 task(s), 1 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        },
+        {
+          "key": "default_none_cpu",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cpu",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 16,
+            "gpus_per_task": 0,
+            "description": "1 node(s), 1 task(s), 0 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 3600,
+          "teardown_seconds": 30
+        }
+      ]
+    },
+    "36_kv_tiering": {
+      "source": "labs/36_kv_tiering.py",
+      "device_option": false,
+      "variants": [
+        {
+          "key": "default_none_cpu",
+          "experiment": "default",
+          "profiler": "none",
+          "device": "cpu",
+          "default_device": true,
+          "runtime": "llm-inference.08_kv_cache.ncu",
+          "scope": {
+            "nodes": 1,
+            "tasks": 1,
+            "cpus_per_task": 1,
+            "gpus_per_task": 0,
+            "description": "1 node(s), 1 task(s), 0 GPU(s) per task"
+          },
+          "fixed_options": {},
+          "timeout_seconds": 600,
+          "teardown_seconds": 30
+        }
+      ]
+    }
+  }
+}

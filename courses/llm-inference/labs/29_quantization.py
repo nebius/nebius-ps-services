@@ -20,12 +20,15 @@ from course_evidence import annotated_operation
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
     width = 512 if args.workload == "small" else 4096
+    # Create the synthetic tensors used by this experiment.
     x = torch.randn((64, width), device="cuda", dtype=torch.bfloat16)
     weight = torch.randn((width, width), device="cuda", dtype=torch.bfloat16)
     weight_scale = weight.abs().max().clamp_min(1e-12) / 127
@@ -77,6 +80,7 @@ def main() -> None:
             iterations=args.iterations,
         )
     )
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="29_quantization",

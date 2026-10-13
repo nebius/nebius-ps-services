@@ -35,6 +35,7 @@ def measure_copy(
 ) -> float:
     for _ in range(warmup):
         destination.copy_(source, non_blocking=non_blocking)
+    # Wait for queued GPU work to finish at this measurement boundary.
     torch.cuda.synchronize()
     samples = []
     for _ in range(iterations):
@@ -46,6 +47,7 @@ def measure_copy(
 
 
 def main() -> None:
+    # Read the experiment controls before allocating inputs.
     args = parse_args()
     validate_common_args(args)
     size_mib = resolve_int_override(
@@ -54,9 +56,11 @@ def main() -> None:
         option="--size-mib",
     )
     torch = load_torch()
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     environment = require_course_gpu(torch)
     elements = size_mib * 2**20 // 4
+    # Create the synthetic tensors used by this experiment.
     pageable = torch.randn(elements, dtype=torch.float32)
     pinned = torch.empty(elements, dtype=torch.float32, pin_memory=True)
     pinned.copy_(pageable)
@@ -83,6 +87,7 @@ def main() -> None:
     correct = bool(torch.equal(destination.cpu(), pageable))
     if not correct:
         raise SystemExit("Copied data did not match the source.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="03_transfer_and_pinning",

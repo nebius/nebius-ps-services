@@ -168,16 +168,27 @@ CATALOG_COPY = {
 
 COMMON_GUIDES = (
     "README.md",
-    "GLOSSARY.md",
     "VERSIONS.md",
-    "reference/benchmark-record.md",
-    "reference/lab-mechanisms.md",
     "reference/cluster-smoke-test.md",
+    "reference/lab-mechanisms.md",
+    "reference/benchmark-record.md",
     "reference/evidence-security.md",
+    "GLOSSARY.md",
 )
 
 
 SUPPORTING_GUIDES = {"gpu-optimizations": ("reference/tooling-setup.md",)}
+
+
+GUIDE_LABELS = {
+    "README.md": "Getting started",
+    "VERSIONS.md": "Versions and environment",
+    "reference/cluster-smoke-test.md": "Readiness checks",
+    "reference/lab-mechanisms.md": "Lab mechanisms and evidence",
+    "reference/benchmark-record.md": "Benchmark worksheet",
+    "reference/evidence-security.md": "Evidence and privacy",
+    "reference/tooling-setup.md": "Diagnostic tooling reference",
+}
 
 
 FIELD_CLASSES = {
@@ -193,13 +204,9 @@ LESSON_FIELDS = tuple(FIELD_CLASSES)[:-1]
 
 
 LAB_SECTIONS = (
-    "Before you start",
-    "Concepts and code path",
-    "Practice",
+    "Diagram",
+    "Run",
     "Check your results",
-    "Investigate the behavior",
-    "If something goes wrong",
-    "Takeaways and next step",
 )
 
 

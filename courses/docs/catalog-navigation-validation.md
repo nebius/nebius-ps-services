@@ -1,6 +1,74 @@
 # Catalog navigation validation
 
-The latest [nine-course alignment](course-format-validation.md#nine-course-alignment--2026-10-05)
+Current catalog-wide source, style and TOC evidence is recorded in the
+[complete catalog review](course-format-validation.md#complete-catalog-review-and-alignment--2026-10-13),
+including the Advanced Labs runtime-support destination and final browser hashes.
+Earlier entries below retain their own scope.
+
+## Links that preserve the current page — 2026-10-13
+
+All eleven generated HTML pages now open their 584 cross-page links in new tabs
+with `target="_blank"` and `rel="noopener noreferrer"`. This includes the Lab setup
+guide, course/catalog menus, cross-course practice and official references.
+All 671 fragment links and six explicit ZIP downloads retain native behavior.
+The shared attribute renderer escapes destinations; build preflight enforces the
+policy. Existing destination allowlists and all course profiles remain intact.
+
+**Source/static:** 604 focused rendering, navigation, validator, wrapper and
+publication tests pass; three optional dependency tests remain skipped.
+All nine native validators, generated HTML/archive freshness, helper parity,
+scoped Ruff/Markdown and whitespace checks pass. Two additional setup-destination
+negative controls reject lookalike attributes and paths. Independent report-only
+code/security review found no material defect. Complete HTML bytes match the
+task-start baseline after removing only the intended navigation attributes and
+new shared-guide reading notice; all six archive hashes are unchanged.
+The generic course checker retains the same baseline profile, shared-markup and
+local-link diagnostics across all nine courses; it is not the acceptance gate
+for these declared profiles. Native source/parity checks remain authoritative.
+
+**Browser/visual:** 33 isolated Playwright Test 1.64.0-alpha-2026-09-14 checks pass
+using owned headless Chrome 155.0.8059.40, with page JavaScript disabled, at
+1440×1000, 390×1000 and 320×1000. Every page's anchors and fragment targets were
+checked. Actual pointer and keyboard activation proved new-tab navigation,
+unchanged original URL and scroll position, and null `window.opener`. The six
+setup links and downloads, catalog links, course menus and HTTPS reference
+links were exercised. External reference responses were local test fixtures;
+remote site availability was not tested. Fragment navigation, keyboard menus,
+page containment and doubled-text reflow passed. Desktop/mobile setup links,
+mobile guide navigation and the catalog were visually inspected without clipping.
+No teaching, diagrams or styles changed.
+
+Local evidence group `course-link-tabs-pqzwci87` contains `browser.spec.cjs`,
+`browser.config.cjs`, `browser-results.json`, `browser-verified.log`,
+`browser-output/*/trace.zip`, selected `browser-output/*/reading.png` captures,
+`preservation.json`, regression/build/native-validation logs and baseline/final
+generic-checker reports. Browser attachments record exact artifact hashes,
+viewports and browser version. Owned contexts, browsers and loopback server were
+closed. Initial runs retain separate evidence: the older Playwright driver
+failed popup observation, and its successor exposed a JavaScript-disabled
+style-helper timeout. Updating only the local test harness resolved both;
+final assertions ran against unchanged product artifacts.
+
+**Other lanes:** no dependencies were installed and no runtime, GPU/Slurm,
+external publication or deployment validation was performed. These checks prove
+local reading/navigation behavior only; earlier course-specific qualification
+limits remain in force.
+
+| Reviewed artifact | SHA-256 |
+| --- | --- |
+| `advanced-gpu-communication/index.html` | `8529771af9d0c9fdafa37af02bf2c2e89cf2a4275dc4cdd49f0c7ce36de42e86` |
+| `custom-cuda-kernels/index.html` | `07e39cdec1cd8afdd91d39a43bd78f2a76b2e1489799e3f8fd2d5ea1d6487fa9` |
+| `gpu-fundamentals/index.html` | `27722f82923a665743758edd84834092e024d7259da6d350fc23673bb957717a` |
+| `gpu-optimizations/index.html` | `247f063b4d3ab0a0292ead972a7eee75b5ec3ff3bc0ab422166b0c0a973aed3e` |
+| `gpu-performance-tools/index.html` | `ad0cfb940ad56e410f54ce4197b960b0e4e5b3eb2690c87695765ee9512316b1` |
+| `llm-inference/index.html` | `d5fdbe01e3d763a44c6de6f9ef1fbc51e5f780fee1ae8b704af7ebfd184e0f4a` |
+| `llm-training/index.html` | `8eea75f26c67183c44a58adfdb269e2b2bebd00cb695efd77d11943c8daeea69` |
+| `pytorch-gpu-performance-engineering/index.html` | `1bf46ef86d5332870c94ca32ff01777d7f32ec890724706b5ee3658a0a62ef3d` |
+| `soperator/index.html` | `25b971adec75cbf09e4d4c5248cbc9ee4985548d5fe8e0212e129d3961eef5d2` |
+| `index.html` | `b2a0076e140ebfd647f9bc74e4cc2467c3b74115810a7c0d6fd10efe141ae349` |
+| `lab-guide.html` | `2a7967cae14b65fb7f7573968c6ee3239a134fb43e2859c580444e1f3588fdf2` |
+
+The latest [nine-course alignment](course-format-validation.md#nine-course-text-and-format-alignment--2026-10-12)
 records the current artifact hashes and final source/browser verification.
 Earlier sections below retain their own reviewed revisions.
 

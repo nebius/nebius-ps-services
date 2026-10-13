@@ -3,6 +3,67 @@
 import pytest
 
 from course_builder import metadata
+from course_builder.markdown import block
+
+
+def test_comparison_preserves_both_panels_and_following_content():
+    calls = []
+
+    def figure(path, title):
+        calls.append((path, title))
+        return f"<figure>{title}</figure>"
+
+    document = block(
+        "Before.\n<!-- comparison:start -->\n#### Loop\n\nExplanation.\n\n"
+        "![Loop figure](loop.svg)\n\n```python\nx = 1\n```\n"
+        "<!-- comparison:next -->\n#### Batch\n\n"
+        "[Reference](https://example.com) and <script>.\n\n"
+        "![Batch figure](batch.svg)\n<!-- comparison:end -->\nAfter.",
+        figure=figure,
+        heading_offset=0,
+        prefix="example-",
+    )
+    assert document.count('class="comparison-panel"') == 2
+    assert '<h4 id="example-loop">Loop</h4>' in document
+    assert '<h4 id="example-batch">Batch</h4>' in document
+    assert '<pre tabindex="0"><code>x = 1</code></pre>' in document
+    assert '<a target="_blank" rel="noopener noreferrer" href="https://example.com">Reference</a>' in document
+    assert "&lt;script&gt;" in document
+    assert calls == [("loop.svg", "Loop figure"), ("batch.svg", "Batch figure")]
+    assert document.startswith("<p>Before.</p>")
+    assert document.endswith("</div></div><p>After.</p>")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "<!-- comparison:next -->",
+        "<!-- comparison:end -->",
+        "<!-- comparison:unknown -->",
+        "<!-- comparison:start --> extra",
+        "<!-- comparison:start -->\nFirst.",
+        "<!-- comparison:start -->\nFirst.\n<!-- comparison:end -->",
+        "<!-- comparison:start -->\n<!-- comparison:next -->\nSecond.\n<!-- comparison:end -->",
+        "<!-- comparison:start -->\nFirst.\n<!-- comparison:next -->\n<!-- comparison:end -->",
+        "<!-- comparison:start -->\nFirst.\n<!-- comparison:next -->\nSecond.\n<!-- comparison:next -->",
+        "<!-- comparison:start -->\n<!-- comparison:start -->",
+    ],
+)
+def test_malformed_comparisons_fail_before_publishing(source):
+    with pytest.raises(ValueError, match="comparison"):
+        block(source)
+
+
+def test_comparison_markers_inside_code_remain_literal():
+    code = "```text\n<!-- comparison:start -->\n<!-- comparison:next -->\n<!-- comparison:end -->\n```"
+    standalone = block(code)
+    assert 'class="comparison"' not in standalone
+    document = block(
+        "<!-- comparison:start -->\n" + code
+        + "\n<!-- comparison:next -->\nSecond.\n<!-- comparison:end -->"
+    )
+    assert standalone in document
+    assert document.count('class="comparison-panel"') == 2
 
 
 def lesson_document(body):

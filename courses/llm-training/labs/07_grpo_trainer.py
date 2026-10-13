@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--steps", type=int, default=3)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     require_hf_commit_revision(args.revision)
@@ -33,6 +34,7 @@ def main() -> None:
         raise SystemExit("--steps must be positive")
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     try:
         from datasets import Dataset
@@ -143,6 +145,7 @@ def main() -> None:
     )
     if not math.isfinite(adapter_max_delta) or adapter_max_delta <= 0:
         raise SystemExit("GRPO adapter parameters did not update.")
+    # Save the actual measurements together with their correctness checks.
     target = write_result(
         args,
         lab_id="07_grpo_trainer",

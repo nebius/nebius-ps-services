@@ -1,5 +1,65 @@
 # Publication review
 
+## Complete catalog review and alignment — 2026-10-13
+
+Reviewed `index.html` SHA-256: `d23659e2dc45da9dd070018fc7976152e96841f11e544577132769990a89d6ce`.
+
+Source, syllabus, glossary, compact-guide directions and navigation were reviewed
+under this course’s declared profile. Native validators and source/build parity
+pass. The complete 748-test scope passes with four documented skips; browser
+checks cover this final artifact at desktop, 390px and 320px widths.
+
+See the [complete catalog review](../docs/course-format-validation.md#complete-catalog-review-and-alignment--2026-10-13)
+for changes, final artifact hashes, scoped reruns, visual findings, generic-checker
+diagnostics and harness history. Dense phone diagrams and applicable live-target
+qualification remain explicit limitations. No installation, live lab execution
+or external publication occurred. Earlier records retain their own artifact scope.
+
+## Course guide cleanup — 2026-10-13
+
+Reviewed `index.html` SHA-256: `ad0cfb940ad56e410f54ce4197b960b0e4e5b3eb2690c87695765ee9512316b1`.
+
+Reviewed and simplified README orientation. At guide-cleanup verification,
+canonical lessons and the rendered page were byte-identical to the task-start
+artifact; no practical guides or runtime requirements were added. Native
+validation and focused profile tests pass. This README-only change does not
+replace the prior HTML browser evidence.
+
+See the [guide review record](../docs/course-format-validation.md#course-guide-cleanup--2026-10-13)
+for artifact identities, preservation, browser evidence and cleanup, initial
+harness failures, generic-checker limitations and validation scope. No live lab
+execution or external publication was performed. Earlier records apply to their
+own artifact identities. Later concurrent styling changes are outside this
+review; its evidence applies to the reviewed digest above.
+
+## Links that preserve the current page — 2026-10-13
+
+Reviewed `index.html` SHA-256: `ad0cfb940ad56e410f54ce4197b960b0e4e5b3eb2690c87695765ee9512316b1`.
+
+Links to other pages now open new tabs while section links and results downloads
+retain native behavior. Source/static checks and 33 whole-catalog browser cases
+pass at desktop, 390px and 320px widths, including pointer/keyboard activation,
+original reading-position preservation and opener isolation. Course content,
+styles, profiles and archive bytes are preserved. See the
+[navigation verification record](../docs/catalog-navigation-validation.md#links-that-preserve-the-current-page--2026-10-13)
+for exact tools, local traces/screenshots, cleanup, generic-checker limits and
+prior harness failures. No live lab qualification or external publication was
+performed. Earlier entries apply to their own reviewed artifact identities.
+
+## Nine-course text and format alignment — 2026-10-12
+
+Reviewed `index.html` SHA-256: `bef9be5ebb76281d34cd91456d461716c679134c1370da6b35dd9d2c2e9b713d`.
+
+The current all-course review preserves this course's declared profile and aligns
+terminology, glossary formatting and coverage, teaching claims and navigation.
+The shared build, 480 focused tests, all nine native validators, scoped lint and
+independent read-only code/security review pass. All eleven pages pass 33 final
+headless Chrome cases at desktop, 390px and 320px widths. See the
+[current alignment evidence](../docs/course-format-validation.md#nine-course-text-and-format-alignment--2026-10-12)
+for exact scope, artifacts and preserved sources. Generic-checker diagnostics,
+older dense diagram labels on narrow screens and unrefreshed live/GPU
+qualification remain explicit limits. Earlier entries apply to their own hashes.
+
 ## Nine-course alignment — 2026-10-05
 
 Reviewed `index.html` SHA-256: `68a02c5f4476df6fd32daadd7524c198f4427a59bd46e674dcef5bac9f6b119f`.

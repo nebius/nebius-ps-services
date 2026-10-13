@@ -417,13 +417,17 @@ def host_copy_fixture(profile="small", variant="baseline"):
         "variant": variant,
         "expected_reports": 1,
         "dispatch": {"job": 13},
-        "argv": [
-            "labs/03_transfer_and_pinning.py",
-            "--workload",
-            profile,
-            "--size-mib",
-            str(size // 2**20),
-        ],
+        "argv": next(
+            item["argv"]
+            for item in catalog.actions(
+                json.loads(catalog.RECIPE_FILE.read_text())["labs"][
+                    "gpu-fundamentals:03_transfer_and_pinning"
+                ],
+                profile,
+                {},
+            )
+            if item["id"] == "systems-" + variant
+        ),
     }
 
     def group(start, count, memory, direction, blocking):
@@ -561,6 +565,8 @@ def test_host_copy_rejects_identity_scope_and_readback_changes():
         (unit, {**stage, "variant": "candidate"}, report),
         (unit, {**stage, "argv": stage["argv"] + ["--size-mib", "64"]}, report),
         (unit, {**stage, "argv": stage["argv"] + ["--warmup", "4"]}, report),
+        (unit, {**stage, "argv": stage["argv"] + ["--profiler", "ncu"]}, report),
+        (unit, {**stage, "argv": ["python3.12", *stage["argv"][1:]]}, report),
         ({**unit, "profile": "large"}, stage, report),
         (unit, stage, {**report, "job": True}),
         (unit, stage, {**report, "nvtx": ["initialization"]}),
@@ -822,13 +828,15 @@ def test_engine_qualification_keeps_distinct_equivalent_runs_per_protocol(profil
     by_variant = {stage["variant"]: stage for stage in executions}
     for protocol, launcher in (
         ("openai", "slurm/30_engine_profile.sbatch"),
-        ("triton", "slurm/30_engine_profile.trtllm.sbatch"),
+        ("triton", "slurm/30_engine_profile.sbatch"),
     ):
         baseline = by_variant[protocol]
         repeat = by_variant[protocol + "-repeat"]
         assert baseline["id"] != repeat["id"]
         assert baseline["argv"] == repeat["argv"]
         assert launcher in baseline["argv"]
+        if protocol == "triton":
+            assert baseline["argv"][-2:] == ["--experiment", "trtllm"]
         assert baseline["environment"] == repeat["environment"]
         assert baseline["environment"]["COURSE_WORKLOAD"] == profile
     assert not any(stage["kind"] == "profile" for stage in stages)
@@ -940,12 +948,13 @@ def test_cuda_capstone_memcheck_precedes_three_acceptance_children(profile):
     assert dependency["kind"] == "dependency"
     assert dependency["argv"] == [
         "sbatch",
-        "slurm/12_capstone.sanitizer.sbatch",
-        "memcheck",
+        "slurm/12_capstone.sbatch",
+        "--sanitizer", "memcheck",
         "--workload",
         profile,
         "--variant-order",
         "baseline-first",
+        "--experiment", "sanitizer",
     ]
     assert trials["id"] == "trials-trial1" and trials["kind"] == "execute"
     assert recipe["result_count"] == 3
@@ -1513,8 +1522,15 @@ def test_direct_systems_capture_matches_named_variant(lab, profile):
     variants = {s["variant"]: s for s in stages if s["kind"] == "execute"}
     for capture in (s for s in stages if s["kind"] == "profile"):
         command = [a for a in capture["argv"] if not a.startswith("--export=")]
-        assert command[2:] == variants[capture["variant"]]["argv"][2:]
-        assert command[1].endswith((".nsys.sbatch", ".ncu.sbatch"))
+        def program_args(argv):
+            args = list(argv[2:])
+            for flag in ("--profiler", "--experiment"):
+                if flag in args:
+                    index = args.index(flag)
+                    del args[index:index + 2]
+            return args
+        assert program_args(command) == program_args(variants[capture["variant"]]["argv"])
+        assert command[1].endswith(".sbatch") and "--profiler" in command
 
 
 @pytest.fixture
@@ -1573,7 +1589,7 @@ def test_campaign_sync_owns_connection_and_verified_proof(
                 "lab": "01_example",
                 "profile": "small",
                 "stages": [{"id": "execute", "argv": ["${REMOTE_WORKSPACE}/run.sh"]}],
-                "preparation": [{"launcher": "01_example.sbatch", "runtime": "sample"}],
+                "preparation": [{"launcher": "01_example.sbatch", "stage": "default_none_cuda", "runtime": "sample"}],
             }],
         },
     }
@@ -1656,7 +1672,7 @@ def transport_request(monkeypatch, controller_modules):
     unit = {"key": "example:01_example", "lab": "01_example", "profile": "small",
             "remote_root": "/fixture/workspace", "stages": [stage]}
     state = {"id": "test", "environment": {"ssh": {"target": "student@example"}},
-             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64}}
+             "plan": {"execution_contract": "native-jobs/v3", "source_sha256": "a" * 64}}
     calls = []
 
     def invoke(outcomes, action="query"):
@@ -1738,7 +1754,7 @@ def test_terminal_job_failure_preserves_evidence_and_finishes_claims(
     state = {"schema": "run-labs-campaign/v1", "id": "test", "status": "running",
              "courses_root": str(tmp_path / "courses"), "preflight": {"passed": True},
              "environment": {"private_root": str(private), "target_id": "target"},
-             "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": units}}
+             "plan": {"execution_contract": "native-jobs/v3", "source_sha256": "a" * 64, "units": units}}
     controller.save(path, state)
     controller.ensure_claims(path.resolve(), state)
     claims = [controller.claim_path(state, unit) for unit in units]
@@ -1938,7 +1954,7 @@ def test_export_resumes_cleanup_without_republishing(
         "courses_root": str(tmp_path / "courses"),
         "preflight": {"passed": True},
         "environment": {"private_root": str(private), "target_id": "target"},
-        "plan": {"execution_contract": "native-jobs/v2", "source_sha256": "a" * 64, "units": [unit]},
+        "plan": {"execution_contract": "native-jobs/v3", "source_sha256": "a" * 64, "units": [unit]},
     }
     controller.save(path, state)
     skill_common.write(
@@ -2089,7 +2105,8 @@ def test_capstone_preserves_two_independent_three_child_groups(profile, key):
     assert jobs[0]["argv"] == jobs[1]["argv"]
     assert jobs[0]["environment"] == jobs[1]["environment"]
     assert jobs[0]["environment"]["COURSE_WORKLOAD"] == profile
-    assert jobs[0]["argv"][1] == f"slurm/{recipe['lab']}.trials.sbatch"
+    assert jobs[0]["argv"][1] == f"slurm/{recipe['lab']}.sbatch"
+    assert jobs[0]["argv"][-2:] == ["--experiment", "trials"]
     assert recipe["repetitions"] == 1 and recipe["result_count"] == 3
     assert recipe["trial_contract"] == "capstone" and recipe["comparisons"] == []
     captures = [s for s in stages if s["kind"] == "profile"]
@@ -2097,7 +2114,7 @@ def test_capstone_preserves_two_independent_three_child_groups(profile, key):
         ("systems-trials", "trials", 1),
         ("compute-trials", "trials", 1),
     ]
-    assert all(s["argv"][1].endswith((".nsys.sbatch", ".ncu.sbatch")) for s in captures)
+    assert all(s["argv"][1].endswith(".sbatch") and "--profiler" in s["argv"] for s in captures)
 
 
 @pytest.mark.parametrize("profile", ["small", "large"])

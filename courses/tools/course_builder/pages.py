@@ -6,6 +6,7 @@ import html
 import json
 import re
 from .markdown import block, markdown_heading_id, slug
+from .code import render_code, source_language
 from .metadata import (
     catalog_metadata,
     course_metadata,
@@ -31,6 +32,7 @@ from .content import (
     shared_guide_links,
 )
 from .downloads import course_downloads
+from .links import link_attributes
 from .shell import course_switcher, license_footer, page_head
 from .config import (
     CATALOG_COPY,
@@ -39,6 +41,7 @@ from .config import (
     COMMON_GUIDES,
     COURSES,
     FIELD_CLASSES,
+    GUIDE_LABELS,
     GUIDE_TITLE,
     LAB_SECTIONS,
     ROOT,
@@ -47,20 +50,20 @@ from .config import (
 )
 
 
+def supporting_guides_toc(guides: tuple[str, ...]) -> str:
+    return "".join(
+        f'<li><a href="#{guide_id(path)}">{GUIDE_LABELS[path]}</a></li>'
+        for path in guides
+        if path != "GLOSSARY.md"
+    )
+
+
 def render_lab_course(course: Path, metadata: dict) -> str:
     # Reuse the same rendering functions; this profile deliberately has no lessons.
     if (course / "COURSE.md").read_text().splitlines()[0] != "# " + metadata["title"]:
         raise ValueError("course title must match canonical metadata")
     guides = lab_guides(course, metadata, 0)
-    supporting = (
-        "README.md",
-        "GLOSSARY.md",
-        "VERSIONS.md",
-        "reference/evidence-security.md",
-        "reference/benchmark-record.md",
-        "reference/cluster-smoke-test.md",
-        "reference/lab-mechanisms.md",
-    )
+    supporting = COMMON_GUIDES + SUPPORTING_GUIDES.get(course.name, ())
     references = list(
         dict.fromkeys(
             parse_references(course / "RESOURCES.md")
@@ -78,6 +81,7 @@ def render_lab_course(course: Path, metadata: dict) -> str:
     )
     links = {url: f"#reference-{n}" for n, (_, url) in enumerate(references, 1)}
     links.update({name: "#" + guide_id(name) for name in supporting})
+    links["NEXT-STEPS.md"] = "#next-steps"
     links.update(shared_guide_links())
     links.update(
         {
@@ -127,7 +131,7 @@ def render_lab_course(course: Path, metadata: dict) -> str:
         lab_markup(course, g, [], links, figures.get(g["source"].stem)) for g in guides
     )
     helpers = "".join(
-        f'<details><summary>{html.escape(str(p.relative_to(course)))}</summary><pre tabindex="0"><code data-source="{html.escape(str(p.relative_to(course)))}">{html.escape(p.read_text())}</code></pre></details>'
+        f'<details><summary>{html.escape(str(p.relative_to(course)))}</summary><pre tabindex="0"><code data-source="{html.escape(str(p.relative_to(course)))}">{render_code(p.read_text(), source_language(str(p)), source=f"{course.name}/{p.relative_to(course)}")}</code></pre></details>'
         for p in sorted((course / "labs").glob("*.py"))
         if not re.match(r"^[0-9]+_", p.name)
     )
@@ -138,7 +142,7 @@ def render_lab_course(course: Path, metadata: dict) -> str:
     )
     glossary_html = course_glossary_markup(course)
     refs = "".join(
-        f'<li id="reference-{n}"><a href="{html.escape(url)}">{html.escape(label)}</a></li>'
+        f'<li id="reference-{n}"><a {link_attributes(url)}>{html.escape(label)}</a></li>'
         for n, (label, url) in enumerate(references, 1)
     )
     title = metadata["title"]
@@ -146,8 +150,8 @@ def render_lab_course(course: Path, metadata: dict) -> str:
     css = (ROOT / "tools/course.css").read_text()
     return f"""{page_head(title, css)}
 <body class="lab-course"><a class="skip-link" href="#main">Skip to course</a><header><h1>{html.escape(title)}</h1><p class="guided-hours">Estimated guided hours: {metadata["estimated_guided_hours"]}</p></header>
-<div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents">{course_switcher(course.name, catalog_metadata())}<details open><summary>Table of contents</summary><ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Labs</h2><ul>{toc}</ul><ul class="section-links"><li><a href="#supporting-guides">Course guides</a></li><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul></details></nav></aside>
-<main id="main"><section id="course-overview"><h2>Course overview</h2>{block(intro, links)}</section><section id="labs"><h2>Practical labs</h2>{course_downloads(course)}{body}</section><section id="runtime-sources"><h2>Complete runtime support</h2>{helpers}</section><section id="supporting-guides"><h2>Course guides</h2>{supporting_html}</section>{next_steps_markup(course, links)}{glossary_html}<section id="official-references"><h2>Official references</h2><ol>{refs}</ol></section>{license_footer()}</main></div></body></html>"""
+<div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents">{course_switcher(course.name, catalog_metadata())}<details open><summary>Table of contents</summary><ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Labs</h2><ul>{toc}</ul><ul class="section-links"><li><a href="#runtime-sources">Complete runtime support</a></li><li><a href="#supporting-guides">Course guides</a><ul>{supporting_guides_toc(supporting)}</ul></li><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul></details></nav></aside>
+<main id="main"><section id="course-overview"><h2>Course overview</h2>{block(intro, links, source=f"{course.name}/COURSE.md", context="Course overview")}</section><section id="labs"><h2>Practical labs</h2>{course_downloads(course)}{body}</section><section id="runtime-sources"><h2>Complete runtime support</h2>{helpers}</section><section id="supporting-guides"><h2>Course guides</h2>{supporting_html}</section>{next_steps_markup(course, links)}{glossary_html}<section id="official-references"><h2>Official references</h2><ol>{refs}</ol></section>{license_footer()}</main></div></body></html>"""
 
 
 def render_text_course(course: Path, metadata: dict) -> str:
@@ -201,11 +205,17 @@ def render_text_course(course: Path, metadata: dict) -> str:
                         if entry["lessons"][0] == number and entry["after"] == field
                     ],
                     links,
+                    source=f"{course.name}/COURSE.md",
+                    context=f"lesson {number}: {lesson['title']} / {field}",
                     prefix=f"lesson-{number}-",
                     heading_offset=0,
                 )
                 if figures
-                else block(lesson[field], links, heading_offset=0)
+                else block(
+                    lesson[field], links, source=f"{course.name}/COURSE.md",
+                    context=f"lesson {number}: {lesson['title']} / {field}",
+                    heading_offset=0,
+                )
             )
             + "</div>"
             for field in lesson
@@ -216,7 +226,7 @@ def render_text_course(course: Path, metadata: dict) -> str:
         )
     references = parse_references(course / "RESOURCES.md")
     refs = "".join(
-        f'<li id="reference-{n}"><a href="{html.escape(url, quote=True)}">{html.escape(label)}</a></li>'
+        f'<li id="reference-{n}"><a {link_attributes(url)}>{html.escape(label)}</a></li>'
         for n, (label, url) in enumerate(references, 1)
     )
     guide_toc = (
@@ -238,7 +248,7 @@ def render_text_course(course: Path, metadata: dict) -> str:
 <div class="course-layout"><aside><nav id="course-contents" aria-label="Course contents">{course_switcher(course.name, catalog_metadata())}<details open><summary>Table of contents</summary>
 <ul class="section-links"><li><a href="#course-overview">Course overview</a></li></ul><h2>Lessons</h2><ol>{"".join(lesson_toc)}</ol>
 <h2>Reference and further reading</h2><ul class="section-links">{guide_toc}</ul></details></nav></aside>
-<main id="main"><section id="course-overview"><h2>Course overview</h2>{block(preamble)}</section>
+<main id="main"><section id="course-overview"><h2>Course overview</h2>{block(preamble, source=f"{course.name}/COURSE.md", context="Course overview")}</section>
 {"".join(lesson_html)}{guide_html}{license_footer()}</main></div></body></html>"""
 
 
@@ -277,11 +287,11 @@ def render_shared_guide() -> str:
         "https://github.com/nebius/nebius-ps-services/blob/main/courses/skills/run-labs/SKILL.md"
     )
     links["../LICENSE"] = "#license"
-    body = block(chunks[0], links, source="README.md", images=True)
+    body = block(chunks[0], links, source="README.md", context="Introduction", images=True)
     toc = ""
     for heading, content in zip(chunks[1::2], chunks[2::2], strict=True):
         anchor = slug(heading)
-        rendered = block(content, links, source="README.md", images=True)
+        rendered = block(content, links, source="README.md", context=heading, images=True)
         # Standalone guide headings retain their authored levels.
         rendered = re.sub(
             r"<(/?)h([5-6])(?=[ >])", lambda m: f"<{m[1]}h{int(m[2]) - 2}", rendered
@@ -340,7 +350,7 @@ def render_catalog() -> str:
 <ul class="course-outcomes">{outcome_items}</ul>
 <div class="course-tags" aria-label="Topics">{tag_items}</div>
 <div class="card-bottom"><p class="prerequisite">{prerequisite}</p>
-<a class="course-link" href="{catalog_destination(name)}" aria-label="Read {title}">Read {"guide" if guide else "course"} <span aria-hidden="true">↗</span></a></div>
+<a class="course-link" {link_attributes(catalog_destination(name))} aria-label="Read {title}">Read {"guide" if guide else "course"} <span aria-hidden="true">↗</span></a></div>
 </article>"""
     path_labels = {
         "soperator": "Soperator",
@@ -375,13 +385,13 @@ def render_catalog() -> str:
 <title>GPU Performance Engineering Courses | Nebius</title><link rel="icon" href="data:,">
 <style>{css}</style></head>
 <body><a class="skip-link" href="#main">Skip to courses</a>
-<div class="site-header"><a class="wordmark" href="../index.html" aria-label="Nebius Platform Services home">nebius<span>courses</span></a>
-<nav aria-label="Main navigation"><a href="#catalog">Explore courses</a><a href="#learning-path">Learning path</a><a href="https://github.com/nebius/nebius-ps-services">GitHub <span aria-hidden="true">↗</span></a></nav></div>
+<div class="site-header"><a class="wordmark" {link_attributes("../index.html")} aria-label="Nebius Platform Services home">nebius<span>courses</span></a>
+<nav aria-label="Main navigation"><a href="#catalog">Explore courses</a><a href="#learning-path">Learning path</a><a {link_attributes("https://github.com/nebius/nebius-ps-services")}>GitHub <span aria-hidden="true">↗</span></a></nav></div>
 <main id="main"><header class="hero">
 <div class="hero-copy"><p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> Learn the system. Understand the result.</p>
 <h1>GPU Performance<br><span>Engineering</span></h1>
 <p class="hero-description">Start with Slurm and Soperator, use the Lab Guide to prepare for practice, then read GPU Performance Tools and PyTorch for GPU Performance Engineering before GPU Fundamentals and its labs. Continue with GPU Performance Optimization before choosing language models or custom kernels. Finish with advanced communication labs for sixteen H100 GPUs.</p>
-<div class="hero-actions"><a class="button primary" href="soperator/index.html">Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" href="lab-guide.html">Set up and run the labs <span aria-hidden="true">→</span></a></div>
+<div class="hero-actions"><a class="button primary" {link_attributes("soperator/index.html")}>Start with Soperator <span aria-hidden="true">↗</span></a><a class="button secondary" {link_attributes("lab-guide.html")}>Set up and run the labs <span aria-hidden="true">→</span></a></div>
 <p class="platform-note">GPU performance · Linux · Slurm</p></div>
 <aside class="learning-map" id="learning-path" aria-labelledby="path-title">
 <div class="map-heading"><p class="eyebrow">Your learning path</p><span class="map-count">{len(CATALOG_ENTRIES)} resources</span></div>
@@ -506,21 +516,7 @@ def render_course(course_name: str) -> str:
                 f'<li><a href="#lab-{slug(guide["source"].stem)}">{html.escape(guide["title"])}</a></li>'
                 for guide in entries
             )
-    guide_labels = {
-        "README.md": "Getting started",
-        "GLOSSARY.md": "Glossary",
-        "VERSIONS.md": "Versions and environment",
-        "reference/benchmark-record.md": "Benchmark worksheet",
-        "reference/lab-mechanisms.md": "Lab mechanisms and evidence",
-        "reference/cluster-smoke-test.md": "Cluster smoke runbook",
-        "reference/evidence-security.md": "Evidence and privacy",
-        "reference/tooling-setup.md": "Diagnostic tooling reference",
-    }
-    guides_toc = "".join(
-        f'<li><a href="#{guide_id(path)}">{guide_labels[path]}</a></li>'
-        for path in guides
-        if path != "GLOSSARY.md"
-    )
+    guides_toc = supporting_guides_toc(guides)
     inline_figures: dict[int, dict[str, list[dict]]] = {}
     lab_figures: dict[str, dict[str, list[dict]]] = {}
     labs_by_stem = {guide["source"].stem: guide for guide in authored_labs}
@@ -598,6 +594,7 @@ def render_course(course_name: str) -> str:
                 for guide in authored_labs + external_labs
                 if index in guide["lessons"]
             ],
+            source=f"{course.name}/COURSE.md",
         )
         for index, item in lesson_sequence
     )
@@ -626,7 +623,7 @@ def render_course(course_name: str) -> str:
     glossary_html = course_glossary_markup(course)
     next_steps_html = next_steps_markup(course, reference_links)
     refs_html = "\n".join(
-        f'<li id="reference-{index}"><a href="{html.escape(url, quote=True)}">{html.escape(label)}</a></li>'
+        f'<li id="reference-{index}"><a {link_attributes(url)}>{html.escape(label)}</a></li>'
         for index, (label, url) in enumerate(references, 1)
     )
     css = (ROOT / "tools/course.css").read_text(encoding="utf-8")
@@ -640,7 +637,7 @@ def render_course(course_name: str) -> str:
 <h2>Practice and reference</h2><ul class="section-links"><li><a href="#labs">Practical labs</a><details><summary>Browse labs</summary><ul>{lab_toc}</ul></details></li>
 <li><a href="#supporting-guides">Course guides</a><ul>{guides_toc}</ul></li><li><a href="#next-steps">Where to Go Next</a></li><li><a href="#guide-glossary">Glossary</a></li><li><a href="#official-references">Official references</a></li></ul>
 </details></nav></aside><main id="main">
-<section id="course-overview"><h2>Course overview</h2>{block(preamble, reference_links)}</section>
+<section id="course-overview"><h2>Course overview</h2>{block(preamble, reference_links, source=f"{course.name}/COURSE.md", context="Course overview")}</section>
 <section id="course-contract"><h2>How to use this course</h2><div class="course-contract"><div><h3>Learn</h3><p>Read the objective and explanation, then use the mental model to review the mechanism. Explain what the technique is, why it is useful and how it works before following the Practice links.</p></div><div><h3>Practice</h3><p>Complete the shared README setup once. Each practical lab explains its purpose and concepts, then gives the commands and comparison to make. Check the results before interpreting performance.</p></div><div><h3>Review</h3><p>Compare correctness, repeated measurements, and profiler observations. Use the glossary and detailed diagrams when a term or relationship needs a second look.</p><p>Use the benchmark worksheet to record what your environment demonstrates and what remains to be tested.</p></div></div>{extensions_html}</section>
 {primer_html}
 {lesson_html}

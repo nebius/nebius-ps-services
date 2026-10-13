@@ -1,60 +1,114 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=00:30:00
+#SBATCH --time=01:02:00
+
 #SBATCH --no-requeue
 #SBATCH --output=results/05_tiled_stencil/logs/%j.out
 #SBATCH --error=results/05_tiled_stencil/logs/%j.err
 
-set -euo pipefail
-
-# Workload size is independent of the profiler selected by this job file.
-if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  printf 'Usage: sbatch %s [--workload small|large] [lab options]\n' "$0"
-  exit 0
-fi
-workload=${COURSE_WORKLOAD:-large}
-lab_args=()
-while (($#)); do
-  case "$1" in
-    --workload) [[ $# -ge 2 ]] || { printf 'ERROR: --workload needs small or large.\n' >&2; exit 2; }; workload=$2; shift 2 ;;
-    --workload=*) workload=${1#*=}; shift ;;
-    --profile|--profile=*) printf 'ERROR: use --workload small|large.\n' >&2; exit 2 ;;
-    *) lab_args+=("$1"); shift ;;
-  esac
-done
-[[ $workload == small || $workload == large ]] || { printf 'ERROR: --workload must be small or large.\n' >&2; exit 2; }
-set -- "${lab_args[@]}"
-export COURSE_WORKLOAD=$workload
-[[ ${SLURM_JOB_ID:-} =~ ^[1-9][0-9]*$ && ${SLURM_RESTART_COUNT:-0} == 0 ]] || {
-  printf 'ERROR: submit a fresh job with sbatch; requeued jobs are unsupported.\n' >&2; exit 2;
-}
-# Load this launcher's persistent installation inside the allocated job.
-source tools/course_env.sh 05_tiled_stencil.sbatch
-umask 077
-for directory in results results/05_tiled_stencil results/05_tiled_stencil/logs results/05_tiled_stencil/jobs; do
-  [[ -d $directory && ! -L $directory && $(stat -c '%a:%u' "$directory") == "700:$(id -u)" ]] || {
-    printf 'ERROR: run regular-lab-setup.py; require private owned directory: %s\n' "$directory" >&2; exit 2;
-  }
-done
-export COURSE_JOB_DIR="$PWD/results/05_tiled_stencil/jobs/$SLURM_JOB_ID"
-mkdir -m 700 -- "$COURSE_JOB_DIR"
-mkdir -m 700 -- "$COURSE_JOB_DIR/results" "$COURSE_JOB_DIR/profiles" "$COURSE_JOB_DIR/logs" "$COURSE_JOB_DIR/artifacts"
-export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
-export COURSE_RESULTS_DIR="$COURSE_JOB_DIR/results"
-export COURSE_PROFILES_DIR="$COURSE_JOB_DIR/profiles"
-export COURSE_PROFILE_TOOL=none COURSE_CAPTURE=0 PYTHONDONTWRITEBYTECODE=1
-printf 'Job results: %s\n' "$COURSE_JOB_DIR"
-source tools/course_job_cache.sh
-
-
+# Reserve the largest selectable allocation; every srun below limits its step.
+# Each stage runs in a fresh shell with separate original results and reports.
+course_stage() {
+  set -euo pipefail
+  umask 077
+  local selection=$1 workload=$2
+  shift 2
+  export SLURM_STEP_ID=${SLURM_STEP_ID:-batch} SLURM_PROCID=${SLURM_PROCID:-0}
+  case "$selection" in
+    default_ncu_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.05_tiled_stencil --runtime
+      source tools/course_job_cache.sh
 : "${COURSE_BUILD_DIR:?select the completed build directory}"
 executable="$COURSE_BUILD_DIR/05_tiled_stencil"
 [[ -x $executable && ! -L $executable ]] || exit 2
 raw="$COURSE_JOB_DIR/logs/05_tiled_stencil.txt"
 started=$(date +%s)
-srun --ntasks=1 --gpus-per-task=1 "$executable" --workload "$workload" "$@" >"$raw"
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s ncu --target-processes all --nvtx --nvtx-include course_measure/ \
+  --kernel-name-base demangled --rename-kernels off --kernel-name "regex:${COURSE_PROFILE_KERNEL:-.*}" \
+  --launch-count 1 --set basic --section SpeedOfLight --section MemoryWorkloadAnalysis --section Occupancy \
+  --clock-control none --force-overwrite false \
+  --export "$COURSE_PROFILES_DIR/ncu-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "$executable" --workload "$workload" "$@" >"$raw"
 ended=$(date +%s)
 "${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+
+# Successful exit alone does not prove that a profiler collected a report.
+report_count=0
+while IFS= read -r -d '' report; do
+  [[ -s $report ]] || { printf 'ERROR: empty profiler report: %s\n' "$report" >&2; exit 2; }
+  report_count=$((report_count + 1))
+done < <(find "$COURSE_JOB_DIR" -type f -name '*.ncu-rep' -print0)
+((report_count == 1)) || { printf 'ERROR: native profiler report count differs from the required producer count.\n' >&2; exit 2; }
+printf 'Diagnostic reports: %s; use a separate normal job for timing.\n' "$COURSE_JOB_DIR"
+      ;;
+    default_nsys_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.05_tiled_stencil --runtime
+      source tools/course_job_cache.sh
+: "${COURSE_BUILD_DIR:?select the completed build directory}"
+executable="$COURSE_BUILD_DIR/05_tiled_stencil"
+[[ -x $executable && ! -L $executable ]] || exit 2
+raw="$COURSE_JOB_DIR/logs/05_tiled_stencil.txt"
+started=$(date +%s)
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none --discard-environment=true --force-overwrite=false --duration=300 --kill=none --wait=all --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" "$executable" --workload "$workload" "$@" >"$raw"
+ended=$(date +%s)
+"${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+
+# Successful exit alone does not prove that a profiler collected a report.
+report_count=0
+while IFS= read -r -d '' report; do
+  [[ -s $report ]] || { printf 'ERROR: empty profiler report: %s\n' "$report" >&2; exit 2; }
+  report_count=$((report_count + 1))
+done < <(find "$COURSE_JOB_DIR" -type f -name '*.nsys-rep' -print0)
+((report_count == 1)) || { printf 'ERROR: native profiler report count differs from the required producer count.\n' >&2; exit 2; }
+printf 'Diagnostic reports: %s; use a separate normal job for timing.\n' "$COURSE_JOB_DIR"
+      ;;
+    sanitizer_none_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.05_tiled_stencil --runtime
+      source tools/course_job_cache.sh
+set -euo pipefail
+umask 077
+tool="${COURSE_SANITIZER:?select --sanitizer}"
+executable="${COURSE_BUILD_DIR:?select completed build}/05_tiled_stencil"
+case ${tool} in
+  memcheck | racecheck | initcheck | synccheck) ;;
+  *) printf 'ERROR: unsupported sanitizer tool: %s\n' "${tool}" >&2; exit 2 ;;
+esac
+sanitizer_options=(--tool "${tool}" --error-exitcode=3)
+if [[ ${tool} == racecheck ]]; then
+  : "${SLURM_CPUS_PER_TASK:?Racecheck requires the Slurm CPU allocation}"
+  if [[ ! ${SLURM_CPUS_PER_TASK} =~ ^[1-9][0-9]*$ ]]; then
+    printf 'ERROR: SLURM_CPUS_PER_TASK must be a positive integer.\n' >&2
+    exit 2
+  fi
+  sanitizer_options+=(--racecheck-num-workers "${SLURM_CPUS_PER_TASK}" --force-synchronization-limit 2)
+fi
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 \
+  compute-sanitizer "${sanitizer_options[@]}" "${executable}" --workload "$workload" "$@"
+      ;;
+    default_none_cuda)
+      # Actual scope: 1 node(s), 1 task(s), 1 GPU(s) per task.
+      source tools/course_env.sh custom-cuda-kernels.05_tiled_stencil --runtime
+      source tools/course_job_cache.sh
+: "${COURSE_BUILD_DIR:?select the completed build directory}"
+executable="$COURSE_BUILD_DIR/05_tiled_stencil"
+[[ -x $executable && ! -L $executable ]] || exit 2
+raw="$COURSE_JOB_DIR/logs/05_tiled_stencil.txt"
+started=$(date +%s)
+srun --nodes=1 --cpus-per-task=8 --ntasks=1 --gpus-per-task=1 "$executable" --workload "$workload" "$@" >"$raw"
+ended=$(date +%s)
+"${COURSE_PYTHON}" tools/cuda_result.py --input "$raw" --started "$started" --ended "$ended" "$executable" --workload "$workload" "$@"
+      ;;
+    *) printf 'ERROR: unknown stage selection.\n' >&2; return 2 ;;
+  esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  set -euo pipefail
+  exec python3.12 -B tools/course_job.py --lab 05_tiled_stencil --launcher "$0" -- "$@"
+fi

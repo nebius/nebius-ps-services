@@ -35,10 +35,12 @@ def relative_l2(torch: object, observed: object, expected: object) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser)
+    # Read the experiment controls before allocating inputs.
     args = parser.parse_args()
     validate_common_args(args)
     torch = load_torch()
     environment = require_course_gpu(torch)
+    # Keep random inputs repeatable across comparable runs.
     seed_everything(torch, args.seed)
     rank, world_size, local_rank = init_nccl(torch)
     try:
@@ -48,6 +50,7 @@ def main() -> None:
         learning_rate = 1e-2
         if width % world_size:
             raise SystemExit("The hidden width must be divisible by the rank count.")
+        # Create the synthetic tensors used by this experiment.
         input_seed = torch.randn((batch, width), device=device, dtype=torch.bfloat16)
         weight_seed = torch.randn((width, width), device=device, dtype=torch.float32)
 
@@ -55,6 +58,7 @@ def main() -> None:
         reference_weight = weight_seed.detach().clone().requires_grad_(True)
         reference_output = reference_input @ reference_weight.to(torch.bfloat16).T
         reference_loss = reference_output.float().square().mean()
+        # Differentiate the loss to populate parameter gradients.
         reference_loss.backward()
         with torch.no_grad():
             reference_updated = reference_weight - learning_rate * reference_weight.grad
@@ -105,6 +109,7 @@ def main() -> None:
             update_error,
             row_forward_error,
         )
+        # Create explicit input values on the selected device.
         local_ok = torch.tensor(
             int(maximum_error < 0.02), device=device, dtype=torch.int32
         )
@@ -136,6 +141,7 @@ def main() -> None:
             with torch.no_grad():
                 timed_weight.add_(timed_weight.grad, alpha=-learning_rate)
             communication_finished.synchronize()
+            # Wait for queued GPU work to finish at this measurement boundary.
             torch.cuda.synchronize()
             elapsed = torch.tensor(
                 (time.perf_counter() - started) * 1_000,
@@ -157,6 +163,7 @@ def main() -> None:
             communication_samples.append(communication_ms)
 
         if rank == 0:
+            # Save the actual measurements together with their correctness checks.
             target = write_result(
                 args,
                 lab_id="18_training_tensor_parallel",
